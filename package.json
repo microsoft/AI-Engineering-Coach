@@ -114,10 +114,10 @@
   "engineStrict": true,
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.59.1",
-    "@types/node": "25.6.0",
+    "@playwright/test": "1.60.0",
+    "@types/node": "25.7.0",
     "@types/vscode": "1.118.0",
-    "@vitest/coverage-v8": "4.1.5",
+    "@vitest/coverage-v8": "4.1.6",
     "@vscode/vsce": "3.9.1",
     "cspell": "10.0.0",
     "esbuild": "0.28.0",
@@ -127,14 +127,14 @@
     "eslint-plugin-unicorn": "64.0.0",
     "husky": "9.1.7",
     "jsdom": "29.1.1",
-    "knip": "6.11.0",
-    "lint-staged": "17.0.2",
+    "knip": "6.13.1",
+    "lint-staged": "17.0.4",
     "lockfile-lint": "5.0.0",
     "preact-render-to-string": "6.6.7",
     "serve": "14.2.6",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.59.1",
-    "vitest": "4.1.5"
+    "typescript-eslint": "8.59.3",
+    "vitest": "4.1.6"
   },
   "dependencies": {
     "chart.js": "4.5.1",
