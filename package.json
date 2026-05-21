@@ -116,8 +116,8 @@
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.60.0",
     "@types/node": "25.9.1",
-    "@types/vscode": "1.118.0",
-    "@vitest/coverage-v8": "4.1.6",
+    "@types/vscode": "1.120.0",
+    "@vitest/coverage-v8": "4.1.7",
     "@vscode/vsce": "3.9.1",
     "cspell": "10.0.0",
     "esbuild": "0.28.0",
@@ -134,7 +134,7 @@
     "serve": "14.2.6",
     "typescript": "6.0.3",
     "typescript-eslint": "8.59.4",
-    "vitest": "4.1.6"
+    "vitest": "4.1.7"
   },
   "dependencies": {
     "chart.js": "4.5.1",
