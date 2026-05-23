@@ -6,6 +6,8 @@
 import * as vscode from 'vscode';
 import { loadSidebarStats } from '../core/cache';
 import { getNonce } from './panel-shared';
+import { getUiLanguageTag } from '../ui-locale';
+import { resolveLocale, t } from './i18n';
 
 export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   public static instance: DashboardSidebarProvider | undefined;
@@ -40,21 +42,23 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private renderHtml(nonce: string): string {
+    const locale = resolveLocale(getUiLanguageTag());
+    const langAttr = locale === 'ru' ? 'ru' : 'en';
     const stats = loadSidebarStats();
     const statsHtml = stats
       ? `
       <div class="sidebar-card">
-        <p class="sidebar-label">Detected harnesses</p>
+        <p class="sidebar-label">${t('sidebar.harnesses', locale)}</p>
         <p class="sidebar-harnesses">${stats.harnesses.join(' · ')}</p>
-        <p class="sidebar-note">Last synced ${new Date(stats.savedAt).toLocaleString()}</p>
+        <p class="sidebar-note">${t('sidebar.lastSync', locale)} ${new Date(stats.savedAt).toLocaleString(langAttr)}</p>
       </div>`
       : `
       <div class="sidebar-card">
-        <p class="sidebar-note">No data yet — sync your sessions to get started.</p>
+        <p class="sidebar-note">${t('sidebar.noData', locale)}</p>
       </div>`;
 
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${langAttr}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
@@ -118,10 +122,10 @@ button.secondary:hover { background: var(--vscode-button-secondaryHoverBackgroun
 </style>
 </head>
 <body>
-<h3>AI Engineer Coach</h3>
+<h3>${t('sidebar.title', locale)}</h3>
 <div id="content">${statsHtml}</div>
-<button id="open">Explore AI Insights</button>
-<button id="reload" class="secondary">Sync Sessions</button>
+<button id="open">${t('sidebar.explore', locale)}</button>
+<button id="reload" class="secondary">${t('sidebar.sync', locale)}</button>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   document.getElementById('open').addEventListener('click', function() {

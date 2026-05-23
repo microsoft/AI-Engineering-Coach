@@ -1,7 +1,7 @@
 {
   "name": "ai-engineer-coach",
-  "displayName": "AI Engineer Coach",
-  "description": "Analyze your AI coding assistant usage across VS Code, Xcode, Claude, Codex, and OpenCode. Read-only, zero telemetry.",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
   "version": "0.1.0",
   "publisher": "ai-engineer-coach",
   "author": {
@@ -44,17 +44,17 @@
     "commands": [
       {
         "command": "aiEngineerCoach.open",
-        "title": "AI Engineer Coach: Open Dashboard",
+        "title": "%command.open%",
         "icon": "$(graph)"
       },
       {
         "command": "aiEngineerCoach.reload",
-        "title": "AI Engineer Coach: Reload Data",
+        "title": "%command.reload%",
         "icon": "$(refresh)"
       },
       {
         "command": "aiEngineerCoach.reviewLocalRules",
-        "title": "AI Engineer Coach: Review Local Rule Approvals",
+        "title": "%command.reviewRules%",
         "icon": "$(shield)"
       }
     ],
@@ -62,7 +62,7 @@
       "activitybar": [
         {
           "id": "aiEngineerCoach",
-          "title": "AI Engineer Coach",
+          "title": "%views.container.title%",
           "icon": "$(graph)"
         }
       ]
@@ -71,10 +71,21 @@
       "aiEngineerCoach": [
         {
           "id": "aiEngineerCoach.welcome",
-          "name": "Dashboard",
+          "name": "%views.dashboard.name%",
           "type": "webview"
         }
       ]
+    },
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.locale": {
+          "type": "string",
+          "enum": ["auto", "en", "ru"],
+          "default": "auto",
+          "description": "%config.locale.description%"
+        }
+      }
     }
   },
   "scripts": {

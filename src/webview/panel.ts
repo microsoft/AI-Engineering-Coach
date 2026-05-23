@@ -13,6 +13,7 @@ import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage } from '../core/types';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
+import { getUiLanguageTag } from '../ui-locale';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
 import { getRpcHandler } from './panel-rpc';
 import { PanelRequestService } from './panel-request-service';
@@ -50,7 +51,11 @@ export class DashboardPanel {
     );
 
     runtimeDebug('panel', 'constructor');
-    this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
+    this.panel.webview.html = getDashboardHtml(
+      this.panel.webview,
+      this.extensionUri,
+      getUiLanguageTag(),
+    );
     this.panel.onDidChangeViewState((e) => {
       runtimeDebug('panel', 'view-state', `visible=${e.webviewPanel.visible} active=${e.webviewPanel.active}`);
     }, null, this.disposables);
@@ -113,7 +118,11 @@ export class DashboardPanel {
     this.pendingMessages = [];
     this.dataReady = false;
     this.disposed = false;
-    this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
+    this.panel.webview.html = getDashboardHtml(
+      this.panel.webview,
+      this.extensionUri,
+      getUiLanguageTag(),
+    );
     void this.loadData();
   }
 
@@ -207,7 +216,12 @@ export class DashboardPanel {
       if (dirs.length === 0) {
         runtimeDebug('panel', 'loadData-no-dirs');
         if (!this.disposed) {
-          try { this.panel.webview.html = getErrorHtml('No Copilot chat log directories found.'); } catch { /* disposed */ }
+          try {
+            this.panel.webview.html = getErrorHtml(
+              'No Copilot chat log directories found.',
+              getUiLanguageTag(),
+            );
+          } catch { /* disposed */ }
         }
         return;
       }
@@ -253,7 +267,12 @@ export class DashboardPanel {
     } catch (error: unknown) {
       runtimeDebug('panel', 'loadData-error', error);
       if (!this.disposed) {
-        try { this.panel.webview.html = getErrorHtml(error instanceof Error ? error.message : 'Failed to load data'); } catch { /* disposed */ }
+        try {
+          this.panel.webview.html = getErrorHtml(
+            error instanceof Error ? error.message : 'Failed to load data',
+            getUiLanguageTag(),
+          );
+        } catch { /* disposed */ }
       }
     } finally {
       this.loading = false;

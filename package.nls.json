@@ -1,0 +1,10 @@
+{
+  "extension.displayName": "AI Engineer Coach",
+  "extension.description": "Analyze your AI coding assistant usage across VS Code, Cursor, Claude, Codex, and OpenCode. Read-only, zero telemetry.",
+  "command.open": "AI Engineer Coach: Open Dashboard",
+  "command.reload": "AI Engineer Coach: Reload Data",
+  "command.reviewRules": "AI Engineer Coach: Review Local Rule Approvals",
+  "views.container.title": "AI Engineer Coach",
+  "views.dashboard.name": "Dashboard",
+  "config.locale.description": "Dashboard language. auto = follow VS Code/Cursor display language."
+}

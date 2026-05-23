@@ -5,7 +5,10 @@
 
 /* Webview entry -- runs in the browser context inside the VS Code webview */
 
+import { setLocaleFromDocument } from './i18n';
 import { AntiPatternData, DateFilter, StatsResult } from '../core/types';
+
+setLocaleFromDocument();
 import { $, $$, rpc, destroyCharts, initMessageListener, withErrorBoundary } from './shared';
 import { html, render, unmount, ComponentChildren } from './render';
 import { renderDashboard } from './page-dashboard';

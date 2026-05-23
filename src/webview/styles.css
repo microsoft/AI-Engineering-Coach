@@ -358,12 +358,32 @@ body {
 }
 
 /* ---- Main Content ---- */
+.content-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+}
+
+.lang-banner {
+  flex-shrink: 0;
+  margin: 12px 28px 0;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 #content {
   flex: 1;
   padding: 24px 28px;
   overflow-y: auto;
   max-width: 1200px;
-  height: 100vh;
+  min-height: 0;
 }
 
 h1 {

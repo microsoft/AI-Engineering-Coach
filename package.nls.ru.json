@@ -1,0 +1,10 @@
+{
+  "extension.displayName": "AI Engineer Coach",
+  "extension.description": "Анализ работы с ИИ в VS Code, Cursor, Claude, Codex и OpenCode. Только локально, без телеметрии.",
+  "command.open": "AI Engineer Coach: Открыть панель",
+  "command.reload": "AI Engineer Coach: Обновить данные",
+  "command.reviewRules": "AI Engineer Coach: Проверить локальные правила",
+  "views.container.title": "AI Engineer Coach",
+  "views.dashboard.name": "Обзор",
+  "config.locale.description": "Язык панели. auto — как в Cursor/VS Code; ru — всегда русский."
+}
