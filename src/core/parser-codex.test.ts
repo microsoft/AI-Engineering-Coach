@@ -12,15 +12,16 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect } from 'vitest';
-import { parseCodexSessions } from './parser-codex';
+import { findCodexDirs, parseCodexSessions } from './parser-codex';
+import { MAX_FILE_SIZE } from './parser-shared';
 
-function withCodexFile(lines: object[], run: (sessionsDir: string) => void): void {
+function withCodexFile(lines: object[], run: (sessionsDir: string, filePath: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-parser-test-'));
   const dayDir = path.join(root, 'sessions', '2025', '06', '15');
   fs.mkdirSync(dayDir, { recursive: true });
   const file = path.join(dayDir, 'rollout-2025-06-15-test.jsonl');
   fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
-  try { run(path.join(root, 'sessions')); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  try { run(path.join(root, 'sessions'), file); } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
 describe('parseCodexSessions', () => {
@@ -63,5 +64,68 @@ describe('parseCodexSessions', () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0].modelUsage).toBeUndefined();
     });
+  });
+
+  it('stores the Codex session cwd as workspaceRootPath', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cwd-test-'));
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-codex-cwd', cwd } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'hi' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z', payload: { type: 'assistant_message', content: 'hello' } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].location).toBe('terminal');
+      expect(sessions[0].workspaceRootPath).toBe(cwd);
+    });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('parses Codex JSONL files that exceed the shared in-memory file cap', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-codex-large', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'hi' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z', payload: { type: 'assistant_message', content: 'hello' } },
+    ], (sessionsDir, filePath) => {
+      fs.appendFileSync(filePath, '\n');
+      const blankLine = Buffer.concat([Buffer.alloc(1024 * 1024, 0x20), Buffer.from('\n')]);
+      while (fs.statSync(filePath).size <= MAX_FILE_SIZE) {
+        fs.appendFileSync(filePath, blankLine);
+      }
+
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].sessionId).toBe('sess-codex-large');
+      expect(sessions[0].requests).toHaveLength(1);
+    });
+  });
+});
+
+describe('findCodexDirs', () => {
+  it('discovers active and archived Codex session directories', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-dirs-test-'));
+    const oldHome = process.env.HOME;
+    const oldUserProfile = process.env.USERPROFILE;
+
+    try {
+      process.env.HOME = root;
+      process.env.USERPROFILE = root;
+
+      const active = path.join(root, '.codex', 'sessions');
+      const archivedUnderscore = path.join(root, '.codex', 'archived_sessions');
+      const archivedHyphen = path.join(root, '.codex', 'archived-sessions');
+      fs.mkdirSync(active, { recursive: true });
+      fs.mkdirSync(archivedUnderscore, { recursive: true });
+      fs.mkdirSync(archivedHyphen, { recursive: true });
+
+      expect(findCodexDirs()).toEqual([active, archivedUnderscore, archivedHyphen]);
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = oldUserProfile;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

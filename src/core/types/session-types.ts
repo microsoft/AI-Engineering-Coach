@@ -150,6 +150,9 @@ export interface Session {
    *  (e.g. CLI session without `cwd`, or multi-root workspace). Used by the
    *  `instruction-bloat` rule to detect always-on-context bloat. */
   customInstructionsBytes?: number;
+  /** Resolved project root for CLI harnesses that record cwd separately from
+   *  launch location/source. Used by config-health workspace scans. */
+  workspaceRootPath?: string;
   /** How the session was launched (Claude only, currently).
    *    interactive  — user typed `claude` in a terminal or used Claude Desktop.
    *    programmatic — spawned by another tool via the SDK (e.g. GitHub Copilot

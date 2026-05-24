@@ -77,7 +77,7 @@ export function resolveWorkspaceRoot(id: string, ws: Workspace): string | null {
     return resolveClaudeRoot(ws.path);
   }
   if (id.startsWith('codex-') || id.startsWith('opencode-')) {
-    return null;
+    return fs.existsSync(ws.path) ? ws.path : null;
   }
   return resolveVsCodeRoot(ws.path) ?? resolveCLIRoot(ws.path);
 }

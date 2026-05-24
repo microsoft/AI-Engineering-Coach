@@ -19,8 +19,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { StringDecoder } from 'string_decoder';
 import { ModelUsage, Session, SessionRequest } from './types';
-import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests } from './parser-shared';
+import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests } from './parser-shared';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId } from './helpers';
 
 interface CodexLine {
@@ -99,16 +100,6 @@ function parseCodexLine(rawLine: string): CodexLine | null {
   } catch {
     return null;
   }
-}
-
-function parseCodexLines(raw: string): CodexLine[] {
-  const lines: CodexLine[] = [];
-  for (const rawLine of raw.split('\n')) {
-    if (!rawLine.trim()) continue;
-    const parsed = parseCodexLine(rawLine);
-    if (parsed) lines.push(parsed);
-  }
-  return lines;
 }
 
 function parseJsonRecord(raw: string): Record<string, unknown> | null {
@@ -362,33 +353,76 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
   if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
 }
 
-function extractSessionMeta(lines: CodexLine[], filePath: string): CodexSessionMeta {
-  let sessionId = '';
-  let cwd = '';
-  let source = '';
-  let model = '';
-
-  for (const line of lines) {
-    if (line.type === 'session_meta') {
-      const payload = line.payload || {};
-      sessionId = stringValue(payload.id);
-      cwd = stringValue(payload.cwd);
-      source = stringValue(payload.source);
-    }
-    if (line.type === 'turn_context' && !model) {
-      model = stringValue(line.payload?.model);
-    }
+function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
+  if (line.type === 'session_meta') {
+    const payload = line.payload || {};
+    meta.sessionId = stringValue(payload.id) || meta.sessionId;
+    meta.cwd = stringValue(payload.cwd) || meta.cwd;
+    meta.source = stringValue(payload.source) || meta.source;
   }
+  if (line.type === 'turn_context' && !meta.model) {
+    meta.model = stringValue(line.payload?.model);
+  }
+}
 
-  if (!sessionId) sessionId = path.basename(filePath, '.jsonl');
-  return { sessionId, cwd, source, model };
+function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSessionMeta): void {
+  updateSessionMeta(line, meta);
+  const ts = line.timestamp ? new Date(line.timestamp).getTime() : null;
+  updateTimestamps(state, ts);
+
+  if (line.type === 'event_msg') {
+    handleEventMsg(line.payload || {}, state, ts, meta.model);
+    return;
+  }
+  if (line.type === 'turn_context') {
+    handleTurnContext(line.payload || {}, state);
+    return;
+  }
+  if (line.type === 'response_item') handleResponseItem(line.payload || {}, state, ts, meta.model);
+}
+
+function readCodexJsonlStreaming(filePath: string, onLine: (line: CodexLine) => void): void {
+  const fd = fs.openSync(filePath, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  let remainder = '';
+
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      const text = remainder + decoder.write(buffer.subarray(0, bytesRead));
+      let start = 0;
+      let nextNewline = text.indexOf('\n', start);
+      while (nextNewline !== -1) {
+        const rawLine = text.slice(start, nextNewline);
+        if (rawLine.trim()) {
+          const parsed = parseCodexLine(rawLine);
+          if (parsed) onLine(parsed);
+        }
+        start = nextNewline + 1;
+        nextNewline = text.indexOf('\n', start);
+      }
+      remainder = text.slice(start);
+    }
+
+    remainder += decoder.end();
+    if (remainder.trim()) {
+      const parsed = parseCodexLine(remainder);
+      if (parsed) onLine(parsed);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export function findCodexDirs(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const dirs: string[] = [];
-  const sessionsDir = path.join(home, '.codex', 'sessions');
-  if (fs.existsSync(sessionsDir)) dirs.push(sessionsDir);
+  for (const name of ['sessions', 'archived_sessions', 'archived-sessions']) {
+    const sessionsDir = path.join(home, '.codex', name);
+    if (fs.existsSync(sessionsDir)) dirs.push(sessionsDir);
+  }
   return dirs;
 }
 
@@ -424,37 +458,24 @@ function findAllJsonlFiles(dir: string): string[] {
 
 function parseCodexSessionFile(filePath: string): Session | null {
   assertTrustedPath(filePath);
-  let raw: string;
+  const meta: CodexSessionMeta = { sessionId: '', cwd: '', source: '', model: '' };
+  const state = createCodexState('');
+  let parsedLineCount = 0;
+
   try {
-    const content = readFileSafe(filePath);
-    if (content === null) return null;
-    raw = content;
+    readCodexJsonlStreaming(filePath, (line) => {
+      parsedLineCount++;
+      handleCodexLine(line, state, meta);
+    });
   } catch {
     return null;
   }
 
-  const lines = parseCodexLines(raw);
-  if (lines.length === 0) return null;
+  if (parsedLineCount === 0) return null;
+  if (!meta.sessionId) meta.sessionId = path.basename(filePath, '.jsonl');
 
-  const meta = extractSessionMeta(lines, filePath);
   const wsName = projectNameFromCwd(meta.cwd);
   const wsId = `codex-${wsName}-${meta.sessionId.slice(0, 8)}`;
-  const state = createCodexState(meta.model);
-
-  for (const line of lines) {
-    const ts = line.timestamp ? new Date(line.timestamp).getTime() : null;
-    updateTimestamps(state, ts);
-
-    if (line.type === 'event_msg') {
-      handleEventMsg(line.payload || {}, state, ts, meta.model);
-      continue;
-    }
-    if (line.type === 'turn_context') {
-      handleTurnContext(line.payload || {}, state);
-      continue;
-    }
-    if (line.type === 'response_item') handleResponseItem(line.payload || {}, state, ts, meta.model);
-  }
 
   flushCodexTurn(state, meta.model);
   if (state.requests.length === 0) return null;
@@ -474,5 +495,6 @@ function parseCodexSessionFile(filePath: string): Session | null {
     modelUsage,
     endReason,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests, meta.cwd),
+    workspaceRootPath: meta.cwd || undefined,
   });
 }

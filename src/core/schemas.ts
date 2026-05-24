@@ -98,6 +98,7 @@ export const SessionSchema = z.object({
   endReason: z.enum(['shutdown', 'active', 'aborted', 'unknown']).optional(),
   hasDevcontainer: z.boolean().optional(),
   customInstructionsBytes: z.number().optional(),
+  workspaceRootPath: z.string().optional(),
 }).passthrough();
 
 /* ---- Validation helper ---- */

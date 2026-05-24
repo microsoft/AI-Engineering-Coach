@@ -17,6 +17,7 @@ import {
   safeFileExists,
   buildFileTree,
   readSnippet,
+  resolveWorkspaceRoot,
 } from './config-health-helpers';
 import { ConfigFileInfo } from './types';
 
@@ -40,6 +41,13 @@ afterEach(() => {
     if (!dir) continue;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe('resolveWorkspaceRoot', () => {
+  it('uses existing Codex workspace paths as root paths', () => {
+    const root = makeTempDir();
+    expect(resolveWorkspaceRoot('codex-proj-1234', { id: 'codex-proj-1234', name: 'proj', path: root })).toBe(root);
+  });
 });
 
 describe('scanConfigFiles', () => {

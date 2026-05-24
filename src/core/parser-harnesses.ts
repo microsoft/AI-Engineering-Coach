@@ -5,6 +5,7 @@
 
 /* External harness collection registry for parser orchestration. */
 
+import * as fs from 'fs';
 import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
@@ -26,7 +27,8 @@ interface ExternalHarnessCollector {
 function addSession(workspaces: WorkspaceMap, sessions: Session[], session: Session, rootPath: string): void {
   sessions.push(session);
   if (!workspaces.has(session.workspaceId)) {
-    workspaces.set(session.workspaceId, { id: session.workspaceId, name: session.workspaceName, path: rootPath });
+    const sessionRootPath = session.workspaceRootPath && fs.existsSync(session.workspaceRootPath) ? session.workspaceRootPath : rootPath;
+    workspaces.set(session.workspaceId, { id: session.workspaceId, name: session.workspaceName, path: sessionRootPath });
   }
 }
 
