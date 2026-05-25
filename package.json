@@ -41,6 +41,26 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.teamMode.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Team Mode to sync only aggregated AI usage statistics to a shared backend."
+        },
+        "aiEngineerCoach.teamMode.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "The Team Mode server URL used to upload aggregated, privacy-safe team statistics."
+        },
+        "aiEngineerCoach.teamMode.developerId": {
+          "type": "string",
+          "default": "",
+          "description": "Your unique Team Mode developer ID used to identify your aggregated stats on the shared backend."
+        }
+      }
+    },
     "commands": [
       {
         "command": "aiEngineerCoach.open",

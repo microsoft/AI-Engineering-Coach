@@ -7,10 +7,12 @@
 
 import * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
-import { saveSidebarStats } from '../core/cache';
+import { loadTeamModeSyncState, saveSidebarStats, saveTeamModeSyncState } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult } from '../core/parser';
 import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage } from '../core/types';
+import { buildTeamModeSnapshot, readTeamModeSettings } from '../core/team-mode';
+import { createFetchTeamModeTransport, fingerprintTeamModeSnapshot, TeamModeSyncClient } from '../core/team-sync';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
@@ -29,6 +31,7 @@ export class DashboardPanel {
   private readonly extensionUri: vscode.Uri;
   private readonly requestService: PanelRequestService;
   private readonly globalState: vscode.Memento;
+  private readonly teamModeSyncClient: TeamModeSyncClient;
   private readonly disposables: vscode.Disposable[] = [];
 
   private analyzer: Analyzer | undefined;
@@ -38,11 +41,16 @@ export class DashboardPanel {
   private disposed = false;
   private loading = false;
   private loadCompletedAt = 0;
+  private lastTeamModeSnapshotFingerprint: string | undefined = loadTeamModeSyncState()?.lastSnapshotFingerprint;
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.globalState = context.globalState;
+    this.teamModeSyncClient = new TeamModeSyncClient(
+      createFetchTeamModeTransport(),
+      () => readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach')),
+    );
     this.requestService = new PanelRequestService(
       this.panel.webview,
       () => this.analyzer,
@@ -195,6 +203,7 @@ export class DashboardPanel {
         this.updateSidebarStats();
         this.dataReady = true;
         safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
+        this.syncTeamModeSnapshot();
         return;
       }
 
@@ -237,6 +246,7 @@ export class DashboardPanel {
 
       safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
       runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${Date.now() - t0}`);
+      this.syncTeamModeSnapshot();
 
       try {
         await this.analyzer.warmUp();
@@ -338,6 +348,38 @@ export class DashboardPanel {
       const budgets = this.globalState.get<Record<string, number>>(DashboardPanel.BUDGET_STATE_KEY, {});
       if (!this.disposed) try { postResponse(this.panel.webview, msg.id, budgets); } catch { /* disposed */ }
     }
+  }
+
+  private syncTeamModeSnapshot(): void {
+    if (!this.analyzer || !this.parseResult || this.disposed) return;
+
+    const settings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
+    if (!settings.enabled || !settings.serverUrl || !settings.developerId) {
+      runtimeDebug('panel', 'team-mode-sync-skipped', 'disabled');
+      return;
+    }
+
+    const snapshot = buildTeamModeSnapshot(this.analyzer, settings);
+    const fingerprint = `${settings.serverUrl}|${settings.developerId}|${fingerprintTeamModeSnapshot(snapshot)}`;
+    if (fingerprint === this.lastTeamModeSnapshotFingerprint) {
+      runtimeDebug('panel', 'team-mode-sync-skipped', 'duplicate-snapshot');
+      return;
+    }
+
+    this.lastTeamModeSnapshotFingerprint = fingerprint;
+    saveTeamModeSyncState({
+      lastSnapshotFingerprint: fingerprint,
+      savedAt: Date.now(),
+    });
+    void this.teamModeSyncClient.enqueue(snapshot).then(result => {
+      runtimeDebug(
+        'panel',
+        'team-mode-sync',
+        `ok=${result.ok} uploaded=${result.uploaded} queued=${result.queued} skipped=${result.skipped}` + (result.error ? ` error=${result.error}` : ''),
+      );
+    }).catch(error => {
+      runtimeDebug('panel', 'team-mode-sync-error', error);
+    });
   }
 
   private dispose(): void {

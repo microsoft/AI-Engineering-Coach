@@ -13,11 +13,16 @@ Analyze your AI coding assistant usage across VS Code, GitHub Copilot for Xcode,
 
 The extension is organized into three sections: **Observe**, **Measure**, and **Improve**.
 
+Optional Team Mode lets a team lead run a shared dashboard without exposing raw prompts, code, or file names. When enabled, each developer enters a server URL and developer ID, and the extension syncs only aggregated scores, token totals, anti-pattern counts, and trend numbers. When Team Mode is off, the extension stays fully local and behaves exactly as before.
+
+The shared backend is designed to run on Cloudflare Workers with D1 so basic usage stays lightweight and low-cost. The admin who boots the server first can generate invite codes for the rest of the team, and only privacy-safe aggregates are ever uploaded.
+
 ### Observe
 
 | Page | What it shows |
 | --- | --- |
 | **Dashboard** | Practice scores with week-over-week and month-over-month trends, skill finder summary, daily activity chart with per-harness breakdown, and top workspace stats |
+| **Team Dashboard** | Optional admin-only team view with per-developer scores, token usage, anti-pattern summaries, and trend reporting from privacy-safe aggregates |
 | **Timeline** | Gantt-style session timeline with per-day drill-down, session overlap detection, and a searchable list view |
 | **Coding Moments** | Screenshot gallery from AI coding sessions with story reels, workspace filtering, and progressive image loading |
 
@@ -67,6 +72,8 @@ The extension is organized into three sections: **Observe**, **Measure**, and **
 2. Run **AI Engineer Coach: Open Dashboard**.
 3. Use the sidebar to navigate pages. Filter by workspace or harness at the bottom.
 4. Run **AI Engineer Coach: Reload Data** to re-parse after new sessions.
+5. If you want Team Mode, enable it in settings, enter your server URL and developer ID, and keep the local dashboard unchanged for everyone else.
+6. If you are hosting the Team Mode backend, bootstrap the server once, then use invite codes to add teammates without any external login system.
 
 
 

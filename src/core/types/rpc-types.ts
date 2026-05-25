@@ -24,6 +24,7 @@ export function isErrorResult(v: unknown): v is ErrorResult {
 }
 
 import type { DateFilter, Session } from './session-types';
+import type { TeamModeSnapshot } from './team-mode-types';
 import type {
   AiCreditBurndownData,
   AiCreditData,
@@ -114,6 +115,15 @@ export interface RpcMethodMap {
 }
 
 export type RpcMethodName = keyof RpcMethodMap;
+
+export interface TeamModeSyncResult {
+  ok: boolean;
+  uploaded: boolean;
+  queued: boolean;
+  skipped: boolean;
+  snapshot?: TeamModeSnapshot;
+  error?: string;
+}
 
 export interface ExtensionMethodMap extends RpcMethodMap {
   openExternal: { params: { url: string }; result: { ok: boolean } };

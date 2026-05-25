@@ -339,6 +339,13 @@ export interface SidebarStats {
 
 const SIDEBAR_STATS_FILE = path.join(CACHE_DIR, 'sidebar-stats.json');
 
+export interface TeamModeSyncState {
+  lastSnapshotFingerprint: string;
+  savedAt: number;
+}
+
+const TEAM_MODE_SYNC_STATE_FILE = path.join(CACHE_DIR, 'team-mode-sync.json');
+
 export function loadSidebarStats(): SidebarStats | null {
   try {
     if (!fs.existsSync(SIDEBAR_STATS_FILE)) return null;
@@ -355,6 +362,26 @@ export function saveSidebarStats(stats: SidebarStats): void {
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
     fs.writeFileSync(SIDEBAR_STATS_FILE, JSON.stringify(stats), 'utf-8');
+  } catch {
+    // best-effort
+  }
+}
+
+export function loadTeamModeSyncState(): TeamModeSyncState | null {
+  try {
+    if (!fs.existsSync(TEAM_MODE_SYNC_STATE_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(TEAM_MODE_SYNC_STATE_FILE, 'utf-8')) as Partial<TeamModeSyncState>;
+    if (typeof raw.lastSnapshotFingerprint !== 'string' || typeof raw.savedAt !== 'number') return null;
+    return raw as TeamModeSyncState;
+  } catch {
+    return null;
+  }
+}
+
+export function saveTeamModeSyncState(state: TeamModeSyncState): void {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(TEAM_MODE_SYNC_STATE_FILE, JSON.stringify(state), 'utf-8');
   } catch {
     // best-effort
   }

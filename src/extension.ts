@@ -9,6 +9,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { getRuntimeDebugLogPath, installRuntimeDebugHooks, runtimeDebug, setOutputHook } from './core/runtime-debug';
 import { loadAllRuleLayersAsync, loadAllMetricLayersAsync, setDefaultTrustGate } from './core/rule-loader';
+import { readTeamModeSettings } from './core/team-mode';
 import {
   approve as approveTrust,
   createTrustGate,
@@ -78,6 +79,9 @@ export function activate(context: vscode.ExtensionContext) {
   setOutputHook((msg) => outputChannel.appendLine(msg));
 
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const teamModeSettings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
+  runtimeDebug('extension', 'team-mode',
+    `enabled=${teamModeSettings.enabled} serverConfigured=${teamModeSettings.serverUrl.length > 0} developerIdConfigured=${teamModeSettings.developerId.length > 0}`);
 
   const trustGate = createTrustGate(context.globalState);
   setDefaultTrustGate(trustGate);

@@ -5,9 +5,12 @@ weight: 20
 
 AI Engineer Coach organizes its capabilities into three areas that mirror a continuous improvement cycle: **Observe** your usage, **Measure** your output, and **Improve** your practices.
 
+When Team Mode is enabled, a fourth shared view becomes available to admins: a team dashboard built only from privacy-safe aggregates. It shows per-developer score cards, token totals, anti-pattern severity, and week-over-week trends without exposing raw prompts, code, or file names. The extension can sync to a Cloudflare Workers + D1 backend so the team keeps basic usage lightweight and cost-conscious.
+
 ## Observe
 
 - [Dashboard](/observe/dashboard/) -- At-a-glance practice scores, activity charts, and skill recommendations
+- Team Dashboard -- Optional admin-only team overview for aggregated AI usage quality and coaching trends
 - [Timeline](/observe/timeline/) -- Gantt-style session timeline showing when and how long you worked with AI
 - [Coding Moments](/observe/coding-moments/) -- Screenshot gallery from AI coding sessions with story reels and workspace filtering
 
@@ -25,6 +28,13 @@ AI Engineer Coach organizes its capabilities into three areas that mirror a cont
 - [Data Explorer](/improve/data-explorer/) -- Inspect request/session fields and distributions
 - [Skill Finder](/improve/skill-finder/) -- Discover repeated prompts and matching community skills
 - [Context Health](/improve/context-health/) -- Evaluate context quality and session management efficiency
+
+## Team Mode
+
+- Team Mode is optional and off by default
+- Admins bootstrap the backend first, then generate invite codes for teammates
+- Developers only upload aggregate numeric snapshots after local analysis
+- No raw prompts, code, file names, or session text ever leave the developer machine
 
 ## Level Up
 

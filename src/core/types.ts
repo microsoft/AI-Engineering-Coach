@@ -9,5 +9,6 @@ export * from './types/catalog-types';
 export * from './types/insights-types';
 export * from './types/config-types';
 export * from './types/context-types';
+export * from './types/team-mode-types';
 export * from './types/rule-types';
 export * from './types/rpc-types';

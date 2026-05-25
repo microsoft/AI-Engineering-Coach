@@ -83,3 +83,9 @@ export interface ConfigHealthData {
   suggestions: string[];
   contextAntiPatterns: AntiPattern[];
 }
+
+export interface TeamModeSettings {
+  enabled: boolean;
+  serverUrl: string;
+  developerId: string;
+}
