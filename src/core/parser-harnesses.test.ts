@@ -10,28 +10,31 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { hasExternalHarnessSources } from './parser-harnesses';
 
-const ORIG_HOME = process.env.HOME;
-const ORIG_USERPROFILE = process.env.USERPROFILE;
+function setEnv(key: 'HOME' | 'USERPROFILE', value: string | undefined): void {
+  if (value === undefined) delete process.env[key]; else process.env[key] = value;
+}
 
-function withHome(setup: (home: string) => void, run: () => void): void {
+/** Run `body` with HOME/USERPROFILE pointed at a fresh temp dir, restoring the
+ *  previous values (and removing the temp dir) afterwards. Self-contained so it
+ *  leaks no env state across tests. */
+function withHome(setup: (home: string) => void, body: () => void): void {
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   try {
     setup(home);
-    run();
+    body();
   } finally {
+    setEnv('HOME', prevHome);
+    setEnv('USERPROFILE', prevUserProfile);
     fs.rmSync(home, { recursive: true, force: true });
   }
 }
-
-afterEach(() => {
-  if (ORIG_HOME === undefined) delete process.env.HOME; else process.env.HOME = ORIG_HOME;
-  if (ORIG_USERPROFILE === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = ORIG_USERPROFILE;
-});
 
 describe('hasExternalHarnessSources', () => {
   it('returns false when no external-harness directories exist', () => {
@@ -46,5 +49,18 @@ describe('hasExternalHarnessSources', () => {
     }, () => {
       expect(hasExternalHarnessSources()).toBe(true);
     });
+  });
+
+  it('returns false when no home directory is set (avoids relative-path probing)', () => {
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
+    setEnv('HOME', undefined);
+    setEnv('USERPROFILE', undefined);
+    try {
+      expect(hasExternalHarnessSources()).toBe(false);
+    } finally {
+      setEnv('HOME', prevHome);
+      setEnv('USERPROFILE', prevUserProfile);
+    }
   });
 });

@@ -84,6 +84,10 @@ export interface ExternalHarnessProgressHandlers {
  *  Remote-SSH host that has Claude Code sessions under `~/.claude/projects` but
  *  no VS Code workspace storage or Copilot directories. */
 export function hasExternalHarnessSources(): boolean {
+  // Without a home directory the find* helpers would join against an empty
+  // string and probe relative paths (e.g. `.claude/projects`) under the current
+  // working directory, which could report false positives. Bail out instead.
+  if (!process.env.HOME && !process.env.USERPROFILE) return false;
   return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
 }
 
