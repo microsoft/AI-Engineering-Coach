@@ -78,6 +78,15 @@ export interface ExternalHarnessProgressHandlers {
   yieldToLoop?: () => Promise<void>;
 }
 
+/** Returns true if any external-harness (Claude Code, Codex, OpenCode) session
+ *  source exists on disk. The dashboard uses this so it does not abort when the
+ *  only available logs come from a non-VS Code harness — e.g. a headless
+ *  Remote-SSH host that has Claude Code sessions under `~/.claude/projects` but
+ *  no VS Code workspace storage or Copilot directories. */
+export function hasExternalHarnessSources(): boolean {
+  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
+}
+
 export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {
   const ctx: HarnessCollectionContext = { workspaces, sessions };
   for (const harness of EXTERNAL_HARNESSES) {
