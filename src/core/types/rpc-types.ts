@@ -123,6 +123,7 @@ export interface ExtensionMethodMap extends RpcMethodMap {
   generateLearningResources: { params: Record<string, unknown>; result: { resources: unknown[]; error?: string } };
   generateCodeComparison: { params: Record<string, unknown>; result: { rounds: unknown[] } };
   generateDidYouKnow: { params: Record<string, unknown>; result: { facts: unknown[] } };
+  exportSummary: { params: { filter?: DateFilter } | DateFilter | undefined; result: { ok: boolean; cancelled?: boolean; folder?: string; markdownPath?: string; jsonPath?: string } };
   installSkill: { params: { filename: string; content: string }; result: { ok: boolean; path?: string; error?: string } };
   installCatalogItem: { params: { path: string; kind?: string; title?: string }; result: { content: string; filename: string; error?: string } };
   triageSkills: { params: Record<string, unknown>; result: { triaged: unknown[] } };

@@ -47,7 +47,7 @@ The extension is organized into three sections: **Observe**, **Measure**, and **
 | **Learning Center** | Personalized quizzes and code-comparison rounds generated from your actual usage |
 | **Achievements** | XP-based progression with Bronze, Silver, Gold, and Diamond tiers |
 | **Agentic SDLC** | Track how you use AI across the full software-development lifecycle |
-| **Share** | Generate a shareable stat card |
+| **Share** | Generate a shareable stat card and export Markdown/JSON summaries |
 
 ## Supported Harnesses
 

@@ -115,7 +115,7 @@ code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | S
 | **Learning Center** | Personalized quizzes and code-comparison rounds generated from your actual usage |
 | **Achievements** | XP-based progression with Bronze → Silver → Gold → Diamond tiers |
 | **Agentic SDLC** | How you use AI across the full software-development lifecycle |
-| **Share** | Generate a shareable stat card |
+| **Share** | Generate a shareable stat card and export Markdown/JSON summaries |
 
 ---
 

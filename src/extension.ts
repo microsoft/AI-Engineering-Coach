@@ -7,6 +7,8 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { Analyzer } from './core/analyzer';
+import { findLogsDirs, parseAllLogsViaWorker } from './core/parser';
 import { getRuntimeDebugLogPath, installRuntimeDebugHooks, runtimeDebug, setOutputHook } from './core/runtime-debug';
 import { loadAllRuleLayersAsync, loadAllMetricLayersAsync, setDefaultTrustGate } from './core/rule-loader';
 import {
@@ -19,6 +21,7 @@ import {
   setDefaultTrustStore,
   type PendingEntry,
 } from './core/rule-trust';
+import { exportSummaryFiles } from './summary-export-vscode';
 
 
 type PanelModule = typeof import('./webview/panel');
@@ -26,6 +29,29 @@ let panelModulePromise: Promise<PanelModule> | null = null;
 function loadPanelModule(): Promise<PanelModule> {
   if (!panelModulePromise) panelModulePromise = import('./webview/panel');
   return panelModulePromise;
+}
+
+async function exportSummaryFromLogs(): Promise<void> {
+  const dirs = findLogsDirs();
+  if (dirs.length === 0) {
+    vscode.window.showErrorMessage('No AI coding session log directories found.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Exporting AI Engineer Coach summary',
+      cancellable: false,
+    },
+    async progress => {
+      const parsed = await parseAllLogsViaWorker(dirs, update => {
+        progress.report({ message: update.detail ?? 'Reading session logs' });
+      });
+      const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
+      await exportSummaryFiles(analyzer);
+    },
+  );
 }
 
 async function reviewPendingTrust(context: vscode.ExtensionContext): Promise<Set<string>> {
@@ -136,6 +162,12 @@ export function activate(context: vscode.ExtensionContext) {
       } else {
         DashboardPanel.createOrShow(context.extensionUri, context);
       }
+    }),
+    vscode.commands.registerCommand('aiEngineerCoach.exportSummary', async () => {
+      runtimeDebug('extension', 'command-export-summary');
+      await ready;
+      if (getPending().length > 0) await promptAndReload();
+      await exportSummaryFromLogs();
     }),
     vscode.commands.registerCommand('aiEngineerCoach.reviewLocalRules', async () => {
       runtimeDebug('extension', 'command-review-trust');

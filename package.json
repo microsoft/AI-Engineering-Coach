@@ -36,6 +36,7 @@
   "activationEvents": [
     "onCommand:aiEngineerCoach.open",
     "onCommand:aiEngineerCoach.reload",
+    "onCommand:aiEngineerCoach.exportSummary",
     "onCommand:aiEngineerCoach.reviewLocalRules",
     "onView:aiEngineerCoach.welcome"
   ],
@@ -51,6 +52,11 @@
         "command": "aiEngineerCoach.reload",
         "title": "AI Engineer Coach: Reload Data",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "aiEngineerCoach.exportSummary",
+        "title": "AI Engineer Coach: Export Summary",
+        "icon": "$(export)"
       },
       {
         "command": "aiEngineerCoach.reviewLocalRules",
