@@ -1,0 +1,22 @@
+{
+  "name": "ai-engineering-coach",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "node",
+  "postCreateCommand": "npm ci",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "streetsidesoftware.code-spell-checker",
+        "ms-playwright.playwright"
+      ],
+      "settings": {
+        "npm.packageManager": "npm",
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  }
+}
