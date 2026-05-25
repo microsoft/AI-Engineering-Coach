@@ -50,16 +50,21 @@ AI Engineer Coach reads your local AI session logs and turns them into actionabl
 
 ---
 
-## Quick Start
+## Installation
 
-```bash
-git clone https://github.com/microsoft/ai-engineering-coach.git
-cd ai-engineering-coach
-npm install
-npm run package
-```
+Choose one of these paths.
 
-Then install the `.vsix`:
+### Path 1 -- Prebuilt VSIX (easiest)
+
+Prerequisites:
+
+- VS Code
+- Access to the repository Releases page
+
+Steps:
+
+1. Download the latest `ai-engineer-coach-*.vsix` from Releases.
+2. Install it in VS Code:
 
 **macOS / Linux**
 
@@ -72,6 +77,51 @@ code --install-extension ai-engineer-coach-*.vsix
 ```powershell
 code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | Select-Object -First 1).FullName
 ```
+
+### Path 2 -- Dev Container build (no local Node.js/npm)
+
+Prerequisites:
+
+- VS Code
+- Dev Containers extension
+- Docker or Podman
+
+Steps:
+
+1. Clone the repo and open it in VS Code.
+2. Reopen in container.
+3. Run:
+
+```bash
+npm ci
+npm run package
+```
+
+4. Install the generated `.vsix` using one of the commands above.
+
+### Path 3 -- Local build
+
+Prerequisites:
+
+- VS Code
+- Node.js and npm
+
+Steps:
+
+```bash
+git clone https://github.com/microsoft/ai-engineering-coach.git
+cd ai-engineering-coach
+npm ci
+npm run package
+```
+
+Then install the generated `.vsix` using one of the commands above.
+
+### Release permissions and contribution path
+
+If you do not have permission to publish a Release artifact, open a PR with your changes and ask a maintainer to publish the `.vsix` in Releases.
+
+After install:
 
 1. Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
 2. Run **AI Engineer Coach: Open Dashboard**
