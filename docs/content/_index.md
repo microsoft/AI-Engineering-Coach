@@ -26,31 +26,3 @@ AI Engineer Coach runs as a VS Code extension. On activation, it scans your loca
 ## Editable Rule Engine
 
 Anti-pattern detection is driven by an editable rule engine. Each detector is a markdown file with YAML frontmatter and a small DSL that you can inspect, tune, and extend. The [Rule Editor](/improve/rule-editor/) lets you live-test changes against your own data, and an AI builder can scaffold new rules from a natural-language description. The [Rule Playground](/improve/rule-playground/) is an interactive REPL for the DSL, and the [Data Explorer](/improve/data-explorer/) shows every field and distribution the rules can key off.
-
-## Documentation Index
-
-This is a quick map of the docs tree so readers and agents can see the available pages at a glance.
-
-- [Features](/features/)
-- [Getting Started](/getting-started/)
-  - [Installation](/getting-started/installation/)
-  - [Supported Tools](/getting-started/supported-tools/)
-- [Improve](/improve/)
-  - [Anti-Patterns](/improve/anti-patterns/)
-  - [Context Health](/improve/context-health/)
-  - [Data Explorer](/improve/data-explorer/)
-  - [Rule Editor](/improve/rule-editor/)
-  - [Rule Playground](/improve/rule-playground/)
-  - [Skill Finder](/improve/skill-finder/)
-- [Level Up](/level-up/)
-  - [Achievements](/level-up/achievements/)
-  - [Learning Center](/level-up/learning/)
-  - [Agentic SDLC](/level-up/sdlc/)
-  - [Share](/level-up/share/)
-- [Measure](/measure/)
-  - [Burndown](/measure/burndown/)
-  - [Output](/measure/output/)
-  - [Activity Patterns](/measure/patterns/)
-- [Observe](/observe/)
-  - [Dashboard](/observe/dashboard/)
-  - [Timeline](/observe/timeline/)
