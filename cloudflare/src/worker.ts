@@ -1,6 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type {
   TeamBootstrapRequest,
+  TeamDashboardAccess,
+  TeamDashboardCategory,
+  TeamDashboardFilters,
+  TeamDashboardMemberRow,
+  TeamDashboardResponse,
   TeamIngestRequest,
   TeamInviteRequest,
   TeamJoinRequest,
@@ -165,6 +170,198 @@ function getMemberContext(state: TeamModeState, request: Request): { member: Tea
 
 function createPayloadHash(snapshot: TeamIngestRequest['snapshot']): string {
   return hashValue(JSON.stringify(snapshot));
+}
+
+function parseDashboardFilters(url: URL): TeamDashboardFilters {
+  const developerId = url.searchParams.get('developerId')?.trim();
+  const category = url.searchParams.get('category')?.trim() as TeamDashboardCategory | '' | null;
+  const fromMsRaw = url.searchParams.get('from');
+  const toMsRaw = url.searchParams.get('to');
+
+  return {
+    developerId: developerId || undefined,
+    category: category && category !== 'all' ? category : undefined,
+    fromMs: fromMsRaw ? Number(fromMsRaw) : undefined,
+    toMs: toMsRaw ? Number(toMsRaw) : undefined,
+  };
+}
+
+function parseWeeklyTrendJson(value: string): TeamSnapshotRow['weeklyTrendJson'] extends string ? Record<string, number[]> : never {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return parsed as Record<string, number[]>;
+  } catch {
+    return {} as Record<string, number[]>;
+  }
+}
+
+function parseViolationsJson(value: string): Array<{ key: string; label: string; count: number; severity: 'low' | 'medium' | 'high' }> {
+  try {
+    const parsed = JSON.parse(value) as Array<{ key?: unknown; label?: unknown; count?: unknown; severity?: unknown }>;
+    return parsed
+      .filter((item) => typeof item.key === 'string' && typeof item.label === 'string' && typeof item.count === 'number' && (item.severity === 'low' || item.severity === 'medium' || item.severity === 'high'))
+      .map((item) => ({
+        key: item.key as string,
+        label: item.label as string,
+        count: item.count as number,
+        severity: item.severity as 'low' | 'medium' | 'high',
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function emptyCategoryScores(): TeamDashboardMemberRow['categoryScores'] {
+  return {
+    promptQuality: 0,
+    sessionHygiene: 0,
+    codeReview: 0,
+    toolMastery: 0,
+    contextManagement: 0,
+  };
+}
+
+function emptyWeeklyTrend(): TeamDashboardMemberRow['weeklyTrend'] {
+  return {
+    weekStartsOn: [],
+    promptQuality: [],
+    sessionHygiene: [],
+    codeReview: [],
+    toolMastery: [],
+    contextManagement: [],
+  };
+}
+
+function aggregateDeveloperRows(state: TeamModeState, filters: TeamDashboardFilters, member: TeamMemberRecord): TeamDashboardMemberRow[] {
+  const fromMs = typeof filters.fromMs === 'number' && Number.isFinite(filters.fromMs) ? filters.fromMs : undefined;
+  const toMs = typeof filters.toMs === 'number' && Number.isFinite(filters.toMs) ? filters.toMs : undefined;
+  const activeDeveloperId = filters.developerId || member.developerId;
+
+  const snapshots = state.snapshots.filter((snapshot) => {
+    if (snapshot.serverId !== state.server?.serverId) return false;
+    if (member.role !== 'admin' && snapshot.developerId !== member.developerId) return false;
+    if (filters.developerId && snapshot.developerId !== filters.developerId) return false;
+    if (fromMs !== undefined && snapshot.capturedAtMs < fromMs) return false;
+    if (toMs !== undefined && snapshot.capturedAtMs > toMs) return false;
+    return true;
+  });
+
+  const grouped = new Map<string, TeamSnapshotRow[]>();
+  for (const snapshot of snapshots) {
+    const rows = grouped.get(snapshot.developerId) ?? [];
+    rows.push(snapshot);
+    grouped.set(snapshot.developerId, rows);
+  }
+
+  const rows: TeamDashboardMemberRow[] = [];
+  for (const [developerId, entries] of grouped.entries()) {
+    const memberRow = state.members.find((candidate) => candidate.developerId === developerId);
+    const latest = [...entries].sort((a, b) => b.capturedAtMs - a.capturedAtMs)[0];
+    const categoryScores = entries.reduce((acc, entry) => {
+      acc.promptQuality += entry.promptQualityScore;
+      acc.sessionHygiene += entry.sessionHygieneScore;
+      acc.codeReview += entry.codeReviewScore;
+      acc.toolMastery += entry.toolMasteryScore;
+      acc.contextManagement += entry.contextManagementScore;
+      return acc;
+    }, emptyCategoryScores());
+    const divisor = entries.length || 1;
+    const latestTrend = parseWeeklyTrendJson(latest.weeklyTrendJson);
+    const topViolationCounts = new Map<string, { key: string; label: string; count: number; severity: 'low' | 'medium' | 'high' }>();
+    let totalViolations = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let totalTokens = 0;
+    let requests = 0;
+
+    for (const entry of entries) {
+      inputTokens += entry.inputTokens;
+      outputTokens += entry.outputTokens;
+      totalTokens += entry.totalTokens;
+      requests += 1;
+      totalViolations += entry.antiPatternTotal;
+      for (const violation of parseViolationsJson(entry.topViolationsJson)) {
+        const existing = topViolationCounts.get(violation.key);
+        if (existing) {
+          existing.count += violation.count;
+        } else {
+          topViolationCounts.set(violation.key, { ...violation });
+        }
+      }
+    }
+
+    rows.push({
+      developerId,
+      displayName: memberRow?.displayName || developerId,
+      snapshotCount: entries.length,
+      categoryScores: {
+        promptQuality: Math.round(categoryScores.promptQuality / divisor),
+        sessionHygiene: Math.round(categoryScores.sessionHygiene / divisor),
+        codeReview: Math.round(categoryScores.codeReview / divisor),
+        toolMastery: Math.round(categoryScores.toolMastery / divisor),
+        contextManagement: Math.round(categoryScores.contextManagement / divisor),
+      },
+      tokenUsage: {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        requests,
+      },
+      antiPatterns: {
+        total: totalViolations,
+        topViolations: Array.from(topViolationCounts.values()).sort((a, b) => b.count - a.count),
+      },
+      weeklyTrend: {
+        weekStartsOn: Array.isArray(latestTrend.weekStartsOn) ? latestTrend.weekStartsOn.map((week) => String(week)) : [],
+        promptQuality: Array.isArray(latestTrend.promptQuality) ? latestTrend.promptQuality.map(Number) : [],
+        sessionHygiene: Array.isArray(latestTrend.sessionHygiene) ? latestTrend.sessionHygiene.map(Number) : [],
+        codeReview: Array.isArray(latestTrend.codeReview) ? latestTrend.codeReview.map(Number) : [],
+        toolMastery: Array.isArray(latestTrend.toolMastery) ? latestTrend.toolMastery.map(Number) : [],
+        contextManagement: Array.isArray(latestTrend.contextManagement) ? latestTrend.contextManagement.map(Number) : [],
+      },
+      weekOverWeek: {
+        promptQuality: computeWeekOverWeek(latestTrend.promptQuality),
+        sessionHygiene: computeWeekOverWeek(latestTrend.sessionHygiene),
+        codeReview: computeWeekOverWeek(latestTrend.codeReview),
+        toolMastery: computeWeekOverWeek(latestTrend.toolMastery),
+        contextManagement: computeWeekOverWeek(latestTrend.contextManagement),
+      },
+    });
+  }
+
+  if (member.role !== 'admin') {
+    return rows.filter((row) => row.developerId === activeDeveloperId || row.developerId === member.developerId);
+  }
+
+  if (filters.developerId) {
+    return rows.filter((row) => row.developerId === filters.developerId);
+  }
+
+  return rows.sort((a, b) => a.developerId.localeCompare(b.developerId));
+}
+
+function computeWeekOverWeek(values: unknown): number {
+  if (!Array.isArray(values) || values.length < 2) return 0;
+  const last = Number(values[values.length - 1]);
+  const prev = Number(values[values.length - 2]);
+  if (!Number.isFinite(last) || !Number.isFinite(prev)) return 0;
+  return Math.round(last - prev);
+}
+
+function buildDashboardResponse(state: TeamModeState, member: TeamMemberRecord, filters: TeamDashboardFilters): TeamDashboardResponse {
+  const access = {
+    role: member.role,
+    developerId: member.developerId,
+    canExportPdf: member.role === 'admin',
+  } satisfies TeamDashboardAccess;
+
+  return {
+    access,
+    filters,
+    selectedCategory: filters.category || 'all',
+    totalDevelopers: new Set(state.snapshots.map((snapshot) => snapshot.developerId)).size,
+    developers: aggregateDeveloperRows(state, filters, member),
+  };
 }
 
 function bootstrapServer(state: TeamModeState, env: TeamModeEnv, body: TeamBootstrapRequest): Response {
@@ -381,6 +578,18 @@ function createApp(env: TeamModeEnv): TeamModeApp {
         const context = getMemberContext(state, request);
         if (context instanceof Response) return context;
         return ingestSnapshot(state, env, request, context.member);
+      }
+
+      if (request.method === 'GET' && url.pathname === '/dashboard') {
+        const context = getMemberContext(state, request);
+        if (context instanceof Response) return context;
+        if (!state.server) return errorResponse('team not initialized', 400);
+        const filters = parseDashboardFilters(url);
+        if (context.member.role !== 'admin' && filters.developerId && filters.developerId !== context.member.developerId) {
+          return errorResponse('member dashboard access is self-scoped', 403);
+        }
+        const response = buildDashboardResponse(state, context.member, filters);
+        return jsonResponse(response);
       }
 
       return errorResponse('not found', 404);

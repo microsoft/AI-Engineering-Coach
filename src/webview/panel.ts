@@ -7,11 +7,12 @@
 
 import * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
-import { loadTeamModeSyncState, saveSidebarStats, saveTeamModeSyncState } from '../core/cache';
+import { loadTeamModeAuthState, loadTeamModeSyncState, saveSidebarStats, saveTeamModeSyncState } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult } from '../core/parser';
 import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage } from '../core/types';
 import { buildTeamModeSnapshot, readTeamModeSettings } from '../core/team-mode';
+import { TeamDashboardClient } from '../core/team-dashboard-client';
 import { createFetchTeamModeTransport, fingerprintTeamModeSnapshot, TeamModeSyncClient } from '../core/team-sync';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
@@ -32,6 +33,7 @@ export class DashboardPanel {
   private readonly requestService: PanelRequestService;
   private readonly globalState: vscode.Memento;
   private readonly teamModeSyncClient: TeamModeSyncClient;
+  private readonly teamDashboardClient: TeamDashboardClient;
   private readonly disposables: vscode.Disposable[] = [];
 
   private analyzer: Analyzer | undefined;
@@ -51,6 +53,7 @@ export class DashboardPanel {
       createFetchTeamModeTransport(),
       () => readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach')),
     );
+    this.teamDashboardClient = new TeamDashboardClient();
     this.requestService = new PanelRequestService(
       this.panel.webview,
       () => this.analyzer,
@@ -203,6 +206,7 @@ export class DashboardPanel {
         this.updateSidebarStats();
         this.dataReady = true;
         safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
+        this.postTeamModeAccess();
         this.syncTeamModeSnapshot();
         return;
       }
@@ -246,6 +250,7 @@ export class DashboardPanel {
 
       safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
       runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${Date.now() - t0}`);
+      this.postTeamModeAccess();
       this.syncTeamModeSnapshot();
 
       try {
@@ -288,6 +293,11 @@ export class DashboardPanel {
     // Budget persistence — handled before data readiness check
     if (msg.method === 'saveModelBudgets' || msg.method === 'loadModelBudgets') {
       this.handleBudgetMessage(msg);
+      return;
+    }
+
+    if (msg.method === 'getTeamDashboard') {
+      void this.handleTeamDashboardMessage(msg);
       return;
     }
 
@@ -350,6 +360,20 @@ export class DashboardPanel {
     }
   }
 
+  private async handleTeamDashboardMessage(msg: Extract<WebviewMessage, { type: 'request' }>): Promise<void> {
+    try {
+      const data = await this.teamDashboardClient.fetchDashboard((msg.params ?? {}) as Record<string, unknown>);
+      if (!this.disposed) {
+        try { postResponse(this.panel.webview, msg.id, data); } catch { /* disposed */ }
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to load team dashboard';
+      if (!this.disposed) {
+        try { postResponse(this.panel.webview, msg.id, errorResult(message)); } catch { /* disposed */ }
+      }
+    }
+  }
+
   private syncTeamModeSnapshot(): void {
     if (!this.analyzer || !this.parseResult || this.disposed) return;
 
@@ -380,6 +404,23 @@ export class DashboardPanel {
     }).catch(error => {
       runtimeDebug('panel', 'team-mode-sync-error', error);
     });
+  }
+
+  private postTeamModeAccess(): void {
+    if (this.disposed) return;
+    const authState = loadTeamModeAuthState();
+    try {
+      this.panel.webview.postMessage({
+        type: 'teamModeAccess',
+        access: authState ? {
+          role: authState.role,
+          developerId: authState.developerId,
+          canExportPdf: authState.role === 'admin',
+        } : null,
+      });
+    } catch {
+      // Webview disposed between check and call.
+    }
   }
 
   private dispose(): void {

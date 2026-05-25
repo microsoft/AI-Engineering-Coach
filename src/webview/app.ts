@@ -21,6 +21,7 @@ import { renderLevelUp } from './page-experiments';
 import { renderDataExplorer } from './page-data-explorer';
 import { renderRulePlayground } from './page-rule-playground';
 import { renderImageGallery } from './page-image-gallery';
+import { renderTeamDashboard } from './page-team-dashboard';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 
 function normalizePageForFeatureFlags(page: string): string {
@@ -39,6 +40,7 @@ let currentPage = 'dashboard';
 const currentFilter: DateFilter = {};
 let _dataIsReady = false;
 let matchedWorkspaceId: string | undefined;
+let teamModeAccess: { role: 'admin' | 'member'; developerId: string; canExportPdf: boolean } | null = null;
 
 /** Navigation hint: which sub-section to auto-open after navigating */
 export let navHint: string | undefined;
@@ -445,7 +447,22 @@ function onDataReady(currentWorkspace: string): void {
   refreshNavBadges(currentFilter);
 }
 
-initMessageListener(handleProgress, onDataReady);
+function onTeamModeAccess(access: unknown): void {
+  if (
+    access
+    && typeof access === 'object'
+    && typeof (access as { role?: unknown }).role === 'string'
+    && typeof (access as { developerId?: unknown }).developerId === 'string'
+    && typeof (access as { canExportPdf?: unknown }).canExportPdf === 'boolean'
+  ) {
+    teamModeAccess = access as { role: 'admin' | 'member'; developerId: string; canExportPdf: boolean };
+  } else {
+    teamModeAccess = null;
+  }
+  setTeamDashboardVisibility(teamModeAccess);
+}
+
+initMessageListener(handleProgress, onDataReady, onTeamModeAccess);
 
 /* ---- Navigation ---- */
 document.addEventListener('click', (e) => {
@@ -485,6 +502,16 @@ function updateToggleState(): void {
     btns[0]?.classList.add('active');
   } else if (!currentFilter.workspaceId) {
     btns[1]?.classList.add('active');
+  }
+}
+
+function setTeamDashboardVisibility(access: typeof teamModeAccess): void {
+  const nav = document.getElementById('team-dashboard-nav');
+  if (!nav) return;
+  nav.classList.toggle('nav-hidden', !access);
+  nav.setAttribute('aria-hidden', access ? 'false' : 'true');
+  if (!access && currentPage === 'team-dashboard') {
+    navigateTo('dashboard');
   }
 }
 
@@ -649,6 +676,7 @@ function renderPage(page: string): void {
     case 'data-explorer': withErrorBoundary('Data Explorer', content, () => renderDataExplorer(content, currentFilter)); break;
     case 'rule-playground': withErrorBoundary('Rule Playground', content, () => renderRulePlayground(content, currentFilter)); break;
     case 'image-gallery': withErrorBoundary('Image Gallery', content, () => renderImageGallery(content, currentFilter)); break;
+    case 'team-dashboard': withErrorBoundary('Team Dashboard', content, () => renderTeamDashboard(content)); break;
     default: render(html`<p>Unknown page</p>`, content);
   }
 }

@@ -1262,6 +1262,7 @@ Explain why this session triggered the rule.`;
       })),
     };
   },
+  getTeamDashboard: () => errorResult('Team dashboard is handled by the extension runtime'),
 };
 
 function buildNumericHistogram(sorted: number[], buckets: number): { label: string; count: number }[] {

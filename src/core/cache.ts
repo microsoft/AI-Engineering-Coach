@@ -346,6 +346,17 @@ export interface TeamModeSyncState {
 
 const TEAM_MODE_SYNC_STATE_FILE = path.join(CACHE_DIR, 'team-mode-sync.json');
 
+export interface TeamModeAuthState {
+  serverUrl: string;
+  serverId: string;
+  developerId: string;
+  accessToken: string;
+  role: 'admin' | 'member';
+  savedAt: number;
+}
+
+const TEAM_MODE_AUTH_STATE_FILE = path.join(CACHE_DIR, 'team-mode-auth.json');
+
 export function loadSidebarStats(): SidebarStats | null {
   try {
     if (!fs.existsSync(SIDEBAR_STATS_FILE)) return null;
@@ -387,6 +398,35 @@ export function saveTeamModeSyncState(state: TeamModeSyncState): void {
   }
 }
 
+export function loadTeamModeAuthState(): TeamModeAuthState | null {
+  try {
+    if (!fs.existsSync(TEAM_MODE_AUTH_STATE_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(TEAM_MODE_AUTH_STATE_FILE, 'utf-8')) as Partial<TeamModeAuthState>;
+    if (
+      typeof raw.serverUrl !== 'string'
+      || typeof raw.serverId !== 'string'
+      || typeof raw.developerId !== 'string'
+      || typeof raw.accessToken !== 'string'
+      || (raw.role !== 'admin' && raw.role !== 'member')
+      || typeof raw.savedAt !== 'number'
+    ) {
+      return null;
+    }
+    return raw as TeamModeAuthState;
+  } catch {
+    return null;
+  }
+}
+
+export function saveTeamModeAuthState(state: TeamModeAuthState): void {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(TEAM_MODE_AUTH_STATE_FILE, JSON.stringify(state), 'utf-8');
+  } catch {
+    // best-effort
+  }
+}
+
 export function clearCache(): void {
   memoryCache = null;
   try { fs.unlinkSync(CACHE_FILE); } catch (e) {
@@ -397,6 +437,9 @@ export function clearCache(): void {
   }
   try { fs.unlinkSync(SIDEBAR_STATS_FILE); } catch (e) {
     console.debug('Sidebar stats removal skipped:', e instanceof Error ? e.message : e);
+  }
+  try { fs.unlinkSync(TEAM_MODE_AUTH_STATE_FILE); } catch (e) {
+    console.debug('Team mode auth state removal skipped:', e instanceof Error ? e.message : e);
   }
 }
 

@@ -1,4 +1,67 @@
 export type TeamRole = 'admin' | 'member';
+export type TeamDashboardCategory = 'prompt-quality' | 'session-hygiene' | 'code-review' | 'tool-mastery' | 'context-management';
+
+export interface TeamDashboardFilters {
+  developerId?: string;
+  fromMs?: number;
+  toMs?: number;
+  category?: TeamDashboardCategory;
+}
+
+export interface TeamDashboardAccess {
+  role: TeamRole;
+  developerId: string;
+  canExportPdf: boolean;
+}
+
+export interface TeamDashboardCategoryScores {
+  promptQuality: number;
+  sessionHygiene: number;
+  codeReview: number;
+  toolMastery: number;
+  contextManagement: number;
+}
+
+export interface TeamDashboardViolation {
+  key: string;
+  label: string;
+  count: number;
+  severity: 'low' | 'medium' | 'high';
+}
+
+export interface TeamDashboardMemberRow {
+  developerId: string;
+  displayName: string;
+  snapshotCount: number;
+  categoryScores: TeamDashboardCategoryScores;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requests: number;
+  };
+  antiPatterns: {
+    total: number;
+    topViolations: TeamDashboardViolation[];
+  };
+  weeklyTrend: {
+    weekStartsOn: string[];
+    promptQuality: number[];
+    sessionHygiene: number[];
+    codeReview: number[];
+    toolMastery: number[];
+    contextManagement: number[];
+  };
+  weekOverWeek: TeamDashboardCategoryScores;
+}
+
+export interface TeamDashboardResponse {
+  access: TeamDashboardAccess;
+  filters: TeamDashboardFilters;
+  selectedCategory: TeamDashboardCategory | 'all';
+  totalDevelopers: number;
+  developers: TeamDashboardMemberRow[];
+}
 
 export interface TeamModeEnv {
   TEAM_MODE_BOOTSTRAP_SECRET?: string;
@@ -81,4 +144,3 @@ export interface TeamIngestResult {
   ok: true;
   inserted: boolean;
 }
-

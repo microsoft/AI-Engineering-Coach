@@ -6,6 +6,69 @@
 import type { PracticeGroup } from './analytics-types';
 
 export type TeamModeSeverity = 'low' | 'medium' | 'high';
+export type TeamDashboardCategory = PracticeGroup;
+
+export interface TeamDashboardFilters {
+  developerId?: string;
+  fromMs?: number;
+  toMs?: number;
+  category?: TeamDashboardCategory;
+}
+
+export interface TeamDashboardAccess {
+  role: 'admin' | 'member';
+  developerId: string;
+  canExportPdf: boolean;
+}
+
+export interface TeamDashboardCategoryScores {
+  'prompt-quality': number;
+  'session-hygiene': number;
+  'code-review': number;
+  'tool-mastery': number;
+  'context-management': number;
+}
+
+export interface TeamDashboardViolation {
+  key: string;
+  label: string;
+  count: number;
+  severity: TeamModeSeverity;
+}
+
+export interface TeamDashboardMemberRow {
+  developerId: string;
+  displayName: string;
+  snapshotCount: number;
+  categoryScores: TeamDashboardCategoryScores;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requests: number;
+  };
+  antiPatterns: {
+    total: number;
+    topViolations: TeamDashboardViolation[];
+  };
+  weeklyTrend: {
+    weekStartsOn: string[];
+    'prompt-quality': number[];
+    'session-hygiene': number[];
+    'code-review': number[];
+    'tool-mastery': number[];
+    'context-management': number[];
+  };
+  weekOverWeek: TeamDashboardCategoryScores;
+}
+
+export interface TeamDashboardResponse {
+  access: TeamDashboardAccess;
+  filters: TeamDashboardFilters;
+  selectedCategory: TeamDashboardCategory | 'all';
+  totalDevelopers: number;
+  developers: TeamDashboardMemberRow[];
+}
 
 export interface TeamModeAntiPatternSummary {
   ruleId: string;

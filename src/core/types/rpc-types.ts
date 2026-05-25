@@ -24,7 +24,7 @@ export function isErrorResult(v: unknown): v is ErrorResult {
 }
 
 import type { DateFilter, Session } from './session-types';
-import type { TeamModeSnapshot } from './team-mode-types';
+import type { TeamDashboardFilters, TeamDashboardResponse, TeamModeSnapshot } from './team-mode-types';
 import type {
   AiCreditBurndownData,
   AiCreditData,
@@ -112,6 +112,7 @@ export interface RpcMethodMap {
   getDataExplorerFields: { params: DateFilter | undefined; result: unknown };
   importRegistryRules: { params: { ruleIds?: string[] }; result: unknown };
   getRegistryCatalog: { params: undefined; result: unknown };
+  getTeamDashboard: { params: TeamDashboardFilters | undefined; result: TeamDashboardResponse };
 }
 
 export type RpcMethodName = keyof RpcMethodMap;

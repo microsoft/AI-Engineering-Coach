@@ -53,6 +53,7 @@ export async function rpcAllSettled<T extends readonly unknown[]>(
 export function initMessageListener(
   onProgress: (msg: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string }) => void,
   onDataReady: (currentWorkspace: string) => void,
+  onTeamModeAccess?: (access: unknown) => void,
 ): void {
   window.addEventListener('message', (ev) => {
     const msg = ev.data as Record<string, unknown>;
@@ -82,6 +83,9 @@ export function initMessageListener(
     }
     if (msg.type === 'dataReady') {
       onDataReady(msg.currentWorkspace as string);
+    }
+    if (msg.type === 'teamModeAccess') {
+      onTeamModeAccess?.(msg.access);
     }
   });
 }
