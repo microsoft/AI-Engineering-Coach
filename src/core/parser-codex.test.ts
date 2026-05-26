@@ -102,6 +102,92 @@ describe('parseCodexSessions', () => {
   });
 });
 
+describe('parseCodexSessions skillsUsed extraction', () => {
+  it('extracts skillsUsed from a function_call event whose cmd argument references SKILL.md', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-skill-1', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'run investigate' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z',
+        payload: { type: 'function_call', name: 'shell',
+          arguments: { cmd: ['bash', '-c', 'cat ~/.codex/skills/investigate/SKILL.md'] } } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:02Z', payload: { type: 'assistant_message', content: 'done' } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      const req = sessions[0].requests[0];
+      expect(req.skillsUsed).toEqual(['investigate']);
+      expect(req.referencedFiles).toContain('/skills/investigate/SKILL.md');
+    });
+  });
+
+  it('extracts skillsUsed from a response_item function_call with stringified arguments', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-skill-2', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'response_item', timestamp: '2025-06-15T10:00:00Z',
+        payload: { role: 'user', content: [{ type: 'input_text', text: 'use money skill' }] } },
+      { type: 'response_item', timestamp: '2025-06-15T10:00:01Z',
+        payload: { type: 'function_call', name: 'shell',
+          arguments: JSON.stringify({ command: 'cat ~/.codex/skills/money/SKILL.md' }) } },
+      { type: 'response_item', timestamp: '2025-06-15T10:00:02Z',
+        payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'ok' }] } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].requests[0].skillsUsed).toEqual(['money']);
+    });
+  });
+
+  it('leaves skillsUsed empty when no function_call references SKILL.md', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-skill-3', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'list files' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z',
+        payload: { type: 'function_call', name: 'shell', arguments: { cmd: 'ls README.md' } } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:02Z', payload: { type: 'assistant_message', content: 'done' } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].requests[0].skillsUsed).toEqual([]);
+    });
+  });
+
+  it('excludes the ai_toolkit pseudo-skill', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-skill-4', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'noop' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z',
+        payload: { type: 'function_call', name: 'shell',
+          arguments: { cmd: 'cat ~/.codex/skills/ai_toolkit/SKILL.md' } } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:02Z', payload: { type: 'assistant_message', content: 'done' } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].requests[0].skillsUsed).toEqual([]);
+    });
+  });
+
+  it('deduplicates a skill referenced multiple times in the same turn', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-skill-5', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'run twice' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z',
+        payload: { type: 'function_call', name: 'shell', arguments: { cmd: 'cat /a/skills/pdf/SKILL.md' } } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:02Z',
+        payload: { type: 'function_call', name: 'shell', arguments: { cmd: 'cat /b/skills/pdf/SKILL.md' } } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:03Z', payload: { type: 'assistant_message', content: 'done' } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].requests[0].skillsUsed).toEqual(['pdf']);
+    });
+  });
+});
+
 describe('findCodexDirs', () => {
   it('discovers active and archived Codex session directories', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-dirs-test-'));

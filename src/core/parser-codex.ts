@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
 import { ModelUsage, Session, SessionRequest } from './types';
-import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests } from './parser-shared';
+import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, extractSkillPathsFromText } from './parser-shared';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId } from './helpers';
 
 interface CodexLine {
@@ -50,6 +50,8 @@ interface CodexParseState {
   currentAssistantTexts: string[];
   currentToolsUsed: string[];
   currentEditedFiles: string[];
+  currentReferencedFiles: string[];
+  currentSkillsUsed: string[];
   turnModel: string;
   turnEffort: 'max' | 'high' | 'medium' | 'low' | null;
   turnStartTs: number | null;
@@ -124,6 +126,8 @@ function createCodexState(initialModel: string): CodexParseState {
     currentAssistantTexts: [],
     currentToolsUsed: [],
     currentEditedFiles: [],
+    currentReferencedFiles: [],
+    currentSkillsUsed: [],
     turnModel: initialModel,
     turnEffort: null,
     turnStartTs: null,
@@ -201,6 +205,8 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     modelId: state.turnModel || defaultModel,
     toolsUsed: state.currentToolsUsed,
     editedFiles: [...new Set(state.currentEditedFiles)],
+    referencedFiles: [...new Set(state.currentReferencedFiles)],
+    skillsUsed: [...new Set(state.currentSkillsUsed)],
     totalElapsed: state.turnStartTs && state.lastTs ? state.lastTs - state.turnStartTs : null,
     promptTokens: reqPromptTokens,
     completionTokens: reqCompletionTokens,
@@ -211,6 +217,8 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
   state.currentAssistantTexts = [];
   state.currentToolsUsed = [];
   state.currentEditedFiles = [];
+  state.currentReferencedFiles = [];
+  state.currentSkillsUsed = [];
   state.turnStartTs = null;
   state.turnCanceled = false;
 }
@@ -226,6 +234,28 @@ function extractContentItems(value: unknown): CodexContentItem[] {
     });
   }
   return items;
+}
+
+/** Pull SKILL.md path references out of Codex function-call arguments,
+ *  which are typically shell commands like `cat .../skills/<name>/SKILL.md`.
+ *  Updates state.currentReferencedFiles and state.currentSkillsUsed. */
+function collectSkillsFromArgs(args: Record<string, unknown> | null | undefined, state: CodexParseState): void {
+  if (!args) return;
+  const candidates: string[] = [];
+  for (const key of ['cmd', 'command', 'script', 'input']) {
+    const v = args[key];
+    if (typeof v === 'string') candidates.push(v);
+    else if (Array.isArray(v)) {
+      for (const part of v) if (typeof part === 'string') candidates.push(part);
+    }
+  }
+  for (const text of candidates) {
+    for (const skillPath of extractSkillPathsFromText(text)) {
+      state.currentReferencedFiles.push(skillPath);
+      const name = extractSkillNameFromPath(skillPath);
+      if (name) state.currentSkillsUsed.push(name);
+    }
+  }
 }
 
 function extractFilePath(args: Record<string, unknown> | null | undefined): string | null {
@@ -251,9 +281,11 @@ function handleUserMessageEvent(payload: Record<string, unknown>, state: CodexPa
 function handleFunctionCallEvent(payload: Record<string, unknown>, state: CodexParseState): void {
   const toolName = stringValue(payload.name) || 'unknown';
   state.currentToolsUsed.push(toolName);
-  if (!CODEX_WRITE_TOOLS.has(toolName.toLowerCase())) return;
 
   const args = recordValue(payload.arguments);
+  collectSkillsFromArgs(args, state);
+
+  if (!CODEX_WRITE_TOOLS.has(toolName.toLowerCase())) return;
   const filePath = extractFilePath(args);
   if (filePath) state.currentEditedFiles.push(filePath);
 }
@@ -330,11 +362,13 @@ function handleFunctionCallResponseItem(payload: Record<string, unknown>, state:
   if (!toolName) return;
 
   state.currentToolsUsed.push(toolName);
-  if (!CODEX_WRITE_TOOLS.has(toolName.toLowerCase())) return;
 
   const args = typeof payload.arguments === 'string'
     ? parseJsonRecord(payload.arguments)
     : recordValue(payload.arguments);
+  collectSkillsFromArgs(args, state);
+
+  if (!CODEX_WRITE_TOOLS.has(toolName.toLowerCase())) return;
   const filePath = extractFilePath(args);
   if (filePath) state.currentEditedFiles.push(filePath);
 }

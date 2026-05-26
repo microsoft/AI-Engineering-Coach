@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, it, expect } from 'vitest';
-import { detectDevcontainerFromRequests } from './parser-shared';
+import { detectDevcontainerFromRequests, extractSkillPathsFromText } from './parser-shared';
 import { createRequest, createSession } from './parser-shared';
 import { SessionRequest } from './types';
 
@@ -103,6 +103,39 @@ describe('createRequest timestamp sanitization', () => {
   it('keeps null timestamp as null', () => {
     const req = createRequest({ messageText: 'hi', responseText: 'ok', timestamp: null });
     expect(req.timestamp).toBeNull();
+  });
+});
+
+describe('extractSkillPathsFromText', () => {
+  it('returns an empty array for empty, non-string, or non-matching input', () => {
+    expect(extractSkillPathsFromText('')).toEqual([]);
+    expect(extractSkillPathsFromText(undefined as unknown as string)).toEqual([]);
+    expect(extractSkillPathsFromText(null as unknown as string)).toEqual([]);
+    expect(extractSkillPathsFromText('cat README.md')).toEqual([]);
+    expect(extractSkillPathsFromText('echo /skills/foo')).toEqual([]);
+  });
+
+  it('extracts a single SKILL.md path from a shell-style command line', () => {
+    const out = extractSkillPathsFromText('cat ~/.codex/skills/investigate/SKILL.md');
+    expect(out).toEqual(['/skills/investigate/SKILL.md']);
+  });
+
+  it('extracts multiple SKILL.md paths from one string', () => {
+    const cmd = 'cat /a/skills/foo/SKILL.md /b/skills/bar/SKILL.md';
+    expect(extractSkillPathsFromText(cmd)).toEqual([
+      '/skills/foo/SKILL.md',
+      '/skills/bar/SKILL.md',
+    ]);
+  });
+
+  it('extracts paths embedded inside quoted JSON-style text', () => {
+    const text = '{"file":"/Users/me/.claude/skills/money/SKILL.md"}';
+    expect(extractSkillPathsFromText(text)).toEqual(['/skills/money/SKILL.md']);
+  });
+
+  it('does not match SKILL.md outside a skills/ directory', () => {
+    expect(extractSkillPathsFromText('cat /etc/SKILL.md')).toEqual([]);
+    expect(extractSkillPathsFromText('cat /home/me/notes/SKILL.md')).toEqual([]);
   });
 });
 

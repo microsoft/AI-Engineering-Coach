@@ -306,6 +306,22 @@ export function extractSkillNameFromPath(rawPath: string): string | null {
   return (name && !name.includes('ai_toolkit')) ? name : null;
 }
 
+/** Regex to find SKILL.md path references embedded inside a larger string
+ *  (e.g. a shell command line like `cat ~/.codex/skills/foo/SKILL.md`).
+ *  The skill segment forbids whitespace and shell quote chars so the match
+ *  cannot run past the path boundary. Slug-style names (the convention in
+ *  the wild) are not affected by these restrictions. */
+const SKILL_PATH_IN_TEXT_RE = /[/\\]skills[/\\][^\s/\\'"`]+[/\\]SKILL\.md/gi;
+
+/** Extract all SKILL.md path references embedded in a string. Use this for
+ *  harnesses whose tool calls expose shell commands or other free-form text
+ *  rather than structured `file_path` arguments (e.g. Codex). For structured
+ *  paths, prefer {@link extractSkillNameFromPath} directly. */
+export function extractSkillPathsFromText(text: string): string[] {
+  if (typeof text !== 'string' || !text) return [];
+  return text.match(SKILL_PATH_IN_TEXT_RE) || [];
+}
+
 /**
  * Optional validation gate that individual parsers can call before returning
  * sessions. Returns the session unchanged if valid, or null (with a warning)
