@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
+FROM mcr.microsoft.com/devcontainers/typescript-node:22-bookworm
 
 # Keep image lean and deterministic for both Docker and Podman engines.
 RUN apt-get update \
