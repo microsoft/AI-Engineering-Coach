@@ -32,3 +32,13 @@ request features. Before filing a new issue, please check if one already exists.
 
 If you discover a security vulnerability, please follow the instructions in [SECURITY.md](SECURITY.md).
 **Do not** report security vulnerabilities through public GitHub issues.
+
+## Creating Rules and Metrics
+
+Detection rules and metrics are the primary extensibility surface of AI Engineer Coach. Each one is
+a self-contained markdown file with YAML frontmatter and a small DSL — no code changes required to
+ship a new one. Built-in rules live in [`src/core/rules/`](src/core/rules/) and metrics in
+[`src/core/metrics/`](src/core/metrics/).
+
+See [docs/AUTHORING_RULES.md](docs/AUTHORING_RULES.md) for the full authoring guide: file format,
+annotated rule and metric examples, the local testing workflow, and links to the DSL reference.

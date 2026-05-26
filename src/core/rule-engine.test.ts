@@ -518,6 +518,19 @@ describe('rule-engine', () => {
 
       expect(ruleEngine.evaluateRule(rule, makeEmission()).suggestion).toBe('');
     });
+
+    it('reports a 0% pct when total is zero but count is positive', () => {
+      const rule = ruleEngine.parseRule(makeRuleMarkdown({
+        id: 'eval-rule',
+        descriptionTemplate: '{{count}} hits ({{pct}}).',
+      }))!;
+
+      const result = ruleEngine.evaluateRule(rule, makeEmission({ count: 3, total: 0, ratio: 0 }));
+
+      expect(result.triggered).toBe(true);
+      expect(result.description).toBe('3 hits (0%).');
+      expect(result.templateVars.pct).toBe('0%');
+    });
   });
 
   describe('getRulesGrouped', () => {

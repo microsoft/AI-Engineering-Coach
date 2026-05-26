@@ -288,6 +288,7 @@ export async function renderShareCard(container: HTMLElement, filter: DateFilter
       <div class="share-actions">
         <button class="btn btn-primary" id="share-download-btn">${SVG.share} Download PNG</button>
         <button class="btn btn-secondary" id="share-copy-btn">${SVG.clipboard} Copy</button>
+        <button class="btn btn-secondary" id="share-export-summary-btn">${SVG.share} Export Summary</button>
       </div>
 
       <div class="share-social">
@@ -327,6 +328,18 @@ export async function renderShareCard(container: HTMLElement, filter: DateFilter
         showToast('Copied! Paste it anywhere.');
       } catch {
         showToast('Copy failed — try downloading instead');
+      }
+    })();
+  });
+
+  document.getElementById('share-export-summary-btn')?.addEventListener('click', () => {
+    void (async () => {
+      try {
+        const result = await rpc<{ ok: boolean; cancelled?: boolean }>('exportSummary', { filter });
+        if (result.cancelled) return;
+        showToast(result.ok ? 'Summary exported.' : 'Export cancelled.');
+      } catch {
+        showToast('Export failed.');
       }
     })();
   });
