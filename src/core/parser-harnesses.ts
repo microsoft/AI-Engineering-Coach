@@ -32,23 +32,37 @@ function addSession(workspaces: WorkspaceMap, sessions: Session[], session: Sess
   }
 }
 
+function addClaudeSession(
+  workspaces: WorkspaceMap,
+  sessions: Session[],
+  seenSessionIds: Set<string>,
+  session: Session,
+  rootPath: string,
+): void {
+  if (seenSessionIds.has(session.sessionId)) return;
+  seenSessionIds.add(session.sessionId);
+  addSession(workspaces, sessions, session, rootPath);
+}
+
 const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
   {
     name: 'Claude Code',
     collectSync(ctx) {
+      const seenSessionIds = new Set<string>();
       for (const claudeDir of findClaudeDirs()) {
         for (const { sessions } of parseClaudeSessions(claudeDir)) {
-          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+          for (const session of sessions) addClaudeSession(ctx.workspaces, ctx.sessions, seenSessionIds, session, claudeDir);
         }
       }
     },
     async collectAsync(ctx, reportDetail) {
+      const seenSessionIds = new Set<string>();
       for (const claudeDir of findClaudeDirs()) {
         const results = await parseClaudeSessionsAsync(claudeDir, (idx, total, name) => {
           reportDetail?.(`${idx}/${total}: ${name}`);
         });
         for (const { sessions } of results) {
-          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+          for (const session of sessions) addClaudeSession(ctx.workspaces, ctx.sessions, seenSessionIds, session, claudeDir);
         }
       }
     },

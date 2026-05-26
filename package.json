@@ -81,6 +81,19 @@
           "type": "webview"
         }
       ]
+    },
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.claudeConfigDirs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Claude configuration directories to scan for session logs. Leave empty to auto-detect `CLAUDE_CONFIG_DIR` and the default `~/.claude`; set one or more entries to explicitly choose Claude profiles such as `~/.claude-home` and `~/.claude-work`. Each entry should point to a Claude config directory; `projects/` is appended automatically unless the entry already ends with `projects`."
+        }
+      }
     }
   },
   "scripts": {

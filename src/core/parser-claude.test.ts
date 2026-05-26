@@ -12,7 +12,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { describe, it, expect } from 'vitest';
-import { parseClaudeSessions } from './parser-claude';
+import { CLAUDE_CONFIG_DIRS_ENV } from './harness-config-roots';
+import { findClaudeDirs, parseClaudeSessions } from './parser-claude';
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -74,7 +75,109 @@ function withProjectsDir(filename: string, lines: object[], run: (projectsDir: s
   try { run(projectsDir); } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
+function withClaudeEnv(run: () => void): void {
+  const original = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    [CLAUDE_CONFIG_DIRS_ENV]: process.env[CLAUDE_CONFIG_DIRS_ENV],
+  };
+  try {
+    run();
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 describe('parseClaudeSessions', () => {
+  it('uses configured Claude config directories as an explicit override', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-dirs-test-'));
+    const home = path.join(root, 'home');
+    const work = path.join(root, '.claude-work');
+    const active = path.join(root, '.claude-active');
+    const directProjects = path.join(root, '.claude-home', 'projects');
+
+    try {
+      withClaudeEnv(() => {
+        for (const dir of [
+          path.join(home, '.claude', 'projects'),
+          path.join(work, 'projects'),
+          path.join(active, 'projects'),
+          directProjects,
+        ]) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        process.env.HOME = home;
+        delete process.env.USERPROFILE;
+        process.env.CLAUDE_CONFIG_DIR = active;
+        process.env[CLAUDE_CONFIG_DIRS_ENV] = JSON.stringify([work, directProjects]);
+
+        expect(findClaudeDirs()).toEqual([
+          path.join(work, 'projects'),
+          directProjects,
+        ]);
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to CLAUDE_CONFIG_DIR and default home when no Claude dirs are configured', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-auto-dirs-test-'));
+    const home = path.join(root, 'home');
+    const active = path.join(root, '.claude-active');
+
+    try {
+      withClaudeEnv(() => {
+        fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
+        fs.mkdirSync(path.join(active, 'projects'), { recursive: true });
+
+        process.env.HOME = home;
+        delete process.env.USERPROFILE;
+        process.env.CLAUDE_CONFIG_DIR = active;
+        delete process.env[CLAUDE_CONFIG_DIRS_ENV];
+
+        expect(findClaudeDirs()).toEqual([
+          path.join(active, 'projects'),
+          path.join(home, '.claude', 'projects'),
+        ]);
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('deduplicates Claude config directories that resolve to the same symlink target', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-symlink-dirs-test-'));
+    const home = path.join(root, 'home');
+    const target = path.join(root, '.claude-home');
+
+    try {
+      withClaudeEnv(() => {
+        fs.mkdirSync(path.join(home), { recursive: true });
+        fs.mkdirSync(path.join(target, 'projects'), { recursive: true });
+        try {
+          fs.symlinkSync(target, path.join(home, '.claude'), 'dir');
+        } catch {
+          return;
+        }
+
+        process.env.HOME = home;
+        delete process.env.USERPROFILE;
+        delete process.env.CLAUDE_CONFIG_DIR;
+        process.env[CLAUDE_CONFIG_DIRS_ENV] = JSON.stringify([target]);
+
+        expect(findClaudeDirs()).toEqual([path.join(target, 'projects')]);
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('skips tool_result-only user records and merges following assistant into prior real user request', () => {
     withProjectsDir('s.jsonl', [
       makeUser('write a file please'),

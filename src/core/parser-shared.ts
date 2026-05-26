@@ -11,6 +11,7 @@ import * as path from 'path';
 import { CodeBlock, Session, SessionRequest, Workspace } from './types';
 import { SessionSource } from './cache';
 import { classifyWorkType } from './helpers';
+import { getClaudeConfigRoots } from './harness-config-roots';
 import { warnCore } from './log';
 import { SessionSchema } from './schemas';
 
@@ -59,11 +60,11 @@ function getTrustedRoots(): string[] {
   // Standard session log locations
   if (home) {
     roots.push(path.resolve(home, '.copilot'));
-    roots.push(path.resolve(home, '.claude'));
     roots.push(path.resolve(home, '.codex'));
     roots.push(path.resolve(home, '.local', 'share', 'opencode'));
     roots.push(path.resolve(home, '.config', 'github-copilot'));
   }
+  roots.push(...getClaudeConfigRoots());
 
   // OS temp directory (used by tests and VS Code temp storage)
   const tmpDir = os.tmpdir();

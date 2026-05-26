@@ -61,6 +61,8 @@ The extension is organized into three sections: **Observe**, **Measure**, and **
 | **OpenCode** | macOS/Linux: `~/.local/share/opencode/`<br>Windows: `%USERPROFILE%\.local\share\opencode\` |
 | **GitHub Copilot CLI** | `~/.copilot/session-state/` and `~/.copilot/history-session-state/` |
 
+Claude auto-detects `CLAUDE_CONFIG_DIR` and `~/.claude` by default. To scan only specific Claude profiles, set `aiEngineerCoach.claudeConfigDirs` in VS Code settings, for example `["~/.claude-home", "~/.claude-work"]`.
+
 ## Getting Started
 
 1. Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`).

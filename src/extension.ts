@@ -8,6 +8,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Analyzer } from './core/analyzer';
+import { CLAUDE_CONFIG_DIRS_ENV } from './core/harness-config-roots';
 import { findLogsDirs, parseAllLogsViaWorker } from './core/parser';
 import { getRuntimeDebugLogPath, installRuntimeDebugHooks, runtimeDebug, setOutputHook } from './core/runtime-debug';
 import { loadAllRuleLayersAsync, loadAllMetricLayersAsync, setDefaultTrustGate } from './core/rule-loader';
@@ -31,12 +32,20 @@ function loadPanelModule(): Promise<PanelModule> {
   return panelModulePromise;
 }
 
-async function exportSummaryFromLogs(): Promise<void> {
-  const dirs = findLogsDirs();
-  if (dirs.length === 0) {
-    vscode.window.showErrorMessage('No AI coding session log directories found.');
-    return;
+function syncClaudeConfigDirsSetting(): void {
+  const value = vscode.workspace.getConfiguration('aiEngineerCoach').get<unknown>('claudeConfigDirs', []);
+  const dirs = Array.isArray(value) ? value.filter((dir): dir is string => typeof dir === 'string' && dir.trim().length > 0) : [];
+  if (dirs.length > 0) {
+    process.env[CLAUDE_CONFIG_DIRS_ENV] = JSON.stringify(dirs);
+  } else {
+    delete process.env[CLAUDE_CONFIG_DIRS_ENV];
   }
+  runtimeDebug('extension', 'claude-config-dirs-setting', `count=${dirs.length}`);
+}
+
+async function exportSummaryFromLogs(): Promise<void> {
+  syncClaudeConfigDirsSetting();
+  const dirs = findLogsDirs();
 
   await vscode.window.withProgress(
     {
@@ -48,6 +57,10 @@ async function exportSummaryFromLogs(): Promise<void> {
       const parsed = await parseAllLogsViaWorker(dirs, update => {
         progress.report({ message: update.detail ?? 'Reading session logs' });
       });
+      if (parsed.sessions.length === 0) {
+        vscode.window.showErrorMessage('No AI coding session logs found.');
+        return;
+      }
       const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
       await exportSummaryFiles(analyzer);
     },
@@ -98,6 +111,7 @@ async function reviewPendingTrust(context: vscode.ExtensionContext): Promise<Set
 export function activate(context: vscode.ExtensionContext) {
   installRuntimeDebugHooks();
   runtimeDebug('extension', 'activate', `runtimeLog=${getRuntimeDebugLogPath()}`);
+  syncClaudeConfigDirsSetting();
 
   const outputChannel = vscode.window.createOutputChannel('AI Engineer Coach');
   context.subscriptions.push(outputChannel);
@@ -144,8 +158,14 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (!e.affectsConfiguration('aiEngineerCoach.claudeConfigDirs')) return;
+      syncClaudeConfigDirsSetting();
+      void loadPanelModule().then(({ DashboardPanel }) => DashboardPanel.current?.reload(true));
+    }),
     vscode.commands.registerCommand('aiEngineerCoach.open', async () => {
       runtimeDebug('extension', 'command-open');
+      syncClaudeConfigDirsSetting();
       await ready;
       // Gate dashboard creation behind the approval review.
       if (getPending().length > 0) await promptAndReload();
@@ -154,6 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('aiEngineerCoach.reload', async () => {
       runtimeDebug('extension', 'command-reload');
+      syncClaudeConfigDirsSetting();
       await ready;
       if (getPending().length > 0) await promptAndReload();
       const { DashboardPanel } = await loadPanelModule();
@@ -165,6 +186,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('aiEngineerCoach.exportSummary', async () => {
       runtimeDebug('extension', 'command-export-summary');
+      syncClaudeConfigDirsSetting();
       await ready;
       if (getPending().length > 0) await promptAndReload();
       await exportSummaryFromLogs();

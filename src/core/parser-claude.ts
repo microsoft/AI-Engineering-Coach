@@ -18,6 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Session, SessionRequest } from './types';
+import { getClaudeConfigRoots } from './harness-config-roots';
 import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
@@ -311,10 +312,25 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
 }
 
 export function findClaudeDirs(): string[] {
-  const home = process.env.HOME || process.env.USERPROFILE || '';
   const dirs: string[] = [];
-  const projectsDir = path.join(home, '.claude', 'projects');
-  if (fs.existsSync(projectsDir)) dirs.push(projectsDir);
+  const seen = new Set<string>();
+
+  for (const root of getClaudeConfigRoots()) {
+    const projectsDir = path.basename(root) === 'projects' ? root : path.join(root, 'projects');
+    const resolved = path.resolve(projectsDir);
+    let canonical = resolved;
+    try {
+      canonical = fs.realpathSync(resolved);
+    } catch {
+      /* Keep the unresolved path so future dirs can still be configured. */
+    }
+    const key = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+    if (seen.has(key)) continue;
+    if (fs.existsSync(resolved)) {
+      seen.add(key);
+      dirs.push(resolved);
+    }
+  }
   return dirs;
 }
 

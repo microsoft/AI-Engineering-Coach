@@ -46,3 +46,13 @@ You can also click the AI Engineer Coach icon in the Activity Bar (sidebar) if i
 ## Configuration
 
 AI Engineer Coach works out of the box with sensible defaults. Optional settings are available under `aiEngineerCoach.*` in VS Code settings to control cache behavior, date ranges, and workspace filtering.
+
+By default, Claude session discovery scans `CLAUDE_CONFIG_DIR` and `~/.claude`. To scan only specific Claude profiles, add config roots to `aiEngineerCoach.claudeConfigDirs`:
+
+```json
+{
+  "aiEngineerCoach.claudeConfigDirs": ["~/.claude-home", "~/.claude-work"]
+}
+```
+
+When this setting is non-empty, it replaces automatic Claude discovery.
