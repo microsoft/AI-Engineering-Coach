@@ -15,59 +15,12 @@ export interface TeamDashboardFilters {
   category?: TeamDashboardCategory;
 }
 
-export interface TeamDashboardAccess {
-  role: 'admin' | 'member';
-  developerId: string;
-  canExportPdf: boolean;
-}
-
 export interface TeamDashboardCategoryScores {
   'prompt-quality': number;
   'session-hygiene': number;
   'code-review': number;
   'tool-mastery': number;
   'context-management': number;
-}
-
-export interface TeamDashboardViolation {
-  key: string;
-  label: string;
-  count: number;
-  severity: TeamModeSeverity;
-}
-
-export interface TeamDashboardMemberRow {
-  developerId: string;
-  displayName: string;
-  snapshotCount: number;
-  categoryScores: TeamDashboardCategoryScores;
-  tokenUsage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    requests: number;
-  };
-  antiPatterns: {
-    total: number;
-    topViolations: TeamDashboardViolation[];
-  };
-  weeklyTrend: {
-    weekStartsOn: string[];
-    'prompt-quality': number[];
-    'session-hygiene': number[];
-    'code-review': number[];
-    'tool-mastery': number[];
-    'context-management': number[];
-  };
-  weekOverWeek: TeamDashboardCategoryScores;
-}
-
-export interface TeamDashboardResponse {
-  access: TeamDashboardAccess;
-  filters: TeamDashboardFilters;
-  selectedCategory: TeamDashboardCategory | 'all';
-  totalDevelopers: number;
-  developers: TeamDashboardMemberRow[];
 }
 
 export interface TeamModeAntiPatternSummary {
@@ -86,32 +39,76 @@ export interface TeamModeTokenUsageSummary {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  totalTokens: number;
   missingPct: number;
 }
 
-export interface TeamModeWeeklyTrend {
-  weekStartMs: number[];
-  scoresByCategory: Record<PracticeGroup, number[]>;
-}
-
-export interface TeamModeSnapshot {
+export interface TeamModeSnapshotFile {
   schemaVersion: 1;
-  developerId: string;
   capturedAtMs: number;
   windowStartMs: number;
   windowEndMs: number;
-  categoryScores: Record<PracticeGroup, number>;
+  categoryScores: TeamDashboardCategoryScores;
   tokenUsage: TeamModeTokenUsageSummary;
   antiPatterns: {
     totalOccurrences: number;
     bySeverity: Record<TeamModeSeverity, number>;
-    byGroup: Record<PracticeGroup, number>;
     topViolations: TeamModeAntiPatternSummary[];
   };
-  weeklyTrend: TeamModeWeeklyTrend;
+  weeklyDeltas: TeamDashboardCategoryScores;
 }
 
-const PRACTICE_GROUP_KEYS: PracticeGroup[] = [
+export type TeamModeSnapshot = TeamModeSnapshotFile;
+
+export interface TeamModeImportedSnapshotRecord {
+  importId: string;
+  filePath: string;
+  fileName: string;
+  displayName: string;
+  importedAtMs: number;
+  snapshot: TeamModeSnapshotFile;
+}
+
+export interface TeamDashboardImportedRun {
+  snapshotId: string;
+  fileName: string;
+  capturedAtMs: number;
+  importedAtMs: number;
+}
+
+export interface TeamDashboardAntiPatternSummary {
+  totalOccurrences: number;
+  bySeverity: Record<TeamModeSeverity, number>;
+  topViolations: TeamModeAntiPatternSummary[];
+}
+
+export interface TeamDashboardDeveloperRow {
+  developerId: string;
+  displayName: string;
+  snapshotCount: number;
+  latestCapturedAtMs: number;
+  categoryScores: TeamDashboardCategoryScores;
+  tokenUsage: TeamModeTokenUsageSummary;
+  antiPatterns: TeamDashboardAntiPatternSummary;
+  weekOverWeek: TeamDashboardCategoryScores;
+  importedSnapshots: TeamDashboardImportedRun[];
+}
+
+export type TeamDashboardMemberRow = TeamDashboardDeveloperRow;
+
+export interface TeamDashboardResponse {
+  filters: TeamDashboardFilters;
+  selectedCategory: TeamDashboardCategory | 'all';
+  totalDevelopers: number;
+  totalSnapshots: number;
+  importedSnapshots: number;
+  availableDevelopers: Array<{ developerId: string; displayName: string }>;
+  developers: TeamDashboardDeveloperRow[];
+  hasSnapshots: boolean;
+  lastImportedAtMs: number | null;
+}
+
+const PRACTICE_GROUP_KEYS: TeamDashboardCategory[] = [
   'prompt-quality',
   'session-hygiene',
   'code-review',
@@ -119,32 +116,40 @@ const PRACTICE_GROUP_KEYS: PracticeGroup[] = [
   'context-management',
 ];
 
-export function createEmptyTeamModeSnapshot(): TeamModeSnapshot {
+export function createEmptyTeamDashboardCategoryScores(): TeamDashboardCategoryScores {
+  return {
+    'prompt-quality': 0,
+    'session-hygiene': 0,
+    'code-review': 0,
+    'tool-mastery': 0,
+    'context-management': 0,
+  };
+}
+
+export function createEmptyTeamModeTokenUsageSummary(): TeamModeTokenUsageSummary {
+  return {
+    requests: 0,
+    countedRequests: 0,
+    partialRequests: 0,
+    pendingRequests: 0,
+    noDataRequests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    missingPct: 0,
+  };
+}
+
+export function createEmptyTeamModeSnapshotFile(): TeamModeSnapshotFile {
   return {
     schemaVersion: 1,
-    developerId: '',
     capturedAtMs: 0,
     windowStartMs: 0,
     windowEndMs: 0,
-    categoryScores: {
-      'prompt-quality': 0,
-      'session-hygiene': 0,
-      'code-review': 0,
-      'tool-mastery': 0,
-      'context-management': 0,
-    },
-    tokenUsage: {
-      requests: 0,
-      countedRequests: 0,
-      partialRequests: 0,
-      pendingRequests: 0,
-      noDataRequests: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      missingPct: 0,
-    },
+    categoryScores: createEmptyTeamDashboardCategoryScores(),
+    tokenUsage: createEmptyTeamModeTokenUsageSummary(),
     antiPatterns: {
       totalOccurrences: 0,
       bySeverity: {
@@ -152,18 +157,28 @@ export function createEmptyTeamModeSnapshot(): TeamModeSnapshot {
         medium: 0,
         high: 0,
       },
-      byGroup: {
-        'prompt-quality': 0,
-        'session-hygiene': 0,
-        'code-review': 0,
-        'tool-mastery': 0,
-        'context-management': 0,
-      },
       topViolations: [],
     },
-    weeklyTrend: {
-      weekStartMs: [],
-      scoresByCategory: Object.fromEntries(PRACTICE_GROUP_KEYS.map(group => [group, []])) as unknown as Record<PracticeGroup, number[]>,
-    },
+    weeklyDeltas: createEmptyTeamDashboardCategoryScores(),
   };
 }
+
+export function createEmptyTeamModeSnapshot(): TeamModeSnapshotFile {
+  return createEmptyTeamModeSnapshotFile();
+}
+
+export function createEmptyTeamDashboardResponse(): TeamDashboardResponse {
+  return {
+    filters: {},
+    selectedCategory: 'all',
+    totalDevelopers: 0,
+    totalSnapshots: 0,
+    importedSnapshots: 0,
+    availableDevelopers: [],
+    developers: [],
+    hasSnapshots: false,
+    lastImportedAtMs: null,
+  };
+}
+
+export const TEAM_MODE_CATEGORIES = PRACTICE_GROUP_KEYS;

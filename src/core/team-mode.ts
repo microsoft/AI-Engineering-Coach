@@ -3,8 +3,12 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { DateFilter, PracticeGroup, TeamModeSettings, TeamModeSnapshot, AntiPatternData, AiCreditData, ContextManagementData } from './types';
-import { createEmptyTeamModeSnapshot } from './types/team-mode-types';
+import type { DateFilter, TeamModeSettings, TeamModeSnapshotFile, AntiPatternData, AiCreditData, ContextManagementData, TeamModeSeverity } from './types';
+import {
+  TEAM_MODE_CATEGORIES,
+  createEmptyTeamDashboardCategoryScores,
+  createEmptyTeamModeSnapshotFile,
+} from './types/team-mode-types';
 
 export interface TeamModeConfigurationLike {
   get<T>(section: string, defaultValue?: T): T;
@@ -12,31 +16,83 @@ export interface TeamModeConfigurationLike {
 
 export const DEFAULT_TEAM_MODE_SETTINGS: TeamModeSettings = {
   enabled: false,
-  serverUrl: '',
-  developerId: '',
 };
-
-function normalizeString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 function normalizeBoolean(value: unknown): boolean {
   return typeof value === 'boolean' ? value : Boolean(value);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function normalizeCount(value: unknown): number {
+  const num = toFiniteNumber(value);
+  return num == null ? 0 : Math.max(0, Math.round(num));
+}
+
+function normalizeCategoryScores(raw: unknown): ReturnType<typeof createEmptyTeamDashboardCategoryScores> {
+  const scores = createEmptyTeamDashboardCategoryScores();
+  if (!isRecord(raw)) return scores;
+  for (const category of TEAM_MODE_CATEGORIES) {
+    scores[category] = clampScore(toFiniteNumber(raw[category]) ?? 0);
+  }
+  return scores;
+}
+
+function normalizeWeeklyDeltaScores(raw: unknown): ReturnType<typeof createEmptyTeamDashboardCategoryScores> {
+  const deltas = createEmptyTeamDashboardCategoryScores();
+  if (!isRecord(raw)) return deltas;
+  for (const category of TEAM_MODE_CATEGORIES) {
+    const value = toFiniteNumber(raw[category]);
+    deltas[category] = value == null ? 0 : Math.round(value);
+  }
+  return deltas;
+}
+
+function normalizeSeverityCounts(raw: unknown): Record<TeamModeSeverity, number> {
+  const counts: Record<TeamModeSeverity, number> = { low: 0, medium: 0, high: 0 };
+  if (!isRecord(raw)) return counts;
+  counts.low = normalizeCount(raw.low);
+  counts.medium = normalizeCount(raw.medium);
+  counts.high = normalizeCount(raw.high);
+  return counts;
+}
+
+function normalizeTopViolations(raw: unknown): TeamModeSnapshotFile['antiPatterns']['topViolations'] {
+  if (!Array.isArray(raw)) return [];
+  const violations: TeamModeSnapshotFile['antiPatterns']['topViolations'] = [];
+  for (const candidate of raw) {
+    if (!isRecord(candidate)) continue;
+    const ruleId = typeof candidate.ruleId === 'string' ? candidate.ruleId.trim() : '';
+    const severity = candidate.severity;
+    if (!ruleId || (severity !== 'low' && severity !== 'medium' && severity !== 'high')) continue;
+    violations.push({
+      ruleId,
+      severity,
+      count: normalizeCount(candidate.count),
+    });
+  }
+  return violations.slice(0, 10);
+}
+
 export function normalizeTeamModeSettings(raw?: Partial<TeamModeSettings> | null): TeamModeSettings {
   return {
     enabled: normalizeBoolean(raw?.enabled ?? false),
-    serverUrl: normalizeString(raw?.serverUrl),
-    developerId: normalizeString(raw?.developerId),
   };
 }
 
 export function readTeamModeSettings(configuration: TeamModeConfigurationLike): TeamModeSettings {
   return normalizeTeamModeSettings({
     enabled: configuration.get<boolean>('teamMode.enabled', DEFAULT_TEAM_MODE_SETTINGS.enabled),
-    serverUrl: configuration.get<string>('teamMode.serverUrl', DEFAULT_TEAM_MODE_SETTINGS.serverUrl),
-    developerId: configuration.get<string>('teamMode.developerId', DEFAULT_TEAM_MODE_SETTINGS.developerId),
   });
 }
 
@@ -47,8 +103,39 @@ export interface TeamModeAnalyticsSource {
   getContextManagement(filter?: DateFilter): ContextManagementData;
 }
 
-function clampScore(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
+export function sanitizeTeamModeSnapshotFile(raw: unknown): TeamModeSnapshotFile | null {
+  if (!isRecord(raw) || raw.schemaVersion !== 1) return null;
+
+  const snapshot = createEmptyTeamModeSnapshotFile();
+  const tokenUsage = isRecord(raw.tokenUsage) ? raw.tokenUsage : {};
+  const antiPatterns = isRecord(raw.antiPatterns) ? raw.antiPatterns : {};
+  snapshot.capturedAtMs = normalizeCount(raw.capturedAtMs);
+  snapshot.windowStartMs = normalizeCount(raw.windowStartMs);
+  snapshot.windowEndMs = normalizeCount(raw.windowEndMs);
+  if (snapshot.windowEndMs < snapshot.windowStartMs) {
+    const tmp = snapshot.windowStartMs;
+    snapshot.windowStartMs = snapshot.windowEndMs;
+    snapshot.windowEndMs = tmp;
+  }
+  snapshot.categoryScores = normalizeCategoryScores(raw.categoryScores);
+  snapshot.tokenUsage = {
+    requests: normalizeCount(tokenUsage.requests),
+    countedRequests: normalizeCount(tokenUsage.countedRequests),
+    partialRequests: normalizeCount(tokenUsage.partialRequests),
+    pendingRequests: normalizeCount(tokenUsage.pendingRequests),
+    noDataRequests: normalizeCount(tokenUsage.noDataRequests),
+    inputTokens: normalizeCount(tokenUsage.inputTokens),
+    outputTokens: normalizeCount(tokenUsage.outputTokens),
+    cacheReadTokens: normalizeCount(tokenUsage.cacheReadTokens),
+    cacheWriteTokens: normalizeCount(tokenUsage.cacheWriteTokens),
+    totalTokens: normalizeCount(tokenUsage.totalTokens),
+    missingPct: clampScore(toFiniteNumber(tokenUsage.missingPct) ?? 0),
+  };
+  snapshot.antiPatterns.totalOccurrences = normalizeCount(antiPatterns.totalOccurrences);
+  snapshot.antiPatterns.bySeverity = normalizeSeverityCounts(antiPatterns.bySeverity);
+  snapshot.antiPatterns.topViolations = normalizeTopViolations(antiPatterns.topViolations);
+  snapshot.weeklyDeltas = normalizeWeeklyDeltaScores(raw.weeklyDeltas);
+  return snapshot;
 }
 
 function parseWeekStartMs(label: string): number | null {
@@ -59,17 +146,16 @@ function parseWeekStartMs(label: string): number | null {
 function buildWeeklySeries(
   antiPatterns: AntiPatternData,
   contextManagement: ContextManagementData,
-): TeamModeSnapshot['weeklyTrend'] {
-  const snapshot = createEmptyTeamModeSnapshot().weeklyTrend;
+): Record<(typeof TEAM_MODE_CATEGORIES)[number], number[]> {
   const weekSet = new Set<number>();
-  const seriesByGroup = new Map<PracticeGroup, Map<number, number>>();
+  const seriesByGroup = new Map<(typeof TEAM_MODE_CATEGORIES)[number], Map<number, number>>();
 
-  for (const group of Object.keys(snapshot.scoresByCategory) as PracticeGroup[]) {
+  for (const group of TEAM_MODE_CATEGORIES) {
     seriesByGroup.set(group, new Map());
   }
 
   for (const series of antiPatterns.weeklyScores.series) {
-    const group = series.group as PracticeGroup;
+    const group = series.group as (typeof TEAM_MODE_CATEGORIES)[number];
     const bucket = seriesByGroup.get(group);
     if (!bucket) continue;
     for (let i = 0; i < series.scores.length; i++) {
@@ -89,7 +175,7 @@ function buildWeeklySeries(
   }
 
   const weekStartMs = [...weekSet].sort((a, b) => a - b);
-  const scoresByCategory: TeamModeSnapshot['weeklyTrend']['scoresByCategory'] = {
+  const series: Record<(typeof TEAM_MODE_CATEGORIES)[number], number[]> = {
     'prompt-quality': [],
     'session-hygiene': [],
     'code-review': [],
@@ -98,24 +184,32 @@ function buildWeeklySeries(
   };
 
   for (const week of weekStartMs) {
-    for (const group of Object.keys(scoresByCategory) as PracticeGroup[]) {
+    for (const group of TEAM_MODE_CATEGORIES) {
       if (group === 'context-management') {
-        scoresByCategory[group].push(contextSeries.get(week) ?? 0);
+        series[group].push(contextSeries.get(week) ?? 0);
       } else {
-        scoresByCategory[group].push(seriesByGroup.get(group)?.get(week) ?? 0);
+        series[group].push(seriesByGroup.get(group)?.get(week) ?? 0);
       }
     }
   }
 
-  return { weekStartMs, scoresByCategory };
+  return series;
+}
+
+function computeWeekOverWeekDelta(series: number[]): number {
+  if (series.length < 2) return 0;
+  return Math.round(series[series.length - 1] - series[series.length - 2]);
+}
+
+function sumTokens(aiCredits: AiCreditData): number {
+  return aiCredits.totalInputTokens + aiCredits.totalOutputTokens + aiCredits.totalCacheReadTokens + aiCredits.totalCacheWriteTokens;
 }
 
 export function buildTeamModeSnapshot(
   source: TeamModeAnalyticsSource,
-  settings: TeamModeSettings,
   filter?: DateFilter,
-): TeamModeSnapshot {
-  const snapshot = createEmptyTeamModeSnapshot();
+): TeamModeSnapshotFile {
+  const snapshot = createEmptyTeamModeSnapshotFile();
   const requests = source.filterRequests(filter);
   const antiPatterns = source.getAntiPatterns(filter);
   const aiCredits = source.getAiCredits(filter);
@@ -125,9 +219,8 @@ export function buildTeamModeSnapshot(
     .map(request => request.timestamp)
     .filter((timestamp): timestamp is number => typeof timestamp === 'number' && Number.isFinite(timestamp));
 
-  const weekSeries = buildWeeklySeries(antiPatterns, contextManagement);
+  const weeklySeries = buildWeeklySeries(antiPatterns, contextManagement);
 
-  snapshot.developerId = settings.developerId;
   snapshot.capturedAtMs = Date.now();
   snapshot.windowStartMs = timestamps.length > 0 ? Math.min(...timestamps) : snapshot.capturedAtMs;
   snapshot.windowEndMs = timestamps.length > 0 ? Math.max(...timestamps) : snapshot.capturedAtMs;
@@ -148,6 +241,7 @@ export function buildTeamModeSnapshot(
     outputTokens: aiCredits.totalOutputTokens,
     cacheReadTokens: aiCredits.totalCacheReadTokens,
     cacheWriteTokens: aiCredits.totalCacheWriteTokens,
+    totalTokens: sumTokens(aiCredits),
     missingPct: aiCredits.missingPct,
   };
   snapshot.antiPatterns.totalOccurrences = antiPatterns.totalOccurrences;
@@ -163,17 +257,13 @@ export function buildTeamModeSnapshot(
     acc[pattern.severity] += pattern.occurrences;
     return acc;
   }, { low: 0, medium: 0, high: 0 });
-  snapshot.antiPatterns.byGroup = antiPatterns.patterns.reduce((acc, pattern) => {
-    acc[pattern.group] += pattern.occurrences;
-    return acc;
-  }, {
-    'prompt-quality': 0,
-    'session-hygiene': 0,
-    'code-review': 0,
-    'tool-mastery': 0,
-    'context-management': 0,
-  });
-  snapshot.weeklyTrend = weekSeries;
+  snapshot.weeklyDeltas = {
+    'prompt-quality': computeWeekOverWeekDelta(weeklySeries['prompt-quality']),
+    'session-hygiene': computeWeekOverWeekDelta(weeklySeries['session-hygiene']),
+    'code-review': computeWeekOverWeekDelta(weeklySeries['code-review']),
+    'tool-mastery': computeWeekOverWeekDelta(weeklySeries['tool-mastery']),
+    'context-management': computeWeekOverWeekDelta(weeklySeries['context-management']),
+  };
 
   return snapshot;
 }

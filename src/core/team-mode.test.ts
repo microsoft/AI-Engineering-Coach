@@ -3,31 +3,21 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildTeamModeSnapshot, normalizeTeamModeSettings, readTeamModeSettings } from './team-mode';
-import type { DateFilter, TeamModeSnapshot } from './types';
-import type { AntiPatternData, AiCreditData, ContextManagementData, FlowStateData, SessionRequest } from './types';
+import type { DateFilter, SessionRequest } from './types';
+import type { AntiPatternData, AiCreditData, ContextManagementData } from './types';
 
 describe('Team Mode settings', () => {
   it('fills in safe defaults when no settings are provided', () => {
     expect(normalizeTeamModeSettings()).toEqual({
       enabled: false,
-      serverUrl: '',
-      developerId: '',
     });
   });
 
-  it('trims and normalizes explicit settings', () => {
-    expect(normalizeTeamModeSettings({
+  it('normalizes the enabled flag', () => {
+    expect(normalizeTeamModeSettings({ enabled: true })).toEqual({
       enabled: true,
-      serverUrl: '  https://team.example.com/api  ',
-      developerId: '  dev-123  ',
-    })).toEqual({
-      enabled: true,
-      serverUrl: 'https://team.example.com/api',
-      developerId: 'dev-123',
     });
   });
 
@@ -36,8 +26,6 @@ describe('Team Mode settings', () => {
       get: <T>(key: string, defaultValue?: T): T => {
         const values: Record<string, unknown> = {
           'teamMode.enabled': true,
-          'teamMode.serverUrl': 'https://team.example.com/api',
-          'teamMode.developerId': 'dev-123',
         };
         return (values[key] ?? defaultValue) as T;
       },
@@ -45,34 +33,6 @@ describe('Team Mode settings', () => {
 
     expect(settings).toEqual({
       enabled: true,
-      serverUrl: 'https://team.example.com/api',
-      developerId: 'dev-123',
-    });
-  });
-
-  it('declares the Team Mode settings surface in package.json', () => {
-    const manifestPath = path.resolve(process.cwd(), 'package.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
-      contributes?: {
-        configuration?: {
-          properties?: Record<string, { type?: string; default?: unknown; description?: string }>;
-        };
-      };
-    };
-
-    const properties = manifest.contributes?.configuration?.properties ?? {};
-
-    expect(properties['aiEngineerCoach.teamMode.enabled']).toMatchObject({
-      type: 'boolean',
-      default: false,
-    });
-    expect(properties['aiEngineerCoach.teamMode.serverUrl']).toMatchObject({
-      type: 'string',
-      default: '',
-    });
-    expect(properties['aiEngineerCoach.teamMode.developerId']).toMatchObject({
-      type: 'string',
-      default: '',
     });
   });
 });
@@ -84,21 +44,33 @@ describe('Team Mode snapshot assembly', () => {
       timestamp,
       messageText: 'refactor this',
       responseText: 'done',
-      messageLength: 13,
-      responseLength: 4,
+      isCanceled: false,
       agentName: 'copilot',
+      agentMode: 'agent',
       modelId: 'gpt-4.1',
       toolsUsed: [],
       editedFiles: [],
       referencedFiles: [],
-      preview: 'refactor this',
-      loc: 0,
-      workType: 'refactor',
+      slashCommand: '',
       variableKinds: {},
       customInstructions: [],
       skillsUsed: [],
-      isCanceled: false,
-    } as unknown as SessionRequest;
+      firstProgress: null,
+      totalElapsed: null,
+      messageLength: 13,
+      responseLength: 4,
+      userCode: [],
+      aiCode: [],
+      toolConfirmations: [],
+      promptTokens: null,
+      completionTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      compaction: null,
+      todoSnapshot: null,
+      workType: 'refactor',
+      endState: 'no-data',
+    };
   }
 
   function makeAnalyzerLike() {
@@ -144,6 +116,7 @@ describe('Team Mode snapshot assembly', () => {
           { group: 'session-hygiene', scores: [78, 80] },
           { group: 'code-review', scores: [89, 90] },
           { group: 'tool-mastery', scores: [58, 60] },
+          { group: 'context-management', scores: [60, 65] },
         ],
       },
     };
@@ -191,18 +164,6 @@ describe('Team Mode snapshot assembly', () => {
       tips: [],
     };
 
-    const flowState: FlowStateData = {
-      days: [],
-      overallFlowScore: 0,
-      avgFollowUpSec: 0,
-      avgBlockMin: 0,
-      deepFlowDays: 0,
-      totalDays: 0,
-      weeklyTrend: { labels: [], scores: [] },
-      hourlyFlow: Array<number>(24).fill(0),
-      suggestions: [],
-    };
-
     const filterRequests = [
       makeRequest(new Date('2026-05-12T10:00:00Z').getTime()),
       makeRequest(new Date('2026-05-19T10:00:00Z').getTime()),
@@ -213,18 +174,15 @@ describe('Team Mode snapshot assembly', () => {
       getAntiPatterns: (_filter?: DateFilter) => antiPatterns,
       getAiCredits: (_filter?: DateFilter) => aiCredits,
       getContextManagement: (_filter?: DateFilter) => contextManagement,
-      getFlowState: (_filter?: DateFilter) => flowState,
     };
   }
 
   it('assembles a privacy-safe numeric snapshot from analyzer outputs', () => {
     const snapshot = buildTeamModeSnapshot(makeAnalyzerLike(), {
-      enabled: true,
-      serverUrl: 'https://team.example.com/api',
-      developerId: 'dev-123',
+      fromDate: '2026-05-01',
+      toDate: '2026-05-31',
     });
 
-    expect(snapshot.developerId).toBe('dev-123');
     expect(snapshot.categoryScores).toMatchObject({
       'prompt-quality': 70,
       'session-hygiene': 80,
@@ -242,6 +200,7 @@ describe('Team Mode snapshot assembly', () => {
       outputTokens: 500,
       cacheReadTokens: 25,
       cacheWriteTokens: 10,
+      totalTokens: 1535,
       missingPct: 11,
     });
     expect(snapshot.antiPatterns.totalOccurrences).toBe(5);
@@ -255,8 +214,13 @@ describe('Team Mode snapshot assembly', () => {
       severity: 'medium',
       count: 3,
     });
-    expect(snapshot.weeklyTrend.weekStartMs).toHaveLength(2);
-    expect(snapshot.weeklyTrend.scoresByCategory['context-management']).toEqual([60, 65]);
+    expect(snapshot.weeklyDeltas).toEqual({
+      'prompt-quality': 2,
+      'session-hygiene': 2,
+      'code-review': 1,
+      'tool-mastery': 2,
+      'context-management': 5,
+    });
     expect(JSON.stringify(snapshot)).not.toContain('raw prompt text');
     expect(JSON.stringify(snapshot)).not.toContain('session detail');
   });

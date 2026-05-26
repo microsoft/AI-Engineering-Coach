@@ -16,8 +16,6 @@ import {
   setMemoryCache,
   loadSidebarStats,
   saveSidebarStats,
-  loadTeamModeAuthState,
-  saveTeamModeAuthState,
   clearCache,
   DirMetas,
   ParseResult,
@@ -230,29 +228,5 @@ describe('sidebar stats', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.harnesses).toContain('Local Agent');
     expect(loaded!.savedAt).toBe(stats.savedAt);
-  });
-});
-
-describe('team mode auth state', () => {
-  it('saveTeamModeAuthState and loadTeamModeAuthState round-trip', () => {
-    const state = {
-      serverUrl: 'https://team.example',
-      serverId: 'server-123',
-      developerId: 'dev-123',
-      accessToken: 'token-abc',
-      role: 'member' as const,
-      savedAt: Date.now(),
-    };
-
-    saveTeamModeAuthState(state);
-    const loaded = loadTeamModeAuthState();
-
-    expect(loaded).not.toBeNull();
-    expect(loaded!.serverUrl).toBe(state.serverUrl);
-    expect(loaded!.serverId).toBe(state.serverId);
-    expect(loaded!.developerId).toBe(state.developerId);
-    expect(loaded!.accessToken).toBe(state.accessToken);
-    expect(loaded!.role).toBe(state.role);
-    expect(loaded!.savedAt).toBe(state.savedAt);
   });
 });

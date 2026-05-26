@@ -37,7 +37,8 @@
     "onCommand:aiEngineerCoach.open",
     "onCommand:aiEngineerCoach.reload",
     "onCommand:aiEngineerCoach.reviewLocalRules",
-    "onView:aiEngineerCoach.welcome"
+    "onView:aiEngineerCoach.welcome",
+    "onCommand:aiEngineerCoach.importTeamSnapshots"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -47,17 +48,7 @@
         "aiEngineerCoach.teamMode.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Enable Team Mode to sync only aggregated AI usage statistics to a shared backend."
-        },
-        "aiEngineerCoach.teamMode.serverUrl": {
-          "type": "string",
-          "default": "",
-          "description": "The Team Mode server URL used to upload aggregated, privacy-safe team statistics."
-        },
-        "aiEngineerCoach.teamMode.developerId": {
-          "type": "string",
-          "default": "",
-          "description": "Your unique Team Mode developer ID used to identify your aggregated stats on the shared backend."
+          "description": "Enable Team Mode to export and import privacy-safe local snapshots inside VS Code."
         }
       }
     },
@@ -76,6 +67,11 @@
         "command": "aiEngineerCoach.reviewLocalRules",
         "title": "AI Engineer Coach: Review Local Rule Approvals",
         "icon": "$(shield)"
+      },
+      {
+        "command": "aiEngineerCoach.importTeamSnapshots",
+        "title": "AI Engineer Coach: Import Team Snapshots",
+        "icon": "$(cloud-upload)"
       }
     ],
     "viewsContainers": {

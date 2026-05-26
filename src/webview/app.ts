@@ -40,7 +40,7 @@ let currentPage = 'dashboard';
 const currentFilter: DateFilter = {};
 let _dataIsReady = false;
 let matchedWorkspaceId: string | undefined;
-let teamModeAccess: { role: 'admin' | 'member'; developerId: string; canExportPdf: boolean } | null = null;
+let teamModeEnabled = false;
 
 /** Navigation hint: which sub-section to auto-open after navigating */
 export let navHint: string | undefined;
@@ -447,22 +447,12 @@ function onDataReady(currentWorkspace: string): void {
   refreshNavBadges(currentFilter);
 }
 
-function onTeamModeAccess(access: unknown): void {
-  if (
-    access
-    && typeof access === 'object'
-    && typeof (access as { role?: unknown }).role === 'string'
-    && typeof (access as { developerId?: unknown }).developerId === 'string'
-    && typeof (access as { canExportPdf?: unknown }).canExportPdf === 'boolean'
-  ) {
-    teamModeAccess = access as { role: 'admin' | 'member'; developerId: string; canExportPdf: boolean };
-  } else {
-    teamModeAccess = null;
-  }
-  setTeamDashboardVisibility(teamModeAccess);
+function onTeamModeState(enabled: unknown): void {
+  teamModeEnabled = typeof enabled === 'boolean' ? enabled : Boolean(enabled);
+  setTeamDashboardVisibility(teamModeEnabled);
 }
 
-initMessageListener(handleProgress, onDataReady, onTeamModeAccess);
+initMessageListener(handleProgress, onDataReady, onTeamModeState);
 
 /* ---- Navigation ---- */
 document.addEventListener('click', (e) => {
@@ -505,12 +495,12 @@ function updateToggleState(): void {
   }
 }
 
-function setTeamDashboardVisibility(access: typeof teamModeAccess): void {
+function setTeamDashboardVisibility(enabled: boolean): void {
   const nav = document.getElementById('team-dashboard-nav');
   if (!nav) return;
-  nav.classList.toggle('nav-hidden', !access);
-  nav.setAttribute('aria-hidden', access ? 'false' : 'true');
-  if (!access && currentPage === 'team-dashboard') {
+  nav.classList.toggle('nav-hidden', !enabled);
+  nav.setAttribute('aria-hidden', enabled ? 'false' : 'true');
+  if (!enabled && currentPage === 'team-dashboard') {
     navigateTo('dashboard');
   }
 }

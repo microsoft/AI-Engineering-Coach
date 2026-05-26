@@ -86,6 +86,4 @@ export interface ConfigHealthData {
 
 export interface TeamModeSettings {
   enabled: boolean;
-  serverUrl: string;
-  developerId: string;
 }

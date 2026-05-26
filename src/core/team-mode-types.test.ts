@@ -4,15 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { createEmptyTeamModeSnapshot } from './types/team-mode-types';
-import { PRACTICE_GROUPS } from './types';
+import { createEmptyTeamDashboardResponse, createEmptyTeamModeSnapshotFile, TEAM_MODE_CATEGORIES } from './types/team-mode-types';
 
 describe('Team Mode snapshot model', () => {
   it('creates an empty privacy-safe snapshot with all expected numeric buckets', () => {
-    const snapshot = createEmptyTeamModeSnapshot();
+    const snapshot = createEmptyTeamModeSnapshotFile();
 
     expect(snapshot.schemaVersion).toBe(1);
-    expect(snapshot.developerId).toBe('');
+    expect(snapshot.capturedAtMs).toBe(0);
+    expect(snapshot.windowStartMs).toBe(0);
+    expect(snapshot.windowEndMs).toBe(0);
     expect(snapshot.categoryScores).toEqual({
       'prompt-quality': 0,
       'session-hygiene': 0,
@@ -30,34 +31,46 @@ describe('Team Mode snapshot model', () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
+      totalTokens: 0,
       missingPct: 0,
     });
-    expect(snapshot.antiPatterns.bySeverity).toEqual({
-      low: 0,
-      medium: 0,
-      high: 0,
+    expect(snapshot.antiPatterns).toEqual({
+      totalOccurrences: 0,
+      bySeverity: {
+        low: 0,
+        medium: 0,
+        high: 0,
+      },
+      topViolations: [],
     });
-    expect(snapshot.antiPatterns.byGroup).toEqual({
+    expect(snapshot.weeklyDeltas).toEqual({
       'prompt-quality': 0,
       'session-hygiene': 0,
       'code-review': 0,
       'tool-mastery': 0,
       'context-management': 0,
     });
-    expect(snapshot.antiPatterns.topViolations).toEqual([]);
-    expect(snapshot.weeklyTrend.weekStartMs).toEqual([]);
-    expect(snapshot.weeklyTrend.scoresByCategory).toEqual({
-      'prompt-quality': [],
-      'session-hygiene': [],
-      'code-review': [],
-      'tool-mastery': [],
-      'context-management': [],
-    });
   });
 
   it('keeps the category order aligned with the dashboard group definitions', () => {
-    const snapshot = createEmptyTeamModeSnapshot();
+    const snapshot = createEmptyTeamModeSnapshotFile();
 
-    expect(Object.keys(snapshot.categoryScores)).toEqual(Object.keys(PRACTICE_GROUPS));
+    expect(Object.keys(snapshot.categoryScores)).toEqual(TEAM_MODE_CATEGORIES);
+  });
+
+  it('creates an empty dashboard response without access metadata', () => {
+    const response = createEmptyTeamDashboardResponse();
+
+    expect(response).toEqual({
+      filters: {},
+      selectedCategory: 'all',
+      totalDevelopers: 0,
+      totalSnapshots: 0,
+      importedSnapshots: 0,
+      availableDevelopers: [],
+      developers: [],
+      hasSnapshots: false,
+      lastImportedAtMs: null,
+    });
   });
 });

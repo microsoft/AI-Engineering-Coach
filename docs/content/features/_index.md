@@ -5,7 +5,7 @@ weight: 20
 
 AI Engineer Coach organizes its capabilities into three areas that mirror a continuous improvement cycle: **Observe** your usage, **Measure** your output, and **Improve** your practices.
 
-When Team Mode is enabled, a fourth shared view becomes available to admins: a team dashboard built only from privacy-safe aggregates. It shows per-developer score cards, token totals, anti-pattern severity, and week-over-week trends without exposing raw prompts, code, or file names. The extension can sync to a Cloudflare Workers + D1 backend so the team keeps basic usage lightweight and cost-conscious.
+When Team Mode is enabled, a fourth shared view becomes available: a team dashboard built only from privacy-safe local snapshots. It shows per-developer score cards, token totals, anti-pattern severity, and week-over-week trends without exposing raw prompts, code, or file names. Team leads can export snapshots after analysis and import teammate snapshots locally inside VS Code.
 
 ## Observe
 
@@ -32,8 +32,8 @@ When Team Mode is enabled, a fourth shared view becomes available to admins: a t
 ## Team Mode
 
 - Team Mode is optional and off by default
-- Admins bootstrap the backend first, then generate invite codes for teammates
-- Developers only upload aggregate numeric snapshots after local analysis
+- Team leads export a privacy-safe snapshot after local analysis finishes
+- Teammates import their snapshots locally so the dashboard can compare teams without a server
 - No raw prompts, code, file names, or session text ever leave the developer machine
 
 ## Level Up

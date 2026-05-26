@@ -80,8 +80,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const teamModeSettings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
-  runtimeDebug('extension', 'team-mode',
-    `enabled=${teamModeSettings.enabled} serverConfigured=${teamModeSettings.serverUrl.length > 0} developerIdConfigured=${teamModeSettings.developerId.length > 0}`);
+  runtimeDebug('extension', 'team-mode', `enabled=${teamModeSettings.enabled}`);
 
   const trustGate = createTrustGate(context.globalState);
   setDefaultTrustGate(trustGate);
@@ -140,6 +139,13 @@ export function activate(context: vscode.ExtensionContext) {
       } else {
         DashboardPanel.createOrShow(context.extensionUri, context);
       }
+    }),
+    vscode.commands.registerCommand('aiEngineerCoach.importTeamSnapshots', async () => {
+      runtimeDebug('extension', 'command-import-team-snapshots');
+      await ready;
+      const { DashboardPanel } = await loadPanelModule();
+      DashboardPanel.createOrShow(context.extensionUri, context);
+      await DashboardPanel.current?.importTeamSnapshots();
     }),
     vscode.commands.registerCommand('aiEngineerCoach.reviewLocalRules', async () => {
       runtimeDebug('extension', 'command-review-trust');

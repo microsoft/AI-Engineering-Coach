@@ -339,31 +339,23 @@ export interface SidebarStats {
 
 const SIDEBAR_STATS_FILE = path.join(CACHE_DIR, 'sidebar-stats.json');
 
-export interface TeamModeSyncState {
-  lastSnapshotFingerprint: string;
-  savedAt: number;
+function readSidebarStats(raw: unknown): SidebarStats | null {
+  if (!isRecord(raw)) return null;
+  if (!Array.isArray(raw.harnesses)) return null;
+  const harnesses = raw.harnesses.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  const savedAt = typeof raw.savedAt === 'number' && Number.isFinite(raw.savedAt) ? Math.round(raw.savedAt) : null;
+  if (savedAt == null) return null;
+  return {
+    harnesses: [...new Set(harnesses)].sort(),
+    savedAt,
+  };
 }
-
-const TEAM_MODE_SYNC_STATE_FILE = path.join(CACHE_DIR, 'team-mode-sync.json');
-
-export interface TeamModeAuthState {
-  serverUrl: string;
-  serverId: string;
-  developerId: string;
-  accessToken: string;
-  role: 'admin' | 'member';
-  savedAt: number;
-}
-
-const TEAM_MODE_AUTH_STATE_FILE = path.join(CACHE_DIR, 'team-mode-auth.json');
 
 export function loadSidebarStats(): SidebarStats | null {
   try {
     if (!fs.existsSync(SIDEBAR_STATS_FILE)) return null;
-    const raw = JSON.parse(fs.readFileSync(SIDEBAR_STATS_FILE, 'utf-8')) as Partial<SidebarStats>;
-    // Reject malformed data missing required fields
-    if (!Array.isArray(raw.harnesses) || typeof raw.savedAt !== 'number') return null;
-    return raw as SidebarStats;
+    const raw = JSON.parse(fs.readFileSync(SIDEBAR_STATS_FILE, 'utf-8')) as unknown;
+    return readSidebarStats(raw);
   } catch {
     return null;
   }
@@ -372,58 +364,13 @@ export function loadSidebarStats(): SidebarStats | null {
 export function saveSidebarStats(stats: SidebarStats): void {
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(SIDEBAR_STATS_FILE, JSON.stringify(stats), 'utf-8');
-  } catch {
-    // best-effort
-  }
-}
-
-export function loadTeamModeSyncState(): TeamModeSyncState | null {
-  try {
-    if (!fs.existsSync(TEAM_MODE_SYNC_STATE_FILE)) return null;
-    const raw = JSON.parse(fs.readFileSync(TEAM_MODE_SYNC_STATE_FILE, 'utf-8')) as Partial<TeamModeSyncState>;
-    if (typeof raw.lastSnapshotFingerprint !== 'string' || typeof raw.savedAt !== 'number') return null;
-    return raw as TeamModeSyncState;
-  } catch {
-    return null;
-  }
-}
-
-export function saveTeamModeSyncState(state: TeamModeSyncState): void {
-  try {
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(TEAM_MODE_SYNC_STATE_FILE, JSON.stringify(state), 'utf-8');
-  } catch {
-    // best-effort
-  }
-}
-
-export function loadTeamModeAuthState(): TeamModeAuthState | null {
-  try {
-    if (!fs.existsSync(TEAM_MODE_AUTH_STATE_FILE)) return null;
-    const raw = JSON.parse(fs.readFileSync(TEAM_MODE_AUTH_STATE_FILE, 'utf-8')) as Partial<TeamModeAuthState>;
-    if (
-      typeof raw.serverUrl !== 'string'
-      || typeof raw.serverId !== 'string'
-      || typeof raw.developerId !== 'string'
-      || typeof raw.accessToken !== 'string'
-      || (raw.role !== 'admin' && raw.role !== 'member')
-      || typeof raw.savedAt !== 'number'
-    ) {
-      return null;
-    }
-    return raw as TeamModeAuthState;
-  } catch {
-    return null;
-  }
-}
-
-export function saveTeamModeAuthState(state: TeamModeAuthState): void {
-  try {
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(TEAM_MODE_AUTH_STATE_FILE, JSON.stringify(state), 'utf-8');
-  } catch {
-    // best-effort
+    const payload: SidebarStats = {
+      harnesses: [...new Set(stats.harnesses.filter((value) => value.trim().length > 0))].sort(),
+      savedAt: Math.round(stats.savedAt),
+    };
+    fs.writeFileSync(SIDEBAR_STATS_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+  } catch (error) {
+    warnCore('cache', 'Sidebar stats write failed', error);
   }
 }
 
@@ -437,9 +384,6 @@ export function clearCache(): void {
   }
   try { fs.unlinkSync(SIDEBAR_STATS_FILE); } catch (e) {
     console.debug('Sidebar stats removal skipped:', e instanceof Error ? e.message : e);
-  }
-  try { fs.unlinkSync(TEAM_MODE_AUTH_STATE_FILE); } catch (e) {
-    console.debug('Team mode auth state removal skipped:', e instanceof Error ? e.message : e);
   }
 }
 

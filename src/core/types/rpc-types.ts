@@ -113,6 +113,7 @@ export interface RpcMethodMap {
   importRegistryRules: { params: { ruleIds?: string[] }; result: unknown };
   getRegistryCatalog: { params: undefined; result: unknown };
   getTeamDashboard: { params: TeamDashboardFilters | undefined; result: TeamDashboardResponse };
+  importTeamSnapshots: { params: undefined; result: { ok: boolean } };
 }
 
 export type RpcMethodName = keyof RpcMethodMap;

@@ -5,15 +5,15 @@
 
 /* Webview panel manager -- creates and manages the dashboard webview shell */
 
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
-import { loadTeamModeAuthState, loadTeamModeSyncState, saveSidebarStats, saveTeamModeSyncState } from '../core/cache';
+import { saveSidebarStats } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult } from '../core/parser';
 import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage } from '../core/types';
 import { buildTeamModeSnapshot, readTeamModeSettings } from '../core/team-mode';
-import { TeamDashboardClient } from '../core/team-dashboard-client';
-import { createFetchTeamModeTransport, fingerprintTeamModeSnapshot, TeamModeSyncClient } from '../core/team-sync';
+import { buildTeamDashboardResponse, exportTeamModeSnapshotFile, importTeamModeSnapshotFiles, type TeamModeSnapshotImportRequest } from '../core/team-mode-local';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
@@ -32,8 +32,8 @@ export class DashboardPanel {
   private readonly extensionUri: vscode.Uri;
   private readonly requestService: PanelRequestService;
   private readonly globalState: vscode.Memento;
-  private readonly teamModeSyncClient: TeamModeSyncClient;
-  private readonly teamDashboardClient: TeamDashboardClient;
+  private readonly globalStorageUri: vscode.Uri;
+  private readonly teamModeEnabled: boolean;
   private readonly disposables: vscode.Disposable[] = [];
 
   private analyzer: Analyzer | undefined;
@@ -43,17 +43,13 @@ export class DashboardPanel {
   private disposed = false;
   private loading = false;
   private loadCompletedAt = 0;
-  private lastTeamModeSnapshotFingerprint: string | undefined = loadTeamModeSyncState()?.lastSnapshotFingerprint;
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.globalState = context.globalState;
-    this.teamModeSyncClient = new TeamModeSyncClient(
-      createFetchTeamModeTransport(),
-      () => readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach')),
-    );
-    this.teamDashboardClient = new TeamDashboardClient();
+    this.globalStorageUri = context.globalStorageUri;
+    this.teamModeEnabled = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach')).enabled;
     this.requestService = new PanelRequestService(
       this.panel.webview,
       () => this.analyzer,
@@ -141,6 +137,93 @@ export class DashboardPanel {
     DashboardSidebarProvider.instance?.refresh();
   }
 
+  private createEmptyAnalysis(): void {
+    this.parseResult = {
+      workspaces: new Map(),
+      sessions: [],
+      editLocIndex: new Map(),
+      sessionSourceIndex: new Map(),
+    };
+    this.analyzer = new Analyzer([], new Map(), new Map());
+  }
+
+  private postTeamModeState(): void {
+    if (this.disposed) return;
+    try {
+      this.panel.webview.postMessage({
+        type: 'teamModeState',
+        enabled: this.teamModeEnabled,
+      });
+    } catch {
+      // Webview disposed between check and call.
+    }
+  }
+
+  private async exportTeamModeSnapshot(): Promise<void> {
+    if (!this.teamModeEnabled || this.disposed || !this.analyzer || !this.parseResult || this.parseResult.sessions.length === 0) {
+      return;
+    }
+
+    try {
+      const snapshot = buildTeamModeSnapshot(this.analyzer);
+      const result = await exportTeamModeSnapshotFile(this.globalStorageUri, snapshot);
+      runtimeDebug('panel', 'team-mode-exported', `file=${result.fileName}`);
+    } catch (error) {
+      runtimeDebug('panel', 'team-mode-export-error', error);
+    }
+  }
+
+  public async importTeamSnapshots(): Promise<void> {
+    if (!this.teamModeEnabled || this.disposed) return;
+
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      canSelectFiles: true,
+      canSelectFolders: false,
+      filters: { 'Team Mode snapshots': ['json'] },
+      openLabel: 'Import Team Snapshots',
+    });
+
+    if (!picked || picked.length === 0) return;
+
+    const requests: TeamModeSnapshotImportRequest[] = [];
+    for (const fileUri of picked) {
+      const defaultName = path.parse(fileUri.fsPath).name || 'Developer';
+      const displayName = await vscode.window.showInputBox({
+        title: 'Developer name for this snapshot',
+        prompt: `Who does ${path.basename(fileUri.fsPath)} belong to?`,
+        value: defaultName,
+        ignoreFocusOut: true,
+      });
+      if (!displayName) continue;
+      requests.push({ filePath: fileUri.fsPath, displayName });
+    }
+
+    if (requests.length === 0) return;
+
+    try {
+      const result = await importTeamModeSnapshotFiles(this.globalStorageUri, requests);
+      runtimeDebug('panel', 'team-mode-imported', `imported=${result.imported} skipped=${result.skipped} rejected=${result.rejected.length}`);
+      this.postTeamModeState();
+      if (!this.disposed) {
+        try {
+          this.panel.webview.postMessage({ type: 'teamModeDataChanged' });
+        } catch {
+          // ignore webview disposal during post
+        }
+      }
+    } catch (error) {
+      runtimeDebug('panel', 'team-mode-import-error', error);
+      if (!this.disposed) {
+        try {
+          this.panel.webview.postMessage({ type: 'teamModeImportError', error: error instanceof Error ? error.message : String(error) });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
   private async loadData(): Promise<void> {
     this.loading = true;
     const t0 = Date.now();
@@ -206,8 +289,8 @@ export class DashboardPanel {
         this.updateSidebarStats();
         this.dataReady = true;
         safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
-        this.postTeamModeAccess();
-        this.syncTeamModeSnapshot();
+        this.postTeamModeState();
+        await this.exportTeamModeSnapshot();
         return;
       }
 
@@ -219,6 +302,22 @@ export class DashboardPanel {
       runtimeDebug('panel', 'logs-dirs-found', `count=${dirs.length}`);
       if (dirs.length === 0) {
         runtimeDebug('panel', 'loadData-no-dirs');
+        if (this.teamModeEnabled) {
+          this.createEmptyAnalysis();
+          sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: 0 });
+          await flush();
+          if (this.disposed) return;
+          this.dataReady = true;
+          safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
+          this.postTeamModeState();
+          if (!this.disposed) {
+            for (const message of this.pendingMessages) {
+              this.handleMessage(message);
+            }
+            this.pendingMessages = [];
+          }
+          return;
+        }
         if (!this.disposed) {
           try { this.panel.webview.html = getErrorHtml('No Copilot chat log directories found.'); } catch { /* disposed */ }
         }
@@ -250,8 +349,8 @@ export class DashboardPanel {
 
       safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '' });
       runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${Date.now() - t0}`);
-      this.postTeamModeAccess();
-      this.syncTeamModeSnapshot();
+      this.postTeamModeState();
+      await this.exportTeamModeSnapshot();
 
       try {
         await this.analyzer.warmUp();
@@ -296,7 +395,7 @@ export class DashboardPanel {
       return;
     }
 
-    if (msg.method === 'getTeamDashboard') {
+    if (msg.method === 'getTeamDashboard' || msg.method === 'importTeamSnapshots') {
       void this.handleTeamDashboardMessage(msg);
       return;
     }
@@ -362,7 +461,15 @@ export class DashboardPanel {
 
   private async handleTeamDashboardMessage(msg: Extract<WebviewMessage, { type: 'request' }>): Promise<void> {
     try {
-      const data = await this.teamDashboardClient.fetchDashboard((msg.params ?? {}) as Record<string, unknown>);
+      if (msg.method === 'importTeamSnapshots') {
+        await this.importTeamSnapshots();
+        if (!this.disposed) {
+          try { postResponse(this.panel.webview, msg.id, { ok: true }); } catch { /* disposed */ }
+        }
+        return;
+      }
+
+      const data = await buildTeamDashboardResponse(this.globalStorageUri, (msg.params ?? {}) as Record<string, unknown>);
       if (!this.disposed) {
         try { postResponse(this.panel.webview, msg.id, data); } catch { /* disposed */ }
       }
@@ -373,56 +480,6 @@ export class DashboardPanel {
       }
     }
   }
-
-  private syncTeamModeSnapshot(): void {
-    if (!this.analyzer || !this.parseResult || this.disposed) return;
-
-    const settings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
-    if (!settings.enabled || !settings.serverUrl || !settings.developerId) {
-      runtimeDebug('panel', 'team-mode-sync-skipped', 'disabled');
-      return;
-    }
-
-    const snapshot = buildTeamModeSnapshot(this.analyzer, settings);
-    const fingerprint = `${settings.serverUrl}|${settings.developerId}|${fingerprintTeamModeSnapshot(snapshot)}`;
-    if (fingerprint === this.lastTeamModeSnapshotFingerprint) {
-      runtimeDebug('panel', 'team-mode-sync-skipped', 'duplicate-snapshot');
-      return;
-    }
-
-    this.lastTeamModeSnapshotFingerprint = fingerprint;
-    saveTeamModeSyncState({
-      lastSnapshotFingerprint: fingerprint,
-      savedAt: Date.now(),
-    });
-    void this.teamModeSyncClient.enqueue(snapshot).then(result => {
-      runtimeDebug(
-        'panel',
-        'team-mode-sync',
-        `ok=${result.ok} uploaded=${result.uploaded} queued=${result.queued} skipped=${result.skipped}` + (result.error ? ` error=${result.error}` : ''),
-      );
-    }).catch(error => {
-      runtimeDebug('panel', 'team-mode-sync-error', error);
-    });
-  }
-
-  private postTeamModeAccess(): void {
-    if (this.disposed) return;
-    const authState = loadTeamModeAuthState();
-    try {
-      this.panel.webview.postMessage({
-        type: 'teamModeAccess',
-        access: authState ? {
-          role: authState.role,
-          developerId: authState.developerId,
-          canExportPdf: authState.role === 'admin',
-        } : null,
-      });
-    } catch {
-      // Webview disposed between check and call.
-    }
-  }
-
   private dispose(): void {
     runtimeDebug('panel', 'dispose');
     this.disposed = true;

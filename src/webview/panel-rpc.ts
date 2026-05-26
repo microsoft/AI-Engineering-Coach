@@ -1262,6 +1262,7 @@ Explain why this session triggered the rule.`;
       })),
     };
   },
+  importTeamSnapshots: () => errorResult('Team dashboard import is handled by the extension runtime'),
   getTeamDashboard: () => errorResult('Team dashboard is handled by the extension runtime'),
 };
 

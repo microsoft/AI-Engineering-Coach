@@ -4,8 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { PRACTICE_GROUPS } from '../core/types';
-import type { TeamDashboardCategory, TeamDashboardFilters, TeamDashboardMemberRow, TeamDashboardResponse } from '../core/types/team-mode-types';
-import { rpc, scoreColor, scoreLabel, formatNum } from './shared';
+import type { TeamDashboardCategory, TeamDashboardDeveloperRow, TeamDashboardFilters, TeamDashboardResponse } from '../core/types/team-mode-types';
+import { rpc, scoreColor, scoreLabel, formatNum, formatDate } from './shared';
 import { html, render, ScoreRing } from './render';
 
 const CATEGORY_OPTIONS: Array<{ value: TeamDashboardCategory | 'all'; label: string }> = [
@@ -39,6 +39,7 @@ function renderLoading(): void {
           <p class="team-dashboard-subtitle">Privacy-safe coaching signals, trends, and usage quality at a glance.</p>
         </div>
         <div class="team-dashboard-actions">
+          <button class="team-dashboard-button team-dashboard-button--ghost" type="button" id="team-dashboard-import" data-action="import-snapshots">Import Snapshots</button>
           <button class="team-dashboard-button" type="button" id="team-dashboard-export" data-action="export-pdf" disabled>Export PDF</button>
         </div>
       </header>
@@ -84,7 +85,7 @@ function renderError(message: string): void {
       <div class="team-dashboard-error">
         <h2>Team Dashboard unavailable</h2>
         <p>${message}</p>
-        <p class="team-dashboard-error-hint">Check Team Mode settings, backend access, and your saved team token.</p>
+        <p class="team-dashboard-error-hint">Check Team Mode settings and try importing snapshots again.</p>
       </div>
     </section>
   `, activeContainer);
@@ -93,14 +94,12 @@ function renderError(message: string): void {
 function renderDashboard(data: TeamDashboardResponse): void {
   if (!activeContainer) return;
 
-  const selectedDeveloper = activeFilters.developerId || (data.access.role === 'admin' ? 'all' : data.developers[0]?.developerId || 'all');
+  const selectedDeveloper = activeFilters.developerId || 'all';
   const fromValue = toDateInputValue(activeFilters.fromMs);
   const toValue = toDateInputValue(activeFilters.toMs);
-  const selectedCategory = activeFilters.category || 'all';
-  const exportDisabled = !data.access.canExportPdf;
-  const developerOptions = data.access.role === 'admin'
-    ? [{ value: 'all', label: 'All Developers' }, ...data.developers.map(dev => ({ value: dev.developerId, label: dev.displayName }))]
-    : data.developers.map(dev => ({ value: dev.developerId, label: dev.displayName }));
+  const selectedCategory = activeFilters.category || data.selectedCategory;
+  const exportDisabled = !data.hasSnapshots;
+  const developerOptions = [{ value: 'all', label: 'All Developers' }, ...data.availableDevelopers.map(dev => ({ value: dev.developerId, label: dev.displayName }))];
 
   render(html`
     <section class="team-dashboard">
@@ -108,9 +107,10 @@ function renderDashboard(data: TeamDashboardResponse): void {
         <div>
           <div class="team-dashboard-kicker">Team Mode</div>
           <h2 class="team-dashboard-title">Team Dashboard</h2>
-          <p class="team-dashboard-subtitle">Privacy-safe coaching signals, trends, and usage quality at a glance.</p>
+          <p class="team-dashboard-subtitle">Privacy-safe coaching signals, trends, and usage quality from locally imported snapshots.</p>
         </div>
         <div class="team-dashboard-actions">
+          <button class="team-dashboard-button team-dashboard-button--ghost" type="button" id="team-dashboard-import" data-action="import-snapshots">Import Snapshots</button>
           <button class="team-dashboard-button" type="button" id="team-dashboard-export" data-action="export-pdf" ?disabled=${exportDisabled}>Export PDF</button>
         </div>
       </header>
@@ -147,12 +147,12 @@ function renderDashboard(data: TeamDashboardResponse): void {
           <div class="team-dashboard-summary-label">Developers</div>
         </div>
         <div class="team-dashboard-summary-card">
-          <div class="team-dashboard-summary-value">${data.selectedCategory === 'all' ? 'All' : PRACTICE_GROUPS[data.selectedCategory]}</div>
-          <div class="team-dashboard-summary-label">Selected category</div>
+          <div class="team-dashboard-summary-value">${formatNum(data.totalSnapshots)}</div>
+          <div class="team-dashboard-summary-label">Visible snapshots</div>
         </div>
         <div class="team-dashboard-summary-card">
-          <div class="team-dashboard-summary-value">${data.access.role}</div>
-          <div class="team-dashboard-summary-label">Access</div>
+          <div class="team-dashboard-summary-value">${data.lastImportedAtMs ? formatDate(data.lastImportedAtMs) : 'Never'}</div>
+          <div class="team-dashboard-summary-label">Last import</div>
         </div>
       </section>
 
@@ -164,6 +164,7 @@ function renderDashboard(data: TeamDashboardResponse): void {
 
   bindFilters();
   bindExportButton();
+  bindImportButton();
 }
 
 function bindFilters(): void {
@@ -228,7 +229,20 @@ function bindExportButton(): void {
   });
 }
 
-function renderMemberCard(member: TeamDashboardMemberRow) {
+function bindImportButton(): void {
+  const importButton = document.getElementById('team-dashboard-import') as HTMLButtonElement | null;
+  importButton?.addEventListener('click', async () => {
+    importButton.disabled = true;
+    try {
+      await rpc<{ ok: boolean }>('importTeamSnapshots');
+      await loadTeamDashboard();
+    } finally {
+      importButton.disabled = false;
+    }
+  });
+}
+
+function renderMemberCard(member: TeamDashboardDeveloperRow) {
   return html`
     <article class="team-dashboard-card" data-developer-id=${member.developerId}>
       <header class="team-dashboard-card-head">
@@ -264,7 +278,7 @@ function renderMemberCard(member: TeamDashboardMemberRow) {
             ? html`<div class="team-dashboard-violations">${member.antiPatterns.topViolations.map((violation) => html`
               <div class="team-dashboard-violation">
                 <span class=${'team-dashboard-severity severity-' + violation.severity}>${violation.severity}</span>
-                <strong>${violation.label}</strong>
+                <strong>${violation.ruleId}</strong>
                 <span>${formatNum(violation.count)}</span>
               </div>
             `)}</div>`
