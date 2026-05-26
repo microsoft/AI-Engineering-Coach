@@ -58,8 +58,6 @@ export interface TeamModeSnapshotFile {
   weeklyDeltas: TeamDashboardCategoryScores;
 }
 
-export type TeamModeSnapshot = TeamModeSnapshotFile;
-
 export interface TeamModeImportedSnapshotRecord {
   importId: string;
   filePath: string;
@@ -93,8 +91,6 @@ export interface TeamDashboardDeveloperRow {
   weekOverWeek: TeamDashboardCategoryScores;
   importedSnapshots: TeamDashboardImportedRun[];
 }
-
-export type TeamDashboardMemberRow = TeamDashboardDeveloperRow;
 
 export interface TeamDashboardResponse {
   filters: TeamDashboardFilters;
@@ -161,10 +157,6 @@ export function createEmptyTeamModeSnapshotFile(): TeamModeSnapshotFile {
     },
     weeklyDeltas: createEmptyTeamDashboardCategoryScores(),
   };
-}
-
-export function createEmptyTeamModeSnapshot(): TeamModeSnapshotFile {
-  return createEmptyTeamModeSnapshotFile();
 }
 
 export function createEmptyTeamDashboardResponse(): TeamDashboardResponse {

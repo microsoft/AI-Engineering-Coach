@@ -87,13 +87,13 @@ function validateBurndownConfig(raw: unknown): BurndownConfig {
  * `RpcResult<RpcMethodMap[M]['result']>` so handlers cannot silently drift
  * from the wire contract defined in `rpc-types.ts`.
  */
-export type TypedRpcHandlers = {
+export type TypedRpcHandlers = Partial<{
   [M in RpcMethodName]: (
     analyzer: Analyzer,
     parseResult: ParseResult,
     params: Record<string, unknown>,
   ) => RpcResult<RpcMethodMap[M]['result']> | Promise<RpcResult<RpcMethodMap[M]['result']>>;
-};
+}>;
 
 export type RpcHandler = TypedRpcHandlers[RpcMethodName];
 
@@ -1262,8 +1262,6 @@ Explain why this session triggered the rule.`;
       })),
     };
   },
-  importTeamSnapshots: () => errorResult('Team dashboard import is handled by the extension runtime'),
-  getTeamDashboard: () => errorResult('Team dashboard is handled by the extension runtime'),
 };
 
 function buildNumericHistogram(sorted: number[], buckets: number): { label: string; count: number }[] {
