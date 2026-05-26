@@ -63,6 +63,15 @@ function getTrustedRoots(): string[] {
     roots.push(path.resolve(home, '.codex'));
     roots.push(path.resolve(home, '.local', 'share', 'opencode'));
     roots.push(path.resolve(home, '.config', 'github-copilot'));
+    // Windsurf (Cascade) IndexedDB
+    if (process.platform === 'darwin') {
+      roots.push(path.resolve(home, 'Library', 'Application Support', 'Windsurf'));
+    } else if (process.platform === 'win32') {
+      const appdata = process.env.APPDATA || '';
+      if (appdata) roots.push(path.resolve(appdata, 'Windsurf'));
+    } else {
+      roots.push(path.resolve(home, '.config', 'Windsurf'));
+    }
   }
 
   // OS temp directory (used by tests and VS Code temp storage)

@@ -10,6 +10,7 @@ import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
+import { findWindsurfDirs, parseWindsurfSessions } from './parser-windsurf';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -69,6 +70,14 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
       }
     },
   },
+  {
+    name: 'Windsurf',
+    collectSync(ctx) {
+      for (const wsDir of findWindsurfDirs()) {
+        for (const session of parseWindsurfSessions(wsDir)) addSession(ctx.workspaces, ctx.sessions, session, wsDir);
+      }
+    },
+  },
 ];
 
 export interface ExternalHarnessProgressHandlers {
@@ -93,6 +102,7 @@ export const EXTERNAL_HARNESS_SET = new Set<string>([
   'Claude',
   'Codex',
   'OpenCode',
+  'Windsurf',
 ]);
 
 export async function collectExternalHarnessesAsync(
