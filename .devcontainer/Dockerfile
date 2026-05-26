@@ -8,5 +8,5 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright browsers for E2E tests (OS-agnostic)
-RUN npx playwright install --with-deps
+# Install Playwright system dependencies for E2E tests
+RUN npx -y playwright@1.60.0 install-deps
