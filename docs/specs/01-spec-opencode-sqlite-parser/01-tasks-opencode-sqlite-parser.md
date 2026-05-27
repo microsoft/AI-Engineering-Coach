@@ -107,7 +107,7 @@
 - [x] 5.2 Add tests that inject malformed JSON into `message.data` / `part.data` and assert the parser skips those rows while still returning other sessions.
 - [x] 5.3 Add a synthetic “large-ish” fixture generator in tests (or prebuilt fixture) to validate runtime does not blow up on volume.
 
-### [ ] 6.0 Document the OpenCode storage change + troubleshooting guidance
+### [x] 6.0 Document the OpenCode storage change + troubleshooting guidance
 
 #### 6.0 Proof Artifact(s)
 
@@ -115,5 +115,5 @@
 
 #### 6.0 Tasks
 
-- [ ] 6.1 Update documentation to explain why OpenCode may not load (DB vs legacy JSON) and what paths are checked.
-- [ ] 6.2 Add a short troubleshooting note: if OpenCode sessions don’t appear, verify `opencode.db` exists in the expected directory.
+- [x] 6.1 Update documentation to explain why OpenCode may not load (DB vs legacy JSON) and what paths are checked.
+- [x] 6.2 Add a short troubleshooting note: if OpenCode sessions don’t appear, verify `opencode.db` exists in the expected directory.

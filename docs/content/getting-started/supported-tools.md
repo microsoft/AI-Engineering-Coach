@@ -32,6 +32,23 @@ Reads session history from OpenAI's Codex terminal agent. Captures prompts, comp
 
 Parses session logs from the open-source OpenCode terminal tool that supports multiple LLM backends.
 
+OpenCode data is read from either of two storage layouts depending on the installed version:
+
+| Layout | Path | OpenCode version |
+| --- | --- | --- |
+| **SQLite** (current) | `~/.local/share/opencode/opencode.db` | ≥ 0.1.x |
+| **Legacy JSON** | `~/.local/share/opencode/storage/` | < 0.1.x |
+
+On Windows both paths use `%USERPROFILE%\.local\share\opencode\`.
+SQLite is preferred when both layouts are present.
+
+**Troubleshooting — OpenCode sessions not appearing:**
+
+1. Confirm the file exists: `ls ~/.local/share/opencode/opencode.db`
+2. If the file is missing, check whether the legacy JSON storage directory exists:
+   `ls ~/.local/share/opencode/storage/session/global/`
+3. On Windows use `%USERPROFILE%\.local\share\opencode\` for the same paths.
+
 ## GitHub Copilot for Xcode
 
 Reads Copilot Chat conversation logs from Apple's Xcode IDE. Sessions are parsed from SQLite databases stored in the GitHub Copilot configuration directory.
