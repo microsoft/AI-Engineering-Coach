@@ -1,0 +1,43 @@
+{
+  "app": {
+    "name": "AI Engineer Coach",
+    "loading": "Завантаження даних сесій...",
+    "noData": "На цьому пристрої не знайдено логів сесій AI-інструментів."
+  },
+  "sidebar": {
+    "group.observe": "Спостерігай",
+    "group.measure": "Вимірюй",
+    "group.improve": "Покращуй",
+    "dashboard": "Інформаційна панель",
+    "timeline": "Хронологія",
+    "codingMoments": "Моменти коду",
+    "output": "Вивід",
+    "burndown": "Burndown",
+    "patterns": "Шаблони",
+    "antiPatterns": "Антишаблони",
+    "skillFinder": "Пошук навичок",
+    "contextHealth": "Здоров'я контексту",
+    "levelUp": "Прокачка"
+  },
+  "filters": {
+    "workspace": "Воркспейс",
+    "harness": "Інструмент",
+    "current": "Поточний",
+    "all": "Усі",
+    "searchWorkspaces": "Пошук воркспейсів...",
+    "allHarnesses": "Усі інструменти"
+  },
+  "menu": {
+    "reloadData": "Перезавантажити дані",
+    "revealLogs": "Показати теку логів у Finder",
+    "language": "Мова",
+    "languageEnglish": "English",
+    "languageRussian": "Русский",
+    "languageUkrainian": "Українська",
+    "about": "Про AI Engineer Coach"
+  },
+  "errors": {
+    "featureUnavailable": "Ця функція потребує збірки для VS Code (використовує Language Model або GitHub API).",
+    "loadFailed": "Не вдалося завантажити дані: {{message}}"
+  }
+}

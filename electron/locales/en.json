@@ -1,0 +1,43 @@
+{
+  "app": {
+    "name": "AI Engineer Coach",
+    "loading": "Loading session data...",
+    "noData": "No AI coding session logs found on this machine."
+  },
+  "sidebar": {
+    "group.observe": "Observe",
+    "group.measure": "Measure",
+    "group.improve": "Improve",
+    "dashboard": "Dashboard",
+    "timeline": "Timeline",
+    "codingMoments": "Coding Moments",
+    "output": "Output",
+    "burndown": "Burndown",
+    "patterns": "Patterns",
+    "antiPatterns": "Anti-Patterns",
+    "skillFinder": "Skill Finder",
+    "contextHealth": "Context Health",
+    "levelUp": "Level Up"
+  },
+  "filters": {
+    "workspace": "Workspace",
+    "harness": "Harness",
+    "current": "Current",
+    "all": "All",
+    "searchWorkspaces": "Search workspaces...",
+    "allHarnesses": "All Harnesses"
+  },
+  "menu": {
+    "reloadData": "Reload Data",
+    "revealLogs": "Reveal Logs Folder in Finder",
+    "language": "Language",
+    "languageEnglish": "English",
+    "languageRussian": "Русский",
+    "languageUkrainian": "Українська",
+    "about": "About AI Engineer Coach"
+  },
+  "errors": {
+    "featureUnavailable": "This feature requires the VS Code build (uses Language Model or GitHub APIs).",
+    "loadFailed": "Failed to load data: {{message}}"
+  }
+}
