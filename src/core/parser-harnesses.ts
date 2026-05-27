@@ -95,23 +95,25 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
 	{
 		name: "OpenCode",
 		collectSync(ctx) {
-			// Prefer SQLite (current OpenCode >= 0.1) over legacy JSON storage.
+			// Sync path: legacy JSON only.
+			// SQLite requires @vscode/sqlite3 which is async — handled in collectAsync.
+			for (const ocDir of findOpenCodeDirs()) {
+				for (const session of parseOpenCodeSessions(ocDir))
+					addSession(ctx.workspaces, ctx.sessions, session, ocDir);
+			}
+		},
+		async collectAsync(ctx) {
+			// Async path: SQLite preferred (VS Code Electron-compatible), JSON fallback.
 			const dbPaths = findOpenCodeDbPaths();
 			const coveredParentDirs = new Set<string>();
 			for (const dbPath of dbPaths) {
-				const sessions = parseOpenCodeSessionsFromDb(dbPath);
+				const sessions = await parseOpenCodeSessionsFromDb(dbPath);
 				for (const session of sessions)
-					addSession(
-						ctx.workspaces,
-						ctx.sessions,
-						session,
-						path.dirname(dbPath),
-					);
+					addSession(ctx.workspaces, ctx.sessions, session, path.dirname(dbPath));
 				coveredParentDirs.add(path.dirname(dbPath));
 			}
-			// Fall back to legacy JSON storage for install locations not covered by a DB.
+			// Fall back to legacy JSON for install dirs not covered by a DB.
 			for (const ocDir of findOpenCodeDirs()) {
-				// ocDir is storage/, parent is opencode/
 				const parentDir = path.dirname(ocDir);
 				if (coveredParentDirs.has(parentDir)) continue;
 				for (const session of parseOpenCodeSessions(ocDir))

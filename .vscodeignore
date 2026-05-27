@@ -30,12 +30,11 @@ SECURITY.md
 benchmark-*.json
 
 # Runtime deps are bundled into dist/ by esbuild — ship the bundle, not node_modules.
-# Exception: better-sqlite3 is a native module that cannot be bundled by esbuild;
-# include its prebuilt binary so the extension host can load it at runtime.
+# Exception: @vscode/sqlite3 is a native module compiled for VS Code's Electron;
+# include it so the extension host and its child processes can require() it.
+# better-sqlite3 is a devDependency (tests only) and must NOT be shipped.
 node_modules/**
-!node_modules/better-sqlite3/**
-!node_modules/bindings/**
-!node_modules/file-uri-to-path/**
+!node_modules/@vscode/sqlite3/**
 
 # Local manual-test rules (project-layer, for exercising the trust gate in dev)
 .ai-engineer-coach/**

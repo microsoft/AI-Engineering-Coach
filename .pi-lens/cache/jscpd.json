@@ -1,0 +1,264 @@
+{
+  "success": true,
+  "clones": [
+    {
+      "fileA": "src/core/types/analytics-types.ts",
+      "startA": 389,
+      "fileB": "src/core/types/analytics-types.ts",
+      "startB": 160,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-workflows.ts",
+      "startA": 79,
+      "fileB": "src/webview/page-workflows.ts",
+      "startB": 58,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-peers.ts",
+      "startA": 357,
+      "fileB": "src/webview/page-peers.ts",
+      "startB": 323,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-output.ts",
+      "startA": 520,
+      "fileB": "src/webview/page-output.ts",
+      "startB": 362,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-learning.ts",
+      "startA": 829,
+      "fileB": "src/webview/page-learning.ts",
+      "startB": 786,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-insights.ts",
+      "startA": 26,
+      "fileB": "src/core/types/insights-types.ts",
+      "startB": 37,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-insights.ts",
+      "startA": 43,
+      "fileB": "src/core/types/insights-types.ts",
+      "startB": 56,
+      "lines": 16,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-insights.ts",
+      "startA": 59,
+      "fileB": "src/core/types/insights-types.ts",
+      "startB": 73,
+      "lines": 14,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-insights.ts",
+      "startA": 72,
+      "fileB": "src/core/types/insights-types.ts",
+      "startB": 87,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-insights.ts",
+      "startA": 274,
+      "fileB": "src/webview/page-insights.ts",
+      "startB": 228,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-insights.ts",
+      "startA": 372,
+      "fileB": "src/webview/page-insights.ts",
+      "startB": 273,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-dsl-reference.ts",
+      "startA": 139,
+      "fileB": "src/webview/page-rule-playground.ts",
+      "startB": 145,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-dsl-reference.ts",
+      "startA": 292,
+      "fileB": "src/webview/page-dsl-reference.ts",
+      "startB": 226,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-dashboard.ts",
+      "startA": 385,
+      "fileB": "src/webview/page-skills.ts",
+      "startB": 185,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-context-mgmt.ts",
+      "startA": 204,
+      "fileB": "src/webview/page-context-mgmt.ts",
+      "startB": 136,
+      "lines": 15,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-context-mgmt.ts",
+      "startA": 575,
+      "fileB": "src/webview/page-context-mgmt.ts",
+      "startB": 116,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-config.ts",
+      "startA": 56,
+      "fileB": "src/webview/page-output.ts",
+      "startB": 148,
+      "lines": 7,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-config.ts",
+      "startA": 134,
+      "fileB": "src/webview/page-output.ts",
+      "startB": 225,
+      "lines": 6,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/webview/page-antipatterns-editor.ts",
+      "startA": 266,
+      "fileB": "src/webview/page-antipatterns-editor.ts",
+      "startB": 246,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/mcp/formatters.ts",
+      "startA": 358,
+      "fileB": "src/mcp/formatters.ts",
+      "startB": 328,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/rule-loader.ts",
+      "startA": 442,
+      "fileB": "src/core/rule-loader.ts",
+      "startB": 280,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/parser.ts",
+      "startA": 479,
+      "fileB": "src/core/parser.ts",
+      "startB": 431,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/parser.ts",
+      "startA": 597,
+      "fileB": "src/core/parser.ts",
+      "startB": 464,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/parser-codex.ts",
+      "startA": 77,
+      "fileB": "src/core/parser-vscode-cli.ts",
+      "startB": 88,
+      "lines": 11,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/parser-codex.ts",
+      "startA": 368,
+      "fileB": "src/core/parser-codex.ts",
+      "startB": 285,
+      "lines": 9,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/log.ts",
+      "startA": 23,
+      "fileB": "src/core/runtime-debug.ts",
+      "startB": 34,
+      "lines": 13,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/helpers.ts",
+      "startA": 280,
+      "fileB": "src/webview/page-sdlc.ts",
+      "startB": 36,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/detector-registry.ts",
+      "startA": 144,
+      "fileB": "src/core/rule-engine.ts",
+      "startB": 231,
+      "lines": 10,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/cache.ts",
+      "startA": 77,
+      "fileB": "src/core/cache.ts",
+      "startB": 59,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/cache.ts",
+      "startA": 295,
+      "fileB": "src/core/parse-worker.ts",
+      "startB": 109,
+      "lines": 8,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/analyzer-context.ts",
+      "startA": 39,
+      "fileB": "src/webview/app.ts",
+      "startB": 193,
+      "lines": 12,
+      "tokens": 0
+    },
+    {
+      "fileA": "src/core/analyzer-context.ts",
+      "startA": 437,
+      "fileB": "src/core/analyzer-context.ts",
+      "startB": 363,
+      "lines": 7,
+      "tokens": 0
+    }
+  ],
+  "duplicatedLines": 294,
+  "totalLines": 36504,
+  "percentage": 0.81
+}

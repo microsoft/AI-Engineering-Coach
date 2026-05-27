@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "type": "TODO",
+      "message": "list state at the end of this request (from manage_todo_list tool calls)",
+      "file": "src/core/types/session-types.ts",
+      "line": 82,
+      "column": 12
+    },
+    {
+      "type": "TODO",
+      "message": "lifecycle bars as box annotations at the bottom of the chart",
+      "file": "src/webview/page-context-mgmt.ts",
+      "line": 488,
+      "column": 11
+    }
+  ]
+}

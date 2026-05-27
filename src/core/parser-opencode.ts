@@ -144,31 +144,77 @@ export function findOpenCodeDbPaths(): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// SQLite access (better-sqlite3, loaded lazily; gracefully degrades if binary
-// is unavailable in this runtime environment)
+// SQLite access — async interface
+//
+// Priority order:
+//  1. @vscode/sqlite3  — compiled for VS Code's Electron; works in the
+//                        extension host and its child processes.
+//  2. better-sqlite3   — compiled for system Node; works in Vitest / local
+//                        dev but NOT in VS Code's Electron runtime.
+//
+// Both are tried lazily so the code degrades gracefully if neither loads.
 // ---------------------------------------------------------------------------
 
-type BetterSqlite3Ctor = new (
-	dbPath: string,
-	opts?: { readonly?: boolean; fileMustExist?: boolean },
-) => SqliteDb;
-interface SqliteDb {
-	prepare(sql: string): SqliteStmt;
-	close(): void;
-}
-interface SqliteStmt {
-	all(...params: unknown[]): unknown[];
+/** Minimal async handle returned by tryOpenSqliteDbAsync. */
+interface AsyncSqliteHandle {
+	all(sql: string, params: unknown[]): Promise<unknown[]>;
+	close(): void | Promise<void>;
 }
 
-function tryOpenSqliteDb(dbPath: string): SqliteDb | null {
+async function tryOpenSqliteDbAsync(
+	dbPath: string,
+): Promise<AsyncSqliteHandle | null> {
+	try { assertTrustedPath(dbPath); } catch { return null; }
+
+	// ── 1. @vscode/sqlite3 (VS Code's Electron) ──────────────────────────────
 	try {
-		assertTrustedPath(dbPath);
+		// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+		const mod = require('@vscode/sqlite3');
+		return await new Promise<AsyncSqliteHandle | null>((resolve) => {
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+			const raw = new mod.Database(
+				dbPath,
+				// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+				mod.OPEN_READONLY as number,
+				(err: Error | null) => {
+					if (err) { resolve(null); return; }
+					resolve({
+						all(sql: string, params: unknown[]) {
+							return new Promise<unknown[]>((res, rej) => {
+								// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+								raw.all(sql, params, (e: Error | null, rows: unknown[]) => {
+									if (e) rej(e); else res(rows ?? []);
+								});
+							});
+						},
+						close() {
+							return new Promise<void>((res) => {
+								// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+								raw.close(() => res());
+							});
+						},
+					});
+				},
+			);
+		});
+	} catch { /* fall through to next candidate */ }
+
+	// ── 2. better-sqlite3 fallback (system Node / Vitest) ────────────────────
+	try {
+		type B3Ctor = new (p: string, o: { readonly: boolean; fileMustExist: boolean }) => {
+			prepare(s: string): { all(...a: unknown[]): unknown[] };
+			close(): void;
+		};
 		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		const Database = require("better-sqlite3") as BetterSqlite3Ctor;
-		return new Database(dbPath, { readonly: true, fileMustExist: true });
-	} catch {
-		return null;
-	}
+		const Database = require('better-sqlite3') as B3Ctor;
+		const raw = new Database(dbPath, { readonly: true, fileMustExist: true });
+		return {
+			all(sql: string, params: unknown[]) {
+				return Promise.resolve(raw.prepare(sql).all(...params));
+			},
+			close() { raw.close(); },
+		};
+	} catch { return null; }
 }
 
 interface SqliteSessionRow {
@@ -202,31 +248,35 @@ function parseJsonBlob<T>(blob: string): T | null {
 
 /**
  * Parse all OpenCode sessions from an opencode.db SQLite file.
+ * Uses @vscode/sqlite3 first (VS Code's Electron-compatible build), with
+ * better-sqlite3 as fallback for system Node / test environments.
  * Returns an empty array if the DB cannot be opened or contains no data.
  */
-export function parseOpenCodeSessionsFromDb(dbPath: string): Session[] {
-	const db = tryOpenSqliteDb(dbPath);
+export async function parseOpenCodeSessionsFromDb(
+	dbPath: string,
+): Promise<Session[]> {
+	const db = await tryOpenSqliteDbAsync(dbPath);
 	if (!db) return [];
 
 	try {
-		const stmtSessions = db.prepare(
-			"SELECT id, slug, directory, title, time_created, time_updated FROM session",
-		);
-		const stmtMessages = db.prepare(
-			"SELECT id, session_id, data FROM message WHERE session_id = ? ORDER BY time_created ASC",
-		);
-		const stmtParts = db.prepare(
-			"SELECT id, message_id, data FROM part WHERE session_id = ? ORDER BY time_created ASC",
-		);
+		const sessions = (await db.all(
+			'SELECT id, slug, directory, title, time_created, time_updated FROM session',
+			[],
+		)) as SqliteSessionRow[];
 
-		const sessions = stmtSessions.all() as SqliteSessionRow[];
 		const results: Session[] = [];
-
 		for (const rawSession of sessions) {
-			const rawMessages = stmtMessages.all(rawSession.id) as SqliteMessageRow[];
+			const rawMessages = (await db.all(
+				'SELECT id, session_id, data FROM message WHERE session_id = ? ORDER BY time_created ASC',
+				[rawSession.id],
+			)) as SqliteMessageRow[];
 			if (rawMessages.length === 0) continue;
 
-			const rawParts = stmtParts.all(rawSession.id) as SqlitePartRow[];
+			const rawParts = (await db.all(
+				'SELECT id, message_id, data FROM part WHERE session_id = ? ORDER BY time_created ASC',
+				[rawSession.id],
+			)) as SqlitePartRow[];
+
 			const session = parseSessionFromSqliteRows(
 				rawSession,
 				rawMessages,
@@ -234,12 +284,11 @@ export function parseOpenCodeSessionsFromDb(dbPath: string): Session[] {
 			);
 			if (session) results.push(session);
 		}
-
 		return results;
 	} catch {
 		return [];
 	} finally {
-		db.close();
+		await db.close();
 	}
 }
 

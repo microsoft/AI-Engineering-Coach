@@ -54,7 +54,7 @@ function withStorage(
 }
 
 describe("parseOpenCodeSessions", () => {
-	it("records {input:0,output:0} assistants as zero-token data, not missing", () => {
+	it("records {input:0,output:0} assistants as zero-token data, not missing", async () => {
 		withStorage(
 			{
 				id: "sess1",
@@ -112,7 +112,7 @@ describe("parseOpenCodeSessions", () => {
 		);
 	});
 
-	it("marks a request as missing when the assistant message is absent entirely", () => {
+	it("marks a request as missing when the assistant message is absent entirely", async () => {
 		withStorage(
 			{ id: "sess2", directory: "/Users/me/proj" },
 			[
@@ -243,7 +243,7 @@ function createTestDb(
 // ---------------------------------------------------------------------------
 
 describe("parseOpenCodeSessionsFromDb", () => {
-	it("parses a session with user + assistant messages from SQLite", () => {
+	it("parses a session with user + assistant messages from SQLite", async () => {
 		const { dbPath, cleanup } = createTestDb(
 			[
 				{
@@ -297,7 +297,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 		);
 
 		try {
-			const sessions = parseOpenCodeSessionsFromDb(dbPath);
+			const sessions = await parseOpenCodeSessionsFromDb(dbPath);
 			expect(sessions).toHaveLength(1);
 			const sess = sessions[0];
 			expect(sess.workspaceId).toBe("opencode-ses_1");
@@ -314,7 +314,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 		}
 	});
 
-	it("extracts tool usage and edited files from tool parts", () => {
+	it("extracts tool usage and edited files from tool parts", async () => {
 		const { dbPath, cleanup } = createTestDb(
 			[
 				{
@@ -376,7 +376,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 		);
 
 		try {
-			const sessions = parseOpenCodeSessionsFromDb(dbPath);
+			const sessions = await parseOpenCodeSessionsFromDb(dbPath);
 			expect(sessions).toHaveLength(1);
 			const req = sessions[0].requests[0];
 			expect(req.toolsUsed).toContain("write");
@@ -388,7 +388,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 		}
 	});
 
-	it("skips malformed message.data and part.data rows without crashing", () => {
+	it("skips malformed message.data and part.data rows without crashing", async () => {
 		const { dbPath, cleanup } = createTestDb(
 			[
 				{
@@ -444,7 +444,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 		db.close();
 
 		try {
-			const sessions = parseOpenCodeSessionsFromDb(dbPath);
+			const sessions = await parseOpenCodeSessionsFromDb(dbPath);
 			// Malformed rows skipped; valid session still returned
 			expect(sessions).toHaveLength(1);
 			expect(sessions[0].requests).toHaveLength(1);
@@ -453,7 +453,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 		}
 	});
 
-	it("handles a large number of sessions without throwing", () => {
+	it("handles a large number of sessions without throwing", async () => {
 		const sessionCount = 200;
 		const sessions = Array.from({ length: sessionCount }, (_, i) => ({
 			id: `ses_large_${i}`,
@@ -489,15 +489,15 @@ describe("parseOpenCodeSessionsFromDb", () => {
 
 		const { dbPath, cleanup } = createTestDb(sessions, messages, []);
 		try {
-			const parsed = parseOpenCodeSessionsFromDb(dbPath);
+			const parsed = await parseOpenCodeSessionsFromDb(dbPath);
 			expect(parsed.length).toBe(sessionCount);
 		} finally {
 			cleanup();
 		}
 	});
 
-	it("returns empty array when the DB path does not exist", () => {
-		const sessions = parseOpenCodeSessionsFromDb("/nonexistent/opencode.db");
+	it("returns empty array when the DB path does not exist", async () => {
+		const sessions = await parseOpenCodeSessionsFromDb("/nonexistent/opencode.db");
 		expect(sessions).toHaveLength(0);
 	});
 });
@@ -507,7 +507,7 @@ describe("parseOpenCodeSessionsFromDb", () => {
 // ---------------------------------------------------------------------------
 
 describe("findOpenCodeDbPaths", () => {
-	it("returns a DB path when HOME points to a dir with opencode.db", () => {
+	it("returns a DB path when HOME points to a dir with opencode.db", async () => {
 		const tmpDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "opencode-discovery-test-"),
 		);
@@ -532,7 +532,7 @@ describe("findOpenCodeDbPaths", () => {
 		}
 	});
 
-	it("returns empty array when no opencode.db exists", () => {
+	it("returns empty array when no opencode.db exists", async () => {
 		const tmpDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "opencode-discovery-empty-"),
 		);

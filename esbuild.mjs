@@ -18,7 +18,7 @@ const extensionBuild = esbuild.build({
 	format: "cjs",
 	outfile: "dist/extension.js",
 	sourcemap: true,
-	external: ["vscode", "better-sqlite3"],
+	external: ["vscode", '@vscode/sqlite3'],
 });
 
 // Bundle the warm-up worker (runs off the extension host thread)
@@ -30,7 +30,7 @@ const workerBuild = esbuild.build({
 	format: "cjs",
 	outfile: "dist/warm-up-worker.js",
 	sourcemap: true,
-	external: ["vscode", "better-sqlite3"],
+	external: ["vscode", '@vscode/sqlite3'],
 });
 
 // Bundle the parse worker (runs the full parse pipeline off the extension host thread)
@@ -42,7 +42,7 @@ const parseWorkerBuild = esbuild.build({
 	format: "cjs",
 	outfile: "dist/parse-worker.js",
 	sourcemap: true,
-	external: ["vscode", "better-sqlite3"],
+	external: ["vscode", '@vscode/sqlite3'],
 });
 
 // Bundle the cache write worker (writes cache data to disk off the main thread)
@@ -54,7 +54,7 @@ const cacheWriteWorkerBuild = esbuild.build({
 	format: "cjs",
 	outfile: "dist/cache-write-worker.js",
 	sourcemap: true,
-	external: ["vscode", "better-sqlite3"],
+	external: ["vscode", '@vscode/sqlite3'],
 });
 
 // Bundle the webview script
@@ -137,7 +137,7 @@ if (isWatch) {
 		format: "cjs",
 		outfile: "dist/extension.js",
 		sourcemap: true,
-		external: ["vscode", "better-sqlite3"],
+		external: ["vscode", '@vscode/sqlite3'],
 	});
 	const ctx2 = await esbuild.context({
 		entryPoints: ["src/core/warm-up-worker.ts"],
@@ -147,7 +147,7 @@ if (isWatch) {
 		format: "cjs",
 		outfile: "dist/warm-up-worker.js",
 		sourcemap: true,
-		external: ["vscode", "better-sqlite3"],
+		external: ["vscode", '@vscode/sqlite3'],
 	});
 	const ctx3 = await esbuild.context({
 		entryPoints: ["src/core/parse-worker.ts"],
@@ -157,7 +157,7 @@ if (isWatch) {
 		format: "cjs",
 		outfile: "dist/parse-worker.js",
 		sourcemap: true,
-		external: ["vscode", "better-sqlite3"],
+		external: ["vscode", '@vscode/sqlite3'],
 	});
 	const ctx5 = await esbuild.context({
 		entryPoints: ["src/core/cache-write-worker.ts"],
@@ -167,7 +167,7 @@ if (isWatch) {
 		format: "cjs",
 		outfile: "dist/cache-write-worker.js",
 		sourcemap: true,
-		external: ["vscode", "better-sqlite3"],
+		external: ["vscode", '@vscode/sqlite3'],
 	});
 	const ctx4 = await esbuild.context({
 		entryPoints: ["src/webview/app.ts"],

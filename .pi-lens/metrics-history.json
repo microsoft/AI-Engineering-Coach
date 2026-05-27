@@ -3,14 +3,14 @@
   "files": {
     "src/core/parser-opencode.ts": {
       "latest": {
-        "commit": "891d4ec",
-        "timestamp": "2026-05-27T21:12:49.998Z",
-        "mi": 22.9,
-        "cognitive": 133,
+        "commit": "5fb3746",
+        "timestamp": "2026-05-27T21:39:35.881Z",
+        "mi": 18,
+        "cognitive": 184,
         "nesting": 4,
-        "lines": 270,
-        "maxCyclomatic": 33,
-        "entropy": 7.02
+        "lines": 498,
+        "maxCyclomatic": 30,
+        "entropy": 7.21
       },
       "history": [
         {
@@ -22,20 +22,30 @@
           "lines": 270,
           "maxCyclomatic": 33,
           "entropy": 7.02
+        },
+        {
+          "commit": "5fb3746",
+          "timestamp": "2026-05-27T21:39:35.881Z",
+          "mi": 18,
+          "cognitive": 184,
+          "nesting": 4,
+          "lines": 498,
+          "maxCyclomatic": 30,
+          "entropy": 7.21
         }
       ],
-      "trend": "stable"
+      "trend": "regressing"
     },
     "src/core/parser-harnesses.ts": {
       "latest": {
-        "commit": "891d4ec",
-        "timestamp": "2026-05-27T21:15:04.971Z",
-        "mi": 39,
-        "cognitive": 57,
+        "commit": "5fb3746",
+        "timestamp": "2026-05-27T21:40:45.571Z",
+        "mi": 32.3,
+        "cognitive": 66,
         "nesting": 5,
-        "lines": 117,
-        "maxCyclomatic": 10,
-        "entropy": 6.15
+        "lines": 183,
+        "maxCyclomatic": 13,
+        "entropy": 6.24
       },
       "history": [
         {
@@ -47,20 +57,30 @@
           "lines": 117,
           "maxCyclomatic": 10,
           "entropy": 6.15
+        },
+        {
+          "commit": "5fb3746",
+          "timestamp": "2026-05-27T21:40:45.571Z",
+          "mi": 32.3,
+          "cognitive": 66,
+          "nesting": 5,
+          "lines": 183,
+          "maxCyclomatic": 13,
+          "entropy": 6.24
         }
       ],
-      "trend": "stable"
+      "trend": "regressing"
     },
     "src/core/parser-opencode.test.ts": {
       "latest": {
-        "commit": "891d4ec",
-        "timestamp": "2026-05-27T21:15:31.881Z",
-        "mi": 42.5,
-        "cognitive": 2,
-        "nesting": 3,
-        "lines": 84,
-        "maxCyclomatic": 1,
-        "entropy": 5.17
+        "commit": "5fb3746",
+        "timestamp": "2026-05-27T21:41:18.012Z",
+        "mi": 16.1,
+        "cognitive": 28,
+        "nesting": 4,
+        "lines": 510,
+        "maxCyclomatic": 17,
+        "entropy": 5.95
       },
       "history": [
         {
@@ -72,10 +92,70 @@
           "lines": 84,
           "maxCyclomatic": 1,
           "entropy": 5.17
+        },
+        {
+          "commit": "5fb3746",
+          "timestamp": "2026-05-27T21:41:18.012Z",
+          "mi": 16.1,
+          "cognitive": 28,
+          "nesting": 4,
+          "lines": 510,
+          "maxCyclomatic": 17,
+          "entropy": 5.95
+        }
+      ],
+      "trend": "regressing"
+    },
+    "src/core/parser.ts": {
+      "latest": {
+        "commit": "5fb3746",
+        "timestamp": "2026-05-27T21:37:11.189Z",
+        "mi": 9.9,
+        "cognitive": 346,
+        "nesting": 7,
+        "lines": 639,
+        "maxCyclomatic": 43,
+        "entropy": 7.41
+      },
+      "history": [
+        {
+          "commit": "5fb3746",
+          "timestamp": "2026-05-27T21:37:11.189Z",
+          "mi": 9.9,
+          "cognitive": 346,
+          "nesting": 7,
+          "lines": 639,
+          "maxCyclomatic": 43,
+          "entropy": 7.41
+        }
+      ],
+      "trend": "stable"
+    },
+    "src/core/warm-up-worker.ts": {
+      "latest": {
+        "commit": "5fb3746",
+        "timestamp": "2026-05-27T21:37:22.054Z",
+        "mi": 52.9,
+        "cognitive": 18,
+        "nesting": 3,
+        "lines": 35,
+        "maxCyclomatic": 17,
+        "entropy": 5.55
+      },
+      "history": [
+        {
+          "commit": "5fb3746",
+          "timestamp": "2026-05-27T21:37:22.054Z",
+          "mi": 52.9,
+          "cognitive": 18,
+          "nesting": 3,
+          "lines": 35,
+          "maxCyclomatic": 17,
+          "entropy": 5.55
         }
       ],
       "trend": "stable"
     }
   },
-  "capturedAt": "2026-05-27T21:15:36.883Z"
+  "capturedAt": "2026-05-27T21:41:23.014Z"
 }
