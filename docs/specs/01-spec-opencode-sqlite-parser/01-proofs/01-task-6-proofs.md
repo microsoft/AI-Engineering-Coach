@@ -18,6 +18,7 @@ do not appear in the dashboard.
 **What it proves:** Documentation now includes storage layout table and troubleshooting guidance.
 
 **Command:**
+
 ```bash
 grep -A 25 "^## OpenCode" docs/content/getting-started/supported-tools.md
 ```
@@ -32,10 +33,10 @@ Parses session logs from the open-source OpenCode terminal tool that supports mu
 
 OpenCode data is read from either of two storage layouts depending on the installed version:
 
-| Layout | Path | OpenCode version |
-| --- | --- | --- |
-| **SQLite** (current) | `~/.local/share/opencode/opencode.db` | ≥ 0.1.x |
-| **Legacy JSON** | `~/.local/share/opencode/storage/` | < 0.1.x |
+| Layout               | Path                                  | OpenCode version |
+| -------------------- | ------------------------------------- | ---------------- |
+| **SQLite** (current) | `~/.local/share/opencode/opencode.db` | ≥ 0.1.x          |
+| **Legacy JSON**      | `~/.local/share/opencode/storage/`    | < 0.1.x          |
 
 On Windows both paths use `%USERPROFILE%\.local\share\opencode\`.
 SQLite is preferred when both layouts are present.

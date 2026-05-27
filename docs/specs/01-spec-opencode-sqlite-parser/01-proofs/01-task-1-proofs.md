@@ -22,6 +22,7 @@ VSIX. A thin read-only DB wrapper is implemented inline in `parser-opencode.ts`.
 **What it proves:** `better-sqlite3` is a production runtime dependency.
 
 **Command:**
+
 ```bash
 node -e "const p=require('./package.json'); console.log('better-sqlite3:', p.dependencies['better-sqlite3'])"
 ```
@@ -37,6 +38,7 @@ better-sqlite3: ^12.10.0
 **What it proves:** Native module is excluded from all bundles (required for `.node` binaries).
 
 **Command:**
+
 ```bash
 grep "better-sqlite3" esbuild.mjs
 ```
@@ -59,6 +61,7 @@ grep "better-sqlite3" esbuild.mjs
 **What it proves:** Native module binary will be included in the published VSIX.
 
 **Command:**
+
 ```bash
 grep -A3 "Exception: better-sqlite3" .vscodeignore
 ```
@@ -76,6 +79,7 @@ grep -A3 "Exception: better-sqlite3" .vscodeignore
 **What it proves:** The new dependency does not break typecheck, lint, spellcheck, knip, or tests.
 
 **Command:**
+
 ```bash
 npm run check 2>&1 | grep -E "CSpell.*Issues|Tests.*passed"
 ```

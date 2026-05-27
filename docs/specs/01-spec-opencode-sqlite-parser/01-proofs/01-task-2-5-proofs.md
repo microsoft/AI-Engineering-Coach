@@ -29,6 +29,7 @@ Tasks 2–5 were implemented atomically in `src/core/parser-opencode.ts` and
 **What it proves:** All 9 tests (2 legacy JSON + 5 SQLite parsing + 2 discovery) pass.
 
 **Command:**
+
 ```bash
 npx vitest run --reporter=verbose src/core/parser-opencode.test.ts 2>&1 | grep -E "✓|Tests"
 ```
@@ -55,6 +56,7 @@ maps to `promptTokens`; `tokens.output` maps to `completionTokens`; `cache.read`
 to `cacheReadTokens`.
 
 From the test "parses a session with user + assistant messages from SQLite":
+
 - message tokens: `{ input: 500, output: 80, cache: { write: 0, read: 200 } }`
 - expected `promptTokens`: 500 + 200 + 0 = **700** ✓
 - expected `completionTokens`: **80** ✓
@@ -66,6 +68,7 @@ From the test "parses a session with user + assistant messages from SQLite":
 both appear in `toolsUsed`.
 
 From the test "extracts tool usage and edited files from tool parts":
+
 ```
 toolsUsed:       ['write', 'read']
 editedFiles:     ['src/index.ts']
@@ -78,6 +81,7 @@ referencedFiles: ['src/utils.ts']
 session still parses and returns 1 request.
 
 From the test "skips malformed message.data and part.data rows without crashing":
+
 ```
 sessions.length  = 1  (not 0 — good)
 requests.length  = 1  (not 0 — good)
@@ -89,6 +93,7 @@ requests.length  = 1  (not 0 — good)
 rows total) parse completely without throwing in ~115 ms.
 
 From the test "handles a large number of sessions without throwing":
+
 ```
 parsed.length = 200 (all sessions returned)
 Duration: ~115ms
@@ -99,11 +104,13 @@ Duration: ~115ms
 **What it proves:** All quality gates pass after Tasks 2–5 implementation.
 
 **Command:**
+
 ```bash
 npm run check 2>&1 | grep -E "CSpell.*Issues|Tests.*passed"
 ```
 
 **Result:**
+
 ```
 CSpell: Files checked: 199, Issues found: 0 in 0 files.
       Tests  1039 passed (1039)

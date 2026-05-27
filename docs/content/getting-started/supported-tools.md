@@ -13,6 +13,7 @@ AI Engineer Coach reads local log files from the following AI coding assistants.
 The primary harness. AI Engineer Coach parses the chat panel logs that GitHub Copilot writes to the VS Code extension host log directory. This captures every request, response, model used, token counts, tool calls, file references, and terminal commands.
 
 **What is tracked:**
+
 - Requests and responses with timestamps
 - Model selection (e.g., `claude-opus-4.6`, `gpt-5.4`, `auto`)
 - Tool calls and slash commands used
@@ -34,10 +35,10 @@ Parses session logs from the open-source OpenCode terminal tool that supports mu
 
 OpenCode data is read from either of two storage layouts depending on the installed version:
 
-| Layout | Path | OpenCode version |
-| --- | --- | --- |
-| **SQLite** (current) | `~/.local/share/opencode/opencode.db` | ≥ 0.1.x |
-| **Legacy JSON** | `~/.local/share/opencode/storage/` | < 0.1.x |
+| Layout               | Path                                  | OpenCode version |
+| -------------------- | ------------------------------------- | ---------------- |
+| **SQLite** (current) | `~/.local/share/opencode/opencode.db` | ≥ 0.1.x          |
+| **Legacy JSON**      | `~/.local/share/opencode/storage/`    | < 0.1.x          |
 
 On Windows both paths use `%USERPROFILE%\.local\share\opencode\`.
 SQLite is preferred when both layouts are present.

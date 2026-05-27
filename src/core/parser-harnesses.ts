@@ -5,90 +5,136 @@
 
 /* External harness collection registry for parser orchestration. */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { Workspace, Session } from './types';
-import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
-import { findCodexDirs, parseCodexSessions } from './parser-codex';
-import { findOpenCodeDirs, findOpenCodeDbPaths, parseOpenCodeSessions, parseOpenCodeSessionsFromDb } from './parser-opencode';
+import * as fs from "fs";
+import * as path from "path";
+import { Workspace, Session } from "./types";
+import {
+	findClaudeDirs,
+	parseClaudeSessions,
+	parseClaudeSessionsAsync,
+} from "./parser-claude";
+import { findCodexDirs, parseCodexSessions } from "./parser-codex";
+import {
+	findOpenCodeDirs,
+	findOpenCodeDbPaths,
+	parseOpenCodeSessions,
+	parseOpenCodeSessionsFromDb,
+} from "./parser-opencode";
 
 type WorkspaceMap = Map<string, Workspace>;
 
 interface HarnessCollectionContext {
-  workspaces: WorkspaceMap;
-  sessions: Session[];
+	workspaces: WorkspaceMap;
+	sessions: Session[];
 }
 
 interface ExternalHarnessCollector {
-  name: string;
-  collectSync(ctx: HarnessCollectionContext): void;
-  collectAsync?(ctx: HarnessCollectionContext, reportDetail?: (detail: string) => void): Promise<void>;
+	name: string;
+	collectSync(ctx: HarnessCollectionContext): void;
+	collectAsync?(
+		ctx: HarnessCollectionContext,
+		reportDetail?: (detail: string) => void,
+	): Promise<void>;
 }
 
-function addSession(workspaces: WorkspaceMap, sessions: Session[], session: Session, rootPath: string): void {
-  sessions.push(session);
-  if (!workspaces.has(session.workspaceId)) {
-    const sessionRootPath = session.workspaceRootPath && fs.existsSync(session.workspaceRootPath) ? session.workspaceRootPath : rootPath;
-    workspaces.set(session.workspaceId, { id: session.workspaceId, name: session.workspaceName, path: sessionRootPath });
-  }
+function addSession(
+	workspaces: WorkspaceMap,
+	sessions: Session[],
+	session: Session,
+	rootPath: string,
+): void {
+	sessions.push(session);
+	if (!workspaces.has(session.workspaceId)) {
+		const sessionRootPath =
+			session.workspaceRootPath && fs.existsSync(session.workspaceRootPath)
+				? session.workspaceRootPath
+				: rootPath;
+		workspaces.set(session.workspaceId, {
+			id: session.workspaceId,
+			name: session.workspaceName,
+			path: sessionRootPath,
+		});
+	}
 }
 
 const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
-  {
-    name: 'Claude Code',
-    collectSync(ctx) {
-      for (const claudeDir of findClaudeDirs()) {
-        for (const { sessions } of parseClaudeSessions(claudeDir)) {
-          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
-        }
-      }
-    },
-    async collectAsync(ctx, reportDetail) {
-      for (const claudeDir of findClaudeDirs()) {
-        const results = await parseClaudeSessionsAsync(claudeDir, (idx, total, name) => {
-          reportDetail?.(`${idx}/${total}: ${name}`);
-        });
-        for (const { sessions } of results) {
-          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
-        }
-      }
-    },
-  },
-  {
-    name: 'Codex CLI',
-    collectSync(ctx) {
-      for (const codexDir of findCodexDirs()) {
-        for (const session of parseCodexSessions(codexDir)) addSession(ctx.workspaces, ctx.sessions, session, codexDir);
-      }
-    },
-  },
-  {
-    name: 'OpenCode',
-    collectSync(ctx) {
-      // Prefer SQLite (current OpenCode >= 0.1) over legacy JSON storage.
-      const dbPaths = findOpenCodeDbPaths();
-      const coveredParentDirs = new Set<string>();
-      for (const dbPath of dbPaths) {
-        const sessions = parseOpenCodeSessionsFromDb(dbPath);
-        for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, path.dirname(dbPath));
-        coveredParentDirs.add(path.dirname(dbPath));
-      }
-      // Fall back to legacy JSON storage for install locations not covered by a DB.
-      for (const ocDir of findOpenCodeDirs()) {
-        // ocDir is storage/, parent is opencode/
-        const parentDir = path.dirname(ocDir);
-        if (coveredParentDirs.has(parentDir)) continue;
-        for (const session of parseOpenCodeSessions(ocDir)) addSession(ctx.workspaces, ctx.sessions, session, ocDir);
-      }
-    },
-  },
+	{
+		name: "Claude Code",
+		collectSync(ctx) {
+			for (const claudeDir of findClaudeDirs()) {
+				for (const { sessions } of parseClaudeSessions(claudeDir)) {
+					for (const session of sessions)
+						addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+				}
+			}
+		},
+		async collectAsync(ctx, reportDetail) {
+			for (const claudeDir of findClaudeDirs()) {
+				const results = await parseClaudeSessionsAsync(
+					claudeDir,
+					(idx, total, name) => {
+						reportDetail?.(`${idx}/${total}: ${name}`);
+					},
+				);
+				for (const { sessions } of results) {
+					for (const session of sessions)
+						addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+				}
+			}
+		},
+	},
+	{
+		name: "Codex CLI",
+		collectSync(ctx) {
+			for (const codexDir of findCodexDirs()) {
+				for (const session of parseCodexSessions(codexDir))
+					addSession(ctx.workspaces, ctx.sessions, session, codexDir);
+			}
+		},
+	},
+	{
+		name: "OpenCode",
+		collectSync(ctx) {
+			// Prefer SQLite (current OpenCode >= 0.1) over legacy JSON storage.
+			const dbPaths = findOpenCodeDbPaths();
+			const coveredParentDirs = new Set<string>();
+			for (const dbPath of dbPaths) {
+				const sessions = parseOpenCodeSessionsFromDb(dbPath);
+				for (const session of sessions)
+					addSession(
+						ctx.workspaces,
+						ctx.sessions,
+						session,
+						path.dirname(dbPath),
+					);
+				coveredParentDirs.add(path.dirname(dbPath));
+			}
+			// Fall back to legacy JSON storage for install locations not covered by a DB.
+			for (const ocDir of findOpenCodeDirs()) {
+				// ocDir is storage/, parent is opencode/
+				const parentDir = path.dirname(ocDir);
+				if (coveredParentDirs.has(parentDir)) continue;
+				for (const session of parseOpenCodeSessions(ocDir))
+					addSession(ctx.workspaces, ctx.sessions, session, ocDir);
+			}
+		},
+	},
 ];
 
 export interface ExternalHarnessProgressHandlers {
-  onHarnessStart?: (name: string, index: number, total: number, sessionCount: number) => void;
-  onHarnessDetail?: (name: string, detail: string, sessionCount: number) => void;
-  onHarnessError?: (name: string, error: unknown) => void;
-  yieldToLoop?: () => Promise<void>;
+	onHarnessStart?: (
+		name: string,
+		index: number,
+		total: number,
+		sessionCount: number,
+	) => void;
+	onHarnessDetail?: (
+		name: string,
+		detail: string,
+		sessionCount: number,
+	) => void;
+	onHarnessError?: (name: string, error: unknown) => void;
+	yieldToLoop?: () => Promise<void>;
 }
 
 /** Returns true if any external-harness (Claude Code, Codex, OpenCode) session
@@ -97,19 +143,26 @@ export interface ExternalHarnessProgressHandlers {
  *  Remote-SSH host that has Claude Code sessions under `~/.claude/projects` but
  *  no VS Code workspace storage or Copilot directories. */
 export function hasExternalHarnessSources(): boolean {
-  // Without a home directory the find* helpers would join against an empty
-  // string and probe relative paths (e.g. `.claude/projects`) under the current
-  // working directory, which could report false positives. Bail out instead.
-  if (!process.env.HOME && !process.env.USERPROFILE) return false;
-  return findClaudeDirs().length > 0 || findCodexDirs().length > 0
-    || findOpenCodeDirs().length > 0 || findOpenCodeDbPaths().length > 0;
+	// Without a home directory the find* helpers would join against an empty
+	// string and probe relative paths (e.g. `.claude/projects`) under the current
+	// working directory, which could report false positives. Bail out instead.
+	if (!process.env.HOME && !process.env.USERPROFILE) return false;
+	return (
+		findClaudeDirs().length > 0 ||
+		findCodexDirs().length > 0 ||
+		findOpenCodeDirs().length > 0 ||
+		findOpenCodeDbPaths().length > 0
+	);
 }
 
-export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {
-  const ctx: HarnessCollectionContext = { workspaces, sessions };
-  for (const harness of EXTERNAL_HARNESSES) {
-    harness.collectSync(ctx);
-  }
+export function collectExternalHarnessesSync(
+	workspaces: WorkspaceMap,
+	sessions: Session[],
+): void {
+	const ctx: HarnessCollectionContext = { workspaces, sessions };
+	for (const harness of EXTERNAL_HARNESSES) {
+		harness.collectSync(ctx);
+	}
 }
 
 /** Harness values set on sessions by external harness collectors.
@@ -117,34 +170,36 @@ export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions:
  *  refresh cached external-harness sessions, so every value the collectors
  *  can produce must be listed here. */
 export const EXTERNAL_HARNESS_SET = new Set<string>([
-  'Claude',
-  'Codex',
-  'OpenCode',
+	"Claude",
+	"Codex",
+	"OpenCode",
 ]);
 
 export async function collectExternalHarnessesAsync(
-  workspaces: WorkspaceMap,
-  sessions: Session[],
-  handlers: ExternalHarnessProgressHandlers = {},
+	workspaces: WorkspaceMap,
+	sessions: Session[],
+	handlers: ExternalHarnessProgressHandlers = {},
 ): Promise<void> {
-  const ctx: HarnessCollectionContext = { workspaces, sessions };
-  const total = EXTERNAL_HARNESSES.length;
+	const ctx: HarnessCollectionContext = { workspaces, sessions };
+	const total = EXTERNAL_HARNESSES.length;
 
-  for (let index = 0; index < EXTERNAL_HARNESSES.length; index++) {
-    const harness = EXTERNAL_HARNESSES[index];
-    handlers.onHarnessStart?.(harness.name, index, total, sessions.length);
-    if (handlers.yieldToLoop) await handlers.yieldToLoop();
+	for (let index = 0; index < EXTERNAL_HARNESSES.length; index++) {
+		const harness = EXTERNAL_HARNESSES[index];
+		handlers.onHarnessStart?.(harness.name, index, total, sessions.length);
+		if (handlers.yieldToLoop) await handlers.yieldToLoop();
 
-    try {
-      if (harness.collectAsync) {
-        await harness.collectAsync(ctx, (detail) => handlers.onHarnessDetail?.(harness.name, detail, sessions.length));
-      } else {
-        harness.collectSync(ctx);
-      }
-    } catch (error) {
-      handlers.onHarnessError?.(harness.name, error);
-    }
+		try {
+			if (harness.collectAsync) {
+				await harness.collectAsync(ctx, (detail) =>
+					handlers.onHarnessDetail?.(harness.name, detail, sessions.length),
+				);
+			} else {
+				harness.collectSync(ctx);
+			}
+		} catch (error) {
+			handlers.onHarnessError?.(harness.name, error);
+		}
 
-    if (handlers.yieldToLoop) await handlers.yieldToLoop();
-  }
+		if (handlers.yieldToLoop) await handlers.yieldToLoop();
+	}
 }
