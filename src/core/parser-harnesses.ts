@@ -109,7 +109,12 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
 			for (const dbPath of dbPaths) {
 				const sessions = await parseOpenCodeSessionsFromDb(dbPath);
 				for (const session of sessions)
-					addSession(ctx.workspaces, ctx.sessions, session, path.dirname(dbPath));
+					addSession(
+						ctx.workspaces,
+						ctx.sessions,
+						session,
+						path.dirname(dbPath),
+					);
 				coveredParentDirs.add(path.dirname(dbPath));
 			}
 			// Fall back to legacy JSON for install dirs not covered by a DB.

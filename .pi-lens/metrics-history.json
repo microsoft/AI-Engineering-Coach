@@ -3,14 +3,14 @@
   "files": {
     "src/core/parser-opencode.ts": {
       "latest": {
-        "commit": "5fb3746",
-        "timestamp": "2026-05-27T21:39:35.881Z",
-        "mi": 18,
-        "cognitive": 184,
-        "nesting": 4,
-        "lines": 498,
+        "commit": "d097833",
+        "timestamp": "2026-05-27T21:51:03.693Z",
+        "mi": 18.3,
+        "cognitive": 203,
+        "nesting": 8,
+        "lines": 547,
         "maxCyclomatic": 30,
-        "entropy": 7.21
+        "entropy": 7.29
       },
       "history": [
         {
@@ -32,6 +32,16 @@
           "lines": 498,
           "maxCyclomatic": 30,
           "entropy": 7.21
+        },
+        {
+          "commit": "d097833",
+          "timestamp": "2026-05-27T21:51:03.693Z",
+          "mi": 18.3,
+          "cognitive": 203,
+          "nesting": 8,
+          "lines": 547,
+          "maxCyclomatic": 30,
+          "entropy": 7.29
         }
       ],
       "trend": "regressing"
@@ -157,5 +167,5 @@
       "trend": "stable"
     }
   },
-  "capturedAt": "2026-05-27T21:41:23.014Z"
+  "capturedAt": "2026-05-27T21:51:08.694Z"
 }

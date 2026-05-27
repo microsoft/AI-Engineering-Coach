@@ -147,12 +147,14 @@ export function findOpenCodeDbPaths(): string[] {
 // SQLite access — async interface
 //
 // Priority order:
-//  1. @vscode/sqlite3  — compiled for VS Code's Electron; works in the
-//                        extension host and its child processes.
-//  2. better-sqlite3   — compiled for system Node; works in Vitest / local
-//                        dev but NOT in VS Code's Electron runtime.
-//
-// Both are tried lazily so the code degrades gracefully if neither loads.
+//  1. node:sqlite     — built-in since Node 22.5 / stable in Node 23+.
+//                       No packaging, no ABI concerns. Works wherever Node
+//                       24+ runs (system Node and VS Code’s Electron from
+//                       1.121+ which ships Electron 37+ / Node 24).
+//  2. @vscode/sqlite3 — compiled for VS Code’s Electron; async callback API.
+//                       Fallback for VS Code versions with older Electron.
+//  3. better-sqlite3  — compiled for system Node; works in Vitest/dev but
+//                       NOT in VS Code’s Electron child process.
 // ---------------------------------------------------------------------------
 
 /** Minimal async handle returned by tryOpenSqliteDbAsync. */
@@ -164,9 +166,32 @@ interface AsyncSqliteHandle {
 async function tryOpenSqliteDbAsync(
 	dbPath: string,
 ): Promise<AsyncSqliteHandle | null> {
-	try { assertTrustedPath(dbPath); } catch { return null; }
+	try {
+		assertTrustedPath(dbPath);
+	} catch {
+		return null;
+	}
 
-	// ── 1. @vscode/sqlite3 (VS Code's Electron) ──────────────────────────────
+	// ── 1. node:sqlite (built-in, no ABI concerns) ──────────────────────────
+	try {
+		type NodeSqliteModule = {
+			DatabaseSync: new (path: string) => {
+				prepare(sql: string): { all(...params: unknown[]): unknown[] };
+				close(): void;
+			};
+		};
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const { DatabaseSync } = require('node:sqlite') as NodeSqliteModule;
+		const db = new DatabaseSync(dbPath);
+		return {
+			all(sql: string, params: unknown[]) {
+				return Promise.resolve(db.prepare(sql).all(...params));
+			},
+			close() { db.close(); },
+		};
+	} catch { /* fall through */ }
+
+	// ── 2. @vscode/sqlite3 (VS Code’s Electron, async callback) ──────────────
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
 		const mod = require('@vscode/sqlite3');
@@ -197,24 +222,31 @@ async function tryOpenSqliteDbAsync(
 				},
 			);
 		});
-	} catch { /* fall through to next candidate */ }
+	} catch { /* fall through */ }
 
 	// ── 2. better-sqlite3 fallback (system Node / Vitest) ────────────────────
 	try {
-		type B3Ctor = new (p: string, o: { readonly: boolean; fileMustExist: boolean }) => {
+		type B3Ctor = new (
+			p: string,
+			o: { readonly: boolean; fileMustExist: boolean },
+		) => {
 			prepare(s: string): { all(...a: unknown[]): unknown[] };
 			close(): void;
 		};
 		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		const Database = require('better-sqlite3') as B3Ctor;
+		const Database = require("better-sqlite3") as B3Ctor;
 		const raw = new Database(dbPath, { readonly: true, fileMustExist: true });
 		return {
 			all(sql: string, params: unknown[]) {
 				return Promise.resolve(raw.prepare(sql).all(...params));
 			},
-			close() { raw.close(); },
+			close() {
+				raw.close();
+			},
 		};
-	} catch { return null; }
+	} catch {
+		return null;
+	}
 }
 
 interface SqliteSessionRow {
@@ -260,20 +292,20 @@ export async function parseOpenCodeSessionsFromDb(
 
 	try {
 		const sessions = (await db.all(
-			'SELECT id, slug, directory, title, time_created, time_updated FROM session',
+			"SELECT id, slug, directory, title, time_created, time_updated FROM session",
 			[],
 		)) as SqliteSessionRow[];
 
 		const results: Session[] = [];
 		for (const rawSession of sessions) {
 			const rawMessages = (await db.all(
-				'SELECT id, session_id, data FROM message WHERE session_id = ? ORDER BY time_created ASC',
+				"SELECT id, session_id, data FROM message WHERE session_id = ? ORDER BY time_created ASC",
 				[rawSession.id],
 			)) as SqliteMessageRow[];
 			if (rawMessages.length === 0) continue;
 
 			const rawParts = (await db.all(
-				'SELECT id, message_id, data FROM part WHERE session_id = ? ORDER BY time_created ASC',
+				"SELECT id, message_id, data FROM part WHERE session_id = ? ORDER BY time_created ASC",
 				[rawSession.id],
 			)) as SqlitePartRow[];
 
