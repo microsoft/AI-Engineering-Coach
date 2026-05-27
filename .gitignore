@@ -16,3 +16,7 @@ local/
 test_output.txt
 scripts/verify-counts.ts
 marketing/
+
+# Electron desktop port build artifacts
+electron-dist/
+out/

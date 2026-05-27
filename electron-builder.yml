@@ -1,0 +1,35 @@
+appId: com.aiengineercoach.desktop
+productName: AI Engineer Coach
+copyright: Copyright © 2026 contributors
+# Forge isn't used here — direct electron-builder config, common in brownfield projects
+# (Slack, Notion, 1Password). Lets us keep the existing esbuild pipeline intact.
+
+# Override package.json.main without modifying it (root main = VS Code extension).
+extraMetadata:
+  main: main.js
+
+directories:
+  output: out
+  buildResources: assets
+
+# Ship only the prebuilt electron-dist/ tree. node_modules are auto-included
+# from package.json deps; we exclude everything else to keep the .app small.
+files:
+  - from: electron-dist
+    to: .
+  - package.json
+  - "!**/*"
+  - "node_modules/**/*"
+
+asar: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dir
+      arch: arm64
+  icon: assets/icon.png
+  identity: null            # explicit: no code signing (local-only PoC)
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  electronLanguages: [en]

@@ -106,7 +106,10 @@
     "check-size": "node scripts/check-bundle-size.mjs",
     "test:e2e": "npx playwright test",
     "lockfile-lint": "lockfile-lint",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build:electron": "node esbuild.mjs && node electron/esbuild-electron.mjs",
+    "start:electron": "npm run build:electron && electron electron-dist/main.js --dev",
+    "package:app": "npm run build:electron && electron-builder --mac --config electron-builder.yml"
   },
   "lint-staged": {
     "*.ts": [
@@ -126,6 +129,8 @@
     "@vitest/coverage-v8": "4.1.6",
     "@vscode/vsce": "3.9.1",
     "cspell": "10.0.0",
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8",
     "esbuild": "0.28.0",
     "eslint": "10.4.0",
     "eslint-plugin-import-x": "4.16.2",
@@ -146,6 +151,7 @@
     "chart.js": "4.5.1",
     "chartjs-chart-treemap": "3.1.0",
     "htm": "3.1.1",
+    "i18next": "23.16.5",
     "leo-profanity": "1.9.0",
     "preact": "10.29.2",
     "zod": "4.4.3"
