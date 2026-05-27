@@ -90,195 +90,387 @@
         "description": "Your AI coding coach — analyze usage patterns, get improvement tips, and track progress",
         "isSticky": true,
         "commands": [
-          { "name": "summary", "description": "Get a quick summary of your AI coding usage" },
-          { "name": "improve", "description": "Get improvement recommendations" },
-          { "name": "compare", "description": "Compare your AI coding tools" },
-          { "name": "flow", "description": "Analyze your flow & focus" }
+          {
+            "name": "summary",
+            "description": "Get a quick summary of your AI coding usage"
+          },
+          {
+            "name": "improve",
+            "description": "Get improvement recommendations"
+          },
+          {
+            "name": "compare",
+            "description": "Compare your AI coding tools"
+          },
+          {
+            "name": "flow",
+            "description": "Analyze your flow & focus"
+          }
         ]
       }
     ],
     "languageModelTools": [
       {
         "name": "aiEngineerCoach_summary",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Usage Summary",
         "modelDescription": "Get a high-level summary of AI coding assistant usage including session counts, recommendations, and top anti-patterns.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_activity",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Daily Activity",
         "modelDescription": "Get daily activity data including requests, LOC, sessions, and harness breakdown.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_credits",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: AI Credits",
         "modelDescription": "Get AI credit usage with per-model breakdown, daily trend, and most expensive requests.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_codeProduction",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Code Production",
         "modelDescription": "Get code production metrics: AI vs user LOC, language breakdown, workspace distribution.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_flow",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Flow State",
         "modelDescription": "Get flow state analysis: deep work scores, best hours, follow-up latency, session continuity.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_patterns",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Anti-Patterns",
         "modelDescription": "Get detected anti-patterns and practice recommendations with severity and trends.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_insights",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Insights",
         "modelDescription": "Get advanced insights: learning velocity, intent classification, prompt maturity, sustainable pace.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_wellbeing",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Work-Life Balance",
         "modelDescription": "Get work-life balance score, time distribution, weekend ratio, and burnout risk.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_workflows",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Workflows",
         "modelDescription": "Get repeated workflow clusters that could be automated, with draft skill suggestions.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_harnessComparison",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Tool Comparison",
         "modelDescription": "Compare AI coding tools side-by-side: sessions, requests, LOC, models, cancel rates.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_sessions",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Sessions",
         "modelDescription": "Browse or search individual coding sessions. Use sessionId for detail, or page/search to browse.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "sessionId": { "type": "string", "description": "Get detail for a specific session" },
-            "page": { "type": "number", "description": "Page number (1-based)" },
-            "pageSize": { "type": "number", "description": "Sessions per page (max 50)" },
-            "search": { "type": "string", "description": "Search term for workspace or message content" },
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "sessionId": {
+              "type": "string",
+              "description": "Get detail for a specific session"
+            },
+            "page": {
+              "type": "number",
+              "description": "Page number (1-based)"
+            },
+            "pageSize": {
+              "type": "number",
+              "description": "Sessions per page (max 50)"
+            },
+            "search": {
+              "type": "string",
+              "description": "Search term for workspace or message content"
+            },
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       },
       {
         "name": "aiEngineerCoach_contextHealth",
-        "tags": ["ai-engineer-coach"],
+        "tags": [
+          "ai-engineer-coach"
+        ],
         "displayName": "Coach: Context Health",
         "modelDescription": "Get context management health: compaction, config scores, agentic readiness, instruction quality.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
-            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
-            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
-            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+            "fromDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range start"
+            },
+            "toDate": {
+              "type": "string",
+              "description": "ISO date (YYYY-MM-DD) for range end"
+            },
+            "workspaceId": {
+              "type": "string",
+              "description": "Filter to a workspace ID"
+            },
+            "harness": {
+              "type": "string",
+              "description": "Filter to an AI tool name"
+            }
           }
         }
       }
@@ -322,6 +514,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.60.0",
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "25.9.1",
     "@types/vscode": "1.118.0",
     "@vitest/coverage-v8": "4.1.6",
@@ -344,6 +537,7 @@
     "vitest": "4.1.6"
   },
   "dependencies": {
+    "better-sqlite3": "12.10.0",
     "chart.js": "4.5.1",
     "chartjs-chart-treemap": "3.1.0",
     "htm": "3.1.1",

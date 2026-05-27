@@ -1,0 +1,556 @@
+{
+  "version": "v1",
+  "timestamp": 1779916381067,
+  "ruleHash": "e81871e3c3a47cad",
+  "queries": [
+    {
+      "id": "console-statement",
+      "name": "Console Statement",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "{{METHOD}} — remove debug statements before committing",
+      "query": "  (call_expression\n    function: (member_expression\n      object: (identifier) @OBJ (#eq? @OBJ \"console\")\n      property: (property_identifier) @METHOD (#not-eq? @METHOD \"dbg\"))\n    arguments: (arguments) @ARGS)",
+      "metavars": [
+        "OBJ",
+        "METHOD",
+        "ARGS"
+      ],
+      "post_filter": "not_in_test_block  # skip test blocks — no-console-in-tests handles that case",
+      "defect_class": "safety",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "debugger-statement",
+      "name": "Debugger Statement",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Debugger statement — remove before committing",
+      "query": "  (debugger_statement) @DEBUGGER",
+      "metavars": [
+        "DEBUGGER"
+      ],
+      "defect_class": "safety",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "deep-nesting",
+      "name": "Deep Nesting",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Deep nesting (3+ levels) — consider early returns or extract functions",
+      "query": "  [\n    ;; Pattern 1: if inside if inside if\n    (statement_block\n      (if_statement\n        consequence: (statement_block\n          (if_statement\n            consequence: (statement_block\n              (if_statement) @IF_NESTED)))))\n\n    ;; Pattern 2: for inside if inside if\n    (statement_block\n      (if_statement\n        consequence: (statement_block\n          (if_statement\n            consequence: (statement_block\n              (for_statement) @FOR_NESTED)))))\n\n    ;; Pattern 3: while inside if inside if\n    (statement_block\n      (if_statement\n        consequence: (statement_block\n          (if_statement\n            consequence: (statement_block\n              (while_statement) @WHILE_NESTED)))))\n\n    ;; Pattern 4: try inside if inside if\n    (statement_block\n      (if_statement\n        consequence: (statement_block\n          (if_statement\n            consequence: (statement_block\n              (try_statement) @TRY_NESTED)))))\n\n    ;; Pattern 5: if inside for inside if\n    (statement_block\n      (if_statement\n        consequence: (statement_block\n          (for_statement\n            body: (statement_block\n              (if_statement) @IF_IN_FOR)))))\n\n    ;; Pattern 6: if inside while inside if\n    (statement_block\n      (if_statement\n        consequence: (statement_block\n          (while_statement\n            body: (statement_block\n              (if_statement) @IF_IN_WHILE)))))\n\n    ;; Pattern 7: for inside for inside for\n    (statement_block\n      (for_statement\n        body: (statement_block\n          (for_statement\n            body: (statement_block\n              (for_statement) @FOR_NESTED)))))\n  ]",
+      "metavars": [
+        "IF_NESTED",
+        "FOR_NESTED",
+        "WHILE_NESTED",
+        "TRY_NESTED",
+        "IF_IN_FOR",
+        "IF_IN_WHILE"
+      ],
+      "defect_class": "safety",
+      "inline_tier": "review"
+    },
+    {
+      "id": "deep-promise-chain",
+      "name": "Deep Promise Chain (4+ levels)",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Promise chain {{M1}} → {{M2}} → {{M3}} → {{M4}} — consider async/await",
+      "query": "  (call_expression\n    function: (member_expression\n      object: (call_expression\n        function: (member_expression\n          object: (call_expression\n            function: (member_expression\n              object: (call_expression\n                function: (member_expression\n                  property: (property_identifier) @M1)\n                arguments: (arguments))\n              property: (property_identifier) @M2)\n            arguments: (arguments))\n          property: (property_identifier) @M3)\n        arguments: (arguments))\n      property: (property_identifier) @M4)\n    arguments: (arguments)\n    (#match? @M1 \"^(then|catch|finally)$\")\n    (#match? @M2 \"^(then|catch|finally)$\")\n    (#match? @M3 \"^(then|catch|finally)$\")\n    (#match? @M4 \"^(then|catch|finally)$\"))",
+      "metavars": [
+        "M1",
+        "M2",
+        "M3",
+        "M4"
+      ],
+      "defect_class": "async-misuse",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "default-not-last",
+      "name": "Default Clauses Should Be Last",
+      "severity": "error",
+      "language": "typescript",
+      "message": "default clause should be the last case",
+      "query": "  (switch_statement\n    body: (switch_body\n      (switch_default) @DEFAULT\n      (switch_case) @AFTER_CASE))",
+      "metavars": [
+        "DEFAULT",
+        "AFTER_CASE"
+      ],
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "duplicate-function-arg",
+      "name": "Function Argument Names Should Be Unique",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Duplicate parameter name '{{NAME}}'",
+      "query": "  (function_declaration\n    parameters: (formal_parameters\n      (identifier) @PARAM1\n      (identifier) @PARAM2))\n  (arrow_function\n    parameters: (formal_parameters\n      (identifier) @PARAM1\n      (identifier) @PARAM2))",
+      "metavars": [
+        "PARAM1",
+        "PARAM2"
+      ],
+      "post_filter": "same_param_name",
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "empty-switch-case",
+      "name": "Switch Cases Should Not Be Empty",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Switch case should not be empty",
+      "query": "  (switch_statement\n    body: (switch_body\n      (switch_case\n        consequence: (statement_block) @BLOCK)))",
+      "metavars": [
+        "BLOCK"
+      ],
+      "post_filter": "is_empty_block",
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "no-eval",
+      "name": "Eval Usage",
+      "severity": "error",
+      "language": "typescript",
+      "message": "eval() detected — security risk, never use eval",
+      "query": "  (call_expression\n    function: (identifier) @FUNC\n    (#eq? @FUNC \"eval\")\n    arguments: (arguments) @ARGS)",
+      "metavars": [
+        "FUNC",
+        "ARGS"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-incomplete-assertion",
+      "name": "Incomplete Test Assertion",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Incomplete assertion — expect() chain is not called",
+      "query": "  (call_expression\n    function: (identifier) @EXPECT\n    (#eq? @EXPECT \"expect\")\n    arguments: (arguments)) @EXPR",
+      "metavars": [
+        "EXPECT",
+        "EXPR"
+      ],
+      "post_filter": "incomplete_assertion",
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "infinite-loop",
+      "name": "Loops Should Not Be Infinite",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Loop appears to be infinite with no termination condition",
+      "query": "  (while_statement\n    condition: (true)\n    body: (statement_block) @BODY)\n  (for_statement\n    condition: (null)\n    body: (statement_block) @BODY)",
+      "metavars": [
+        "BODY"
+      ],
+      "post_filter": "no_break_or_return_in_body",
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "mixed-async-styles",
+      "name": "Mixed Async/Await and Promise Chains",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Mixed async/await + promise chains — use consistent async style",
+      "query": "  (function_declaration\n    (async_modifier)\n    body: (statement_block) @BODY)\n\n# Post-filter: Check if body contains both await and .then()",
+      "metavars": [
+        "BODY"
+      ],
+      "post_filter": "has_mixed_async",
+      "defect_class": "async-misuse",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "no-console-in-tests",
+      "name": "Console Statement in Test",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "console.{{METHOD}} in test block — use proper assertions or logging",
+      "query": "  (call_expression\n    function: (member_expression\n      object: (identifier) @OBJ (#eq? @OBJ \"console\")\n      property: (property_identifier) @METHOD)\n    arguments: (arguments) @ARGS)",
+      "metavars": [
+        "OBJ",
+        "METHOD",
+        "ARGS"
+      ],
+      "post_filter": "in_test_block",
+      "defect_class": "safety",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "self-assignment",
+      "name": "Variables Should Not Be Self-Assigned",
+      "severity": "error",
+      "language": "typescript",
+      "message": "'{{VAR}}' is assigned to itself",
+      "query": "  (assignment_expression\n    left: (identifier) @VAR\n    right: (identifier) @SAME\n    (#eq? @VAR @SAME))",
+      "metavars": [
+        "VAR",
+        "SAME"
+      ],
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "sql-injection",
+      "name": "SQL Injection Risk",
+      "severity": "error",
+      "language": "typescript",
+      "message": "SQL injection risk — use parameterized queries, never interpolate into SQL",
+      "query": "  (call_expression\n    function: [\n      (identifier) @SQL_FUNC\n      (member_expression property: (property_identifier) @SQL_FUNC)\n    ]\n    arguments: (arguments\n      (template_string (template_substitution) @INTERPOLATION))\n    (#match? @SQL_FUNC \"^(query|execute|exec|run)$\"))",
+      "metavars": [
+        "SQL_FUNC",
+        "INTERPOLATION"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "switch-case-termination",
+      "name": "Switch Cases Should End With Terminating Statement",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Switch case should end with break, return, throw, or continue",
+      "query": "  (switch_statement\n    body: (switch_body\n      (switch_case\n        consequence: (statement_block\n          (expression_statement) @LAST))\n      (switch_case) @NEXT))",
+      "metavars": [
+        "LAST",
+        "NEXT"
+      ],
+      "post_filter": "no_terminating_statement",
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "switch-non-case-labels-ts",
+      "name": "Switch Should Not Contain Non-Case Labels",
+      "severity": "error",
+      "language": "typescript",
+      "message": "switch statements should not contain non-case labels",
+      "query": "  (switch_statement\n    body: (switch_body\n      (switch_case\n        (labeled_statement\n          (statement_identifier) @LABEL) @LABELED)))",
+      "metavars": [
+        "LABEL",
+        "LABELED"
+      ],
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-command-injection",
+      "name": "Command Injection Sink",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Potential command injection sink — avoid child_process command execution with untrusted input",
+      "query": "  [\n    (call_expression\n      function: (member_expression\n        object: (identifier) @MOD\n        property: (property_identifier) @FN)\n      arguments: (arguments) @ARGS\n      (#eq? @MOD \"child_process\")\n      (#match? @FN \"^(exec|execSync)$\"))\n    (call_expression\n      function: (member_expression\n        object: (member_expression\n          object: (identifier) @MOD\n          property: (property_identifier) @NS)\n        property: (property_identifier) @FN)\n      arguments: (arguments) @ARGS\n      (#eq? @MOD \"child_process\")\n      (#match? @FN \"^(exec|execSync)$\"))\n  ]",
+      "metavars": [
+        "MOD",
+        "NS",
+        "FN",
+        "ARGS"
+      ],
+      "post_filter": "ts_command_injection_sink",
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-detached-async-call",
+      "name": "Detached Async Call",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Detached async call — ensure this Promise is awaited or explicitly handled",
+      "query": "  (expression_statement\n    (call_expression\n      function: [\n        (identifier) @FN\n        (member_expression\n          property: (property_identifier) @FN)\n      ]\n      arguments: (arguments) @ARGS)\n    (#match? @FN \"(Async$|fetch$|request$)\"))",
+      "metavars": [
+        "FN",
+        "ARGS"
+      ],
+      "post_filter": "ts_detached_async_call",
+      "defect_class": "async-misuse",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "ts-dynamic-require",
+      "name": "Dynamic Require Injection",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Dynamic require() — non-literal argument allows loading arbitrary modules",
+      "query": "  (call_expression\n    function: (identifier) @FN\n    arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @ARG)\n    (#eq? @FN \"require\"))",
+      "metavars": [
+        "FN",
+        "ARG"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-hallucinated-react-import",
+      "name": "Hallucinated React Import",
+      "severity": "error",
+      "language": "typescript",
+      "message": "'{NAME}' is a Next.js API, not from 'react' — import from 'next/{CORRECT}' instead",
+      "query": "  (import_statement\n    (import_clause\n      (named_imports\n        (import_specifier\n          name: (identifier) @NAME)))\n    source: (string) @SRC)\n  (#match? @SRC \"^['\\\"]react['\\\"]$\")\n  (#match? @NAME \"^(useRouter|usePathname|useSearchParams|useParams|Link|Image|Script|Head|getServerSideProps|getStaticProps|getStaticPaths|NextPage|NextApiRequest|NextApiResponse|GetServerSideProps|GetStaticProps|GetStaticPaths|notFound|redirect|permanentRedirect)$\")",
+      "metavars": [
+        "NAME",
+        "SRC"
+      ],
+      "post_filter": "match_captures",
+      "post_filter_params": {
+        "SRC": "^['\\\"]react['\\\"]$",
+        "NAME": "^(useRouter|usePathname|useSearchParams|useParams|Link|Image|Script|Head|getServerSideProps|getStaticProps|getStaticPaths|NextPage|NextApiRequest|NextApiResponse|GetServerSideProps|GetStaticProps|GetStaticPaths|notFound|redirect|permanentRedirect)$"
+      },
+      "defect_class": "hallucination",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-insecure-random",
+      "name": "Insecure Randomness",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Insecure randomness source detected — use crypto.getRandomValues or secure RNG APIs",
+      "query": "  (variable_declarator\n    name: (identifier) @VAR\n    value: (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments) @ARGS)\n    (#eq? @OBJ \"Math\")\n    (#eq? @FN \"random\")\n    (#match? @VAR \"(?i)(token|secret|password|key|nonce|salt|csrf|auth|session|credential|hash|otp|pin)\"))",
+      "metavars": [
+        "OBJ",
+        "FN",
+        "ARGS",
+        "VAR"
+      ],
+      "post_filter": "ts_insecure_random_source",
+      "defect_class": "injection",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "ts-nosql-injection",
+      "name": "NoSQL Injection",
+      "severity": "error",
+      "language": "typescript",
+      "message": "NoSQL injection — $where executes JavaScript server-side and must never be used with user input",
+      "query": "  (pair\n    key: [(property_identifier) (string)] @KEY\n    (#match? @KEY \"\\\\$where\"))",
+      "metavars": [
+        "KEY"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-open-redirect",
+      "name": "Open Redirect",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Open redirect — unvalidated URL in redirect/location lets attackers send users to malicious sites",
+      "query": "  [\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments (identifier) @URL)\n      (#match? @OBJ \"^(res|response|ctx|context)$\")\n      (#eq? @FN \"redirect\"))\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments (member_expression) @URL)\n      (#match? @OBJ \"^(res|response|ctx|context)$\")\n      (#eq? @FN \"redirect\"))\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments (call_expression) @URL)\n      (#match? @OBJ \"^(res|response|ctx|context)$\")\n      (#eq? @FN \"redirect\"))\n  ]\n  [\n    (assignment_expression\n      left: (member_expression\n        object: (member_expression\n          object: (identifier) @WIN\n          property: (property_identifier) @LOC)\n        property: (property_identifier) @PROP)\n      right: (identifier) @VALUE\n      (#eq? @WIN \"window\")\n      (#eq? @LOC \"location\")\n      (#eq? @PROP \"href\"))\n    (assignment_expression\n      left: (member_expression\n        object: (member_expression\n          object: (identifier) @WIN\n          property: (property_identifier) @LOC)\n        property: (property_identifier) @PROP)\n      right: (member_expression) @VALUE\n      (#eq? @WIN \"window\")\n      (#eq? @LOC \"location\")\n      (#eq? @PROP \"href\"))\n    (assignment_expression\n      left: (member_expression\n        object: (member_expression\n          object: (identifier) @WIN\n          property: (property_identifier) @LOC)\n        property: (property_identifier) @PROP)\n      right: (call_expression) @VALUE\n      (#eq? @WIN \"window\")\n      (#eq? @LOC \"location\")\n      (#eq? @PROP \"href\"))\n  ]",
+      "metavars": [
+        "OBJ",
+        "FN",
+        "URL",
+        "WIN",
+        "LOC",
+        "PROP",
+        "VALUE"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-react-antipatterns",
+      "name": "React Anti-Pattern",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "React anti-pattern: setState inside a loop causes multiple re-renders — batch with a single state update",
+      "query": "  [\n    (for_statement\n      (statement_block) @BODY\n      (#match? @BODY \"set[A-Z]\")\n      (#not-match? @BODY \"set(Timeout|Interval|Immediate)\"))\n    (for_in_statement\n      (statement_block) @BODY\n      (#match? @BODY \"set[A-Z]\")\n      (#not-match? @BODY \"set(Timeout|Interval|Immediate)\"))\n    (while_statement\n      (statement_block) @BODY\n      (#match? @BODY \"set[A-Z]\")\n      (#not-match? @BODY \"set(Timeout|Interval|Immediate)\"))\n  ]",
+      "metavars": [
+        "BODY"
+      ],
+      "defect_class": "logic-error",
+      "inline_tier": "warning"
+    },
+    {
+      "id": "ts-ssrf",
+      "name": "SSRF Risk",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Potential SSRF sink — validate and allowlist outbound URLs",
+      "query": "  [\n    (call_expression\n      function: (identifier) @FN\n      arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @URL)\n      (#match? @FN \"^(fetch|get|post|put|patch|delete|request)$\"))\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @URL)\n      (#match? @FN \"^(fetch|get|post|put|patch|delete|request)$\"))\n  ]",
+      "metavars": [
+        "OBJ",
+        "FN",
+        "URL"
+      ],
+      "post_filter": "ts_ssrf_sink",
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-weak-hash",
+      "name": "Weak Hash Primitive",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Weak hash primitive selected (md5/sha1) — use sha256+ for security-sensitive contexts",
+      "query": "  (call_expression\n    function: (member_expression\n      property: (property_identifier) @FN)\n    arguments: (arguments\n      (string (string_fragment) @ALG)\n      (_)*)\n    (#eq? @FN \"createHash\")\n    (#match? @ALG \"^(md5|sha1)$\"))",
+      "metavars": [
+        "FN",
+        "ALG"
+      ],
+      "post_filter": "ts_weak_hash_algorithm",
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "ts-xss-dom-sink",
+      "name": "XSS DOM Sink",
+      "severity": "error",
+      "language": "typescript",
+      "message": "XSS risk — dynamic value written to innerHTML/outerHTML or document.write()",
+      "query": "  [\n    (assignment_expression\n      left: (member_expression\n        property: (property_identifier) @PROP)\n      right: (identifier) @VALUE\n      (#match? @PROP \"^(innerHTML|outerHTML)$\"))\n    (assignment_expression\n      left: (member_expression\n        property: (property_identifier) @PROP)\n      right: (member_expression) @VALUE\n      (#match? @PROP \"^(innerHTML|outerHTML)$\"))\n    (assignment_expression\n      left: (member_expression\n        property: (property_identifier) @PROP)\n      right: (call_expression) @VALUE\n      (#match? @PROP \"^(innerHTML|outerHTML)$\"))\n    (assignment_expression\n      left: (member_expression\n        property: (property_identifier) @PROP)\n      right: (await_expression) @VALUE\n      (#match? @PROP \"^(innerHTML|outerHTML)$\"))\n  ]\n  [\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments (identifier) @ARG)\n      (#eq? @OBJ \"document\")\n      (#match? @FN \"^(write|writeln)$\"))\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments (member_expression) @ARG)\n      (#eq? @OBJ \"document\")\n      (#match? @FN \"^(write|writeln)$\"))\n    (call_expression\n      function: (member_expression\n        object: (identifier) @OBJ\n        property: (property_identifier) @FN)\n      arguments: (arguments (call_expression) @ARG)\n      (#eq? @OBJ \"document\")\n      (#match? @FN \"^(write|writeln)$\"))\n  ]",
+      "metavars": [
+        "PROP",
+        "VALUE",
+        "OBJ",
+        "FN",
+        "ARG"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "unsafe-regex",
+      "name": "Dynamic Regex Construction",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Dynamic regex from user input — can cause ReDoS (Regular Expression Denial of Service)",
+      "query": "  (new_expression\n    constructor: (identifier) @CTOR\n    (#eq? @CTOR \"RegExp\")\n    arguments: (arguments\n      (template_string\n        (template_substitution) @INTERPOLATION) @PATTERN)\n    (#not-match? @INTERPOLATION \"escape|Escape|replace\"))",
+      "metavars": [
+        "CTOR",
+        "INTERPOLATION",
+        "PATTERN"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "variable-shadowing",
+      "name": "Variable Shadowing",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Variable '{{NAME}}' shadows a parameter — use a distinct name",
+      "query": "  (function_declaration\n    parameters: (formal_parameters\n      (required_parameter\n        pattern: (identifier) @PARAM))\n    body: (statement_block\n      (lexical_declaration\n        (variable_declarator\n          name: (identifier) @NAME))))",
+      "metavars": [
+        "PARAM",
+        "NAME"
+      ],
+      "post_filter": "name_matches_param",
+      "defect_class": "safety",
+      "inline_tier": "review"
+    },
+    {
+      "id": "await-in-loop",
+      "name": "Await in Loop",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Await in loop — sequential execution is slow, use Promise.all()",
+      "query": "  (for_in_statement\n    body: (statement_block\n      (expression_statement\n        (await_expression) @AWAIT)))\n  (for_statement\n    body: (statement_block\n      (expression_statement\n        (await_expression) @AWAIT)))\n  (while_statement\n    body: (statement_block\n      (expression_statement\n        (await_expression) @AWAIT)))",
+      "metavars": [
+        "AWAIT"
+      ],
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "constructor-super",
+      "name": "Missing super() call in derived class constructor",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Constructor of derived class must call super() before accessing 'this'",
+      "query": "  (class_declaration\n    (class_heritage\n      (extends_clause) @EXTENDS)\n    body: (class_body\n      (method_definition\n        name: (property_identifier) @CONSTRUCTOR\n        (#eq? @CONSTRUCTOR \"constructor\")\n        body: (statement_block) @BODY)))",
+      "metavars": [
+        "EXTENDS",
+        "CONSTRUCTOR",
+        "BODY"
+      ],
+      "post_filter": "no_super_call",
+      "post_filter_params": "{}",
+      "defect_class": "correctness",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "empty-catch",
+      "name": "Empty Catch Block",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Empty catch block — properly handle or log the error",
+      "query": "  (catch_clause\n    (identifier) @ERR\n    (statement_block) @BODY)\n\n# Post-filter: Check if body is effectively empty (ignoring comments)",
+      "metavars": [
+        "ERR",
+        "BODY"
+      ],
+      "post_filter": "empty_body",
+      "defect_class": "silent-error",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "hardcoded-secrets",
+      "name": "Hardcoded Secret",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Hardcoded secret in variable assignment — use environment variables",
+      "query": "  [\n    (lexical_declaration\n      (variable_declarator\n        name: (identifier) @VARNAME\n        value: (string)))\n    (expression_statement\n      (assignment_expression\n        left: (identifier) @VARNAME\n        right: (string)))\n  ]",
+      "metavars": [
+        "VARNAME"
+      ],
+      "post_filter": "check_secret_pattern",
+      "defect_class": "secrets",
+      "inline_tier": "blocking"
+    },
+    {
+      "id": "long-parameter-list",
+      "name": "Long Parameter List",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Function has {{PARAM_COUNT}} parameters — use object pattern",
+      "query": "  (function_declaration\n    name: (identifier) @NAME\n    parameters: (formal_parameters) @PARAMS\n    body: (statement_block) @BODY)",
+      "metavars": [
+        "NAME",
+        "PARAMS",
+        "BODY"
+      ],
+      "post_filter": "count_params",
+      "post_filter_params": {
+        "min_params": "6"
+      },
+      "defect_class": "safety",
+      "inline_tier": "review"
+    },
+    {
+      "id": "nested-ternary",
+      "name": "Nested Ternary",
+      "severity": "warning",
+      "language": "typescript",
+      "message": "Nested ternary — use if/else or early returns for clarity",
+      "query": "  (ternary_expression\n    consequence: (ternary_expression) @NESTED)\n  (ternary_expression\n    alternative: (ternary_expression) @NESTED)",
+      "metavars": [
+        "NESTED"
+      ],
+      "defect_class": "safety",
+      "inline_tier": "review"
+    },
+    {
+      "id": "ts-path-traversal",
+      "name": "Path Traversal Risk",
+      "severity": "error",
+      "language": "typescript",
+      "message": "Potential path traversal sink — avoid filesystem I/O with untrusted input",
+      "query": "  (call_expression\n    function: (member_expression\n      object: (identifier) @MOD\n      property: (property_identifier) @FN)\n    arguments: (arguments\n      [(identifier) (member_expression) (template_string) (call_expression) (binary_expression)] @PATH)\n    (#eq? @MOD \"fs\"))\n  (call_expression\n    function: (member_expression\n      object: (identifier) @MOD\n      property: (property_identifier) @FN)\n    arguments: (arguments\n      [(identifier) (member_expression) (template_string) (call_expression) (binary_expression)] @PATH)\n    (#eq? @MOD \"path\")\n    (#match? @FN \"^(join|resolve)$\"))\n  (call_expression\n    function: (member_expression\n      object: (member_expression\n        object: (identifier) @MOD\n        property: (property_identifier) @PROMISES)\n      property: (property_identifier) @FN)\n    arguments: (arguments\n      [(identifier) (member_expression) (template_string) (call_expression) (binary_expression)] @PATH)\n    (#eq? @MOD \"fs\")\n    (#eq? @PROMISES \"promises\"))",
+      "metavars": [
+        "MOD",
+        "PROMISES",
+        "FN",
+        "PATH"
+      ],
+      "post_filter": "ts_path_traversal_sink",
+      "defect_class": "injection",
+      "inline_tier": "blocking"
+    }
+  ]
+}

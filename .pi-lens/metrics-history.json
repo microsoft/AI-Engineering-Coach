@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "files": {
+    "src/core/parser-opencode.ts": {
+      "latest": {
+        "commit": "891d4ec",
+        "timestamp": "2026-05-27T21:12:49.998Z",
+        "mi": 22.9,
+        "cognitive": 133,
+        "nesting": 4,
+        "lines": 270,
+        "maxCyclomatic": 33,
+        "entropy": 7.02
+      },
+      "history": [
+        {
+          "commit": "891d4ec",
+          "timestamp": "2026-05-27T21:12:49.998Z",
+          "mi": 22.9,
+          "cognitive": 133,
+          "nesting": 4,
+          "lines": 270,
+          "maxCyclomatic": 33,
+          "entropy": 7.02
+        }
+      ],
+      "trend": "stable"
+    },
+    "src/core/parser-harnesses.ts": {
+      "latest": {
+        "commit": "891d4ec",
+        "timestamp": "2026-05-27T21:15:04.971Z",
+        "mi": 39,
+        "cognitive": 57,
+        "nesting": 5,
+        "lines": 117,
+        "maxCyclomatic": 10,
+        "entropy": 6.15
+      },
+      "history": [
+        {
+          "commit": "891d4ec",
+          "timestamp": "2026-05-27T21:15:04.971Z",
+          "mi": 39,
+          "cognitive": 57,
+          "nesting": 5,
+          "lines": 117,
+          "maxCyclomatic": 10,
+          "entropy": 6.15
+        }
+      ],
+      "trend": "stable"
+    },
+    "src/core/parser-opencode.test.ts": {
+      "latest": {
+        "commit": "891d4ec",
+        "timestamp": "2026-05-27T21:15:31.881Z",
+        "mi": 42.5,
+        "cognitive": 2,
+        "nesting": 3,
+        "lines": 84,
+        "maxCyclomatic": 1,
+        "entropy": 5.17
+      },
+      "history": [
+        {
+          "commit": "891d4ec",
+          "timestamp": "2026-05-27T21:15:31.881Z",
+          "mi": 42.5,
+          "cognitive": 2,
+          "nesting": 3,
+          "lines": 84,
+          "maxCyclomatic": 1,
+          "entropy": 5.17
+        }
+      ],
+      "trend": "stable"
+    }
+  },
+  "capturedAt": "2026-05-27T21:15:36.883Z"
+}

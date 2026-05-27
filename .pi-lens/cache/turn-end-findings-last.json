@@ -1,0 +1,4 @@
+{
+  "signature": "src/core/parser-opencode.test.ts::Unresolved from this turn — src/core/parser-opencode.test.ts:\n🔴 STOP — 3 issue(s) must be fixed:\n  L19: @typescript-eslint/no-unused-vars: 'Database' is defined but never used. Allowed unused vars must match /^_/u.\n  L20: @typescript-eslint/no-unused-vars: 'parseOpenCodeSessionsFromDb' is defined but never used. Allowed unused vars must match /^_/u.\n  L20: @typescript-eslint/no-unused-vars: 'findOpenCodeDbPaths' is defined but never used. Allowed unused vars must match /^_/u.",
+  "sessionId": "lens-mpojmdnf-c83e5b1b"
+}

@@ -6,10 +6,11 @@
 /* External harness collection registry for parser orchestration. */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
-import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
+import { findOpenCodeDirs, findOpenCodeDbPaths, parseOpenCodeSessions, parseOpenCodeSessionsFromDb } from './parser-opencode';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -64,7 +65,19 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
   {
     name: 'OpenCode',
     collectSync(ctx) {
+      // Prefer SQLite (current OpenCode >= 0.1) over legacy JSON storage.
+      const dbPaths = findOpenCodeDbPaths();
+      const coveredParentDirs = new Set<string>();
+      for (const dbPath of dbPaths) {
+        const sessions = parseOpenCodeSessionsFromDb(dbPath);
+        for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, path.dirname(dbPath));
+        coveredParentDirs.add(path.dirname(dbPath));
+      }
+      // Fall back to legacy JSON storage for install locations not covered by a DB.
       for (const ocDir of findOpenCodeDirs()) {
+        // ocDir is storage/, parent is opencode/
+        const parentDir = path.dirname(ocDir);
+        if (coveredParentDirs.has(parentDir)) continue;
         for (const session of parseOpenCodeSessions(ocDir)) addSession(ctx.workspaces, ctx.sessions, session, ocDir);
       }
     },
@@ -88,7 +101,8 @@ export function hasExternalHarnessSources(): boolean {
   // string and probe relative paths (e.g. `.claude/projects`) under the current
   // working directory, which could report false positives. Bail out instead.
   if (!process.env.HOME && !process.env.USERPROFILE) return false;
-  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
+  return findClaudeDirs().length > 0 || findCodexDirs().length > 0
+    || findOpenCodeDirs().length > 0 || findOpenCodeDbPaths().length > 0;
 }
 
 export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {

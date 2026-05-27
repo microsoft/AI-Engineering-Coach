@@ -5,10 +5,21 @@
 
 /* OpenCode session parser
  *
- * Data layout (macOS):
- *   ~/.local/share/opencode/storage/session/global/<session-id>.json   -- session metadata
- *   ~/.local/share/opencode/storage/message/<session-id>/<msg-id>.json -- message metadata
- *   ~/.local/share/opencode/storage/part/<msg-id>/<part-id>.json       -- content parts (text, tool, step-start/finish)
+ * Supports two storage layouts:
+ *
+ * 1. SQLite (current — opencode ≥ 0.1.x):
+ *      ~/.local/share/opencode/opencode.db
+ *      Windows: %USERPROFILE%\.local\share\opencode\opencode.db
+ *                %APPDATA%\opencode\opencode.db  (legacy Windows fallback)
+ *
+ *    Tables: session, message (data JSON blob), part (data JSON blob)
+ *
+ * 2. Legacy JSON files (opencode < 0.1.x):
+ *   ~/.local/share/opencode/storage/session/global/<session-id>.json
+ *   ~/.local/share/opencode/storage/message/<session-id>/<msg-id>.json
+ *   ~/.local/share/opencode/storage/part/<msg-id>/<part-id>.json
+ *
+ * Discovery order: SQLite DB preferred; JSON storage used as fallback.
  *
  * Sessions have: id, slug, version, projectID, directory, title, time.created/updated
  * Messages have: id, sessionID, role (user|assistant), time, agent, model {providerID, modelID}, tokens, cost
@@ -81,11 +92,168 @@ export function findOpenCodeDirs(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const dirs: string[] = [];
 
-  // macOS / Linux
+  // macOS / Linux / Windows (%USERPROFILE%\.local\share\opencode\storage)
   const linuxPath = path.join(home, '.local', 'share', 'opencode', 'storage');
   if (fs.existsSync(linuxPath)) dirs.push(linuxPath);
 
   return dirs;
+}
+
+/**
+ * Returns paths to opencode.db SQLite files found on the current machine.
+ * macOS/Linux: ~/.local/share/opencode/opencode.db
+ * Windows:     %USERPROFILE%\.local\share\opencode\opencode.db
+ *              %APPDATA%\opencode\opencode.db  (legacy Windows fallback)
+ */
+export function findOpenCodeDbPaths(): string[] {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const found: string[] = [];
+
+  if (home) {
+    const dbPath = path.join(home, '.local', 'share', 'opencode', 'opencode.db');
+    if (fs.existsSync(dbPath)) found.push(dbPath);
+  }
+
+  // Windows fallback: older OpenCode docs referenced %APPDATA%\opencode
+  const appData = process.env.APPDATA || '';
+  if (appData) {
+    const dbPath = path.join(appData, 'opencode', 'opencode.db');
+    if (fs.existsSync(dbPath) && !found.includes(dbPath)) found.push(dbPath);
+  }
+
+  return found;
+}
+
+// ---------------------------------------------------------------------------
+// SQLite access (better-sqlite3, loaded lazily; gracefully degrades if binary
+// is unavailable in this runtime environment)
+// ---------------------------------------------------------------------------
+
+type BetterSqlite3Ctor = new (dbPath: string, opts?: { readonly?: boolean; fileMustExist?: boolean }) => SqliteDb;
+interface SqliteDb {
+  prepare(sql: string): SqliteStmt;
+  close(): void;
+}
+interface SqliteStmt {
+  all(...params: unknown[]): unknown[];
+}
+
+function tryOpenSqliteDb(dbPath: string): SqliteDb | null {
+  try {
+    assertTrustedPath(dbPath);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Database = require('better-sqlite3') as BetterSqlite3Ctor;
+    return new Database(dbPath, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+}
+
+interface SqliteSessionRow {
+  id: string;
+  slug: string;
+  directory: string;
+  title: string;
+  time_created: number;
+  time_updated: number;
+}
+
+interface SqliteMessageRow {
+  id: string;
+  session_id: string;
+  data: string;
+}
+
+interface SqlitePartRow {
+  id: string;
+  message_id: string;
+  data: string;
+}
+
+function parseJsonBlob<T>(blob: string): T | null {
+  try {
+    return JSON.parse(blob) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse all OpenCode sessions from an opencode.db SQLite file.
+ * Returns an empty array if the DB cannot be opened or contains no data.
+ */
+export function parseOpenCodeSessionsFromDb(dbPath: string): Session[] {
+  const db = tryOpenSqliteDb(dbPath);
+  if (!db) return [];
+
+  try {
+    const stmtSessions = db.prepare(
+      'SELECT id, slug, directory, title, time_created, time_updated FROM session',
+    );
+    const stmtMessages = db.prepare(
+      'SELECT id, session_id, data FROM message WHERE session_id = ? ORDER BY time_created ASC',
+    );
+    const stmtParts = db.prepare(
+      'SELECT id, message_id, data FROM part WHERE session_id = ? ORDER BY time_created ASC',
+    );
+
+    const sessions = stmtSessions.all() as SqliteSessionRow[];
+    const results: Session[] = [];
+
+    for (const rawSession of sessions) {
+      const rawMessages = stmtMessages.all(rawSession.id) as SqliteMessageRow[];
+      if (rawMessages.length === 0) continue;
+
+      const rawParts = stmtParts.all(rawSession.id) as SqlitePartRow[];
+      const session = parseSessionFromSqliteRows(rawSession, rawMessages, rawParts);
+      if (session) results.push(session);
+    }
+
+    return results;
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
+}
+
+function parseSessionFromSqliteRows(
+  rawSession: SqliteSessionRow,
+  rawMessageRows: SqliteMessageRow[],
+  rawPartRows: SqlitePartRow[],
+): Session | null {
+  // Parse message JSON blobs; skip malformed rows
+  const messages: OcMessage[] = [];
+  for (const row of rawMessageRows) {
+    const data = parseJsonBlob<OcMessage>(row.data);
+    if (!data) continue;
+    data.id = row.id;
+    data.sessionID = row.session_id;
+    messages.push(data);
+  }
+  if (messages.length === 0) return null;
+
+  // Build parts map by message ID; skip malformed rows
+  const partsByMsg = new Map<string, OcPart[]>();
+  for (const row of rawPartRows) {
+    const data = parseJsonBlob<OcPart>(row.data);
+    if (!data) continue;
+    data.id = row.id;
+    data.messageID = row.message_id;
+    const existing = partsByMsg.get(row.message_id);
+    if (existing) existing.push(data);
+    else partsByMsg.set(row.message_id, [data]);
+  }
+
+  const ocSession: OcSession = {
+    id: rawSession.id,
+    slug: rawSession.slug,
+    directory: rawSession.directory,
+    title: rawSession.title,
+    time: { created: rawSession.time_created, updated: rawSession.time_updated },
+  };
+
+  return buildSessionFromMessages(ocSession, messages, partsByMsg);
 }
 
 function readJsonSafe<T>(filePath: string): T | null {
@@ -261,28 +429,29 @@ function buildOpenCodeRequest(
   });
 }
 
-function parseOpenCodeSession(rawSession: OcSession, storageDir: string): Session | null {
-  if (!rawSession.id) return null;
-
-  const msgDir = path.join(storageDir, 'message', rawSession.id);
-  const rawMessages = readAllJsonInDir<OcMessage>(msgDir);
-  rawMessages.sort((a, b) => (a.time?.created || 0) - (b.time?.created || 0));
-  if (rawMessages.length === 0) return null;
-
-  const partsByMsg = indexPartsByMessage(rawMessages, storageDir);
+/**
+ * Shared session-building logic used by both the legacy JSON parser and the
+ * SQLite parser. Takes a normalized OcSession + sorted OcMessage array + parts
+ * map and produces a Session (or null when there are no requests).
+ */
+function buildSessionFromMessages(
+  rawSession: OcSession,
+  messages: OcMessage[],
+  partsByMsg: Map<string, OcPart[]>,
+): Session | null {
   const { wsId, wsName } = getOpenCodeWorkspace(rawSession);
   const requests: SessionRequest[] = [];
   let firstTs: number | null = null;
   let lastTs: number | null = null;
 
-  for (let i = 0; i < rawMessages.length; i++) {
-    const msg = rawMessages[i];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     if (msg.role !== 'user') continue;
 
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
 
-    const assistantMsg = findAssistantMessage(rawMessages, i + 1, msg.id);
+    const assistantMsg = findAssistantMessage(messages, i + 1, msg.id);
     const assistantData = collectAssistantData(assistantMsg, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
     requests.push(buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs));
@@ -301,6 +470,18 @@ function parseOpenCodeSession(rawSession: OcSession, storageDir: string): Sessio
     requests,
     hasDevcontainer: detectDevcontainerFromRequests(requests, rawSession.directory),
   });
+}
+
+function parseOpenCodeSession(rawSession: OcSession, storageDir: string): Session | null {
+  if (!rawSession.id) return null;
+
+  const msgDir = path.join(storageDir, 'message', rawSession.id);
+  const rawMessages = readAllJsonInDir<OcMessage>(msgDir);
+  rawMessages.sort((a, b) => (a.time?.created || 0) - (b.time?.created || 0));
+  if (rawMessages.length === 0) return null;
+
+  const partsByMsg = indexPartsByMessage(rawMessages, storageDir);
+  return buildSessionFromMessages(rawSession, rawMessages, partsByMsg);
 }
 
 export function parseOpenCodeSessions(storageDir: string): Session[] {
