@@ -38,7 +38,7 @@
   - closes the DB reliably
 - [x] 1.4 Add a focused unit test that can open a fixture DB file and run a simple query (smoke test for dependency/runtime compatibility).
 
-### [ ] 2.0 Implement OpenCode SQLite discovery (macOS/Linux/Windows)
+### [x] 2.0 Implement OpenCode SQLite discovery (macOS/Linux/Windows)
 
 #### 2.0 Proof Artifact(s)
 
@@ -46,14 +46,14 @@
 
 #### 2.0 Tasks
 
-- [ ] 2.1 Update `findOpenCodeDirs()` (or replace with `findOpenCodeSources()` if needed) to discover:
+- [x] 2.1 Update `findOpenCodeDirs()` (or replace with `findOpenCodeSources()` if needed) to discover:
   - macOS/Linux: `~/.local/share/opencode/opencode.db`
   - Windows: `%USERPROFILE%\\.local\\share\\opencode\\opencode.db`
   - Windows fallback: `%APPDATA%\\opencode\\opencode.db` (best-effort)
-- [ ] 2.2 Preserve legacy discovery of `~/.local/share/opencode/storage` for JSON fallback.
-- [ ] 2.3 Add unit tests for discovery logic by stubbing `HOME`/`USERPROFILE`/`APPDATA` and using temp directories.
+- [x] 2.2 Preserve legacy discovery of `~/.local/share/opencode/storage` for JSON fallback.
+- [x] 2.3 Add unit tests for discovery logic by stubbing `HOME`/`USERPROFILE`/`APPDATA` and using temp directories.
 
-### [ ] 3.0 Parse sessions/messages/parts from opencode.db
+### [x] 3.0 Parse sessions/messages/parts from opencode.db
 
 #### 3.0 Proof Artifact(s)
 
@@ -62,23 +62,23 @@
 
 #### 3.0 Tasks
 
-- [ ] 3.1 Implement `parseOpenCodeSessionsFromSqlite(dbPath: string): Session[]` that:
+- [x] 3.1 Implement `parseOpenCodeSessionsFromSqlite(dbPath: string): Session[]` that:
   - reads `session` rows
   - reads `message` rows filtered by `session_id`
   - reads `part` rows filtered by `message_id` (or `session_id` + grouping)
-- [ ] 3.2 Implement JSON parsing helpers for `message.data` and `part.data` with try/catch and minimal-field extraction.
-- [ ] 3.3 Map SQLite records into the existing request/session shapes:
+- [x] 3.2 Implement JSON parsing helpers for `message.data` and `part.data` with try/catch and minimal-field extraction.
+- [x] 3.3 Map SQLite records into the existing request/session shapes:
   - user message text from message/part JSON
   - assistant response text from text parts
   - tool usage + edited/referenced files from tool parts
   - timestamps, model IDs, tokens/cost (when available)
-- [ ] 3.4 Add a fixture `opencode.db` (small, representative) under test fixtures and ensure tests do not rely on the developer’s local DB.
-- [ ] 3.5 Add unit tests asserting:
+- [x] 3.4 Add a fixture `opencode.db` (small, representative) under test fixtures and ensure tests do not rely on the developer’s local DB.
+- [x] 3.5 Add unit tests asserting:
   - parsed session count > 0
   - workspace IDs use `opencode-<session.id>`
   - at least one request has assistant text and toolsUsed populated (when fixture contains them)
 
-### [ ] 4.0 Preserve legacy JSON parsing + enforce SQLite-preferred fallback
+### [x] 4.0 Preserve legacy JSON parsing + enforce SQLite-preferred fallback
 
 #### 4.0 Proof Artifact(s)
 
@@ -87,14 +87,14 @@
 
 #### 4.0 Tasks
 
-- [ ] 4.1 Refactor `parseOpenCodeSessions()` to:
+- [x] 4.1 Refactor `parseOpenCodeSessions()` to:
   - attempt SQLite parsing when a DB path exists and is readable
   - fall back to legacy JSON parsing when SQLite is missing or throws
-- [ ] 4.2 Keep legacy JSON parsing behavior intact (including token mapping and tool classification).
-- [ ] 4.3 Add fixtures for legacy JSON (or reuse existing) and assert exact or near-exact output stability.
-- [ ] 4.4 Add a test covering the “both present” scenario (SQLite preferred).
+- [x] 4.2 Keep legacy JSON parsing behavior intact (including token mapping and tool classification).
+- [x] 4.3 Add fixtures for legacy JSON (or reuse existing) and assert exact or near-exact output stability.
+- [x] 4.4 Add a test covering the “both present” scenario (SQLite preferred).
 
-### [ ] 5.0 Robustness for large DBs and malformed rows
+### [x] 5.0 Robustness for large DBs and malformed rows
 
 #### 5.0 Proof Artifact(s)
 
@@ -103,9 +103,9 @@
 
 #### 5.0 Tasks
 
-- [ ] 5.1 Ensure DB parsing iterates row-by-row (or in bounded batches) instead of loading all rows into memory when possible.
-- [ ] 5.2 Add tests that inject malformed JSON into `message.data` / `part.data` and assert the parser skips those rows while still returning other sessions.
-- [ ] 5.3 Add a synthetic “large-ish” fixture generator in tests (or prebuilt fixture) to validate runtime does not blow up on volume.
+- [x] 5.1 Ensure DB parsing iterates row-by-row (or in bounded batches) instead of loading all rows into memory when possible.
+- [x] 5.2 Add tests that inject malformed JSON into `message.data` / `part.data` and assert the parser skips those rows while still returning other sessions.
+- [x] 5.3 Add a synthetic “large-ish” fixture generator in tests (or prebuilt fixture) to validate runtime does not blow up on volume.
 
 ### [ ] 6.0 Document the OpenCode storage change + troubleshooting guidance
 
