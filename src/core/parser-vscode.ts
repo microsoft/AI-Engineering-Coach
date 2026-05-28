@@ -12,6 +12,7 @@ import { createRequest, createSession, detectDevcontainerFromRequests, extractSk
 import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId } from './helpers';
 import { parseCLIEventsFile } from './parser-vscode-cli';
+import { parseDebugLogSession, listDebugLogSessions } from './parser-debug-logs';
 import { parseCLIWorkspaceName, parseWorkspaceName, parseWorkspaceFolderPath, parseCLIWorkspaceFolderPath, readFile, reconstructFromJsonl, stripImageData } from './parser-vscode-files';
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -19,8 +20,9 @@ function isObj(v: unknown): v is Record<string, unknown> {
 }
 
 export function harnessFromPath(logsDir: string): string {
-  if (logsDir.includes('Code - Insiders')) return 'Local Agent (Insiders)';
+  if (logsDir.includes('Code - Insiders') || logsDir.includes('.vscode-server-insiders')) return 'Local Agent (Insiders)';
   if (logsDir.includes('.copilot')) return 'GitHub Copilot CLI';
+  if (logsDir.includes('.vscode-server')) return 'Copilot';
   return 'Local Agent';
 }
 
@@ -40,6 +42,13 @@ export function findVsCodeDirs(): string[] {
       vsPath = path.join(home, '.config', edition, 'User', 'workspaceStorage');
     }
     if (vsPath && fs.existsSync(vsPath) && !dirs.includes(vsPath)) dirs.push(vsPath);
+  }
+
+  // VS Code Remote SSH / Dev Containers — логи на remote-сервері
+  const remoteServerFolders = ['.vscode-server', '.vscode-server-insiders'];
+  for (const serverFolder of remoteServerFolders) {
+    const remotePath = path.join(home, serverFolder, 'data', 'User', 'workspaceStorage');
+    if (fs.existsSync(remotePath) && !dirs.includes(remotePath)) dirs.push(remotePath);
   }
 
   // Copilot CLI paths
@@ -128,6 +137,16 @@ function listChatSessionFiles(chatDir: string): string[] {
     return fs.readdirSync(chatDir, { withFileTypes: true })
       .filter(cf => cf.isFile() && (cf.name.endsWith('.json') || cf.name.endsWith('.jsonl')))
       .map(cf => path.join(chatDir, cf.name));
+  } catch {
+    return [];
+  }
+}
+
+function listTranscriptFiles(transcriptsDir: string): string[] {
+  try {
+    return fs.readdirSync(transcriptsDir, { withFileTypes: true })
+      .filter(cf => cf.isFile() && cf.name.endsWith('.jsonl'))
+      .map(cf => path.join(transcriptsDir, cf.name));
   } catch {
     return [];
   }
@@ -257,6 +276,45 @@ export function processWorkspaceEntry(
     }
   }
 
+  // VS Code Remote SSH: transcripts у GitHub.copilot-chat/transcripts/ (events.jsonl формат)
+  const transcriptsDir = path.join(entryPath, 'GitHub.copilot-chat', 'transcripts');
+  for (const transcriptFile of listTranscriptFiles(transcriptsDir)) {
+    const session = parseCLIEventsFile(transcriptFile, wsId, wsName, customInstructionsBytes);
+    if (session) {
+      session.harness = harness;
+      // Не дублювати якщо debug-log вже покрив цю сесію
+      if (!sessionSourceIndex.has(session.sessionId)) {
+        sessions.push(session);
+        sessionSourceIndex.set(session.sessionId, {
+          kind: 'cli-events',
+          filePath: transcriptFile,
+          workspaceId: wsId,
+          workspaceName: wsName,
+          harness,
+        });
+      }
+    }
+  }
+
+  // VS Code Remote SSH: debug-logs у GitHub.copilot-chat/debug-logs/*/main.jsonl (span формат)
+  const debugLogFiles = listDebugLogSessions(entryPath);
+  for (const debugLogFile of debugLogFiles) {
+    const session = parseDebugLogSession(debugLogFile, wsId, wsName, harness, customInstructionsBytes);
+    if (session) {
+      // Не дублювати якщо transcript вже покрив цю сесію
+      if (!sessionSourceIndex.has(session.sessionId)) {
+        sessions.push(session);
+        sessionSourceIndex.set(session.sessionId, {
+          kind: 'debug-log',
+          filePath: debugLogFile,
+          workspaceId: wsId,
+          workspaceName: wsName,
+          harness,
+        });
+      }
+    }
+  }
+
   const eventsFile = path.join(entryPath, 'events.jsonl');
   const cliSession = parseCLIEventsFile(eventsFile, wsId, wsName, customInstructionsBytes);
   if (cliSession) {
@@ -305,9 +363,12 @@ export async function processWorkspaceEntryAsync(
   }
 
   const chatFiles = listChatSessionFiles(path.join(entryPath, 'chatSessions'));
+  const transcriptFiles = listTranscriptFiles(path.join(entryPath, 'GitHub.copilot-chat', 'transcripts'));
+  const debugLogFilesForCount = listDebugLogSessions(entryPath);
   const editStateFiles = listEditStateFiles(path.join(entryPath, 'chatEditingSessions'));
-  const totalUnits = Math.max(1, chatFiles.length + editStateFiles.length);
+  const totalUnits = Math.max(1, chatFiles.length + transcriptFiles.length + debugLogFilesForCount.length + editStateFiles.length);
   const chatEvery = chunkInterval(chatFiles.length);
+  const transcriptEvery = chunkInterval(transcriptFiles.length);
   const editEvery = chunkInterval(editStateFiles.length);
   let completed = 0;
 
@@ -334,6 +395,63 @@ export async function processWorkspaceEntryAsync(
     }
     // Always yield after each file to keep the event loop responsive,
     // especially for workspaces with many large session files.
+    await yieldToLoop();
+  }
+
+  // VS Code Remote SSH: transcripts у GitHub.copilot-chat/transcripts/ (events.jsonl формат)
+  for (let i = 0; i < transcriptFiles.length; i++) {
+    const session = parseCLIEventsFile(transcriptFiles[i], wsId, wsName, customInstructionsBytes);
+    if (session) {
+      session.harness = harness;
+      if (!sessionSourceIndex.has(session.sessionId)) {
+        sessions.push(session);
+        sessionSourceIndex.set(session.sessionId, {
+          kind: 'cli-events',
+          filePath: transcriptFiles[i],
+          workspaceId: wsId,
+          workspaceName: wsName,
+          harness,
+        });
+      }
+    }
+    completed++;
+    if (shouldReportChunk(i, transcriptFiles.length, transcriptEvery)) {
+      onProgress?.({
+        wsName,
+        detail: `transcripts ${i + 1}/${transcriptFiles.length}`,
+        completed,
+        total: totalUnits,
+      });
+    }
+    await yieldToLoop();
+  }
+
+  // VS Code Remote SSH: debug-logs у GitHub.copilot-chat/debug-logs/*/main.jsonl (span формат)
+  const debugLogFiles = listDebugLogSessions(entryPath);
+  const debugEvery = chunkInterval(debugLogFiles.length);
+  for (let i = 0; i < debugLogFiles.length; i++) {
+    const session = parseDebugLogSession(debugLogFiles[i], wsId, wsName, harness, customInstructionsBytes);
+    if (session) {
+      if (!sessionSourceIndex.has(session.sessionId)) {
+        sessions.push(session);
+        sessionSourceIndex.set(session.sessionId, {
+          kind: 'debug-log',
+          filePath: debugLogFiles[i],
+          workspaceId: wsId,
+          workspaceName: wsName,
+          harness,
+        });
+      }
+    }
+    completed++;
+    if (shouldReportChunk(i, debugLogFiles.length, debugEvery)) {
+      onProgress?.({
+        wsName,
+        detail: `debug-logs ${i + 1}/${debugLogFiles.length}`,
+        completed,
+        total: totalUnits,
+      });
+    }
     await yieldToLoop();
   }
 

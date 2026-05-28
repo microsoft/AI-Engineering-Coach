@@ -311,7 +311,7 @@ const LLM_REQUEST_TIMEOUT_MS = 90_000;
  * nothing is available so callers can surface a useful message.
  */
 async function selectModel(): Promise<vscode.LanguageModelChat> {
-  const families = [LLM_FAMILY, 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4'];
+  const families = [LLM_FAMILY, 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4', 'claude-sonnet', 'claude-3.5-sonnet', 'o4-mini', 'o3-mini'];
   for (const family of families) {
     const models = await vscode.lm.selectChatModels({ family });
     if (models.length > 0) return models[0];
@@ -389,6 +389,8 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
       // On parse failures, nudge the model to return valid JSON on the next attempt
       if (lastError instanceof Error && /JSON|parse/i.test(lastError.message)) {
         parseFailures++;
+        // Після першого parse failure, скидаємо structured output і додаємо explicit JSON instruction
+        options.modelOptions = undefined;
         if (retryMessages.length === messages.length) {
           retryMessages.push(vscode.LanguageModelChatMessage.User(
             'Your previous response was not valid JSON. Please respond ONLY with a valid JSON object or array, no markdown fences, no commentary.'
