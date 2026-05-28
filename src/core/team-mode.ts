@@ -3,12 +3,25 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { DateFilter, TeamModeSettings, TeamModeSnapshotFile, AntiPatternData, AiCreditData, ContextManagementData, TeamModeSeverity } from './types';
+import type {
+  DateFilter,
+  TeamModeSettings,
+  TeamModeSnapshotFile,
+  AntiPatternData,
+  AiCreditData,
+  ContextManagementData,
+  TeamModeSeverity,
+} from './types';
+import type {
+  TeamModeAggregationDetailLevel,
+  TeamModeAggregationGranularity,
+} from './types/config-types';
 import {
   TEAM_MODE_CATEGORIES,
   createEmptyTeamDashboardCategoryScores,
   createEmptyTeamModeSnapshotFile,
 } from './types/team-mode-types';
+import type { TeamModeSnapshotAggregation, TeamModeCategoryBreakdown } from './types/team-mode-types';
 
 export interface TeamModeConfigurationLike {
   get<T>(section: string, defaultValue?: T): T;
@@ -16,6 +29,8 @@ export interface TeamModeConfigurationLike {
 
 export const DEFAULT_TEAM_MODE_SETTINGS: TeamModeSettings = {
   enabled: false,
+  aggregationGranularity: 'weekly',
+  detailLevel: 'category-only',
 };
 
 function normalizeBoolean(value: unknown): boolean {
@@ -32,6 +47,14 @@ function toFiniteNumber(value: unknown): number | null {
 
 function clampScore(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function normalizeAggregationGranularity(value: unknown): TeamModeAggregationGranularity {
+  return value === 'daily' || value === 'weekly' || value === 'monthly' ? value : DEFAULT_TEAM_MODE_SETTINGS.aggregationGranularity;
+}
+
+function normalizeDetailLevel(value: unknown): TeamModeAggregationDetailLevel {
+  return value === 'category-only' || value === 'expanded' ? value : DEFAULT_TEAM_MODE_SETTINGS.detailLevel;
 }
 
 function normalizeCount(value: unknown): number {
@@ -87,12 +110,16 @@ function normalizeTopViolations(raw: unknown): TeamModeSnapshotFile['antiPattern
 export function normalizeTeamModeSettings(raw?: Partial<TeamModeSettings> | null): TeamModeSettings {
   return {
     enabled: normalizeBoolean(raw?.enabled ?? false),
+    aggregationGranularity: normalizeAggregationGranularity(raw?.aggregationGranularity),
+    detailLevel: normalizeDetailLevel(raw?.detailLevel),
   };
 }
 
 export function readTeamModeSettings(configuration: TeamModeConfigurationLike): TeamModeSettings {
   return normalizeTeamModeSettings({
     enabled: configuration.get<boolean>('teamMode.enabled', DEFAULT_TEAM_MODE_SETTINGS.enabled),
+    aggregationGranularity: configuration.get<TeamModeAggregationGranularity>('teamMode.aggregationGranularity', DEFAULT_TEAM_MODE_SETTINGS.aggregationGranularity),
+    detailLevel: configuration.get<TeamModeAggregationDetailLevel>('teamMode.detailLevel', DEFAULT_TEAM_MODE_SETTINGS.detailLevel),
   });
 }
 
@@ -104,11 +131,12 @@ export interface TeamModeAnalyticsSource {
 }
 
 export function sanitizeTeamModeSnapshotFile(raw: unknown): TeamModeSnapshotFile | null {
-  if (!isRecord(raw) || raw.schemaVersion !== 1) return null;
+  if (!isRecord(raw) || (raw.schemaVersion !== 1 && raw.schemaVersion !== 2)) return null;
 
   const snapshot = createEmptyTeamModeSnapshotFile();
   const tokenUsage = isRecord(raw.tokenUsage) ? raw.tokenUsage : {};
   const antiPatterns = isRecord(raw.antiPatterns) ? raw.antiPatterns : {};
+  const aggregation = isRecord(raw.aggregation) ? raw.aggregation : {};
   snapshot.capturedAtMs = normalizeCount(raw.capturedAtMs);
   snapshot.windowStartMs = normalizeCount(raw.windowStartMs);
   snapshot.windowEndMs = normalizeCount(raw.windowEndMs);
@@ -118,6 +146,11 @@ export function sanitizeTeamModeSnapshotFile(raw: unknown): TeamModeSnapshotFile
     snapshot.windowEndMs = tmp;
   }
   snapshot.categoryScores = normalizeCategoryScores(raw.categoryScores);
+  snapshot.aggregation = {
+    granularity: normalizeAggregationGranularity(aggregation.granularity),
+    detailLevel: normalizeDetailLevel(aggregation.detailLevel),
+  };
+  snapshot.categoryBreakdown = normalizeCategoryBreakdown(raw.categoryBreakdown, snapshot.categoryScores);
   snapshot.tokenUsage = {
     requests: normalizeCount(tokenUsage.requests),
     countedRequests: normalizeCount(tokenUsage.countedRequests),
@@ -136,6 +169,38 @@ export function sanitizeTeamModeSnapshotFile(raw: unknown): TeamModeSnapshotFile
   snapshot.antiPatterns.topViolations = normalizeTopViolations(antiPatterns.topViolations);
   snapshot.weeklyDeltas = normalizeWeeklyDeltaScores(raw.weeklyDeltas);
   return snapshot;
+}
+
+function normalizeCategoryBreakdown(
+  raw: unknown,
+  categoryScores: ReturnType<typeof createEmptyTeamDashboardCategoryScores>,
+): TeamModeSnapshotFile['categoryBreakdown'] {
+  const breakdown = createEmptyTeamModeSnapshotFile().categoryBreakdown;
+  if (!isRecord(raw)) {
+    for (const category of TEAM_MODE_CATEGORIES) {
+      breakdown[category] = {
+        ...breakdown[category],
+        score: categoryScores[category],
+      };
+    }
+    return breakdown;
+  }
+
+  for (const category of TEAM_MODE_CATEGORIES) {
+    const candidate = isRecord(raw[category]) ? raw[category] : {};
+    breakdown[category] = {
+      score: clampScore(toFiniteNumber(candidate.score) ?? categoryScores[category]),
+      wowPct: Math.round(toFiniteNumber(candidate.wowPct) ?? 0),
+      momPct: Math.round(toFiniteNumber(candidate.momPct) ?? 0),
+      patternCount: normalizeCount(candidate.patternCount),
+      topIssue: typeof candidate.topIssue === 'string' && candidate.topIssue.trim() ? candidate.topIssue.trim() : null,
+      improvements: Array.isArray(candidate.improvements)
+        ? candidate.improvements.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map(value => value.trim()).slice(0, 5)
+        : [],
+    };
+  }
+
+  return breakdown;
 }
 
 function parseWeekStartMs(label: string): number | null {
@@ -208,6 +273,7 @@ function sumTokens(aiCredits: AiCreditData): number {
 export function buildTeamModeSnapshot(
   source: TeamModeAnalyticsSource,
   filter?: DateFilter,
+  settings: TeamModeSettings = DEFAULT_TEAM_MODE_SETTINGS,
 ): TeamModeSnapshotFile {
   const snapshot = createEmptyTeamModeSnapshotFile();
   const requests = source.filterRequests(filter);
@@ -220,10 +286,15 @@ export function buildTeamModeSnapshot(
     .filter((timestamp): timestamp is number => typeof timestamp === 'number' && Number.isFinite(timestamp));
 
   const weeklySeries = buildWeeklySeries(antiPatterns, contextManagement);
+  const normalizedSettings = normalizeTeamModeSettings(settings);
 
   snapshot.capturedAtMs = Date.now();
   snapshot.windowStartMs = timestamps.length > 0 ? Math.min(...timestamps) : snapshot.capturedAtMs;
   snapshot.windowEndMs = timestamps.length > 0 ? Math.max(...timestamps) : snapshot.capturedAtMs;
+  snapshot.aggregation = {
+    granularity: normalizedSettings.aggregationGranularity,
+    detailLevel: normalizedSettings.detailLevel,
+  };
   snapshot.categoryScores = {
     'prompt-quality': antiPatterns.groupScores.find(group => group.group === 'prompt-quality')?.score ?? 0,
     'session-hygiene': antiPatterns.groupScores.find(group => group.group === 'session-hygiene')?.score ?? 0,
@@ -231,6 +302,7 @@ export function buildTeamModeSnapshot(
     'tool-mastery': antiPatterns.groupScores.find(group => group.group === 'tool-mastery')?.score ?? 0,
     'context-management': contextManagement.overallScore,
   };
+  snapshot.categoryBreakdown = buildCategoryBreakdown(antiPatterns, contextManagement, snapshot.categoryScores);
   snapshot.tokenUsage = {
     requests: aiCredits.totalRequests,
     countedRequests: aiCredits.countedRequests,
@@ -266,4 +338,33 @@ export function buildTeamModeSnapshot(
   };
 
   return snapshot;
+}
+
+function buildCategoryBreakdown(
+  antiPatterns: AntiPatternData,
+  contextManagement: ContextManagementData,
+  categoryScores: ReturnType<typeof createEmptyTeamDashboardCategoryScores>,
+): TeamModeSnapshotFile['categoryBreakdown'] {
+  const breakdown = createEmptyTeamModeSnapshotFile().categoryBreakdown;
+  const scoreByGroup = new Map(antiPatterns.groupScores.map(group => [group.group, group]));
+  const improvementsByGroup = new Map<(typeof TEAM_MODE_CATEGORIES)[number], string[]>();
+  for (const pattern of antiPatterns.patterns) {
+    const list = improvementsByGroup.get(pattern.group) ?? [];
+    if (pattern.suggestion) list.push(pattern.suggestion);
+    improvementsByGroup.set(pattern.group, list);
+  }
+
+  for (const category of TEAM_MODE_CATEGORIES) {
+    const group = scoreByGroup.get(category);
+    breakdown[category] = {
+      score: categoryScores[category],
+      wowPct: Math.round(group?.wowPct ?? 0),
+      momPct: Math.round(group?.momPct ?? 0),
+      patternCount: group?.patternCount ?? 0,
+      topIssue: group?.topIssue ?? (category === 'context-management' ? (contextManagement.tips[0] ?? null) : null),
+      improvements: (group?.improvements ?? improvementsByGroup.get(category) ?? []).filter(Boolean).slice(0, 5),
+    };
+  }
+
+  return breakdown;
 }

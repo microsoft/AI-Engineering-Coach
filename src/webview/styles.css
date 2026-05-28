@@ -4230,6 +4230,28 @@ h2 {
   max-width: 58ch;
 }
 
+.team-dashboard-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.team-dashboard-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent-cyan) 12%, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .team-dashboard-actions {
   display: flex;
   align-items: center;
@@ -4432,6 +4454,35 @@ h2 {
 
 .team-dashboard-score-meta strong {
   font-size: 12px;
+}
+
+.team-dashboard-score-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.team-dashboard-score-detail .trend-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+}
+
+.team-dashboard-detail-note {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--canvas) 60%, var(--surface));
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .team-dashboard-surface {

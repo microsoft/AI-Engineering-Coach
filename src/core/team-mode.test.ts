@@ -12,12 +12,28 @@ describe('Team Mode settings', () => {
   it('fills in safe defaults when no settings are provided', () => {
     expect(normalizeTeamModeSettings()).toEqual({
       enabled: false,
+      aggregationGranularity: 'weekly',
+      detailLevel: 'category-only',
     });
   });
 
   it('normalizes the enabled flag', () => {
     expect(normalizeTeamModeSettings({ enabled: true })).toEqual({
       enabled: true,
+      aggregationGranularity: 'weekly',
+      detailLevel: 'category-only',
+    });
+  });
+
+  it('normalizes aggregation preferences', () => {
+    expect(normalizeTeamModeSettings({
+      enabled: true,
+      aggregationGranularity: 'monthly',
+      detailLevel: 'expanded',
+    })).toEqual({
+      enabled: true,
+      aggregationGranularity: 'monthly',
+      detailLevel: 'expanded',
     });
   });
 
@@ -26,6 +42,8 @@ describe('Team Mode settings', () => {
       get: <T>(key: string, defaultValue?: T): T => {
         const values: Record<string, unknown> = {
           'teamMode.enabled': true,
+          'teamMode.aggregationGranularity': 'daily',
+          'teamMode.detailLevel': 'expanded',
         };
         return (values[key] ?? defaultValue) as T;
       },
@@ -33,6 +51,8 @@ describe('Team Mode settings', () => {
 
     expect(settings).toEqual({
       enabled: true,
+      aggregationGranularity: 'daily',
+      detailLevel: 'expanded',
     });
   });
 });
@@ -181,6 +201,10 @@ describe('Team Mode snapshot assembly', () => {
     const snapshot = buildTeamModeSnapshot(makeAnalyzerLike(), {
       fromDate: '2026-05-01',
       toDate: '2026-05-31',
+    }, {
+      enabled: false,
+      aggregationGranularity: 'monthly',
+      detailLevel: 'expanded',
     });
 
     expect(snapshot.categoryScores).toMatchObject({
@@ -220,6 +244,16 @@ describe('Team Mode snapshot assembly', () => {
       'code-review': 1,
       'tool-mastery': 2,
       'context-management': 5,
+    });
+    expect(snapshot.aggregation).toEqual({
+      granularity: 'monthly',
+      detailLevel: 'expanded',
+    });
+    expect(snapshot.categoryBreakdown['prompt-quality']).toMatchObject({
+      score: 70,
+      wowPct: 2,
+      momPct: 4,
+      patternCount: 3,
     });
     expect(JSON.stringify(snapshot)).not.toContain('raw prompt text');
     expect(JSON.stringify(snapshot)).not.toContain('session detail');

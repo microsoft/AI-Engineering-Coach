@@ -10,7 +10,7 @@ AI Engineer Coach is a VS Code extension that analyzes your AI-assisted coding s
 - **VS Code** 1.85 or later (or VS Code Insiders) — harness shown as "Local Agent"
 - At least one supported AI coding tool with existing session logs
 
-No API keys, accounts, or external services required for the default local experience. Team Mode is optional: if you enable it, the extension exports privacy-safe snapshots locally after analysis finishes and lets you import teammate snapshots on demand inside VS Code.
+No API keys, accounts, or external services required for the default local experience. Team Mode is optional: if you enable it, the extension exports privacy-safe snapshots locally after analysis finishes and lets you import teammate snapshots on demand inside VS Code. You can also choose how those local coaching signals are grouped in the dashboard, with daily, weekly, or monthly rollups and category-only or expanded detail.
 
 ## Quick Start
 

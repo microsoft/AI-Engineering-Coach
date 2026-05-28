@@ -169,6 +169,16 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration('aiEngineerCoach.teamMode')) return;
+      runtimeDebug('extension', 'team-mode-settings-changed');
+      void loadPanelModule().then(({ DashboardPanel }) => {
+        DashboardPanel.current?.refreshTeamModeState();
+      }).catch(() => { /* ignore */ });
+    }),
+  );
+
   void ready.then(() => loadPanelModule()).then(({ DashboardSidebarProvider }) => {
     const sidebarProvider = new DashboardSidebarProvider(context.extensionUri);
     context.subscriptions.push(

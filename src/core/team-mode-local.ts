@@ -8,6 +8,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import type * as vscode from 'vscode';
 import { sanitizeTeamModeSnapshotFile } from './team-mode';
+import type { TeamModeSettings, TeamModeAggregationGranularity } from './types/config-types';
 import {
   TEAM_MODE_CATEGORIES,
   createEmptyTeamDashboardCategoryScores,
@@ -15,6 +16,7 @@ import {
 } from './types/team-mode-types';
 import type {
   TeamDashboardCategoryScores,
+  TeamDashboardAggregationState,
   TeamDashboardDeveloperRow,
   TeamDashboardFilters,
   TeamDashboardResponse,
@@ -23,6 +25,7 @@ import type {
   TeamModeTokenUsageSummary,
   TeamModeAntiPatternSummary,
   TeamModeSeverity,
+  TeamModeCategoryBreakdown,
 } from './types/team-mode-types';
 
 const TEAM_MODE_STORAGE_DIR = 'team-mode';
@@ -85,6 +88,202 @@ function toFiniteNumber(value: unknown): number | null {
 
 function normalizeSnapshot(raw: unknown): TeamModeSnapshotFile | null {
   return sanitizeTeamModeSnapshotFile(raw);
+}
+
+function normalizeAggregationGranularity(value: unknown): TeamModeAggregationGranularity {
+  return value === 'daily' || value === 'weekly' || value === 'monthly' ? value : 'weekly';
+}
+
+function normalizeDetailLevel(value: unknown): TeamModeSettings['detailLevel'] {
+  return value === 'expanded' ? 'expanded' : 'category-only';
+}
+
+function normalizeTeamModeSettings(settings?: Partial<TeamModeSettings> | null): TeamModeSettings {
+  return {
+    enabled: Boolean(settings?.enabled),
+    aggregationGranularity: normalizeAggregationGranularity(settings?.aggregationGranularity),
+    detailLevel: normalizeDetailLevel(settings?.detailLevel),
+  };
+}
+
+interface TeamModeBucketSummary {
+  bucketLabel: string;
+  bucketStartMs: number;
+  bucketEndMs: number;
+  snapshotCount: number;
+  categoryScores: TeamDashboardCategoryScores;
+  categoryBreakdown: TeamDashboardDeveloperRow['categoryBreakdown'];
+}
+
+function getBucketStartMs(timestamp: number, granularity: TeamModeAggregationGranularity): number {
+  const date = new Date(timestamp);
+  if (granularity === 'monthly') {
+    date.setUTCDate(1);
+    date.setUTCHours(0, 0, 0, 0);
+    return date.getTime();
+  }
+  if (granularity === 'weekly') {
+    const day = (date.getUTCDay() + 6) % 7;
+    date.setUTCDate(date.getUTCDate() - day);
+    date.setUTCHours(0, 0, 0, 0);
+    return date.getTime();
+  }
+  date.setUTCHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function formatBucketLabel(timestamp: number, granularity: TeamModeAggregationGranularity): string {
+  const date = new Date(timestamp);
+  if (granularity === 'monthly') {
+    return date.toISOString().slice(0, 7);
+  }
+  if (granularity === 'weekly') {
+    const weekStart = new Date(timestamp);
+    const day = (weekStart.getUTCDay() + 6) % 7;
+    weekStart.setUTCDate(weekStart.getUTCDate() - day);
+    weekStart.setUTCHours(0, 0, 0, 0);
+    return weekStart.toISOString().slice(0, 10);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function aggregationLabel(granularity: TeamModeAggregationGranularity): string {
+  return granularity === 'daily' ? 'Daily rollup' : granularity === 'monthly' ? 'Monthly rollup' : 'Weekly rollup';
+}
+
+function averageScoresFromSummaries(summaries: TeamDashboardCategoryScores[]): TeamDashboardCategoryScores {
+  const totals = createEmptyTeamDashboardCategoryScores();
+  if (summaries.length === 0) return totals;
+  for (const summary of summaries) {
+    for (const category of TEAM_MODE_CATEGORIES) {
+      totals[category] += summary[category];
+    }
+  }
+  for (const category of TEAM_MODE_CATEGORIES) {
+    totals[category] = Math.round(totals[category] / summaries.length);
+  }
+  return totals;
+}
+
+function createEmptyCategoryBreakdown(): TeamDashboardDeveloperRow['categoryBreakdown'] {
+  return {
+    'prompt-quality': {
+      score: 0,
+      wowPct: 0,
+      momPct: 0,
+      patternCount: 0,
+      topIssue: null,
+      improvements: [],
+    },
+    'session-hygiene': {
+      score: 0,
+      wowPct: 0,
+      momPct: 0,
+      patternCount: 0,
+      topIssue: null,
+      improvements: [],
+    },
+    'code-review': {
+      score: 0,
+      wowPct: 0,
+      momPct: 0,
+      patternCount: 0,
+      topIssue: null,
+      improvements: [],
+    },
+    'tool-mastery': {
+      score: 0,
+      wowPct: 0,
+      momPct: 0,
+      patternCount: 0,
+      topIssue: null,
+      improvements: [],
+    },
+    'context-management': {
+      score: 0,
+      wowPct: 0,
+      momPct: 0,
+      patternCount: 0,
+      topIssue: null,
+      improvements: [],
+    },
+  };
+}
+
+function averageCategoryBreakdowns(
+  summaries: Array<TeamDashboardDeveloperRow['categoryBreakdown']>,
+): TeamDashboardDeveloperRow['categoryBreakdown'] {
+  const breakdown = createEmptyCategoryBreakdown();
+  if (summaries.length === 0) return breakdown;
+
+  for (const category of TEAM_MODE_CATEGORIES) {
+    const values = summaries.map((summary) => summary[category]);
+    const totalScore = values.reduce((sum, item) => sum + item.score, 0);
+    const totalWow = values.reduce((sum, item) => sum + item.wowPct, 0);
+    const totalMom = values.reduce((sum, item) => sum + item.momPct, 0);
+    const totalPatterns = values.reduce((sum, item) => sum + item.patternCount, 0);
+    const topIssue = values.find((item) => item.topIssue)?.topIssue ?? null;
+    const improvements = values.flatMap((item) => item.improvements).filter((value, index, array) => array.indexOf(value) === index).slice(0, 5);
+
+    breakdown[category] = {
+      score: Math.round(totalScore / summaries.length),
+      wowPct: Math.round(totalWow / summaries.length),
+      momPct: Math.round(totalMom / summaries.length),
+      patternCount: totalPatterns,
+      topIssue,
+      improvements,
+    };
+  }
+
+  return breakdown;
+}
+
+function buildBucketSummary(
+  records: TeamModeImportedSnapshotRecord[],
+  granularity: TeamModeAggregationGranularity,
+): TeamModeBucketSummary {
+  const sorted = [...records].sort((a, b) => a.snapshot.capturedAtMs - b.snapshot.capturedAtMs);
+  const bucketLabel = sorted[0] ? formatBucketLabel(sorted[0].snapshot.capturedAtMs, granularity) : 'Unknown';
+  const bucketStartMs = sorted[0] ? getBucketStartMs(sorted[0].snapshot.capturedAtMs, granularity) : 0;
+  const bucketEndMs = sorted[sorted.length - 1]?.snapshot.capturedAtMs ?? 0;
+  return {
+    bucketLabel,
+    bucketStartMs,
+    bucketEndMs,
+    snapshotCount: records.length,
+    categoryScores: averageScores(records),
+    categoryBreakdown: averageCategoryBreakdowns(records.map((record) => record.snapshot.categoryBreakdown)),
+  };
+}
+
+function groupRecordsByGranularity(
+  records: TeamModeImportedSnapshotRecord[],
+  granularity: TeamModeAggregationGranularity,
+): TeamModeImportedSnapshotRecord[][] {
+  const buckets = new Map<string, TeamModeImportedSnapshotRecord[]>();
+  for (const record of records) {
+    const bucketKey = String(getBucketStartMs(record.snapshot.capturedAtMs, granularity));
+    const list = buckets.get(bucketKey) ?? [];
+    list.push(record);
+    buckets.set(bucketKey, list);
+  }
+
+  return [...buckets.values()].sort((a, b) => {
+    const aStart = getBucketStartMs(a[0]?.snapshot.capturedAtMs ?? 0, granularity);
+    const bStart = getBucketStartMs(b[0]?.snapshot.capturedAtMs ?? 0, granularity);
+    return aStart - bStart;
+  });
+}
+
+function computeTrendDelta(bucketScores: TeamDashboardCategoryScores[]): TeamDashboardCategoryScores {
+  const delta = createEmptyTeamDashboardCategoryScores();
+  if (bucketScores.length < 2) return delta;
+  const prev = bucketScores[bucketScores.length - 2];
+  const next = bucketScores[bucketScores.length - 1];
+  for (const category of TEAM_MODE_CATEGORIES) {
+    delta[category] = next[category] - prev[category];
+  }
+  return delta;
 }
 
 async function ensureStorageDirs(storageUri: vscode.Uri): Promise<void> {
@@ -172,20 +371,6 @@ function averageScores(records: TeamModeImportedSnapshotRecord[]): TeamDashboard
   return totals;
 }
 
-function averageDeltas(records: TeamModeImportedSnapshotRecord[]): TeamDashboardCategoryScores {
-  const totals = createEmptyTeamDashboardCategoryScores();
-  if (records.length === 0) return totals;
-  for (const record of records) {
-    for (const category of TEAM_MODE_CATEGORIES) {
-      totals[category] += record.snapshot.weeklyDeltas[category];
-    }
-  }
-  for (const category of TEAM_MODE_CATEGORIES) {
-    totals[category] = Math.round(totals[category] / records.length);
-  }
-  return totals;
-}
-
 function sumTokenUsage(records: TeamModeImportedSnapshotRecord[]): TeamModeTokenUsageSummary {
   const totals = createEmptyTeamModeTokenUsageSummary();
   let missingTokenCount = 0;
@@ -241,17 +426,29 @@ function mergeAntiPatterns(records: TeamModeImportedSnapshotRecord[]): { totalOc
   return { totalOccurrences, bySeverity, topViolations };
 }
 
-function buildDeveloperRow(displayName: string, records: TeamModeImportedSnapshotRecord[]): TeamDashboardDeveloperRow {
+function buildDeveloperRow(
+  displayName: string,
+  records: TeamModeImportedSnapshotRecord[],
+  settings: TeamModeSettings,
+): TeamDashboardDeveloperRow {
   const sorted = [...records].sort((a, b) => a.snapshot.capturedAtMs - b.snapshot.capturedAtMs);
+  const bucketRecords = groupRecordsByGranularity(sorted, settings.aggregationGranularity);
+  const bucketSummaries = bucketRecords.map((bucket) => buildBucketSummary(bucket, settings.aggregationGranularity));
+  const bucketScores = bucketSummaries.map((bucket) => bucket.categoryScores);
+  const bucketBreakdowns = bucketSummaries.map((bucket) => bucket.categoryBreakdown);
   return {
     developerId: normalizeDeveloperId(displayName),
     displayName,
     snapshotCount: records.length,
     latestCapturedAtMs: sorted[sorted.length - 1]?.snapshot.capturedAtMs ?? 0,
-    categoryScores: averageScores(records),
+    bucketCount: bucketSummaries.length,
+    aggregationGranularity: settings.aggregationGranularity,
+    aggregationDetailLevel: settings.detailLevel,
+    categoryScores: averageScoresFromSummaries(bucketScores.length > 0 ? bucketScores : [averageScores(records)]),
+    categoryBreakdown: averageCategoryBreakdowns(bucketBreakdowns.length > 0 ? bucketBreakdowns : [createEmptyCategoryBreakdown()]),
     tokenUsage: sumTokenUsage(records),
     antiPatterns: mergeAntiPatterns(records),
-    weekOverWeek: averageDeltas(records),
+    trendDelta: computeTrendDelta(bucketScores.length > 0 ? bucketScores : [averageScores(records)]),
     importedSnapshots: sorted.map((record) => ({
       snapshotId: record.importId,
       fileName: record.fileName,
@@ -334,10 +531,16 @@ export async function importTeamModeSnapshotFiles(
   };
 }
 
-export async function buildTeamDashboardResponse(storageUri: vscode.Uri, filters?: TeamDashboardFilters): Promise<TeamDashboardResponse> {
+export async function buildTeamDashboardResponse(
+  storageUri: vscode.Uri,
+  filters?: TeamDashboardFilters,
+  settings?: TeamModeSettings,
+): Promise<TeamDashboardResponse> {
   const importedSnapshots = await loadTeamModeImportedSnapshots(storageUri);
   const normalizedFilters = normalizeDashboardFilters(filters);
+  const normalizedSettings = normalizeTeamModeSettings(settings);
   const activeSnapshots = importedSnapshots.filter((record) => snapshotMatchesFilters(record, normalizedFilters));
+  const activeBuckets = groupRecordsByGranularity(activeSnapshots, normalizedSettings.aggregationGranularity);
   const grouped = new Map<string, TeamModeImportedSnapshotRecord[]>();
   const availableDevelopers = new Map<string, string>();
 
@@ -350,7 +553,11 @@ export async function buildTeamDashboardResponse(storageUri: vscode.Uri, filters
   }
 
   const developers = [...grouped.entries()]
-    .map(([developerId, records]) => buildDeveloperRow(availableDevelopers.get(developerId) ?? developerId, records.filter((record) => snapshotMatchesFilters(record, normalizedFilters))))
+    .map(([developerId, records]) => buildDeveloperRow(
+      availableDevelopers.get(developerId) ?? developerId,
+      records.filter((record) => snapshotMatchesFilters(record, normalizedFilters)),
+      normalizedSettings,
+    ))
     .filter((developer) => developer.snapshotCount > 0)
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
@@ -361,6 +568,12 @@ export async function buildTeamDashboardResponse(storageUri: vscode.Uri, filters
   return {
     filters: normalizedFilters,
     selectedCategory: normalizedFilters.category ?? 'all',
+    aggregation: {
+      granularity: normalizedSettings.aggregationGranularity,
+      detailLevel: normalizedSettings.detailLevel,
+      label: aggregationLabel(normalizedSettings.aggregationGranularity),
+      bucketCount: activeBuckets.length,
+    },
     totalDevelopers,
     totalSnapshots,
     importedSnapshots: importedSnapshots.length,

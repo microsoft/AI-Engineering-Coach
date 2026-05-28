@@ -54,6 +54,7 @@ export function initMessageListener(
   onProgress: (msg: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string }) => void,
   onDataReady: (currentWorkspace: string) => void,
   onTeamModeState?: (enabled: unknown) => void,
+  onTeamModeSettingsChanged?: (settings: unknown) => void,
 ): void {
   window.addEventListener('message', (ev) => {
     const msg = ev.data as Record<string, unknown>;
@@ -86,6 +87,9 @@ export function initMessageListener(
     }
     if (msg.type === 'teamModeState') {
       onTeamModeState?.(msg.enabled);
+    }
+    if (msg.type === 'teamModeSettingsChanged') {
+      onTeamModeSettingsChanged?.(msg.settings);
     }
   });
 }

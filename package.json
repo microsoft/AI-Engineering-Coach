@@ -49,6 +49,25 @@
           "type": "boolean",
           "default": false,
           "description": "Enable Team Mode to export and import privacy-safe local snapshots inside VS Code."
+        },
+        "aiEngineerCoach.teamMode.aggregationGranularity": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "weekly",
+            "monthly"
+          ],
+          "default": "weekly",
+          "description": "Choose how Team Mode groups local coaching signals before displaying them."
+        },
+        "aiEngineerCoach.teamMode.detailLevel": {
+          "type": "string",
+          "enum": [
+            "category-only",
+            "expanded"
+          ],
+          "default": "category-only",
+          "description": "Choose whether Team Mode shows one score per practice group or a richer local breakdown."
         }
       }
     },

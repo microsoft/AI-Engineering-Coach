@@ -15,6 +15,8 @@ The extension is organized into three sections: **Observe**, **Measure**, and **
 
 Optional Team Mode lets a team lead run a shared dashboard without exposing raw prompts, code, or file names. When enabled, each developer enters a server URL and developer ID, and the extension syncs only aggregated scores, token totals, anti-pattern counts, and trend numbers. When Team Mode is off, the extension stays fully local and behaves exactly as before.
 
+The new Team Mode aggregation settings are local-only: each developer can choose daily, weekly, or monthly rollups, plus category-only or expanded detail, and the dashboard updates immediately without rerunning analysis.
+
 The shared backend is designed to run on Cloudflare Workers with D1 so basic usage stays lightweight and low-cost. The admin who boots the server first can generate invite codes for the rest of the team, and only privacy-safe aggregates are ever uploaded.
 
 ### Observe
@@ -72,7 +74,7 @@ The shared backend is designed to run on Cloudflare Workers with D1 so basic usa
 2. Run **AI Engineer Coach: Open Dashboard**.
 3. Use the sidebar to navigate pages. Filter by workspace or harness at the bottom.
 4. Run **AI Engineer Coach: Reload Data** to re-parse after new sessions.
-5. If you want Team Mode, enable it in settings, enter your server URL and developer ID, and keep the local dashboard unchanged for everyone else.
+5. If you want Team Mode, enable it in settings, enter your server URL and developer ID, and optionally tune the aggregation granularity and detail level for the local dashboard.
 6. If you are hosting the Team Mode backend, bootstrap the server once, then use invite codes to add teammates without any external login system.
 
 

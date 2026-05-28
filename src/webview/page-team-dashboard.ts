@@ -6,7 +6,7 @@
 import { PRACTICE_GROUPS } from '../core/types';
 import type { TeamDashboardCategory, TeamDashboardDeveloperRow, TeamDashboardFilters, TeamDashboardResponse } from '../core/types/team-mode-types';
 import { rpc, scoreColor, scoreLabel, formatNum, formatDate } from './shared';
-import { html, render, ScoreRing } from './render';
+import { html, render, ScoreRing, PctBadge } from './render';
 
 const CATEGORY_OPTIONS: Array<{ value: TeamDashboardCategory | 'all'; label: string }> = [
   { value: 'all', label: 'All Categories' },
@@ -21,9 +21,12 @@ let activeFilters: TeamDashboardFilters = {};
 let activeRequestId = 0;
 let activeContainer: HTMLElement | null = null;
 let exportPrintCleanupBound = false;
+let teamDashboardSettingsRefreshBound = false;
+const TEAM_MODE_SETTINGS_CHANGED_EVENT = 'aiEngineerCoach:teamModeSettingsChanged';
 
 export function renderTeamDashboard(container: HTMLElement): void {
   activeContainer = container;
+  bindTeamModeSettingsRefresh();
   renderLoading();
   void loadTeamDashboard();
 }
@@ -69,6 +72,14 @@ async function loadTeamDashboard(): Promise<void> {
   }
 }
 
+function bindTeamModeSettingsRefresh(): void {
+  if (teamDashboardSettingsRefreshBound) return;
+  window.addEventListener(TEAM_MODE_SETTINGS_CHANGED_EVENT, () => {
+    void loadTeamDashboard();
+  });
+  teamDashboardSettingsRefreshBound = true;
+}
+
 function normalizeFilters(filters: TeamDashboardFilters): TeamDashboardFilters {
   return {
     developerId: filters.developerId?.trim() || undefined,
@@ -100,6 +111,7 @@ function renderDashboard(data: TeamDashboardResponse): void {
   const selectedCategory = activeFilters.category || data.selectedCategory;
   const exportDisabled = !data.hasSnapshots;
   const developerOptions = [{ value: 'all', label: 'All Developers' }, ...data.availableDevelopers.map(dev => ({ value: dev.developerId, label: dev.displayName }))];
+  const detailLabel = data.aggregation.detailLevel === 'expanded' ? 'Expanded detail' : 'Category-only detail';
 
   render(html`
     <section class="team-dashboard">
@@ -108,10 +120,15 @@ function renderDashboard(data: TeamDashboardResponse): void {
           <div class="team-dashboard-kicker">Team Mode</div>
           <h2 class="team-dashboard-title">Team Dashboard</h2>
           <p class="team-dashboard-subtitle">Privacy-safe coaching signals, trends, and usage quality from locally imported snapshots.</p>
+          <div class="team-dashboard-meta-row">
+            <span class="team-dashboard-mode-chip">${data.aggregation.label}</span>
+            <span class="team-dashboard-mode-chip">${detailLabel}</span>
+            <span class="team-dashboard-mode-chip">${formatNum(data.aggregation.bucketCount)} buckets</span>
+          </div>
         </div>
         <div class="team-dashboard-actions">
           <button class="team-dashboard-button team-dashboard-button--ghost" type="button" id="team-dashboard-import" data-action="import-snapshots">Import Snapshots</button>
-          <button class="team-dashboard-button" type="button" id="team-dashboard-export" data-action="export-pdf" ?disabled=${exportDisabled}>Export PDF</button>
+          <button class="team-dashboard-button" type="button" id="team-dashboard-export" data-action="export-pdf" disabled=${exportDisabled}>Export PDF</button>
         </div>
       </header>
 
@@ -157,7 +174,7 @@ function renderDashboard(data: TeamDashboardResponse): void {
       </section>
 
       ${data.developers.length > 0
-        ? html`<section class="team-dashboard-grid">${data.developers.map((developer) => renderMemberCard(developer))}</section>`
+        ? html`<section class="team-dashboard-grid">${data.developers.map((developer) => renderMemberCard(developer, data.aggregation.detailLevel, data.aggregation.granularity))}</section>`
         : html`<section class="team-dashboard-empty"><h3>No matching team snapshots</h3><p>Try widening the date range or clearing the developer filter.</p></section>`}
     </section>
   `, activeContainer);
@@ -242,23 +259,28 @@ function bindImportButton(): void {
   });
 }
 
-function renderMemberCard(member: TeamDashboardDeveloperRow) {
+function renderMemberCard(
+  member: TeamDashboardDeveloperRow,
+  detailLevel: TeamDashboardResponse['aggregation']['detailLevel'],
+  granularity: TeamDashboardResponse['aggregation']['granularity'],
+) {
+  const trendLabel = granularity === 'daily' ? 'Day-over-day' : granularity === 'monthly' ? 'Month-over-month' : 'Week-over-week';
   return html`
     <article class="team-dashboard-card" data-developer-id=${member.developerId}>
       <header class="team-dashboard-card-head">
         <div>
           <h3 class="team-dashboard-member-name">${member.displayName}</h3>
-          <div class="team-dashboard-member-meta">${formatNum(member.snapshotCount)} snapshots | ${formatNum(member.tokenUsage.totalTokens)} tokens</div>
+          <div class="team-dashboard-member-meta">${formatNum(member.snapshotCount)} snapshots | ${formatNum(member.bucketCount)} buckets | ${formatNum(member.tokenUsage.totalTokens)} tokens</div>
         </div>
         <button class="team-dashboard-button team-dashboard-button--ghost team-dashboard-card-action" type="button" data-action="focus-developer" data-developer-id=${member.developerId}>View developer</button>
       </header>
 
       <div class="team-dashboard-score-grid">
-        ${renderScoreTile('Prompt Quality', member.categoryScores['prompt-quality'])}
-        ${renderScoreTile('Session Hygiene', member.categoryScores['session-hygiene'])}
-        ${renderScoreTile('Code Review', member.categoryScores['code-review'])}
-        ${renderScoreTile('Tool Mastery', member.categoryScores['tool-mastery'])}
-        ${renderScoreTile('Context Management', member.categoryScores['context-management'])}
+        ${renderScoreTile('Prompt Quality', member.categoryScores['prompt-quality'], member.categoryBreakdown['prompt-quality'], detailLevel)}
+        ${renderScoreTile('Session Hygiene', member.categoryScores['session-hygiene'], member.categoryBreakdown['session-hygiene'], detailLevel)}
+        ${renderScoreTile('Code Review', member.categoryScores['code-review'], member.categoryBreakdown['code-review'], detailLevel)}
+        ${renderScoreTile('Tool Mastery', member.categoryScores['tool-mastery'], member.categoryBreakdown['tool-mastery'], detailLevel)}
+        ${renderScoreTile('Context Management', member.categoryScores['context-management'], member.categoryBreakdown['context-management'], detailLevel)}
       </div>
 
       <div class="team-dashboard-surface">
@@ -286,13 +308,13 @@ function renderMemberCard(member: TeamDashboardDeveloperRow) {
         </section>
 
         <section>
-          <h4>Week-over-Week</h4>
+          <h4>${trendLabel}</h4>
           <div class="team-dashboard-trends">
-            ${renderTrendLine('Prompt Quality', member.weekOverWeek['prompt-quality'])}
-            ${renderTrendLine('Session Hygiene', member.weekOverWeek['session-hygiene'])}
-            ${renderTrendLine('Code Review', member.weekOverWeek['code-review'])}
-            ${renderTrendLine('Tool Mastery', member.weekOverWeek['tool-mastery'])}
-            ${renderTrendLine('Context Management', member.weekOverWeek['context-management'])}
+            ${renderTrendLine('Prompt Quality', member.trendDelta['prompt-quality'])}
+            ${renderTrendLine('Session Hygiene', member.trendDelta['session-hygiene'])}
+            ${renderTrendLine('Code Review', member.trendDelta['code-review'])}
+            ${renderTrendLine('Tool Mastery', member.trendDelta['tool-mastery'])}
+            ${renderTrendLine('Context Management', member.trendDelta['context-management'])}
           </div>
         </section>
       </div>
@@ -328,7 +350,12 @@ function renderActiveFilterSummary(data: TeamDashboardResponse) {
   `;
 }
 
-function renderScoreTile(label: string, score: number) {
+function renderScoreTile(
+  label: string,
+  score: number,
+  breakdown: TeamDashboardDeveloperRow['categoryBreakdown'][TeamDashboardCategory],
+  detailLevel: TeamDashboardResponse['aggregation']['detailLevel'],
+) {
   const color = scoreColor(score);
   return html`
     <div class="team-dashboard-score-tile">
@@ -336,6 +363,14 @@ function renderScoreTile(label: string, score: number) {
       <div class="team-dashboard-score-meta">
         <span>${label}</span>
         <strong style=${'color:' + color}>${scoreLabel(score)}</strong>
+        ${detailLevel === 'expanded' ? html`
+          <div class="team-dashboard-score-detail">
+            <span>${formatNum(breakdown.patternCount)} signals</span>
+            <${PctBadge} pct=${breakdown.wowPct} label="WoW" />
+            <${PctBadge} pct=${breakdown.momPct} label="MoM" />
+            ${breakdown.topIssue ? html`<span class="team-dashboard-detail-note">${breakdown.topIssue}</span>` : null}
+          </div>
+        ` : null}
       </div>
     </div>
   `;

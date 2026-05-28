@@ -452,7 +452,12 @@ function onTeamModeState(enabled: unknown): void {
   setTeamDashboardVisibility(teamModeEnabled);
 }
 
-initMessageListener(handleProgress, onDataReady, onTeamModeState);
+function onTeamModeSettingsChanged(): void {
+  if (currentPage !== 'team-dashboard') return;
+  window.dispatchEvent(new CustomEvent('aiEngineerCoach:teamModeSettingsChanged'));
+}
+
+initMessageListener(handleProgress, onDataReady, onTeamModeState, onTeamModeSettingsChanged);
 
 /* ---- Navigation ---- */
 document.addEventListener('click', (e) => {

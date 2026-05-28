@@ -45,4 +45,4 @@ You can also click the AI Engineer Coach icon in the Activity Bar (sidebar) if i
 
 ## Configuration
 
-AI Engineer Coach works out of the box with sensible defaults. Optional settings are available under `aiEngineerCoach.*` in VS Code settings to control cache behavior, date ranges, and workspace filtering.
+AI Engineer Coach works out of the box with sensible defaults. Optional settings are available under `aiEngineerCoach.*` in VS Code settings to control cache behavior, date ranges, workspace filtering, and Team Mode presentation. For Team Mode, the default aggregation is weekly with category-only detail, but you can switch to daily or monthly rollups and expanded practice-group breakdowns whenever you want.

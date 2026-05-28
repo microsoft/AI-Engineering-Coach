@@ -24,6 +24,8 @@ Five score cards are displayed at the top of the dashboard, each computed from t
 
 Each score ranges from 0 to 100 and includes week-over-week and month-over-month trend indicators. Clicking a card navigates to the detailed Anti-Patterns view for that category.
 
+If you use Team Mode, the local Team Dashboard can group those same coaching signals by day, week, or month and can switch between category-only and expanded practice-group detail without rerunning analysis.
+
 ## Skill Finder
 
 The dashboard includes an inline preview of the Skill Finder. It scans your prompt history for repeated patterns and surfaces two types of findings:

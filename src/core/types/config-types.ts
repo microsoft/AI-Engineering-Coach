@@ -8,6 +8,9 @@ import type { AgenticReadinessScore } from './context-types';
 
 /* ---- Context Health ---- */
 
+export type TeamModeAggregationGranularity = 'daily' | 'weekly' | 'monthly';
+export type TeamModeAggregationDetailLevel = 'category-only' | 'expanded';
+
 export interface ConfigFileInfo {
   relativePath: string;
   kind: 'instruction' | 'prompt' | 'agent' | 'skill' | 'hook-config' | 'claude-md' | 'other';
@@ -86,4 +89,6 @@ export interface ConfigHealthData {
 
 export interface TeamModeSettings {
   enabled: boolean;
+  aggregationGranularity: TeamModeAggregationGranularity;
+  detailLevel: TeamModeAggregationDetailLevel;
 }

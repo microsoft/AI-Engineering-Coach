@@ -33,7 +33,7 @@ export class DashboardPanel {
   private readonly requestService: PanelRequestService;
   private readonly globalState: vscode.Memento;
   private readonly globalStorageUri: vscode.Uri;
-  private readonly teamModeEnabled: boolean;
+  private teamModeEnabled: boolean;
   private readonly disposables: vscode.Disposable[] = [];
 
   private analyzer: Analyzer | undefined;
@@ -159,13 +159,34 @@ export class DashboardPanel {
     }
   }
 
+  public refreshTeamModeState(): void {
+    if (this.disposed) return;
+    const settings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
+    this.teamModeEnabled = settings.enabled;
+    this.postTeamModeState();
+    this.postTeamModeSettingsChanged(settings);
+  }
+
+  private postTeamModeSettingsChanged(settings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'))): void {
+    if (this.disposed) return;
+    try {
+      this.panel.webview.postMessage({
+        type: 'teamModeSettingsChanged',
+        settings,
+      });
+    } catch {
+      // Webview disposed between check and call.
+    }
+  }
+
   private async exportTeamModeSnapshot(): Promise<void> {
     if (!this.teamModeEnabled || this.disposed || !this.analyzer || !this.parseResult || this.parseResult.sessions.length === 0) {
       return;
     }
 
     try {
-      const snapshot = buildTeamModeSnapshot(this.analyzer);
+      const settings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
+      const snapshot = buildTeamModeSnapshot(this.analyzer, undefined, settings);
       const result = await exportTeamModeSnapshotFile(this.globalStorageUri, snapshot);
       runtimeDebug('panel', 'team-mode-exported', `file=${result.fileName}`);
     } catch (error) {
@@ -469,7 +490,8 @@ export class DashboardPanel {
         return;
       }
 
-      const data = await buildTeamDashboardResponse(this.globalStorageUri, (msg.params ?? {}) as Record<string, unknown>);
+      const settings = readTeamModeSettings(vscode.workspace.getConfiguration('aiEngineerCoach'));
+      const data = await buildTeamDashboardResponse(this.globalStorageUri, (msg.params ?? {}) as Record<string, unknown>, settings);
       if (!this.disposed) {
         try { postResponse(this.panel.webview, msg.id, data); } catch { /* disposed */ }
       }

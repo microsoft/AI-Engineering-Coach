@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { PracticeGroup } from './analytics-types';
+import type { TeamModeAggregationDetailLevel, TeamModeAggregationGranularity } from './config-types';
 
 export type TeamModeSeverity = 'low' | 'medium' | 'high';
 export type TeamDashboardCategory = PracticeGroup;
@@ -23,10 +24,29 @@ export interface TeamDashboardCategoryScores {
   'context-management': number;
 }
 
+export interface TeamModeCategoryBreakdown {
+  score: number;
+  wowPct: number;
+  momPct: number;
+  patternCount: number;
+  topIssue: string | null;
+  improvements: string[];
+}
+
+export interface TeamModeSnapshotAggregation {
+  granularity: TeamModeAggregationGranularity;
+  detailLevel: TeamModeAggregationDetailLevel;
+}
+
 export interface TeamModeAntiPatternSummary {
   ruleId: string;
   severity: TeamModeSeverity;
   count: number;
+}
+
+export interface TeamDashboardAggregationState extends TeamModeSnapshotAggregation {
+  label: string;
+  bucketCount: number;
 }
 
 export interface TeamModeTokenUsageSummary {
@@ -44,11 +64,13 @@ export interface TeamModeTokenUsageSummary {
 }
 
 export interface TeamModeSnapshotFile {
-  schemaVersion: 1;
+  schemaVersion: 2;
   capturedAtMs: number;
   windowStartMs: number;
   windowEndMs: number;
+  aggregation: TeamModeSnapshotAggregation;
   categoryScores: TeamDashboardCategoryScores;
+  categoryBreakdown: Record<TeamDashboardCategory, TeamModeCategoryBreakdown>;
   tokenUsage: TeamModeTokenUsageSummary;
   antiPatterns: {
     totalOccurrences: number;
@@ -85,16 +107,21 @@ export interface TeamDashboardDeveloperRow {
   displayName: string;
   snapshotCount: number;
   latestCapturedAtMs: number;
+  bucketCount: number;
+  aggregationGranularity: TeamModeAggregationGranularity;
+  aggregationDetailLevel: TeamModeAggregationDetailLevel;
   categoryScores: TeamDashboardCategoryScores;
+  categoryBreakdown: Record<TeamDashboardCategory, TeamModeCategoryBreakdown>;
   tokenUsage: TeamModeTokenUsageSummary;
   antiPatterns: TeamDashboardAntiPatternSummary;
-  weekOverWeek: TeamDashboardCategoryScores;
+  trendDelta: TeamDashboardCategoryScores;
   importedSnapshots: TeamDashboardImportedRun[];
 }
 
 export interface TeamDashboardResponse {
   filters: TeamDashboardFilters;
   selectedCategory: TeamDashboardCategory | 'all';
+  aggregation: TeamDashboardAggregationState;
   totalDevelopers: number;
   totalSnapshots: number;
   importedSnapshots: number;
@@ -140,11 +167,57 @@ export function createEmptyTeamModeTokenUsageSummary(): TeamModeTokenUsageSummar
 
 export function createEmptyTeamModeSnapshotFile(): TeamModeSnapshotFile {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     capturedAtMs: 0,
     windowStartMs: 0,
     windowEndMs: 0,
+    aggregation: {
+      granularity: 'weekly',
+      detailLevel: 'category-only',
+    },
     categoryScores: createEmptyTeamDashboardCategoryScores(),
+    categoryBreakdown: {
+      'prompt-quality': {
+        score: 0,
+        wowPct: 0,
+        momPct: 0,
+        patternCount: 0,
+        topIssue: null,
+        improvements: [],
+      },
+      'session-hygiene': {
+        score: 0,
+        wowPct: 0,
+        momPct: 0,
+        patternCount: 0,
+        topIssue: null,
+        improvements: [],
+      },
+      'code-review': {
+        score: 0,
+        wowPct: 0,
+        momPct: 0,
+        patternCount: 0,
+        topIssue: null,
+        improvements: [],
+      },
+      'tool-mastery': {
+        score: 0,
+        wowPct: 0,
+        momPct: 0,
+        patternCount: 0,
+        topIssue: null,
+        improvements: [],
+      },
+      'context-management': {
+        score: 0,
+        wowPct: 0,
+        momPct: 0,
+        patternCount: 0,
+        topIssue: null,
+        improvements: [],
+      },
+    },
     tokenUsage: createEmptyTeamModeTokenUsageSummary(),
     antiPatterns: {
       totalOccurrences: 0,
@@ -163,6 +236,12 @@ export function createEmptyTeamDashboardResponse(): TeamDashboardResponse {
   return {
     filters: {},
     selectedCategory: 'all',
+    aggregation: {
+      granularity: 'weekly',
+      detailLevel: 'category-only',
+      label: 'Weekly rollup',
+      bucketCount: 0,
+    },
     totalDevelopers: 0,
     totalSnapshots: 0,
     importedSnapshots: 0,

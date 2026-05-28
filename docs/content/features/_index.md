@@ -7,6 +7,8 @@ AI Engineer Coach organizes its capabilities into three areas that mirror a cont
 
 When Team Mode is enabled, a fourth shared view becomes available: a team dashboard built only from privacy-safe local snapshots. It shows per-developer score cards, token totals, anti-pattern severity, and week-over-week trends without exposing raw prompts, code, or file names. Team leads can export snapshots after analysis and import teammate snapshots locally inside VS Code.
 
+Team Mode also supports configurable aggregation granularity for the local dashboard: choose daily, weekly, or monthly rollups, and switch between category-only and expanded practice-group detail without rerunning analysis.
+
 ## Observe
 
 - [Dashboard](/observe/dashboard/) -- At-a-glance practice scores, activity charts, and skill recommendations
@@ -34,6 +36,7 @@ When Team Mode is enabled, a fourth shared view becomes available: a team dashbo
 - Team Mode is optional and off by default
 - Team leads export a privacy-safe snapshot after local analysis finishes
 - Teammates import their snapshots locally so the dashboard can compare teams without a server
+- The local dashboard can be grouped by day, week, or month, and can show either category-only or expanded detail per practice group
 - No raw prompts, code, file names, or session text ever leave the developer machine
 
 ## Level Up
