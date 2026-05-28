@@ -10,6 +10,7 @@ import * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
 import { saveSidebarStats } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult } from '../core/parser';
+import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage } from '../core/types';
 import { buildTeamModeSnapshot, readTeamModeSettings } from '../core/team-mode';
@@ -320,8 +321,13 @@ export class DashboardPanel {
       if (this.disposed) return;
 
       const dirs = findLogsDirs();
-      runtimeDebug('panel', 'logs-dirs-found', `count=${dirs.length}`);
-      if (dirs.length === 0) {
+      const hasExternal = hasExternalHarnessSources();
+      runtimeDebug('panel', 'logs-dirs-found', `count=${dirs.length} external=${hasExternal}`);
+      // External harnesses (Claude Code, Codex, OpenCode) are collected by the
+      // parse worker independently of `dirs`, so only abort when no source of
+      // any kind is present. Otherwise a host with e.g. only Claude Code logs
+      // (and no VS Code/Copilot directories) would never load.
+      if (dirs.length === 0 && !hasExternal) {
         runtimeDebug('panel', 'loadData-no-dirs');
         if (this.teamModeEnabled) {
           this.createEmptyAnalysis();
@@ -340,7 +346,7 @@ export class DashboardPanel {
           return;
         }
         if (!this.disposed) {
-          try { this.panel.webview.html = getErrorHtml('No Copilot chat log directories found.'); } catch { /* disposed */ }
+          try { this.panel.webview.html = getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, and OpenCode sessions.'); } catch { /* disposed */ }
         }
         return;
       }

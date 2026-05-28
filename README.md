@@ -50,16 +50,21 @@ AI Engineer Coach reads your local AI session logs and turns them into actionabl
 
 ---
 
-## Quick Start
+## Installation
 
-```bash
-git clone https://github.com/microsoft/ai-engineering-coach.git
-cd ai-engineering-coach
-npm install
-npm run package
-```
+Choose one of these paths.
 
-Then install the `.vsix`:
+### Path 1 -- Prebuilt VSIX (easiest)
+
+Prerequisites:
+
+- VS Code
+- Access to the repository Releases page
+
+Steps:
+
+1. Download the latest `ai-engineer-coach-*.vsix` from Releases.
+2. Install it in VS Code:
 
 **macOS / Linux**
 
@@ -73,6 +78,51 @@ code --install-extension ai-engineer-coach-*.vsix
 code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | Select-Object -First 1).FullName
 ```
 
+### Path 2 -- Dev Container build (no local Node.js/npm)
+
+Prerequisites:
+
+- VS Code
+- Dev Containers extension
+- Docker or Podman
+
+Steps:
+
+1. Clone the repo and open it in VS Code.
+2. Reopen in container.
+3. Run:
+
+```bash
+npm ci
+npm run package
+```
+
+4. Install the generated `.vsix` using one of the commands above.
+
+### Path 3 -- Local build
+
+Prerequisites:
+
+- VS Code
+- Node.js and npm
+
+Steps:
+
+```bash
+git clone https://github.com/microsoft/ai-engineering-coach.git
+cd ai-engineering-coach
+npm ci
+npm run package
+```
+
+Then install the generated `.vsix` using one of the commands above.
+
+### Release permissions and contribution path
+
+If you do not have permission to publish a Release artifact, open a PR with your changes and ask a maintainer to publish the `.vsix` in Releases.
+
+After install:
+
 1. Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
 2. Run **AI Engineer Coach: Open Dashboard**
 3. Navigate pages from the sidebar, filter by workspace or harness
@@ -83,39 +133,39 @@ code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | S
 
 ### Observe
 
-| Page | Description |
-|------|-------------|
-| **Dashboard** | Practice scores with week-over-week trends, daily activity chart, top workspace stats |
-| **Timeline** | Gantt-style session timeline with per-day drill-down and overlap detection |
-| **Coding Moments** | Screenshot gallery from AI coding sessions with story reels and workspace filtering |
+| Page               | Description                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| **Dashboard**      | Practice scores with week-over-week trends, daily activity chart, top workspace stats |
+| **Timeline**       | Gantt-style session timeline with per-day drill-down and overlap detection            |
+| **Coding Moments** | Screenshot gallery from AI coding sessions with story reels and workspace filtering   |
 
 ### Measure
 
-| Page | Description |
-|------|-------------|
-| **Output** | Generated code volume by language, model usage table *(token breakdown temporarily hidden)* |
-| **Burndown** | Monthly AI token budget progress with projections *(temporarily disabled)* |
-| **Patterns** | 7×24 activity heatmap and work-life balance signals |
+| Page         | Description                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| **Output**   | Generated code volume by language, model usage table _(token breakdown temporarily hidden)_ |
+| **Burndown** | Monthly AI token budget progress with projections _(temporarily disabled)_                  |
+| **Patterns** | 7×24 activity heatmap and work-life balance signals                                         |
 
 ### Improve
 
-| Page | Description |
-|------|-------------|
-| **Anti-Patterns** | Five practice score cards with severity ratings, concrete actions, and example prompts. 45 editable markdown rules plus a coverage heatmap |
-| **Rule Editor** | Create, edit, and tune detection rules visually or as raw markdown. Live-test against your data |
-| **Rule Playground** | Interactive REPL for the rule DSL with field browser, function catalog, and metric list |
-| **Data Explorer** | Browse session fields, view distributions, run ad-hoc filters |
-| **Skill Finder** | Discover repeated prompt patterns and matching community skills from the open-source catalog |
-| **Context Health** | Overall context score, agentic readiness checklist, workspace context map, AI-powered instruction-file review |
+| Page                | Description                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Anti-Patterns**   | Five practice score cards with severity ratings, concrete actions, and example prompts. 45 editable markdown rules plus a coverage heatmap |
+| **Rule Editor**     | Create, edit, and tune detection rules visually or as raw markdown. Live-test against your data                                            |
+| **Rule Playground** | Interactive REPL for the rule DSL with field browser, function catalog, and metric list                                                    |
+| **Data Explorer**   | Browse session fields, view distributions, run ad-hoc filters                                                                              |
+| **Skill Finder**    | Discover repeated prompt patterns and matching community skills from the open-source catalog                                               |
+| **Context Health**  | Overall context score, agentic readiness checklist, workspace context map, AI-powered instruction-file review                              |
 
 ### Level Up
 
-| Page | Description |
-|------|-------------|
+| Page                | Description                                                                      |
+| ------------------- | -------------------------------------------------------------------------------- |
 | **Learning Center** | Personalized quizzes and code-comparison rounds generated from your actual usage |
-| **Achievements** | XP-based progression with Bronze → Silver → Gold → Diamond tiers |
-| **Agentic SDLC** | How you use AI across the full software-development lifecycle |
-| **Share** | Generate a shareable stat card |
+| **Achievements**    | XP-based progression with Bronze → Silver → Gold → Diamond tiers                 |
+| **Agentic SDLC**    | How you use AI across the full software-development lifecycle                    |
+| **Share**           | Generate a shareable stat card and export Markdown/JSON summaries               |
 
 ---
 

@@ -29,4 +29,5 @@ Three actions are available:
 
 - **Download PNG** -- Save the card as an image file
 - **Copy to Clipboard** -- Copy the card image to your clipboard for pasting
+- **Export Summary** -- Save a Markdown report and matching JSON data file for archiving or sharing
 - **Refresh** -- Regenerate the card with current data

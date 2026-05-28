@@ -10,6 +10,8 @@ import {
   evaluateMetric,
   evaluateTrigger,
   calibrate,
+  serializeCalibration,
+  stripCalibration,
   runTestCases,
   resolveDependencies,
   registerMetric,
@@ -292,5 +294,255 @@ describe('Metric Registry', () => {
     });
     clearMetrics();
     expect(getAllMetrics()).toHaveLength(0);
+  });
+});
+
+/* ---- Edge Cases: Missing Data & Zero Values ---- */
+describe('Metric Evaluation – edge cases', () => {
+  it('returns zeros for an empty dataset', () => {
+    const emission = evaluateMetric('messageLength < 30', 'ratio', '', []);
+    expect(emission.count).toBe(0);
+    expect(emission.total).toBe(0);
+    expect(emission.ratio).toBe(0);
+    expect(emission.examples).toEqual([]);
+  });
+
+  it('returns zero count when no row matches the filter', () => {
+    const rows = [{ messageLength: 100 }, { messageLength: 200 }] as Record<string, unknown>[];
+    const emission = evaluateMetric('messageLength < 30', 'ratio', '', rows);
+    expect(emission.count).toBe(0);
+    expect(emission.total).toBe(2);
+    expect(emission.ratio).toBe(0);
+    expect(emission.examples).toEqual([]);
+  });
+
+  it('treats missing fields as non-matching', () => {
+    const rows = [
+      { messageLength: 5 },
+      { /* messageLength missing */ },
+      { messageLength: null },
+    ] as Record<string, unknown>[];
+    const emission = evaluateMetric('messageLength < 30 AND messageLength > 0', 'ratio', '', rows);
+    expect(emission.count).toBe(1);
+    expect(emission.total).toBe(3);
+  });
+
+  it('falls back to default example text when no template is provided', () => {
+    const rows = [{ messageText: 'hello world', messageLength: 11 }] as Record<string, unknown>[];
+    const emission = evaluateMetric('messageLength > 0', 'ratio', '', rows);
+    expect(emission.examples[0]).toContain('hello world');
+  });
+
+  it('supports avg aggregations and exposes the value via extra', () => {
+    const rows = [
+      { messageLength: 10 },
+      { messageLength: 20 },
+      { messageLength: 30 },
+    ] as Record<string, unknown>[];
+    const emission = evaluateMetric('messageLength > 0', 'avg(messageLength)', '', rows);
+    expect(emission.total).toBe(3);
+    expect(emission.extra.aggregationType).toBe('avg');
+    expect(emission.extra.aggregationField).toBe('messageLength');
+    expect(emission.extra.aggregationValue).toBeCloseTo(20);
+  });
+
+  it('caps generated examples at three rows', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      messageLength: 5,
+      messageText: `msg-${i}`,
+    })) as Record<string, unknown>[];
+    const emission = evaluateMetric('messageLength < 30', 'ratio', '"{{messageText}}"', rows);
+    expect(emission.examples).toHaveLength(3);
+  });
+});
+
+/* ---- Threshold Overrides on Trigger / Calibrate / Test Cases ---- */
+describe('Threshold Overrides', () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ messageLength: i })) as Record<string, unknown>[];
+
+  it('applies thresholds to trigger expressions', () => {
+    const emission = evaluateMetric('messageLength < 5', 'ratio', '', rows);
+    expect(evaluateTrigger('ratio > {{thresholds.maxRatio}}', emission, { maxRatio: 0.3 })).toBe(true);
+    expect(evaluateTrigger('ratio > {{thresholds.maxRatio}}', emission, { maxRatio: 0.9 })).toBe(false);
+  });
+
+  it('applies thresholds when calibrating', () => {
+    const result = calibrate(
+      'messageLength < {{thresholds.minChars}}',
+      'ratio',
+      'ratio > {{thresholds.maxRatio}}',
+      rows,
+      { minChars: 3, maxRatio: 0.2 },
+    );
+    expect(result.flaggedCount).toBe(3);
+    expect(result.triggered).toBe(true);
+  });
+
+  it('applies thresholds inside test fixtures', () => {
+    const results = runTestCases(
+      'messageLength < {{thresholds.minChars}}',
+      'ratio',
+      '',
+      [
+        { input: { messageLength: 2 }, expect: 'flagged' },
+        { input: { messageLength: 50 }, expect: 'clean' },
+      ],
+      { minChars: 10 },
+    );
+    expect(results[0].passed).toBe(true);
+    expect(results[1].passed).toBe(true);
+  });
+});
+
+/* ---- Calibration edge cases ---- */
+describe('Calibration – edge cases', () => {
+  it('handles an empty dataset', () => {
+    const result = calibrate('messageLength < 30', 'ratio', 'ratio > 0.3', []);
+    expect(result.datasetSize).toBe(0);
+    expect(result.flaggedCount).toBe(0);
+    expect(result.flaggedPct).toBe(0);
+    expect(result.distribution).toBeNull();
+    expect(result.triggered).toBe(false);
+  });
+
+  it('omits distribution when the filter has no numeric field', () => {
+    const rows = [{ isCanceled: true }, { isCanceled: false }] as Record<string, unknown>[];
+    const result = calibrate('isCanceled == true', 'count', 'count > 0', rows);
+    expect(result.flaggedCount).toBe(1);
+    expect(result.distribution).toBeNull();
+  });
+
+  it('marks scope as sessions when the aggregation references session', () => {
+    const rows = [{ messageLength: 5 }] as Record<string, unknown>[];
+    const result = calibrate('messageLength < 30', 'count(session)', '', rows);
+    expect(result.scope).toBe('sessions');
+  });
+});
+
+/* ---- Calibration Serialization ---- */
+describe('Calibration serialization', () => {
+  it('serializes a calibration result as a markdown comment', () => {
+    const rendered = serializeCalibration({
+      datasetSize: 1234,
+      scope: 'requests',
+      flaggedCount: 12,
+      flaggedPct: 1.0,
+      distribution: { min: 0, max: 100, p25: 10, p50: 50, p75: 75 },
+      triggered: true,
+      lastRun: '2025-01-01',
+    });
+    expect(rendered).toContain('<!-- calibration:');
+    expect(rendered).toContain('dataset: 1,234 requests');
+    expect(rendered).toContain('flagged: 12 (1%)');
+    expect(rendered).toContain('p25: 10, p50: 50, p75: 75');
+    expect(rendered).toContain('min: 0, max: 100');
+    expect(rendered).toContain('triggered: true');
+    expect(rendered).toContain('last_run: 2025-01-01');
+    expect(rendered.trimEnd().endsWith('-->')).toBe(true);
+  });
+
+  it('omits distribution lines when no distribution is available', () => {
+    const rendered = serializeCalibration({
+      datasetSize: 0,
+      scope: 'sessions',
+      flaggedCount: 0,
+      flaggedPct: 0,
+      distribution: null,
+      triggered: false,
+      lastRun: '2025-01-01',
+    });
+    expect(rendered).not.toContain('p25');
+    expect(rendered).not.toContain('min:');
+  });
+
+  it('strips an existing calibration comment block from markdown', () => {
+    const md = `# Rule\n\nBody text.\n\n<!-- calibration:\n  dataset: 1 requests\n-->`;
+    const stripped = stripCalibration(md);
+    expect(stripped).not.toContain('calibration');
+    expect(stripped.endsWith('Body text.')).toBe(true);
+  });
+
+  it('leaves markdown without calibration intact', () => {
+    const md = '# Rule\n\nBody text.';
+    expect(stripCalibration(md)).toBe(md);
+  });
+});
+
+/* ---- Rule Extension parsing – edge cases ---- */
+describe('Rule Extensions – edge cases', () => {
+  it('parses inline-array requires and skips malformed test cases', () => {
+    const md = `---
+id: ext-rule
+name: Ext
+group: prompt-quality
+severity: medium
+metric: short-messages
+requires: [a, b, c]
+---
+
+# Filter
+messageLength < 30
+
+# Trigger
+ratio > 0.1
+
+# Test Cases
+- input: { "messageLength": 5 }
+  expect: flagged
+- input: { not valid json
+  expect: clean
+- input: { "messageLength": 100 }
+  expect: clean
+`;
+    const ext = parseRuleExtensions(md);
+    expect(ext.requires).toEqual(['a', 'b', 'c']);
+    expect(ext.metricRef).toBe('short-messages');
+    expect(ext.testCases).toHaveLength(2);
+    expect(ext.testCases[0].expect).toBe('flagged');
+    expect(ext.testCases[1].expect).toBe('clean');
+  });
+
+  it('parses extensions from markdown without frontmatter', () => {
+    const md = `# Filter
+messageLength < 30
+
+# Trigger
+ratio > 0.3
+`;
+    const ext = parseRuleExtensions(md);
+    expect(ext.filterExpr).toBe('messageLength < 30');
+    expect(ext.triggerExpr).toBe('ratio > 0.3');
+    expect(ext.metricRef).toBe('');
+    expect(ext.requires).toEqual([]);
+  });
+});
+
+/* ---- parseMetric – edge cases ---- */
+describe('parseMetric – edge cases', () => {
+  it('defaults missing scope to requests and missing aggregation to ratio', () => {
+    const md = `---
+id: simple
+name: Simple
+---
+
+# Filter
+messageLength > 0
+`;
+    const metric = parseMetric(md);
+    expect(metric).not.toBeNull();
+    expect(metric!.scope).toBe('requests');
+    expect(metric!.aggregationExpr).toBe('ratio');
+    expect(metric!.version).toBe(1);
+  });
+
+  it('returns null when id or name are missing', () => {
+    const md = `---
+name: NoId
+---
+
+# Filter
+messageLength > 0
+`;
+    expect(parseMetric(md)).toBeNull();
   });
 });

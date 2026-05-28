@@ -54,7 +54,7 @@ The shared backend is designed to run on Cloudflare Workers with D1 so basic usa
 | **Learning Center** | Personalized quizzes and code-comparison rounds generated from your actual usage |
 | **Achievements** | XP-based progression with Bronze, Silver, Gold, and Diamond tiers |
 | **Agentic SDLC** | Track how you use AI across the full software-development lifecycle |
-| **Share** | Generate a shareable stat card |
+| **Share** | Generate a shareable stat card and export Markdown/JSON summaries |
 
 ## Supported Harnesses
 
@@ -67,6 +67,10 @@ The shared backend is designed to run on Cloudflare Workers with D1 so basic usa
 | **Codex** | macOS/Linux: `~/.codex/sessions/`<br>Windows: `%USERPROFILE%\.codex\sessions\` |
 | **OpenCode** | macOS/Linux: `~/.local/share/opencode/`<br>Windows: `%USERPROFILE%\.local\share\opencode\` |
 | **GitHub Copilot CLI** | `~/.copilot/session-state/` and `~/.copilot/history-session-state/` |
+
+### Chat
+
+Type `@aicoach` in any VS Code chat panel for conversational access to all coaching data. Slash commands `/summary`, `/improve`, `/compare`, and `/flow` give quick access to common analyses. The participant orchestrates multiple backend tools automatically to answer complex questions.
 
 ## Getting Started
 

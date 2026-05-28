@@ -31,13 +31,9 @@ Team Mode also supports configurable aggregation granularity for the local dashb
 - [Skill Finder](/improve/skill-finder/) -- Discover repeated prompts and matching community skills
 - [Context Health](/improve/context-health/) -- Evaluate context quality and session management efficiency
 
-## Team Mode
+## Chat
 
-- Team Mode is optional and off by default
-- Team leads export a privacy-safe snapshot after local analysis finishes
-- Teammates import their snapshots locally so the dashboard can compare teams without a server
-- The local dashboard can be grouped by day, week, or month, and can show either category-only or expanded detail per practice group
-- No raw prompts, code, file names, or session text ever leave the developer machine
+- [Chat Participant](/features/chat/) -- Conversational access to all coaching data via `@aicoach` in VS Code chat, with slash commands and agentic tool orchestration
 
 ## Level Up
 

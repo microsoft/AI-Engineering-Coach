@@ -11,6 +11,7 @@ import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
 import { readFileSafe } from '../core/parser-shared';
 import { Workspace } from '../core/types';
+import { exportSummaryFiles } from '../summary-export-vscode';
 import {
   callLlm,
   callLlmJson,
@@ -33,6 +34,7 @@ type CustomPanelMethodName =
   | 'generateLearningResources'
   | 'generateCodeComparison'
   | 'generateDidYouKnow'
+  | 'exportSummary'
   | 'installSkill'
   | 'installCatalogItem'
   | 'triageSkills'
@@ -105,6 +107,7 @@ export class PanelRequestService {
     generateLearningResources: this.handleGenerateLearningResources.bind(this),
     generateCodeComparison: this.handleGenerateCodeComparison.bind(this),
     generateDidYouKnow: this.handleGenerateDidYouKnow.bind(this),
+    exportSummary: this.handleExportSummary.bind(this),
     installSkill: this.handleInstallSkill.bind(this),
     installCatalogItem: this.handleInstallCatalogItem.bind(this),
     triageSkills: this.handleTriageSkills.bind(this),
@@ -229,6 +232,23 @@ ${context.packageDeps.length > 0 ? `- Key dependencies: ${context.packageDeps.sl
 ${context.focusSkills.length > 0 ? `- Skill focus areas: ${context.focusSkills.join(', ')}` : ''}
 
 Generate 3 ${context.difficulty} interview-style questions tailored to this developer's actual stack.`;
+  }
+
+  private async handleExportSummary(msg: RequestMessage): Promise<void> {
+    if (!this.analyzer) {
+      postError(this.webview, msg.id, 'Dashboard data is still loading. Try again once the dashboard is ready.');
+      return;
+    }
+
+    const params = (msg.params ?? {}) as Record<string, unknown>;
+    const filter = isRecord(params.filter) ? validateDateFilter(params.filter) : validateDateFilter(params);
+
+    try {
+      const result = await exportSummaryFiles(this.analyzer, filter);
+      postResponse(this.webview, msg.id, result);
+    } catch (error: unknown) {
+      postError(this.webview, msg.id, error instanceof Error ? error.message : 'Failed to export summary');
+    }
   }
 
   private normalizeQuizQuestions(response: { items: QuizQuestion[] } | QuizQuestion[], fallbackDifficulty: QuizDifficulty): Array<{

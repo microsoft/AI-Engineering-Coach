@@ -7,6 +7,8 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { Analyzer } from './core/analyzer';
+import { findLogsDirs, parseAllLogsViaWorker } from './core/parser';
 import { getRuntimeDebugLogPath, installRuntimeDebugHooks, runtimeDebug, setOutputHook } from './core/runtime-debug';
 import { loadAllRuleLayersAsync, loadAllMetricLayersAsync, setDefaultTrustGate } from './core/rule-loader';
 import { readTeamModeSettings } from './core/team-mode';
@@ -20,13 +22,39 @@ import {
   setDefaultTrustStore,
   type PendingEntry,
 } from './core/rule-trust';
-
+import { panelCache } from './webview/panel-cache';
+import { registerTools } from './mcp/tools';
+import { registerChatParticipant } from './chat/participant';
+import { exportSummaryFiles } from './summary-export-vscode';
 
 type PanelModule = typeof import('./webview/panel');
 let panelModulePromise: Promise<PanelModule> | null = null;
 function loadPanelModule(): Promise<PanelModule> {
   if (!panelModulePromise) panelModulePromise = import('./webview/panel');
   return panelModulePromise;
+}
+
+async function exportSummaryFromLogs(): Promise<void> {
+  const dirs = findLogsDirs();
+  if (dirs.length === 0) {
+    vscode.window.showErrorMessage('No AI coding session log directories found.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Exporting AI Engineer Coach summary',
+      cancellable: false,
+    },
+    async progress => {
+      const parsed = await parseAllLogsViaWorker(dirs, update => {
+        progress.report({ message: update.detail ?? 'Reading session logs' });
+      });
+      const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
+      await exportSummaryFiles(analyzer);
+    },
+  );
 }
 
 async function reviewPendingTrust(context: vscode.ExtensionContext): Promise<Set<string>> {
@@ -140,12 +168,11 @@ export function activate(context: vscode.ExtensionContext) {
         DashboardPanel.createOrShow(context.extensionUri, context);
       }
     }),
-    vscode.commands.registerCommand('aiEngineerCoach.importTeamSnapshots', async () => {
-      runtimeDebug('extension', 'command-import-team-snapshots');
+    vscode.commands.registerCommand('aiEngineerCoach.exportSummary', async () => {
+      runtimeDebug('extension', 'command-export-summary');
       await ready;
-      const { DashboardPanel } = await loadPanelModule();
-      DashboardPanel.createOrShow(context.extensionUri, context);
-      await DashboardPanel.current?.importTeamSnapshots();
+      if (getPending().length > 0) await promptAndReload();
+      await exportSummaryFromLogs();
     }),
     vscode.commands.registerCommand('aiEngineerCoach.reviewLocalRules', async () => {
       runtimeDebug('extension', 'command-review-trust');
@@ -169,15 +196,8 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((event) => {
-      if (!event.affectsConfiguration('aiEngineerCoach.teamMode')) return;
-      runtimeDebug('extension', 'team-mode-settings-changed');
-      void loadPanelModule().then(({ DashboardPanel }) => {
-        DashboardPanel.current?.refreshTeamModeState();
-      }).catch(() => { /* ignore */ });
-    }),
-  );
+  registerTools(context, () => panelCache.analyzerInstance);
+  registerChatParticipant(context);
 
   void ready.then(() => loadPanelModule()).then(({ DashboardSidebarProvider }) => {
     const sidebarProvider = new DashboardSidebarProvider(context.extensionUri);
