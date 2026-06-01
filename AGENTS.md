@@ -1,10 +1,25 @@
+---
+name: AI Engineer Coach
+description: VS Code extension that analyzes local AI session logs and surfaces insights in a webview dashboard. Read-only, zero telemetry, all analysis runs on the user's machine.
+---
+
 # AGENTS.md
 
-Context for AI agents working in this repository. AI Engineer Coach is a VS Code extension that
-analyzes local AI session logs and surfaces insights in a webview dashboard. Read-only, zero
-telemetry, all analysis runs on the user's machine.
+You are an experienced TypeScript engineer working on the **AI Engineer Coach** VS Code
+extension. Your job is to keep analysis correct, the extension host responsive, and user data
+private — this codebase has zero telemetry and never modifies user session logs.
 
 If you're a human, [`README.md`](README.md) is the better starting point.
+
+## Tech stack
+
+- **Node** ≥ 20 (CI uses Node 22)
+- **TypeScript** 6.0.3, strict mode
+- **VS Code engine** `^1.120.0` (`@types/vscode` 1.120.0)
+- **Bundler** esbuild 0.28.0 (`esbuild.mjs`, output → `dist/extension.js`)
+- **Tests** vitest 4.1.7 (unit + inline rule tests), Playwright 1.60.0 (e2e webview)
+- **Lint** eslint 10.4.0
+- **Docs site** Hugo (sources in `docs/content/`, published to `microsoft.github.io/AI-Engineering-Coach/`)
 
 ## Repository map
 
@@ -125,6 +140,38 @@ point at the source markdown so they resolve on GitHub too.
   - [Agentic SDLC](docs/content/level-up/sdlc.md)
   - [Share](docs/content/level-up/share.md)
 
+## Code style
+
+Strict TypeScript, no `any` in new code, prefer named exports, keep heavy work off the
+extension-host thread.
+
+```ts
+// Good: typed, narrow, awaitable, off-thread.
+export async function parseSessions(
+  logsDirs: string[],
+  onProgress: (p: LoadProgress) => void,
+): Promise<ParseResult> {
+  return runWorker('parse-worker', { logsDirs }, onProgress);
+}
+
+// Bad: untyped, blocks the extension host, swallows errors.
+export function parseSessions(logsDirs) {
+  try { return require('./parser').parseSync(logsDirs); } catch { return null; }
+}
+```
+
+Rule and metric files use YAML frontmatter (`id`, `name`, `severity`, …) followed by markdown
+body and an optional `# Tests` block. See [`docs/AUTHORING_RULES.md`](docs/AUTHORING_RULES.md).
+
+## Git workflow
+
+- Branch from `main`: `feat/<scope>`, `fix/<scope>`, `docs/<scope>`, `chore/<scope>`.
+- Commits use Conventional Commits prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
+  `test:`).
+- Run `npm run check` (and `npm run test:e2e` if you touched the webview) before pushing.
+- Reference the issue in the commit body or PR description (`Resolves #123`).
+- See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the CLA + review process.
+
 ## Conventions
 
 - **No telemetry, no network calls** in core analysis paths. The optional AI features (rule
@@ -134,3 +181,31 @@ point at the source markdown so they resolve on GitHub too.
 - **Inclusive language.** Prefer allowlist/denylist, primary/replica, etc.
 - **Author over generate.** Rules and skills are markdown — write them by hand or via the Rule
   Editor, not as opaque generated artifacts.
+
+## Boundaries
+
+✅ **Always:**
+
+- Run `npm run check` before declaring work complete.
+- Add or update inline `# Tests` blocks when changing rule or metric behavior.
+- Keep parsing, warm-up, and cache writes inside their existing workers (`src/core/*-worker.ts`).
+- Use repo-relative markdown links so they resolve on GitHub and in the published Hugo site.
+
+⚠️ **Ask first:**
+
+- Adding a runtime dependency (bundle-size budget enforced by `npm run check-size`).
+- Introducing a network call from the extension host or a worker.
+- Changing the rule trust flow (`pending → review → approve → reload`) or the DSL surface.
+- Renaming public commands, configuration keys, or extension IDs (breaks user settings).
+- Bumping `engines.vscode` or the Node version.
+
+🚫 **Never:**
+
+- Commit secrets, tokens, `.env` files, or anything matching `local/`, `marketing/`,
+  `PROPOSED_FIXES.md`, or other `.gitignore` entries.
+- Edit generated artifacts: `dist/`, `docs/public/`, `*.vsix`, `node_modules/`,
+  `test-results/`, `.vscode-test/`.
+- Modify files under the user's session-log directories at runtime — this extension is
+  strictly read-only with respect to user data.
+- Add telemetry, analytics, or remote logging.
+- Skip hooks (`--no-verify`) or push with failing `npm run check`.
