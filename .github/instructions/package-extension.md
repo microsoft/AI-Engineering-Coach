@@ -1,0 +1,1 @@
+../../skills/package-extension.md
