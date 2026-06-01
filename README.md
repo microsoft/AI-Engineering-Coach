@@ -98,6 +98,11 @@ npm run package
 ```
 
 4. Install the generated `.vsix` using one of the commands above.
+If it doesn't work simply Install it via VS Code UI:
+Open VS Code
+Press Ctrl+Shift+P
+Type Install from VSIX
+Browse to the .vsix file and select it
 
 ### Path 3 -- Local build
 
