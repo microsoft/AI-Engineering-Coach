@@ -249,16 +249,16 @@ function generateRecommendations(
   mcpServers: McpServer[], awCount: number, wfCount: number, ctxCount: number,
 ): { icon: ComponentChildren; title: string; description: string }[] {
   const recs: { icon: ComponentChildren; title: string; description: string }[] = [];
-  if (total === 0) return [{ icon: SVG.lightbulb, title: 'Start using AI', description: 'Begin using GitHub Copilot to see SDLC insights.' }];
+  if (total === 0) return [{ icon: SVG.lightbulb, title: 'Start using AI', description: 'Begin using an AI coding assistant to see SDLC insights.' }];
 
   const reviewPct = (dist['code review'] ?? 0) / total * 100;
   if (reviewPct < 5) {
-    recs.push({ icon: SVG.warning, title: 'Add AI Reviews', description: 'Less than 5% of sessions involve code review. Use Copilot as a reviewer for PRs.' });
+    recs.push({ icon: SVG.warning, title: 'Add AI Reviews', description: 'Less than 5% of sessions involve code review. Use your AI agent as a reviewer for PRs.' });
   }
 
   const testPct = (dist['test'] ?? 0) / total * 100;
   if (testPct < 10) {
-    recs.push({ icon: SVG.warning, title: 'More AI Testing', description: 'Low test session ratio. Ask Copilot to write tests alongside features.' });
+    recs.push({ icon: SVG.warning, title: 'More AI Testing', description: 'Low test session ratio. Ask your AI assistant to write tests alongside features.' });
   }
 
   if (mcpServers.length === 0) {
@@ -266,11 +266,11 @@ function generateRecommendations(
   }
 
   if (awCount === 0) {
-    recs.push({ icon: SVG.bolt, title: 'Enable Agentic Workflows', description: 'Set up GitHub Agentic Workflows in .github/aw/ for automated agent-driven tasks.' });
+    recs.push({ icon: SVG.bolt, title: 'Enable Agentic Workflows', description: 'Set up Agentic Workflows in .github/aw/ for automated agent-driven tasks.' });
   }
 
   if (ctxCount === 0) {
-    recs.push({ icon: SVG.pencilDoc, title: 'Add Context Files', description: 'Create .github/agents/ or copilot-instructions.md to give Copilot project-specific guidance.' });
+    recs.push({ icon: SVG.pencilDoc, title: 'Add Context Files', description: 'Create instruction files (e.g. .github/agents/ or CLAUDE.md) to give your AI project-specific guidance.' });
   }
 
   if (wfCount === 0) {

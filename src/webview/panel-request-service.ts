@@ -15,6 +15,7 @@ import { exportSummaryFiles } from '../summary-export-vscode';
 import {
   callLlm,
   callLlmJson,
+  getAvailableModels,
   SCHEMA_CATALOG_PICKS,
   SCHEMA_CODE_REVIEW,
   SCHEMA_CONTEXT_REVIEW,
@@ -44,7 +45,9 @@ type CustomPanelMethodName =
   | 'getWorkspaceDeps'
   | 'getSdlcToolAnalysis'
   | 'getSdlcRepoScan'
-  | 'getSdlcGitHubData';
+  | 'getSdlcGitHubData'
+  | 'getLmSettings'
+  | 'setLmSettings';
 
 type RequestHandler = (msg: RequestMessage) => void | Promise<void>;
 type QuizDifficulty = 'easy' | 'medium' | 'hard';
@@ -118,6 +121,8 @@ export class PanelRequestService {
     getSdlcToolAnalysis: this.handleGetSdlcToolAnalysis.bind(this),
     getSdlcRepoScan: this.handleGetSdlcRepoScan.bind(this),
     getSdlcGitHubData: this.handleGetSdlcGitHubData.bind(this),
+    getLmSettings: this.handleGetLmSettings.bind(this),
+    setLmSettings: this.handleSetLmSettings.bind(this),
   };
 
   constructor(
@@ -309,10 +314,10 @@ Generate 3 ${context.difficulty} interview-style questions tailored to this deve
     const examples = Array.isArray(params.examples) ? (params.examples as string[]).slice(0, 5) : [];
     const skillDraft = isString(params.skillDraft) ? params.skillDraft : '';
 
-    const systemPrompt = `You are an expert at writing SKILL.md files for VS Code GitHub Copilot.
-A skill file is a markdown instruction file that teaches Copilot how to handle a specific repeated workflow pattern.
+    const systemPrompt = `You are an expert at writing instruction files for AI coding assistants.
+A skill file is a markdown instruction file that teaches an AI agent how to handle a specific repeated workflow pattern.
 
-Generate a professional, production-ready SKILL.md file. Include:
+Generate a professional, production-ready skill file (SKILL.md). Include:
 1. YAML frontmatter with: name, description, and an applyTo glob pattern
 2. A clear "## When to Use" section
 3. Detailed "## Steps" with numbered instructions the AI should follow
@@ -769,7 +774,7 @@ Here are the top ${clusterSummaries.length} groups of similar prompts this devel
     const context = this.getUserContext();
     const workspace = isOptionalString(params.workspace) ? params.workspace : undefined;
 
-    const systemPrompt = `You are an expert at recommending GitHub Copilot customization files (skills, agents, instructions, hooks) for developers.
+    const systemPrompt = `You are an expert at recommending customization files (skills, agents, instructions, hooks) for AI coding assistants.
 
 You will receive:
 1. The developer's context: languages, harnesses, topics, and which workspace they are currently analyzing
@@ -1346,5 +1351,20 @@ ${contextSection}`;
     };
 
     postResponse(this.webview, msg.id, results);
+  }
+
+  private async handleSetLmSettings(msg: RequestMessage): Promise<void> {
+    const params = (msg.params ?? {}) as Record<string, unknown>;
+    const modelId = isString(params.preferredModelId) ? params.preferredModelId : '';
+    const config = vscode.workspace.getConfiguration('aiEngineerCoach');
+    await config.update('preferredModelId', modelId, vscode.ConfigurationTarget.Global);
+    postResponse(this.webview, msg.id, { ok: true });
+  }
+
+  private async handleGetLmSettings(msg: RequestMessage): Promise<void> {
+    const config = vscode.workspace.getConfiguration('aiEngineerCoach');
+    const preferredModelId = config.get<string>('preferredModelId') || '';
+    const availableModels = await getAvailableModels();
+    postResponse(this.webview, msg.id, { preferredModelId, availableModels });
   }
 }

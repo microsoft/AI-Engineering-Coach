@@ -42,6 +42,16 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.preferredModelId": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred Language Model ID to use for dashboard AI features (e.g. 'google.gemini-2.0-pro-exp-02-05'). If empty, the best available model is chosen automatically."
+        }
+      }
+    },
     "commands": [
       {
         "command": "aiEngineerCoach.open",
@@ -323,7 +333,7 @@
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.60.0",
     "@types/node": "25.9.1",
-    "@types/vscode": "1.120.0",
+    "@types/vscode": "1.115.0",
     "@vitest/coverage-v8": "4.1.7",
     "@vscode/vsce": "3.9.1",
     "cspell": "10.0.0",

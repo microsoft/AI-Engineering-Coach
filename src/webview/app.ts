@@ -21,6 +21,7 @@ import { renderLevelUp } from './page-experiments';
 import { renderDataExplorer } from './page-data-explorer';
 import { renderRulePlayground } from './page-rule-playground';
 import { renderImageGallery } from './page-image-gallery';
+import { renderSettings } from './page-settings';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 
 function normalizePageForFeatureFlags(page: string): string {
@@ -645,6 +646,7 @@ function renderPage(page: string): void {
     case 'rule-editor': withErrorBoundary('Rule Editor', content, () => renderAntiPatterns(content, currentFilter)); break;
     case 'skills': withErrorBoundary('Skills', content, () => renderSkills(content, currentFilter)); break;
     case 'config-health': withErrorBoundary('Config Health', content, () => renderConfigHealth(content, currentFilter)); break;
+    case 'settings': withErrorBoundary('AI Settings', content, () => renderSettings(content)); break;
     case 'level-up': withErrorBoundary('Level Up', content, () => renderLevelUp(content, currentFilter)); break;
     case 'data-explorer': withErrorBoundary('Data Explorer', content, () => renderDataExplorer(content, currentFilter)); break;
     case 'rule-playground': withErrorBoundary('Rule Playground', content, () => renderRulePlayground(content, currentFilter)); break;

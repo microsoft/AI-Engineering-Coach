@@ -10,6 +10,7 @@ import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
+import { findGeminiDirs, parseGeminiSessions, parseGeminiSessionsAsync } from './parser-gemini';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -33,6 +34,26 @@ function addSession(workspaces: WorkspaceMap, sessions: Session[], session: Sess
 }
 
 const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
+  {
+    name: 'Gemini CLI',
+    collectSync(ctx) {
+      for (const geminiDir of findGeminiDirs()) {
+        for (const { sessions } of parseGeminiSessions(geminiDir)) {
+          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, geminiDir);
+        }
+      }
+    },
+    async collectAsync(ctx, reportDetail) {
+      for (const geminiDir of findGeminiDirs()) {
+        const results = await parseGeminiSessionsAsync(geminiDir, (idx, total, name) => {
+          reportDetail?.(`${idx}/${total}: ${name}`);
+        });
+        for (const { sessions } of results) {
+          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, geminiDir);
+        }
+      }
+    },
+  },
   {
     name: 'Claude Code',
     collectSync(ctx) {
@@ -88,7 +109,7 @@ export function hasExternalHarnessSources(): boolean {
   // string and probe relative paths (e.g. `.claude/projects`) under the current
   // working directory, which could report false positives. Bail out instead.
   if (!process.env.HOME && !process.env.USERPROFILE) return false;
-  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
+  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0 || findGeminiDirs().length > 0;
 }
 
 export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {
@@ -103,6 +124,7 @@ export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions:
  *  refresh cached external-harness sessions, so every value the collectors
  *  can produce must be listed here. */
 export const EXTERNAL_HARNESS_SET = new Set<string>([
+  'Gemini CLI',
   'Claude',
   'Codex',
   'OpenCode',

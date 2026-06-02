@@ -300,25 +300,52 @@ function parseLlmJson<T>(text: string): T {
 }
 
 const LLM_MAX_RETRIES = 2;
-const LLM_FAMILY = 'gpt-4.1';
 /** Hard cap for a single LLM streaming request (ms). Prevents the UI from
  *  spinning forever when the model hangs or the user never grants consent. */
 const LLM_REQUEST_TIMEOUT_MS = 90_000;
 
 /**
- * Pick a Copilot chat model. Tries the preferred family first, then a short
- * fallback list, then any available model. Throws a descriptive error when
- * nothing is available so callers can surface a useful message.
+ * Pick a chat model. Tries to find a high-capability model from any provider.
+ * Throws a descriptive error when nothing is available.
  */
 async function selectModel(): Promise<vscode.LanguageModelChat> {
-  const families = [LLM_FAMILY, 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4'];
-  for (const family of families) {
+  // 1. Check for user-preferred model setting
+  const config = vscode.workspace.getConfiguration('aiEngineerCoach');
+  const preferredId = config.get<string>('preferredModelId');
+  if (preferredId) {
+    const models = await vscode.lm.selectChatModels({ id: preferredId });
+    if (models.length > 0) return models[0];
+    
+    // If preferred model is set but not found, try by family match as a fallback
+    const familyModels = await vscode.lm.selectChatModels({ family: preferredId });
+    if (familyModels.length > 0) return familyModels[0];
+  }
+
+  // 2. Prefer high-capability families from any provider (Copilot, Gemini, Claude, etc.)
+  const preferredFamilies = ['gpt-4.1', 'gemini-2.0-pro', 'claude-3.5-sonnet', 'gpt-4', 'gemini-1.5-pro', 'claude-3-opus'];
+  for (const family of preferredFamilies) {
     const models = await vscode.lm.selectChatModels({ family });
     if (models.length > 0) return models[0];
   }
+
+  // 3. Fallback to any available chat model
   const any = await vscode.lm.selectChatModels({});
   if (any.length > 0) return any[0];
-  throw new Error('No language model available. Make sure GitHub Copilot is installed and signed in.');
+
+  throw new Error('No language model available. Please make sure you have an AI extension installed and signed in (e.g., Gemini, Claude Dev, or GitHub Copilot).');
+}
+
+/**
+ * Return a list of all available language models.
+ */
+export async function getAvailableModels(): Promise<Array<{ id: string; name: string; family: string; vendor: string }>> {
+  const models = await vscode.lm.selectChatModels({});
+  return models.map(m => ({
+    id: m.id,
+    name: m.name,
+    family: m.family,
+    vendor: m.vendor,
+  }));
 }
 
 /** Race a promise against a timeout. Rejects with a clear message on timeout. */
