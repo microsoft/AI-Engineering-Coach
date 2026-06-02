@@ -14,6 +14,7 @@
 import { FIELD_SCHEMA, FUNCTION_CATALOG } from './dsl/index';
 import { parseRule } from './rule-parser';
 import type { DetectionRule } from './types/rule-types';
+import { listCandidateModels } from './llm-models';
 
 /**
  * Result of compiling a natural-language description into a rule.
@@ -79,12 +80,14 @@ async function compileLlm(
     return null;
   }
 
-  const lm = vscode.lm;
-  if (!lm) return null;
+  if (!vscode.lm) return null;
 
-  const models = await lm.selectChatModels({ family: 'gpt-4.1' });
-  const model = models[0];
-  if (!model) return null;
+  let candidates: import('vscode').LanguageModelChat[];
+  try {
+    candidates = await listCandidateModels();
+  } catch {
+    return null;
+  }
 
   const systemPrompt = buildSystemPrompt();
   const userPrompt = buildUserPrompt(prompt, options);
@@ -94,16 +97,22 @@ async function compileLlm(
     vscode.LanguageModelChatMessage.User(userPrompt),
   ];
 
-  const response = await model.sendRequest(messages, {});
-  let result = '';
-  for await (const chunk of response.text) {
-    result += chunk;
-  }
+  // Iterate candidates so a model that is disabled for the plan/organization
+  // (which returns an empty response) transparently falls through to the next.
+  for (const model of candidates) {
+    const response = await model.sendRequest(messages, {});
+    let result = '';
+    for await (const chunk of response.text) {
+      result += chunk;
+    }
+    if (result.trim().length === 0) continue;
 
-  // Extract markdown from code block if wrapped
-  const fenced = result.match(/```(?:markdown)?\s*\n([\s\S]*?)```/);
-  if (fenced) return fenced[1].trim();
-  if (result.includes('---')) return result.trim();
+    // Extract markdown from code block if wrapped
+    const fenced = result.match(/```(?:markdown)?\s*\n([\s\S]*?)```/);
+    if (fenced) return fenced[1].trim();
+    if (result.includes('---')) return result.trim();
+    return null;
+  }
   return null;
 }
 

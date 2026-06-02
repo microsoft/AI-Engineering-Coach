@@ -7,6 +7,18 @@
 
 import * as vscode from 'vscode';
 import { runtimeDebug } from '../core/runtime-debug';
+import {
+  listCandidateModels,
+  listAvailableModels,
+  setPreferredModelId,
+  getPreferredModelId,
+  type AvailableModel,
+} from '../core/llm-models';
+
+// Re-exported so existing importers keep a single entry point while model
+// selection lives centrally in core/llm-models.
+export { listAvailableModels, setPreferredModelId, getPreferredModelId };
+export type { AvailableModel };
 
 export interface JsonSchemaSpec {
   name: string;
@@ -317,26 +329,15 @@ function balanceTruncatedJson(input: string): string {
 }
 
 const LLM_MAX_RETRIES = 2;
-const LLM_FAMILY = 'gpt-5.4-mini';
 /** Hard cap for a single LLM streaming request (ms). Prevents the UI from
  *  spinning forever when the model hangs or the user never grants consent. */
 const LLM_REQUEST_TIMEOUT_MS = 90_000;
 
-/**
- * Pick a Copilot chat model. Tries the preferred family first, then a short
- * fallback list, then any available model. Throws a descriptive error when
- * nothing is available so callers can surface a useful message.
- */
-async function selectModel(): Promise<vscode.LanguageModelChat> {
-  const families = [LLM_FAMILY, 'gpt-5-mini', 'gpt-4.1-mini', 'gpt-4.1'];
-  for (const family of families) {
-    const models = await vscode.lm.selectChatModels({ family });
-    if (models.length > 0) return models[0];
-  }
-  const any = await vscode.lm.selectChatModels({});
-  if (any.length > 0) return any[0];
-  throw new Error('No language model available. Make sure GitHub Copilot is installed and signed in.');
-}
+/** Shown when every available model returns an empty response (all disabled). */
+const EMPTY_RESPONSE_MESSAGE =
+  'Every available language model returned an empty response after multiple attempts. ' +
+  'Some models can be disabled for your Copilot plan or organization. ' +
+  'Pick a specific model from the "AI Model" selector in the dashboard sidebar and try again.';
 
 /** Race a promise against a timeout. Rejects with a clear message on timeout. */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -350,40 +351,65 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 export async function callLlm(messages: vscode.LanguageModelChatMessage[]): Promise<string> {
-  const model = await selectModel();
+  const candidates = await listCandidateModels();
 
   let lastError: unknown;
-  for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
-    const cts = new vscode.CancellationTokenSource();
-    try {
-      const streamText = async () => {
-        const response = await model.sendRequest(messages, {}, cts.token);
-        let text = '';
-        for await (const chunk of response.text) text += chunk;
+  let sawEmpty = false;
+  for (const model of candidates) {
+    for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+      const cts = new vscode.CancellationTokenSource();
+      try {
+        const streamText = async () => {
+          const response = await model.sendRequest(messages, {}, cts.token);
+          let text = '';
+          for await (const chunk of response.text) text += chunk;
+          return text;
+        };
+        const text = await withTimeout(streamText(), LLM_REQUEST_TIMEOUT_MS, 'LLM request');
+        // An empty response usually means this model is disabled for the plan or
+        // organization but still selectable — move on to the next candidate.
+        if (text.trim().length === 0) {
+          sawEmpty = true;
+          runtimeDebug('panel-llm', 'empty-response', `model=${model.id}(${model.family}) plain attempt=${attempt + 1}`);
+          break;
+        }
         return text;
-      };
-      return await withTimeout(streamText(), LLM_REQUEST_TIMEOUT_MS, 'LLM request');
-    } catch (err) {
-      cts.cancel();
-      lastError = err;
-      if (err instanceof vscode.CancellationError) throw err;
-    } finally {
-      cts.dispose();
+      } catch (err) {
+        cts.cancel();
+        lastError = err;
+        if (err instanceof vscode.CancellationError) throw err;
+      } finally {
+        cts.dispose();
+      }
     }
   }
-  throw lastError;
+  if (lastError instanceof Error) throw lastError;
+  throw new Error(sawEmpty ? EMPTY_RESPONSE_MESSAGE : 'LLM request failed');
 }
 
-export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[], jsonSchema?: JsonSchemaSpec): Promise<T> {
-  const model = await selectModel();
+type JsonAttemptOutcome<T> =
+  | { kind: 'value'; value: T }
+  | { kind: 'empty' }
+  | { kind: 'error'; error: unknown; parseFailures: number };
 
+/**
+ * Run the retry loop for a single model: stream the response, parse JSON,
+ * recover from structured-output rejections and nudge the model back to valid
+ * JSON. Returns a value on success, `empty` when the model returned nothing
+ * (likely disabled for the plan/organization) or `error` with the last failure.
+ */
+async function requestJsonFromModel<T>(
+  model: vscode.LanguageModelChat,
+  messages: vscode.LanguageModelChatMessage[],
+  jsonSchema?: JsonSchemaSpec,
+): Promise<JsonAttemptOutcome<T>> {
   const options: vscode.LanguageModelChatRequestOptions = jsonSchema
     ? { modelOptions: structuredOutputOptions(jsonSchema) }
     : {};
-
+  const retryMessages = [...messages];
   let lastError: unknown;
   let parseFailures = 0;
-  const retryMessages = [...messages];
+  let sawEmpty = false;
 
   for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
     const cts = new vscode.CancellationTokenSource();
@@ -391,25 +417,34 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     try {
       const response = await model.sendRequest(retryMessages, options, cts.token);
       for await (const chunk of response.text) text += chunk;
+      // An empty response usually means this model is disabled for the plan or
+      // organization but still selectable. Drop structured output first (in
+      // case that is the cause), then signal the caller to try the next model.
+      if (text.trim().length === 0) {
+        sawEmpty = true;
+        runtimeDebug('panel-llm', 'empty-response',
+          `model=${model.id}(${model.family}) schema=${jsonSchema?.name ?? 'none'} attempt=${attempt + 1} hadModelOptions=${options.modelOptions !== undefined}`);
+        if (options.modelOptions) { options.modelOptions = undefined; continue; }
+        break;
+      }
       try {
-        return JSON.parse(text.trim()) as T;
+        return { kind: 'value', value: JSON.parse(text.trim()) as T };
       } catch {
-        return parseLlmJson<T>(text);
+        return { kind: 'value', value: parseLlmJson<T>(text) };
       }
     } catch (err) {
       lastError = err;
-      const schemaName = jsonSchema?.name ?? 'none';
       runtimeDebug('panel-llm', 'call-failed',
-        `schema=${schemaName} attempt=${attempt + 1} structured=${options.modelOptions !== undefined} ` +
+        `schema=${jsonSchema?.name ?? 'none'} attempt=${attempt + 1} structured=${options.modelOptions !== undefined} ` +
         `model=${model.id} textLen=${text.length} error=${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof vscode.CancellationError) { cts.dispose(); throw err; }
       // Drop structured output so later attempts can recover in plain mode.
-      if (jsonSchema && options.modelOptions && lastError instanceof Error &&
-          /response_format|modelOptions|not supported|JSON|parse/i.test(lastError.message)) {
+      if (jsonSchema && options.modelOptions && err instanceof Error &&
+          /response_format|modelOptions|not supported|JSON|parse/i.test(err.message)) {
         options.modelOptions = undefined;
       }
-      // On parse failures, nudge the model to return valid JSON on the next attempt
-      if (lastError instanceof Error && /JSON|parse/i.test(lastError.message)) {
+      // On parse failures, nudge the model to return valid JSON on the next attempt.
+      if (err instanceof Error && /JSON|parse/i.test(err.message)) {
         parseFailures++;
         if (retryMessages.length === messages.length) {
           retryMessages.push(vscode.LanguageModelChatMessage.User(
@@ -422,8 +457,34 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     }
   }
 
-  const label = parseFailures > 0
-    ? `LLM returned invalid JSON after ${LLM_MAX_RETRIES + 1} attempts. Please try again.`
-    : (lastError instanceof Error ? lastError.message : 'LLM request failed after retries');
+  if (sawEmpty) return { kind: 'empty' };
+  return { kind: 'error', error: lastError, parseFailures };
+}
+
+export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[], jsonSchema?: JsonSchemaSpec): Promise<T> {
+  const candidates = await listCandidateModels();
+
+  let lastError: unknown;
+  let parseFailures = 0;
+  let sawEmpty = false;
+
+  for (const model of candidates) {
+    const outcome = await requestJsonFromModel<T>(model, messages, jsonSchema);
+    if (outcome.kind === 'value') return outcome.value;
+    if (outcome.kind === 'empty') { sawEmpty = true; continue; }
+    lastError = outcome.error;
+    parseFailures += outcome.parseFailures;
+  }
+
+  let label: string;
+  if (parseFailures > 0) {
+    label = `LLM returned invalid JSON after ${LLM_MAX_RETRIES + 1} attempts. Please try again.`;
+  } else if (lastError instanceof Error) {
+    label = lastError.message;
+  } else if (sawEmpty) {
+    label = EMPTY_RESPONSE_MESSAGE;
+  } else {
+    label = 'LLM request failed after retries';
+  }
   throw new Error(label);
 }

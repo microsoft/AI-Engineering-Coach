@@ -134,6 +134,8 @@ export interface ExtensionMethodMap extends RpcMethodMap {
   getSdlcToolAnalysis: { params: { filter?: DateFilter } | Record<string, unknown>; result: { mcpServers: unknown[] } };
   getSdlcRepoScan: { params: Record<string, unknown> | undefined; result: { repos: unknown[] } };
   getSdlcGitHubData: { params: Record<string, unknown>; result: unknown };
+  listModels: { params: undefined; result: { models: { id: string; name: string; family: string; vendor: string }[]; selectedId?: string } };
+  setModel: { params: { id?: string }; result: { ok: boolean; selectedId?: string } };
   saveModelBudgets: { params: { budgets: Record<string, number> }; result: { ok: boolean } };
   loadModelBudgets: { params: Record<string, unknown> | undefined; result: Record<string, number> };
 }

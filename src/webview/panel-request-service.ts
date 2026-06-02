@@ -15,6 +15,9 @@ import { exportSummaryFiles } from '../summary-export-vscode';
 import {
   callLlm,
   callLlmJson,
+  listAvailableModels,
+  setPreferredModelId,
+  getPreferredModelId,
   SCHEMA_CATALOG_PICKS,
   SCHEMA_CODE_REVIEW,
   SCHEMA_CONTEXT_REVIEW,
@@ -45,7 +48,9 @@ type CustomPanelMethodName =
   | 'getWorkspaceDeps'
   | 'getSdlcToolAnalysis'
   | 'getSdlcRepoScan'
-  | 'getSdlcGitHubData';
+  | 'getSdlcGitHubData'
+  | 'listModels'
+  | 'setModel';
 
 type RequestHandler = (msg: RequestMessage) => void | Promise<void>;
 type QuizDifficulty = 'easy' | 'medium' | 'hard';
@@ -125,6 +130,8 @@ export class PanelRequestService {
     getSdlcToolAnalysis: this.handleGetSdlcToolAnalysis.bind(this),
     getSdlcRepoScan: this.handleGetSdlcRepoScan.bind(this),
     getSdlcGitHubData: this.handleGetSdlcGitHubData.bind(this),
+    listModels: this.handleListModels.bind(this),
+    setModel: this.handleSetModel.bind(this),
   };
 
   constructor(
@@ -240,6 +247,18 @@ ${context.packageDeps.length > 0 ? `- Key dependencies: ${context.packageDeps.sl
 ${context.focusSkills.length > 0 ? `- Skill focus areas: ${context.focusSkills.join(', ')}` : ''}
 
 Generate 3 ${context.difficulty} interview-style questions tailored to this developer's actual stack.`;
+  }
+
+  private async handleListModels(msg: RequestMessage): Promise<void> {
+    const models = await listAvailableModels();
+    postResponse(this.webview, msg.id, { models, selectedId: getPreferredModelId() });
+  }
+
+  private async handleSetModel(msg: RequestMessage): Promise<void> {
+    const params = (msg.params ?? {}) as Record<string, unknown>;
+    const id = isString(params.id) ? params.id : undefined;
+    await setPreferredModelId(id);
+    postResponse(this.webview, msg.id, { ok: true, selectedId: getPreferredModelId() });
   }
 
   private async handleExportSummary(msg: RequestMessage): Promise<void> {

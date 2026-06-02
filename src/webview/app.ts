@@ -441,6 +441,8 @@ function onDataReady(currentWorkspace: string): void {
     }
   }).catch(() => {});
 
+  void populateModelFilter();
+
   navigateTo(currentPage);
   refreshNavBadges(currentFilter);
 }
@@ -614,6 +616,28 @@ if (harnessFilter) {
     }
     renderPageLater(currentPage);
     refreshNavBadges(currentFilter);
+  });
+}
+
+const modelFilter = document.getElementById('model-filter') as HTMLSelectElement | null;
+
+async function populateModelFilter(): Promise<void> {
+  if (!modelFilter) return;
+  try {
+    const res = await rpc<{ models: { id: string; name: string; family: string; vendor: string }[]; selectedId?: string }>('listModels');
+    modelFilter.length = 1; // keep "Auto (first available)" default option
+    for (const m of res.models) {
+      modelFilter.add(new Option(m.name || m.id, m.id));
+    }
+    modelFilter.value = res.selectedId ?? '';
+  } catch {
+    /* model list is best-effort; the Auto default still works */
+  }
+}
+
+if (modelFilter) {
+  modelFilter.addEventListener('change', () => {
+    void rpc('setModel', { id: modelFilter.value || undefined });
   });
 }
 

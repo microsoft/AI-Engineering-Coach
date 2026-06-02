@@ -42,6 +42,16 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.preferredModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Preferred GitHub Copilot language model id used for the extension's AI features (skill generation, quizzes, code reviews, rule compilation, etc.).\n\nLeave empty to **auto-select**: the extension picks the most capable available model and automatically falls through to the next one if a model is disabled for your Copilot plan or organization (which otherwise returns an empty response).\n\nYou can also change this from the **AI Model** picker in the dashboard sidebar."
+        }
+      }
+    },
     "commands": [
       {
         "command": "aiEngineerCoach.open",

@@ -56,6 +56,10 @@ export function getDashboardHtml(webview: vscode.Webview, extensionUri: vscode.U
         <label for="harness-filter">Harness</label>
         <select id="harness-filter"><option value="">All Harnesses</option></select>
       </div>
+      <div class="sidebar-filter">
+        <label for="model-filter">AI Model</label>
+        <select id="model-filter"><option value="">Auto (first available)</option></select>
+      </div>
     </div>
   </nav>
   <main id="content"></main>
