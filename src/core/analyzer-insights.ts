@@ -614,10 +614,10 @@ export class InsightsAnalyzer extends AnalyzerBase {
       { feature: 'Plan Mode', description: 'Separate planning step before implementation', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude'] },
       { feature: 'Skills', description: 'Domain-specific knowledge modules', harnesses: ['Local Agent', 'Local Agent (Insiders)'] },
       { feature: 'Slash Commands', description: '/fix, /explain, /tests, /doc', harnesses: ['Local Agent', 'Local Agent (Insiders)'] },
-      { feature: 'Multi-file Edits', description: 'Edit multiple files in a single turn', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude', 'Codex'] },
-      { feature: 'Terminal Access', description: 'Run commands as part of agent workflow', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude', 'Codex', 'OpenCode'] },
+      { feature: 'Multi-file Edits', description: 'Edit multiple files in a single turn', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude', 'Codex', 'Pi Coding Agent'] },
+      { feature: 'Terminal Access', description: 'Run commands as part of agent workflow', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude', 'Codex', 'OpenCode', 'Pi Coding Agent'] },
       { feature: 'File References', description: 'Reference specific files in prompts', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude'] },
-      { feature: 'Parallel Sessions', description: 'Run multiple conversations simultaneously', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude', 'Codex'] },
+      { feature: 'Parallel Sessions', description: 'Run multiple conversations simultaneously', harnesses: ['Local Agent', 'Local Agent (Insiders)', 'Claude', 'Codex', 'Pi Coding Agent'] },
     ];
   }
 

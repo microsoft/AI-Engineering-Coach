@@ -3,7 +3,7 @@ title: "Getting Started"
 weight: 10
 ---
 
-AI Engineer Coach is a VS Code extension that analyzes your AI-assisted coding sessions. It reads local log files from VS Code, GitHub Copilot for Xcode, Claude, Codex, OpenCode, and GitHub Copilot CLI, then presents detailed analytics in an interactive webview panel.
+AI Engineer Coach is a VS Code extension that analyzes your AI-assisted coding sessions. It reads local log files from VS Code, GitHub Copilot for Xcode, Claude, Codex, OpenCode, Pi Coding Agent, and GitHub Copilot CLI, then presents detailed analytics in an interactive webview panel.
 
 ## Requirements
 

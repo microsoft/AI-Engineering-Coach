@@ -206,14 +206,14 @@ export class DashboardPanel {
       const dirs = findLogsDirs();
       const hasExternal = hasExternalHarnessSources();
       runtimeDebug('panel', 'logs-dirs-found', `count=${dirs.length} external=${hasExternal}`);
-      // External harnesses (Claude Code, Codex, OpenCode) are collected by the
+      // External harnesses (Claude Code, Codex, OpenCode, Pi Coding Agent) are collected by the
       // parse worker independently of `dirs`, so only abort when no source of
       // any kind is present. Otherwise a host with e.g. only Claude Code logs
       // (and no VS Code/Copilot directories) would never load.
       if (dirs.length === 0 && !hasExternal) {
         runtimeDebug('panel', 'loadData-no-dirs');
         if (!this.disposed) {
-          try { this.panel.webview.html = getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, and OpenCode sessions.'); } catch { /* disposed */ }
+          try { this.panel.webview.html = getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, OpenCode, and Pi Coding Agent sessions.'); } catch { /* disposed */ }
         }
         return;
       }

@@ -32,6 +32,10 @@ Reads session history from OpenAI's Codex terminal agent. Captures prompts, comp
 
 Parses session logs from the open-source OpenCode terminal tool that supports multiple LLM backends.
 
+## Pi Coding Agent
+
+Reads JSONL session logs from the Pi Coding Agent, stored under `~/.pi/agent/sessions/`. Each session is parsed from its tree of entries (messages, model changes, tool calls) into a structured conversation, preserving the working directory, timestamps, model, and per-turn token usage.
+
 ## GitHub Copilot for Xcode
 
 Reads Copilot Chat conversation logs from Apple's Xcode IDE. Sessions are parsed from SQLite databases stored in the GitHub Copilot configuration directory.
