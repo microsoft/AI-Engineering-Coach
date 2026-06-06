@@ -10,6 +10,7 @@ import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
+import { findKiloDirs, parseKiloSessions } from './parser-kilo';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -69,6 +70,14 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
       }
     },
   },
+  {
+    name: 'Kilo',
+    collectSync(ctx) {
+      for (const kiloDir of findKiloDirs()) {
+        for (const session of parseKiloSessions(kiloDir)) addSession(ctx.workspaces, ctx.sessions, session, kiloDir);
+      }
+    },
+  },
 ];
 
 export interface ExternalHarnessProgressHandlers {
@@ -78,7 +87,7 @@ export interface ExternalHarnessProgressHandlers {
   yieldToLoop?: () => Promise<void>;
 }
 
-/** Returns true if any external-harness (Claude Code, Codex, OpenCode) session
+/** Returns true if any external-harness (Claude Code, Codex, OpenCode, Kilo) session
  *  source exists on disk. The dashboard uses this so it does not abort when the
  *  only available logs come from a non-VS Code harness — e.g. a headless
  *  Remote-SSH host that has Claude Code sessions under `~/.claude/projects` but
@@ -88,7 +97,7 @@ export function hasExternalHarnessSources(): boolean {
   // string and probe relative paths (e.g. `.claude/projects`) under the current
   // working directory, which could report false positives. Bail out instead.
   if (!process.env.HOME && !process.env.USERPROFILE) return false;
-  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
+  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0 || findKiloDirs().length > 0;
 }
 
 export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {
@@ -106,6 +115,7 @@ export const EXTERNAL_HARNESS_SET = new Set<string>([
   'Claude',
   'Codex',
   'OpenCode',
+  'Kilo',
 ]);
 
 export async function collectExternalHarnessesAsync(
