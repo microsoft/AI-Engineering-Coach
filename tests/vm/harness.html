@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Engineer Coach – Authless Real-Data Harness</title>
+<link href="/dist/webview/styles.css" rel="stylesheet">
+<style>
+:root {
+  --vscode-editor-background: #1e1e1e;
+  --vscode-editor-foreground: #d4d4d4;
+  --vscode-sideBar-background: #252526;
+  --vscode-button-background: #0e639c;
+  --vscode-button-foreground: #ffffff;
+  --vscode-badge-background: #4d4d4d;
+  --vscode-badge-foreground: #ffffff;
+  --vscode-input-background: #3c3c3c;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-focusBorder: #007fd4;
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #969696;
+  --vscode-textLink-foreground: #3794ff;
+  --vscode-charts-red: #f14c4c;
+  --vscode-charts-green: #89d185;
+  --vscode-charts-blue: #3794ff;
+  --vscode-charts-yellow: #cca700;
+  --vscode-charts-orange: #d18616;
+  --vscode-charts-purple: #b180d7;
+}
+body { background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+</style>
+</head>
+<body>
+<div id="app">
+  <nav id="sidebar">
+    <ul class="nav-links">
+      <li class="nav-group-header">Observe</li>
+      <li><a href="#" data-page="dashboard" class="active"><span class="nav-icon">&#9632;</span> Dashboard</a></li>
+      <li><a href="#" data-page="timeline"><span class="nav-icon">&#9472;</span> Timeline<span class="nav-badge" id="badge-sessions"></span></a></li>
+      <li><a href="#" data-page="image-gallery"><span class="nav-icon">&#9635;</span> Coding Moments</a></li>
+      <li class="nav-group-header">Measure</li>
+      <li><a href="#" data-page="output"><span class="nav-icon">&#9650;</span> Output<span class="nav-badge" id="badge-output"></span></a></li>
+      <li><a href="#" data-page="patterns"><span class="nav-icon">&#9632;</span> Patterns</a></li>
+      <li class="nav-group-header">Improve</li>
+      <li><a href="#" data-page="anti-patterns"><span class="nav-icon">&#9888;</span> Anti-Patterns<span class="nav-badge" id="badge-antipatterns"></span></a></li>
+      <li><a href="#" data-page="skills"><span class="nav-icon">&#9733;</span> Skill Finder<span class="nav-badge" id="badge-skills"></span></a></li>
+      <li><a href="#" data-page="config-health"><span class="nav-icon">&#9670;</span> Context Health</a></li>
+      <li><a href="#" data-page="level-up"><span class="nav-icon">&#9733;</span> Level Up</a></li>
+      <li class="nav-group-header">Explore</li>
+      <li><a href="#" data-page="data-explorer"><span class="nav-icon">&#9776;</span> Data Explorer</a></li>
+      <li><a href="#" data-page="rule-playground"><span class="nav-icon">&#9881;</span> Rule Playground</a></li>
+    </ul>
+    <div class="sidebar-filters">
+      <div class="sidebar-filter">
+        <label>Workspace</label>
+        <div class="ws-toggle" id="ws-toggle">
+          <button class="ws-toggle-btn active" data-ws="current">Current</button>
+          <button class="ws-toggle-btn" data-ws="all">All</button>
+        </div>
+        <div class="combobox" id="ws-combobox">
+          <input type="text" id="ws-filter-input" placeholder="Search workspaces..." autocomplete="off" />
+          <div class="combobox-list" id="ws-filter-list"></div>
+          <input type="hidden" id="ws-filter" />
+        </div>
+      </div>
+      <div class="sidebar-filter">
+        <label for="harness-filter">Harness</label>
+        <select id="harness-filter"><option value="">All Harnesses</option></select>
+      </div>
+    </div>
+  </nav>
+  <main id="content"></main>
+</div>
+<script>
+// Mock VS Code API
+function acquireVsCodeApi() {
+  return {
+    postMessage(msg) {
+      if (msg.type === 'request') {
+        const data = getMockData(msg.method, msg.params);
+        setTimeout(() => {
+          window.dispatchEvent(new MessageEvent('message', {
+            data: { type: 'response', id: msg.id, data }
+          }));
+        }, 5);
+      }
+    },
+    getState() { return {}; },
+    setState(s) { return s; }
+  };
+}
+window.acquireVsCodeApi = acquireVsCodeApi;
+
+function genLabels(n) {
+  const r = [];
+  const now = new Date('2026-05-03');
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now); d.setDate(d.getDate() - i);
+    r.push(d.toISOString().slice(0, 10));
+  }
+  return r;
+}
+
+function getMockData(method, params) {
+  const labels30 = genLabels(30);
+
+  const mocks = {
+    getStats: () => ({ totalSessions: 127, totalWorkspaces: 12, totalRequests: 2841 }),
+
+    getWorkspaces: () => [
+      { id: 'ws-1', name: 'my-api', recent: true, harnesses: ['Local Agent', 'GitHub Copilot CLI'] },
+      { id: 'ws-2', name: 'frontend-app', recent: true, harnesses: ['Local Agent'] },
+      { id: 'ws-3', name: 'data-pipeline', recent: false, harnesses: ['Claude Code'] },
+      { id: 'ws-4', name: 'mobile-sdk', recent: false, harnesses: ['Local Agent (Insiders)'] },
+      { id: 'ws-5', name: 'infra-tools', recent: false, harnesses: ['Local Agent'] }
+    ],
+
+    getHarnesses: () => ['Local Agent', 'Local Agent (Insiders)', 'GitHub Copilot CLI', 'Claude Code'],
+
+    getHarnessBreakdown: () => ({
+      labels: ['Local Agent', 'Local Agent (Insiders)', 'GitHub Copilot CLI', 'Claude Code'],
+      sessions: [52, 38, 22, 15],
+      requests: [1200, 880, 480, 281]
+    }),
+
+    getDailyActivity: () => ({
+      labels: labels30,
+      values: labels30.map((_, i) => 80 + (i % 10)),
+      sessions: labels30.map((_, i) => 3 + (i % 5)),
+      loc: labels30.map((_, i) => 400 + (i % 8) * 50),
+      workspaces: labels30.map((_, i) => 2 + (i % 3)),
+      byHarness: [
+        { harness: 'Local Agent', requests: labels30.map((_, i) => 50 + (i % 10)), sessions: labels30.map((_, i) => 2 + (i % 3)), loc: labels30.map((_, i) => 200 + (i % 5) * 30) },
+        { harness: 'Claude Code', requests: labels30.map((_, i) => 20 + (i % 5)), sessions: labels30.map((_, i) => 1 + (i % 2)), loc: labels30.map((_, i) => 100 + (i % 4) * 20) }
+      ]
+    }),
+
+    getWorkspaceBreakdown: () => ({
+      labels: ['my-api', 'frontend-app', 'data-pipeline', 'mobile-sdk', 'infra-tools'],
+      values: [980, 720, 510, 401, 230]
+    }),
+
+    getCodeProduction: () => ({
+      summary: {
+        totalAiLoc: 14520, totalUserLoc: 3200, totalLoc: 17720,
+        aiBlocks: 892, userBlocks: 340, aiRatio: 0.82,
+        locCost2010: 290400, costPerLoc: 0.04
+      },
+      byLanguage: { labels: ['TypeScript', 'Python', 'Go', 'Rust'], aiLoc: [8200, 3100, 2100, 1120], userLoc: [1800, 900, 400, 100] },
+      dailyTimeline: { labels: labels30, aiLoc: labels30.map(() => Math.floor(Math.random() * 600) + 100), userLoc: labels30.map(() => Math.floor(Math.random() * 150) + 20) },
+      byWorkspace: { labels: ['my-api', 'frontend-app', 'data-pipeline', 'mobile-sdk', 'infra-tools'], aiLoc: [5000, 4200, 3100, 1500, 720], userLoc: [1200, 1000, 600, 300, 100] },
+      dailyByWorkspace: { 'my-api': labels30.map(() => Math.floor(Math.random() * 200) + 50) }
+    }),
+
+    getConsumption: () => ({
+      totalRequests: 2841,
+      avgPerDay: 94.7,
+      avgPerWeek: 663,
+      avgPerMonth: 2841,
+      modelTotals: { 'gpt-4o': 1200, 'claude-sonnet-4-20250514': 800, 'o3-mini': 500, 'gpt-4.1': 341 },
+      defaultMultipliers: { 'gpt-4o': 1, 'claude-sonnet-4-20250514': 1, 'o3-mini': 0.33, 'gpt-4.1': 1 },
+      daily: { labels: labels30, values: labels30.map(() => Math.floor(Math.random() * 120) + 30), byModel: { 'gpt-4o': labels30.map(() => Math.floor(Math.random() * 50) + 10) } },
+      weekly: { labels: ['W17', 'W18', 'W19', 'W20'], values: [620, 710, 680, 831], byModel: { 'gpt-4o': [280, 300, 310, 310], 'claude-sonnet-4-20250514': [180, 200, 190, 230] } },
+      monthly: { labels: ['2026-05'], values: [2841], byModel: { 'gpt-4o': [1200] } }
+    }),
+
+    getBurndown: () => ({
+      currentMonth: 'May 2026',
+      daysInMonth: 31,
+      dayOfMonth: 3,
+      budget: 1500,
+      consumed: 248,
+      projected: 2480,
+      dailyConsumption: { labels: ['2026-05-01', '2026-05-02', '2026-05-03'], values: [80, 92, 76], cumulative: [80, 172, 248] },
+      projectedLine: Array.from({ length: 31 }, (_, i) => Math.round(80 * (i + 1))),
+      budgetLine: Array.from({ length: 31 }, () => 1500),
+      status: 'on-track',
+      recommendation: 'You are within budget.'
+    }),
+
+    getAntiPatterns: () => ({
+      patterns: [
+        { id: 'ap-1', name: 'Giant Prompt Detected', severity: 'high', group: 'prompt-quality', occurrences: 8, description: 'Prompts exceeding 4000 tokens reduce response quality', suggestion: 'Break prompts into smaller focused requests', examples: ['Session s1: 5200 tokens'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [3,2,2,1] } },
+        { id: 'ap-2', name: 'Abandoned Session', severity: 'medium', group: 'session-hygiene', occurrences: 5, description: 'Sessions ended without completing the task', suggestion: 'Use explicit completion signals', examples: ['Session s2: no final commit'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [2,1,1,1] } },
+        { id: 'ap-3', name: 'AI Code Not Reviewed', severity: 'high', group: 'code-review', occurrences: 4, description: 'Large AI code blocks accepted without changes', suggestion: 'Review AI output before accepting', examples: ['Session s3: 200 lines unreviewed'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [1,1,1,1] } },
+        { id: 'ap-4', name: 'Search Tool Underused', severity: 'low', group: 'tool-mastery', occurrences: 3, description: 'Manual file navigation instead of search', suggestion: 'Use codebase_search for discovery', examples: ['Session s4: 0 search calls'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [1,1,1,0] } },
+        { id: 'ap-5', name: 'Context Window Overload', severity: 'medium', group: 'prompt-quality', occurrences: 3, description: 'Context exceeded 80% capacity', suggestion: 'Start new sessions before context fills', examples: ['Session s5: 82% utilization'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [1,1,0,1] } }
+      ],
+      totalOccurrences: 23,
+      weeklyTrend: { labels: ['W17', 'W18', 'W19', 'W20'], counts: [7, 6, 5, 5] },
+      groupScores: [
+        { group: 'prompt-quality', score: 72, wowPct: -3, momPct: 5, topIssue: 'Giant prompts detected', improvements: [], patternCount: 11 },
+        { group: 'session-hygiene', score: 85, wowPct: 2, momPct: 8, topIssue: null, improvements: ['Fewer abandoned sessions this week'], patternCount: 5 },
+        { group: 'code-review', score: 68, wowPct: -1, momPct: 3, topIssue: 'AI code accepted without review', improvements: [], patternCount: 4 },
+        { group: 'tool-mastery', score: 91, wowPct: 1, momPct: 4, topIssue: null, improvements: ['Great tool usage diversity'], patternCount: 3 }
+      ],
+      weeklyScores: {
+        labels: ['W17', 'W18', 'W19', 'W20'],
+        series: [
+          { group: 'prompt-quality', scores: [70, 71, 72, 72] },
+          { group: 'session-hygiene', scores: [82, 84, 85, 85] },
+          { group: 'code-review', scores: [65, 66, 67, 68] },
+          { group: 'tool-mastery', scores: [88, 90, 91, 91] }
+        ]
+      }
+    }),
+
+    getContextManagement: () => ({
+      overallScore: 74,
+      estimatedContextWindow: 128000,
+      thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
+      workspaces: [
+        { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null },
+        { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null },
+        { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null }
+      ],
+      trend: [
+        { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
+      ],
+      workspaceTrend: [],
+      totalCompactions: 12,
+      fullCompactions: 4,
+      simpleCompactions: 8,
+      sessionsWithTokenData: 89,
+      totalSessions: 127,
+      antiPatterns: [],
+      tips: ['Consider shorter sessions to reduce compaction events']
+    }),
+
+    getWorkspaceContextSessions: () => ({
+      workspaceName: 'my-api',
+      estimatedContextWindow: 128000,
+      thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
+      sessions: [
+        { sessionId: 's1', date: '2026-05-03', harness: 'Local Agent', requestCount: 28, requestsWithTokens: 28, avgPromptTokens: 38000, maxPromptTokens: 72000, avgUtilization: 30, peakUtilization: 56, contextWindow: 128000, compactionCount: 1, tokenCurve: Array.from({ length: 28 }, (_, i) => 2000 + i * 2500), saturation: 8, costEfficiency: null, verdict: 'optimal', events: [{ type: 'compaction', requestIndex: 12 }] },
+        { sessionId: 's2', date: '2026-05-03', harness: 'GitHub Copilot CLI', requestCount: 15, requestsWithTokens: 0, avgPromptTokens: 45000, maxPromptTokens: 60000, avgUtilization: 35, peakUtilization: 47, contextWindow: 128000, compactionCount: 0, tokenCurve: [], saturation: 0, costEfficiency: null, verdict: 'optimal', events: [] },
+        { sessionId: 's3', date: '2026-05-03', harness: 'Local Agent', requestCount: 35, requestsWithTokens: 35, avgPromptTokens: 52000, maxPromptTokens: 108000, avgUtilization: 41, peakUtilization: 84, contextWindow: 128000, compactionCount: 2, tokenCurve: Array.from({ length: 35 }, (_, i) => 1800 + i * 3000), saturation: 18, costEfficiency: null, verdict: 'limited', events: [{ type: 'compaction', requestIndex: 8 }, { type: 'todo-complete', requestIndex: 20 }] }
+      ]
+    }),
+
+    getContextRangeAvailability: () => ({
+      rangesWithTokens: [30, 90, 180],
+      matchingSessions: 127,
+      sessionsWithRequestTokens: 89,
+      harnessesWithoutRequestTokens: ['GitHub Copilot CLI']
+    }),
+
+    getDayTimeline: () => ({
+      date: '2026-05-03',
+      mode: 'day',
+      rangeLabel: 'May 3, 2026',
+      dayStart: new Date('2026-05-03T00:00:00Z').getTime(),
+      dayEnd: new Date('2026-05-03T23:59:59Z').getTime(),
+      sessions: [
+        { sessionId: 's1', workspaceName: 'my-api', sessionName: 'Refactoring auth module', firstActivity: new Date('2026-05-03T09:00:00Z').getTime(), lastActivity: new Date('2026-05-03T09:45:00Z').getTime(), requestCount: 28, totalRequestCount: 28, requests: [] },
+        { sessionId: 's2', workspaceName: 'frontend-app', sessionName: 'Fix login page', firstActivity: new Date('2026-05-03T10:00:00Z').getTime(), lastActivity: new Date('2026-05-03T10:30:00Z').getTime(), requestCount: 15, totalRequestCount: 15, requests: [] },
+        { sessionId: 's3', workspaceName: 'data-pipeline', sessionName: 'Add ETL step', firstActivity: new Date('2026-05-03T11:15:00Z').getTime(), lastActivity: new Date('2026-05-03T12:00:00Z').getTime(), requestCount: 22, totalRequestCount: 22, requests: [] },
+        { sessionId: 's4', workspaceName: 'my-api', sessionName: 'API tests', firstActivity: new Date('2026-05-03T14:00:00Z').getTime(), lastActivity: new Date('2026-05-03T15:10:00Z').getTime(), requestCount: 35, totalRequestCount: 35, requests: [] },
+        { sessionId: 's5', workspaceName: 'mobile-sdk', sessionName: 'SDK integration', firstActivity: new Date('2026-05-03T16:00:00Z').getTime(), lastActivity: new Date('2026-05-03T16:45:00Z').getTime(), requestCount: 18, totalRequestCount: 18, requests: [] }
+      ],
+      sessionCount: 5,
+      maxConcurrent: 1,
+      prevDay: '2026-05-02',
+      nextDay: null
+    }),
+
+    getHeatmap: () => ({
+      heatmap: Array.from({ length: 7 }, (day) => Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? Math.floor(Math.random() * 30) + 10 : Math.floor(Math.random() * 3))),
+      byType: {},
+      focusHeatmap: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 50))
+    }),
+
+    getWorkLifeBalance: () => ({
+      score: 72,
+      totalRequests: 2841,
+      weekdayReqs: 2500,
+      weekendReqs: 341,
+      weekendRatio: 0.12,
+      timeDistribution: { lateNight: 0.05, earlyMorning: 0.08, workHours: 0.75, evening: 0.12 },
+      hours: Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? 150 + h * 5 : h >= 7 ? 20 : 5),
+      weekdayHours: Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? 130 + h * 4 : h >= 7 ? 15 : 3),
+      weekendHours: Array.from({ length: 24 }, (_, h) => (h >= 10 && h <= 14) ? 20 + h : 2),
+      weeklyTrend: { labels: ['W17', 'W18', 'W19', 'W20'], weekday: [580, 620, 640, 660], weekend: [40, 50, 30, 41] },
+      avgStartHour: 9,
+      avgEndHour: 18,
+      avgSpanHours: 9,
+      maxStreak: 12,
+      maxBreak: 3,
+      activeDays: 22
+    }),
+
+    getAiCredits: () => ({
+      totalCredits: 142.5,
+      totalInputTokens: 5800000,
+      totalOutputTokens: 1900000,
+      totalCacheReadTokens: 1200000,
+      totalCacheWriteTokens: 400000,
+      totalRequests: 2841,
+      countedRequests: 2200,
+      partialRequests: 200,
+      pendingRequests: 100,
+      noDataRequests: 341,
+      finalizableRequests: 2400,
+      missingPct: 8.3,
+      avgCreditsPerRequest: 0.065,
+      avgCreditsPerDay: 4.75,
+      costByModel: {
+        'gpt-4o': { model: 'gpt-4o', credits: 68.2, inputTokens: 2400000, outputTokens: 800000, cacheReadTokens: 600000, cacheWriteTokens: 200000, requests: 1200, partialRequests: 80, avgCreditsPerReq: 0.057 },
+        'claude-sonnet-4-20250514': { model: 'claude-sonnet-4-20250514', credits: 42.1, inputTokens: 1800000, outputTokens: 600000, cacheReadTokens: 400000, cacheWriteTokens: 100000, requests: 800, partialRequests: 60, avgCreditsPerReq: 0.053 }
+      },
+      daily: { labels: labels30, credits: labels30.map(() => Math.round(Math.random() * 8 + 2)), cumulative: labels30.map((_, i) => Math.round((i + 1) * 4.75)), byModel: { 'gpt-4o': labels30.map(() => Math.round(Math.random() * 4 + 1)) } },
+      weekly: { labels: ['W17', 'W18', 'W19', 'W20'], credits: [32, 36, 34, 40.5], cumulative: [32, 68, 102, 142.5], byModel: { 'gpt-4o': [15, 17, 16, 20.2] } },
+      topRequests: []
+    }),
+
+    getAiCreditBurndown: () => ({
+      currentMonth: 'May 2026',
+      daysInMonth: 31,
+      dayOfMonth: 3,
+      budget: 300,
+      consumed: 42.5,
+      projected: 425,
+      dailyConsumption: { labels: ['2026-05-01', '2026-05-02', '2026-05-03'], values: [14.2, 15.1, 13.2], cumulative: [14.2, 29.3, 42.5] },
+      projectedLine: Array.from({ length: 31 }, (_, i) => Math.round(14 * (i + 1))),
+      budgetLine: Array.from({ length: 31 }, () => 300),
+      status: 'warning',
+      recommendation: 'At current pace you will exceed your credit budget.'
+    }),
+
+    getWorkflowOptimization: () => ({
+      clusters: [
+        { pattern: 'Use multi-file edits', count: 12, impact: 'high', description: 'Batch related edits', sessions: [] },
+        { pattern: 'Leverage codebase search', count: 8, impact: 'medium', description: 'Use search before navigation', sessions: [] }
+      ],
+      totalRepetitions: 20,
+      estimatedTimeSavedMins: 45,
+      topWorkspaces: [{ name: 'my-api', clusters: 8 }]
+    }),
+
+    getCalendarActivity: () => ({
+      days: genLabels(90).map(d => ({ date: d, requests: Math.floor(Math.random() * 120) + 10, sessions: Math.floor(Math.random() * 8) + 1 })),
+      maxRequests: 140
+    }),
+
+    getProjectOverview: () => ({
+      projects: [
+        { name: 'my-api', sessions: 45, lastActive: '2026-05-03', requests: 980 },
+        { name: 'frontend-app', sessions: 32, lastActive: '2026-05-02', requests: 720 },
+        { name: 'data-pipeline', sessions: 22, lastActive: '2026-05-01', requests: 510 },
+        { name: 'mobile-sdk', sessions: 18, lastActive: '2026-04-30', requests: 401 },
+        { name: 'infra-tools', sessions: 10, lastActive: '2026-04-28', requests: 230 }
+      ]
+    }),
+
+    getFlowState: () => ({ avgSessionLength: 28.5, avgRequestsPerSession: 22.4, focusScore: 78, interruptionRate: 0.12 }),
+
+    getHourlyDistribution: () => ({
+      hours: Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? Math.floor(Math.random() * 20) + 10 : Math.floor(Math.random() * 3)),
+      byType: {}
+    }),
+
+    getConfigHealth: () => ({
+      overallScore: 72,
+      agenticReadiness: { score: 65, signals: [{ id: 'has-instructions', label: 'Has instruction files', present: true, weight: 30, detail: 'Found .github/copilot-instructions.md' }] },
+      workspaces: [
+        { workspaceId: 'ws-1', workspaceName: 'my-api', rootPath: '/home/user/my-api', harness: 'Local Agent', configFiles: [], hasInstructions: true, hasPrompts: false, hasAgents: false, hasSkills: false, hasHooks: false, progressiveDisclosureScore: 60, instructionQualityScore: 70, hookCoverage: null, suggestions: [], sessionCount: 45, requestCount: 980 },
+        { workspaceId: 'ws-2', workspaceName: 'frontend-app', rootPath: '/home/user/frontend-app', harness: 'Local Agent', configFiles: [], hasInstructions: true, hasPrompts: true, hasAgents: false, hasSkills: false, hasHooks: false, progressiveDisclosureScore: 75, instructionQualityScore: 80, hookCoverage: null, suggestions: [], sessionCount: 32, requestCount: 720 }
+      ],
+      contextProvisionByHarness: {},
+      suggestions: ['Add a .github/copilot-instructions.md to data-pipeline'],
+      contextAntiPatterns: []
+    }),
+    getDataExplorer: () => ({ sessions: [], fields: [] }),
+    getDataExplorerFields: () => ([]),
+    getRuleEditor: () => ({ rules: [], previews: [], layers: [], pending: [] }),
+    getSessions: () => ({ sessions: [], totalCount: 0 }),
+    getSessionDetail: () => null,
+    getMetricList: () => ([]),
+    getRuleCoverage: () => ({ rules: [], workspaces: [], matrix: {} }),
+    getRulePreview: () => ({ matches: [] }),
+    getRuleSource: () => ({ source: '' }),
+    getParserCoverage: () => ({ coverage: 0, fields: [] }),
+    getParserPreview: () => ({ tokens: [], fields: [] }),
+    getFunctionCatalog: () => ({ functions: [] }),
+    getFieldSchema: () => ({ fields: [] }),
+    getSdlcRepoScan: () => ({ repos: [] }),
+    getSdlcToolAnalysis: () => ({ mcpServers: [] }),
+    getWorkspaceDeps: () => ({ deps: [] }),
+    discoverCatalog: () => ({ items: [], totalScanned: 0 }),
+    triageCatalog: () => ({ items: [] }),
+    triageSkills: () => ({ triaged: [] }),
+    getInsights: () => ({ insights: [] }),
+    getTokenCoverage: () => ({ coverage: 0, byHarness: [] }),
+    getHarnessComparison: () => ({ harnesses: [] }),
+    reviewContextFiles: () => ({ reviews: [] }),
+    generateSkillContent: () => ({ content: '', filename: '' }),
+    generateLearningQuiz: () => ({ questions: [] }),
+    generateLearningResources: () => ({ resources: [] }),
+    generateCodeComparison: () => ({ rounds: [] }),
+    generateDidYouKnow: () => ({ facts: [] }),
+    compileNlRule: () => ({ markdown: '' }),
+    evaluateExpression: () => ({ result: null }),
+  };
+
+  // Real fixture data (computed by the analyzer over synthetic logs) takes
+  // precedence; fall back to the static mocks above for interactive methods
+  // that are not precomputed (rule editor, learning generators, etc.).
+  if (window.__RPC && Object.prototype.hasOwnProperty.call(window.__RPC, method)) {
+    return window.__RPC[method];
+  }
+  const handler = mocks[method];
+  if (handler) return handler();
+  return {};
+}
+
+window.getMockData = getMockData;
+</script>
+<script>
+// Load the REAL analyzer-computed RPC responses (written by the authless
+// pipeline verifier) before booting the webview bundle, so every page renders
+// from real fixture data instead of inline stubs.
+(function bootstrap() {
+  function boot(rpc) {
+    window.__RPC = rpc || {};
+    var s = document.createElement('script');
+    s.src = '/dist/webview/app.js';
+    s.onload = function () {
+      setTimeout(function () {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'dataReady' } }));
+      }, 50);
+    };
+    document.body.appendChild(s);
+  }
+  fetch('/tests/vm/.artifacts/rpc-fixtures.json')
+    .then(function (r) { return r.ok ? r.json() : {}; })
+    .then(boot)
+    .catch(function () { boot({}); });
+})();
+</script>
+</body>
+</html>
