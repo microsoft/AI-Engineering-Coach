@@ -1,8 +1,8 @@
 <h1 align="center">AI Engineer Coach</h1>
 
 <p align="center">
-<strong>better agentic engineering.</strong><br>
-Analyze your AI coding assistant usage — any harness, one dashboard.
+<strong>besseres agentisches Engineering.</strong><br>
+Analysiere die Nutzung deines KI-Programmierassistenten — jedes Harness, ein Dashboard.
 </p>
 
 <p align="center">
@@ -20,15 +20,15 @@ https://github.com/user-attachments/assets/9f0239bf-20e0-459f-b137-17cce0edd1b2
 
 ---
 
-## What it does
+## Was es macht
 
-AI Engineer Coach reads your local AI session logs and turns them into actionable insights — no data leaves your machine.
+AI Engineer Coach liest deine lokalen KI-Sitzungsprotokolle und verwandelt sie in umsetzbare Erkenntnisse — keine Daten verlassen deinen Rechner.
 
-- **Track progress** -- practice scores, weekly trends, daily activity charts
-- **Detect anti-patterns** -- 45 rules across prompt quality, session hygiene, code review, tool mastery, and context management
-- **Measure output** -- AI-generated code volume by language, workspace, model, and harness
-- **Discover skills** -- find repeated prompts and turn them into reusable skills
-- **Score context health** — agentic readiness checks, instruction-file audits, workspace context maps
+- **Fortschritt verfolgen** -- Praxis-Scores, wöchentliche Trends, tägliche Aktivitätsdiagramme
+- **Anti-Patterns erkennen** -- 45 Regeln zu Prompt-Qualität, Sitzungshygiene, Code-Review, Werkzeugbeherrschung und Kontextmanagement
+- **Output messen** -- KI-generiertes Code-Volumen nach Sprache, Workspace, Modell und Harness
+- **Skills entdecken** -- wiederkehrende Prompts finden und in wiederverwendbare Skills verwandeln
+- **Kontextgesundheit bewerten** — Prüfungen der agentischen Bereitschaft, Audits von Instruktionsdateien, Workspace-Kontextkarten
 
 <details>
 <summary><strong>Screenshots</strong></summary>
@@ -52,19 +52,19 @@ AI Engineer Coach reads your local AI session logs and turns them into actionabl
 
 ## Installation
 
-Choose one of these paths.
+Wähle einen dieser Wege.
 
-### Path 1 -- Prebuilt VSIX (easiest)
+### Weg 1 -- Vorgefertigtes VSIX (am einfachsten)
 
-Prerequisites:
+Voraussetzungen:
 
 - VS Code
-- Access to the repository Releases page
+- Zugriff auf die Releases-Seite des Repositorys
 
-Steps:
+Schritte:
 
-1. Download the latest `ai-engineer-coach-*.vsix` from Releases.
-2. Install it in VS Code:
+1. Lade die neueste `ai-engineer-coach-*.vsix` aus den Releases herunter.
+2. Installiere sie in VS Code:
 
 **macOS / Linux**
 
@@ -78,40 +78,40 @@ code --install-extension ai-engineer-coach-*.vsix
 code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | Select-Object -First 1).FullName
 ```
 
-### Path 2 -- Dev Container build (no local Node.js/npm)
+### Weg 2 -- Dev-Container-Build (kein lokales Node.js/npm)
 
-Prerequisites:
+Voraussetzungen:
 
 - VS Code
-- Dev Containers extension
-- Docker or Podman
+- Dev Containers Erweiterung
+- Docker oder Podman
 
-Steps:
+Schritte:
 
-1. Clone the repo and open it in VS Code.
-2. Reopen in container.
-3. Run:
+1. Klone das Repo und öffne es in VS Code.
+2. Im Container erneut öffnen.
+3. Führe aus:
 
 ```bash
 npm ci
 npm run package
 ```
 
-4. Install the generated `.vsix` using one of the commands above.
-If it doesn't work simply Install it via VS Code UI:
-Open VS Code
-Press Ctrl+Shift+P
-Type Install from VSIX
-Browse to the .vsix file and select it
+4. Installiere die erzeugte `.vsix` mit einem der obigen Befehle.
+Falls das nicht funktioniert, installiere sie einfach über die VS Code-Oberfläche:
+Öffne VS Code
+Drücke Ctrl+Shift+P
+Tippe Install from VSIX
+Navigiere zur .vsix-Datei und wähle sie aus
 
-### Path 3 -- Local build
+### Weg 3 -- Lokaler Build
 
-Prerequisites:
+Voraussetzungen:
 
 - VS Code
-- Node.js and npm
+- Node.js und npm
 
-Steps:
+Schritte:
 
 ```bash
 git clone https://github.com/microsoft/ai-engineering-coach.git
@@ -120,87 +120,87 @@ npm ci
 npm run package
 ```
 
-Then install the generated `.vsix` using one of the commands above.
+Installiere dann die erzeugte `.vsix` mit einem der obigen Befehle.
 
-### Release permissions and contribution path
+### Release-Berechtigungen und Beitragsweg
 
-If you do not have permission to publish a Release artifact, open a PR with your changes and ask a maintainer to publish the `.vsix` in Releases.
+Wenn du keine Berechtigung hast, ein Release-Artefakt zu veröffentlichen, öffne einen PR mit deinen Änderungen und bitte eine:n Maintainer:in, die `.vsix` in den Releases zu veröffentlichen.
 
-After install:
+Nach der Installation:
 
-1. Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
-2. Run **AI Engineer Coach: Open Dashboard**
-3. Navigate pages from the sidebar, filter by workspace or harness
+1. Öffne die Befehlspalette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
+2. Führe **AI Engineer Coach: Open Dashboard** aus
+3. Navigiere über die Seitenleiste durch die Seiten, filtere nach Workspace oder Harness
 
 ---
 
-## Pages
+## Seiten
 
-### Observe
+### Beobachten
 
-| Page               | Description                                                                           |
+| Seite              | Beschreibung                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------- |
-| **Dashboard**      | Practice scores with week-over-week trends, daily activity chart, top workspace stats |
-| **Timeline**       | Gantt-style session timeline with per-day drill-down and overlap detection            |
-| **Coding Moments** | Screenshot gallery from AI coding sessions with story reels and workspace filtering   |
+| **Dashboard**      | Praxis-Scores mit Woche-zu-Woche-Trends, tägliches Aktivitätsdiagramm, Top-Workspace-Statistiken |
+| **Timeline**       | Gantt-artige Sitzungs-Timeline mit Tagesaufschlüsselung und Überschneidungserkennung  |
+| **Coding Moments** | Screenshot-Galerie aus KI-Programmiersitzungen mit Story-Reels und Workspace-Filterung |
 
-### Measure
+### Messen
 
-| Page         | Description                                                                                 |
+| Seite        | Beschreibung                                                                                |
 | ------------ | ------------------------------------------------------------------------------------------- |
-| **Output**   | Generated code volume by language, model usage table _(token breakdown temporarily hidden)_ |
-| **Burndown** | Monthly AI token budget progress with projections _(temporarily disabled)_                  |
-| **Patterns** | 7×24 activity heatmap and work-life balance signals                                         |
+| **Output**   | Generiertes Code-Volumen nach Sprache, Tabelle zur Modellnutzung _(Token-Aufschlüsselung vorübergehend ausgeblendet)_ |
+| **Burndown** | Monatlicher KI-Token-Budgetfortschritt mit Prognosen _(vorübergehend deaktiviert)_          |
+| **Patterns** | 7×24-Aktivitäts-Heatmap und Work-Life-Balance-Signale                                       |
 
-### Improve
+### Verbessern
 
-| Page                | Description                                                                                                                                |
+| Seite               | Beschreibung                                                                                                                               |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Anti-Patterns**   | Five practice score cards with severity ratings, concrete actions, and example prompts. 45 editable markdown rules plus a coverage heatmap |
-| **Rule Editor**     | Create, edit, and tune detection rules visually or as raw markdown. Live-test against your data                                            |
-| **Rule Playground** | Interactive REPL for the rule DSL with field browser, function catalog, and metric list                                                    |
-| **Data Explorer**   | Browse session fields, view distributions, run ad-hoc filters                                                                              |
-| **Skill Finder**    | Discover repeated prompt patterns and matching community skills from the open-source catalog                                               |
-| **Context Health**  | Overall context score, agentic readiness checklist, workspace context map, AI-powered instruction-file review                              |
+| **Anti-Patterns**   | Fünf Praxis-Score-Karten mit Schweregradbewertungen, konkreten Maßnahmen und Beispiel-Prompts. 45 bearbeitbare Markdown-Regeln plus eine Abdeckungs-Heatmap |
+| **Rule Editor**     | Erkennungsregeln visuell oder als reines Markdown erstellen, bearbeiten und feinabstimmen. Live-Test gegen deine Daten                     |
+| **Rule Playground** | Interaktive REPL für die Regel-DSL mit Feld-Browser, Funktionskatalog und Metrikliste                                                      |
+| **Data Explorer**   | Sitzungsfelder durchsuchen, Verteilungen anzeigen, Ad-hoc-Filter ausführen                                                                 |
+| **Skill Finder**    | Wiederkehrende Prompt-Muster und passende Community-Skills aus dem Open-Source-Katalog entdecken                                           |
+| **Context Health**  | Gesamter Kontext-Score, Checkliste zur agentischen Bereitschaft, Workspace-Kontextkarte, KI-gestützte Überprüfung von Instruktionsdateien |
 
 ### Level Up
 
-| Page                | Description                                                                      |
+| Seite               | Beschreibung                                                                     |
 | ------------------- | -------------------------------------------------------------------------------- |
-| **Learning Center** | Personalized quizzes and code-comparison rounds generated from your actual usage |
-| **Achievements**    | XP-based progression with Bronze → Silver → Gold → Diamond tiers                 |
-| **Agentic SDLC**    | How you use AI across the full software-development lifecycle                    |
-| **Share**           | Generate a shareable stat card and export Markdown/JSON summaries               |
+| **Learning Center** | Personalisierte Quizze und Code-Vergleichsrunden, generiert aus deiner tatsächlichen Nutzung |
+| **Achievements**    | XP-basierte Progression mit Bronze → Silber → Gold → Diamant-Stufen              |
+| **Agentic SDLC**    | Wie du KI über den gesamten Software-Entwicklungslebenszyklus hinweg einsetzt    |
+| **Share**           | Eine teilbare Statistik-Karte erstellen und Markdown-/JSON-Zusammenfassungen exportieren |
 
 ---
 
-## Privacy
+## Datenschutz
 
-- **Read-only** — the extension never modifies your session files
-- **Local analysis** — all parsing and analytics run entirely on your machine
-- **No proprietary telemetry** — the extension does not phone home or collect usage data
-- **Optional AI features** — some features (rule compiler, skill finder, context review) use the VS Code built-in Copilot language model API when explicitly invoked by the user
+- **Nur Lesen** — die Erweiterung verändert deine Sitzungsdateien niemals
+- **Lokale Analyse** — das gesamte Parsen und die Analytik laufen vollständig auf deinem Rechner
+- **Keine proprietäre Telemetrie** — die Erweiterung funkt nicht nach Hause und sammelt keine Nutzungsdaten
+- **Optionale KI-Funktionen** — einige Funktionen (Regel-Compiler, Skill Finder, Kontextprüfung) nutzen die in VS Code integrierte Copilot-Sprachmodell-API, wenn sie ausdrücklich von der Benutzer:in aufgerufen werden
 
 ---
 
-## Code of Conduct
+## Verhaltenskodex
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+Dieses Projekt hat den [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/) übernommen.
+Weitere Informationen findest du in den [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) oder
+kontaktiere [opencode@microsoft.com](mailto:opencode@microsoft.com) bei weiteren Fragen oder Anmerkungen.
 
-## Trademarks
+## Marken
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
-trademarks or logos is subject to and must follow
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+Dieses Projekt kann Marken oder Logos für Projekte, Produkte oder Dienste enthalten. Die autorisierte Nutzung von Microsoft-
+Marken oder -Logos unterliegt den
+[Microsoft Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general) und muss diesen folgen.
+Die Nutzung von Microsoft-Marken oder -Logos in modifizierten Versionen dieses Projekts darf keine Verwirrung stiften oder eine Microsoft-Unterstützung implizieren.
+Jegliche Nutzung von Marken oder Logos Dritter unterliegt den Richtlinien dieser Dritten.
 
-## License
+## Lizenz
 
 [MIT](LICENSE)
 
-## Disclaimer
+## Haftungsausschluss
 
-This project is an open-source community effort by Microsoft employees. It is **not** an official Microsoft product and is not part of any Microsoft service or support offering. It is provided as-is with no warranties or guarantees.
+Dieses Projekt ist eine Open-Source-Gemeinschaftsarbeit von Microsoft-Mitarbeiter:innen. Es ist **kein** offizielles Microsoft-Produkt und nicht Teil eines Microsoft-Dienstes oder Support-Angebots. Es wird wie besehen ohne Gewährleistungen oder Garantien bereitgestellt.
