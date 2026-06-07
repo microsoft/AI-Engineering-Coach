@@ -306,6 +306,10 @@
     "check": "npm run typecheck && npm run lint && npm run spellcheck && npm run knip && npm run test",
     "check-size": "node scripts/check-bundle-size.mjs",
     "test:e2e": "npx playwright test",
+    "vm:pipeline": "npx tsx tests/vm/lib/run-pipeline.ts",
+    "vm:ui": "npx playwright test --config=tests/vm/playwright.vm.config.ts",
+    "vm:e2e": "bash tests/vm/run.sh",
+    "vm:docker": "docker compose -f tests/vm/docker-compose.yml run --rm e2e",
     "lockfile-lint": "lockfile-lint",
     "prepare": "husky"
   },

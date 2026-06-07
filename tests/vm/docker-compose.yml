@@ -1,0 +1,25 @@
+# Fully isolated e2e test runner for the AI Engineer Coach extension.
+#
+#   docker compose -f tests/vm/docker-compose.yml run --rm e2e
+#
+# By default this runs the complete suite (build → authless pipeline → headless
+# webview → VSIX install → real-VS-Code UI). Override the command to run a
+# subset, e.g. headless-only:
+#
+#   SKIP_VSCODE_UI=1 docker compose -f tests/vm/docker-compose.yml run --rm e2e
+#
+# To run the auth/real-data suite after collecting logs, mount a seeded HOME and
+# set AEC_AUTH_DATA=1 (see tests/vm/data-collection/README.md).
+
+services:
+  e2e:
+    build:
+      context: ../..
+      dockerfile: tests/vm/Dockerfile
+    environment:
+      - SKIP_VSCODE_UI=${SKIP_VSCODE_UI:-0}
+      - AEC_AUTH_DATA=${AEC_AUTH_DATA:-0}
+      - CODE_VERSION=${CODE_VERSION:-stable}
+    # ExTester/Electron occasionally needs more shared memory than the default 64M.
+    shm_size: "1gb"
+    command: ["bash", "tests/vm/run.sh"]

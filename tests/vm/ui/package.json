@@ -1,0 +1,23 @@
+{
+  "name": "ai-engineer-coach-vm-ui-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Real-VS-Code (ExTester) e2e UI tests for the AI Engineer Coach extension. Isolated from the root package so its heavy browser-automation deps never touch the extension build.",
+  "license": "MIT",
+  "scripts": {
+    "compile": "tsc -p ./tsconfig.json",
+    "seed": "npx -y tsx ../lib/seed-home.ts",
+    "setup": "extest get-vscode -c $CODE_VERSION -s .test-extensions && extest get-chromedriver -c $CODE_VERSION -s .test-extensions",
+    "install-vsix": "extest install-vsix -f \"$VSIX_PATH\" -e .test-extensions",
+    "test": "npm run compile && extest run-tests -e .test-extensions -s .test-extensions \"./out/specs/**/*.test.js\"",
+    "e2e": "npm run setup && npm run install-vsix && npm run seed && npm run test"
+  },
+  "devDependencies": {
+    "@types/chai": "4.3.20",
+    "@types/mocha": "10.0.10",
+    "chai": "4.5.0",
+    "mocha": "11.7.6",
+    "typescript": "6.0.3",
+    "vscode-extension-tester": "8.23.0"
+  }
+}
