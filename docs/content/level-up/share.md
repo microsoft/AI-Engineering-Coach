@@ -25,9 +25,14 @@ The generated card includes:
 
 ## Export Options
 
-Three actions are available:
+Four actions are available:
 
 - **Download PNG** -- Save the card as an image file
 - **Copy to Clipboard** -- Copy the card image to your clipboard for pasting
 - **Export Summary** -- Save a Markdown report and matching JSON data file for archiving or sharing
 - **Refresh** -- Regenerate the card with current data
+
+The command palette also includes **AI Engineer Coach: Export Full Context Pack**. This writes a deeper Markdown/JSON context pack for ChatGPT or a VS Code coding agent:
+
+- **Safe Context Pack** -- Includes all analytical findings, anti-pattern details, context health, repeated workflow opportunities, and session metadata without raw prompt/response turns.
+- **Full Raw Context Pack** -- Includes the Safe data plus bounded raw prompt/response excerpts from recent sessions.

@@ -4,7 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { buildSummaryExport, renderSummaryMarkdown, renderSummaryJson, getSummaryExportFilenames } from './summary-export';
+import {
+  buildSummaryExport,
+  renderSummaryMarkdown,
+  renderSummaryJson,
+  getSummaryExportFilenames,
+  buildContextPackExport,
+  buildContextPackExportFromAnalyzerAsync,
+  renderContextPackJson,
+  renderContextPackMarkdown,
+  getContextPackExportFilenames,
+} from './summary-export';
 import type {
   AntiPatternData,
   CodeProductionData,
@@ -171,5 +181,192 @@ describe('summary export', () => {
       markdown: 'ai-engineer-coach-summary-2026-05-25.md',
       json: 'ai-engineer-coach-summary-2026-05-25.json',
     });
+  });
+});
+
+describe('context pack export', () => {
+  const rawSession = {
+    sessionId: 'session-1',
+    workspaceId: 'workspace-1',
+    workspaceName: 'Coach App',
+    location: 'local',
+    harness: 'Codex',
+    creationDate: Date.UTC(2026, 4, 20),
+    lastMessageDate: Date.UTC(2026, 4, 21),
+    requestCount: 1,
+    requests: [
+      {
+        requestId: 'request-1',
+        timestamp: Date.UTC(2026, 4, 20, 10),
+        messageText: `please fix this ${'without much context '.repeat(400)}`,
+        responseText: `I changed the implementation ${'and explained details '.repeat(400)}`,
+        isCanceled: false,
+        agentName: 'Codex',
+        agentMode: 'agent',
+        modelId: 'gpt-5-codex',
+        toolsUsed: ['apply_patch'],
+        editedFiles: ['src/core/summary-export.ts'],
+        referencedFiles: ['src/core/summary-export.test.ts'],
+        slashCommand: '',
+        variableKinds: {},
+        customInstructions: [],
+        skillsUsed: ['test-driven-development'],
+        firstProgress: 1000,
+        totalElapsed: 2000,
+        messageLength: 6000,
+        responseLength: 8000,
+        userCode: [],
+        aiCode: [{ language: 'typescript', loc: 12 }],
+        toolConfirmations: [],
+        promptTokens: 100,
+        completionTokens: 200,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        compaction: null,
+        todoSnapshot: null,
+        workType: 'bug fix',
+      },
+    ],
+  };
+
+  const baseInput = {
+    generatedAt: '2026-05-25T10:00:00.000Z',
+    filter: { harness: 'Codex' },
+    stats,
+    codeProduction,
+    dailyActivity,
+    workLifeBalance,
+    flowState,
+    antiPatterns: {
+      ...antiPatterns,
+      patterns: antiPatterns.patterns.map(pattern => ({
+        ...pattern,
+        details: [
+          {
+            sessionId: 'session-1',
+            workspace: 'Coach App',
+            timestamp: Date.UTC(2026, 4, 20, 10),
+            message: 'please fix this',
+            model: 'gpt-5-codex',
+          },
+        ],
+      })),
+    },
+    recommendations: [{ name: 'Prompt context', score: 62, status: 'needs-improvement' }],
+    contextManagement: { contextHealthScore: 70, antiPatterns: [] },
+    configHealth: { agenticReadiness: { score: 80, checklist: [] } },
+    workflowOptimization: { totalRepetitions: 4, clusters: [] },
+    sessionList: {
+      total: 1,
+      page: 1,
+      pageSize: 50,
+      sessions: [
+        {
+          sessionId: 'session-1',
+          workspaceName: 'Coach App',
+          workspaceId: 'workspace-1',
+          creationDate: Date.UTC(2026, 4, 20),
+          lastMessageDate: Date.UTC(2026, 4, 21),
+          requestCount: 1,
+          firstMessage: 'please fix this',
+        },
+      ],
+    },
+  };
+
+  it('builds a safe context pack without raw session turns', () => {
+    const report = buildContextPackExport({
+      ...baseInput,
+      mode: 'safe',
+      rawSessions: [rawSession],
+    });
+
+    expect(report.kind).toBe('context-pack');
+    expect(report.mode).toBe('safe');
+    expect(report.summary.totals.sessions).toBe(7);
+    expect(report.antiPatterns.patterns).toHaveLength(2);
+    expect(report.antiPatterns.patterns[0].details).toHaveLength(1);
+    expect(report.sessions?.total).toBe(1);
+    expect(report.rawSessions).toBeUndefined();
+  });
+
+  it('builds a full context pack with bounded raw session turns', () => {
+    const report = buildContextPackExport({
+      ...baseInput,
+      mode: 'full',
+      rawSessions: [rawSession],
+    });
+
+    expect(report.rawSessions).toHaveLength(1);
+    expect(report.rawSessions?.[0]?.requests).toHaveLength(1);
+    expect(report.rawSessions?.[0]?.requests[0]?.prompt.length).toBeLessThanOrEqual(report.limits.textCharLimit + 20);
+    expect(report.rawSessions?.[0]?.requests[0]?.response.length).toBeLessThanOrEqual(report.limits.textCharLimit + 20);
+    expect(report.rawSessions?.[0]?.requests[0]?.toolsUsed).toEqual(['apply_patch']);
+  });
+
+  it('renders deterministic json, agent-focused markdown, and date-stamped filenames', () => {
+    const report = buildContextPackExport({
+      ...baseInput,
+      mode: 'safe',
+    });
+
+    expect(JSON.parse(renderContextPackJson(report))).toEqual(report);
+
+    const markdown = renderContextPackMarkdown(report);
+    expect(markdown).toContain('# AI Engineer Coach Agent Context Pack');
+    expect(markdown).toContain('Mode: safe');
+    expect(markdown).toContain('## Agent Context Prompt');
+    expect(markdown).toContain('Low Context Prompts');
+    expect(markdown).toContain('Reference the relevant files and constraints.');
+
+    expect(getContextPackExportFilenames('2026-05-25T10:00:00.000Z')).toEqual({
+      markdown: 'ai-engineer-coach-context-pack-2026-05-25.md',
+      json: 'ai-engineer-coach-context-pack-2026-05-25.json',
+    });
+  });
+
+  it('loads raw full-mode sessions through an async session loader', async () => {
+    const strippedSession = {
+      ...rawSession,
+      requests: rawSession.requests.map(request => ({
+        ...request,
+        messageText: request.messageText.slice(0, 20),
+        responseText: '',
+      })),
+    };
+    const analyzer = {
+      getStats: () => stats,
+      getCodeProduction: () => codeProduction,
+      getDailyActivity: () => dailyActivity,
+      getWorkLifeBalance: () => workLifeBalance,
+      getFlowState: () => flowState,
+      getAntiPatterns: () => antiPatterns,
+      getSessions: () => baseInput.sessionList,
+      getSessionDetail: () => strippedSession,
+    };
+
+    const report = await buildContextPackExportFromAnalyzerAsync(
+      analyzer,
+      'full',
+      undefined,
+      '2026-05-25T10:00:00.000Z',
+      async sessionId => sessionId === rawSession.sessionId ? rawSession : null,
+    );
+
+    expect(report.rawSessions?.[0]?.requests[0]?.prompt).toContain('without much context');
+    expect(report.rawSessions?.[0]?.requests[0]?.response).toContain('I changed the implementation');
+  });
+
+  it('explains when full mode has no raw session excerpts available', () => {
+    const report = buildContextPackExport({
+      ...baseInput,
+      mode: 'full',
+      rawSessions: [],
+    });
+
+    const markdown = renderContextPackMarkdown(report);
+
+    expect(markdown).toContain('Full mode was requested');
+    expect(markdown).toContain('raw prompt/response excerpts were not available');
   });
 });

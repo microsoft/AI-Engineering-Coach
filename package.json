@@ -37,6 +37,7 @@
     "onCommand:aiEngineerCoach.open",
     "onCommand:aiEngineerCoach.reload",
     "onCommand:aiEngineerCoach.exportSummary",
+    "onCommand:aiEngineerCoach.exportContextPack",
     "onCommand:aiEngineerCoach.reviewLocalRules",
     "onView:aiEngineerCoach.welcome"
   ],
@@ -56,6 +57,11 @@
       {
         "command": "aiEngineerCoach.exportSummary",
         "title": "AI Engineer Coach: Export Summary",
+        "icon": "$(export)"
+      },
+      {
+        "command": "aiEngineerCoach.exportContextPack",
+        "title": "AI Engineer Coach: Export Full Context Pack",
         "icon": "$(export)"
       },
       {

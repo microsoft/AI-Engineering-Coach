@@ -24,7 +24,7 @@ import {
 import { panelCache } from './webview/panel-cache';
 import { registerTools } from './mcp/tools';
 import { registerChatParticipant } from './chat/participant';
-import { exportSummaryFiles } from './summary-export-vscode';
+import { exportContextPackFiles, exportSummaryFiles } from './summary-export-vscode';
 
 type PanelModule = typeof import('./webview/panel');
 let panelModulePromise: Promise<PanelModule> | null = null;
@@ -52,6 +52,29 @@ async function exportSummaryFromLogs(): Promise<void> {
       });
       const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
       await exportSummaryFiles(analyzer);
+    },
+  );
+}
+
+async function exportContextPackFromLogs(): Promise<void> {
+  const dirs = findLogsDirs();
+  if (dirs.length === 0) {
+    void vscode.window.showErrorMessage('No AI coding session log directories found.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Exporting AI Engineer Coach context pack',
+      cancellable: false,
+    },
+    async progress => {
+      const parsed = await parseAllLogsViaWorker(dirs, update => {
+        progress.report({ message: update.detail ?? 'Reading session logs' });
+      });
+      const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
+      await exportContextPackFiles(analyzer);
     },
   );
 }
@@ -170,6 +193,12 @@ export function activate(context: vscode.ExtensionContext) {
       await ready;
       if (getPending().length > 0) await promptAndReload();
       await exportSummaryFromLogs();
+    }),
+    vscode.commands.registerCommand('aiEngineerCoach.exportContextPack', async () => {
+      runtimeDebug('extension', 'command-export-context-pack');
+      await ready;
+      if (getPending().length > 0) await promptAndReload();
+      await exportContextPackFromLogs();
     }),
     vscode.commands.registerCommand('aiEngineerCoach.reviewLocalRules', async () => {
       runtimeDebug('extension', 'command-review-trust');

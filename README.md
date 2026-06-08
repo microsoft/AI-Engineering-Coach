@@ -170,7 +170,9 @@ After install:
 | **Learning Center** | Personalized quizzes and code-comparison rounds generated from your actual usage |
 | **Achievements**    | XP-based progression with Bronze → Silver → Gold → Diamond tiers                 |
 | **Agentic SDLC**    | How you use AI across the full software-development lifecycle                    |
-| **Share**           | Generate a shareable stat card and export Markdown/JSON summaries               |
+| **Share**           | Generate a shareable stat card, compact summaries, and full agent context packs |
+
+The command palette includes **AI Engineer Coach: Export Full Context Pack** for creating Markdown/JSON context packs tailored to ChatGPT or VS Code coding agents. Safe mode excludes raw prompt/response turns; Full Raw mode includes bounded raw session excerpts.
 
 ---
 

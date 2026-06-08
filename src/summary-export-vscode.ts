@@ -6,11 +6,18 @@
 /* VS Code integration for summary export file writes. */
 
 import * as vscode from 'vscode';
+import { loadSessionFromDisk } from './core/cache';
 import {
+  buildContextPackExportFromAnalyzerAsync,
   buildSummaryExportFromAnalyzer,
+  getContextPackExportFilenames,
   getSummaryExportFilenames,
+  renderContextPackJson,
+  renderContextPackMarkdown,
   renderSummaryJson,
   renderSummaryMarkdown,
+  type ContextPackExportAnalyzer,
+  type ContextPackExportMode,
   type SummaryExportAnalyzer,
 } from './core/summary-export';
 import type { DateFilter } from './core/types/session-types';
@@ -59,6 +66,84 @@ export async function exportSummaryFiles(
 
   const action = await vscode.window.showInformationMessage(
     `Exported AI Engineer Coach summary to ${folder.fsPath}`,
+    'Open Folder',
+  );
+  if (action === 'Open Folder') {
+    await vscode.env.openExternal(folder);
+  }
+
+  return result;
+}
+
+async function pickContextPackMode(): Promise<ContextPackExportMode | undefined> {
+  const picked = await vscode.window.showQuickPick(
+    [
+      {
+        label: 'Safe Context Pack',
+        description: 'Analytical findings without raw prompt/response turns',
+        mode: 'safe' as const,
+      },
+      {
+        label: 'Full Raw Context Pack',
+        description: 'Includes bounded raw prompt/response excerpts',
+        mode: 'full' as const,
+      },
+    ],
+    {
+      title: 'Choose AI Engineer Coach context pack export mode',
+      placeHolder: 'Safe mode is recommended unless you need raw session excerpts.',
+      ignoreFocusOut: true,
+    },
+  );
+  return picked?.mode;
+}
+
+export async function exportContextPackFiles(
+  analyzer: ContextPackExportAnalyzer,
+  mode?: ContextPackExportMode,
+  filter?: DateFilter,
+): Promise<SummaryExportWriteResult> {
+  const selectedMode = mode ?? await pickContextPackMode();
+  if (!selectedMode) return { ok: false, cancelled: true };
+
+  const generatedAt = new Date();
+  const report = await buildContextPackExportFromAnalyzerAsync(
+    analyzer,
+    selectedMode,
+    filter,
+    generatedAt,
+    loadSessionFromDisk,
+  );
+  const filenames = getContextPackExportFilenames(generatedAt);
+  const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+
+  const folders = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    defaultUri,
+    openLabel: 'Export Context Pack',
+    title: 'Choose a folder for the AI Engineer Coach context pack',
+  });
+
+  const folder = folders?.[0];
+  if (!folder) return { ok: false, cancelled: true };
+
+  const markdownUri = vscode.Uri.joinPath(folder, filenames.markdown);
+  const jsonUri = vscode.Uri.joinPath(folder, filenames.json);
+
+  await vscode.workspace.fs.writeFile(markdownUri, Buffer.from(renderContextPackMarkdown(report), 'utf8'));
+  await vscode.workspace.fs.writeFile(jsonUri, Buffer.from(renderContextPackJson(report), 'utf8'));
+
+  const result = {
+    ok: true,
+    folder: folder.fsPath,
+    markdownPath: markdownUri.fsPath,
+    jsonPath: jsonUri.fsPath,
+  };
+
+  const action = await vscode.window.showInformationMessage(
+    `Exported AI Engineer Coach ${selectedMode} context pack to ${folder.fsPath}`,
     'Open Folder',
   );
   if (action === 'Open Folder') {
