@@ -1374,6 +1374,16 @@
 .img-stat-chip.accent .img-stat-val { color: var(--accent-purple); font-size: 12px; }
 .img-stat-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; }
 
+/* Time-range filter bar */
+.img-range-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-bottom: 14px;
+}
+.img-range-count {
+  margin-left: auto; font-size: 11px; color: var(--text-muted);
+  white-space: nowrap;
+}
+
 /* Tabs */
 .img-tabs {
   display: flex; gap: 2px;

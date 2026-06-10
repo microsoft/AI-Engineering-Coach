@@ -78,6 +78,42 @@ function rankMomentsForGallery(moments: ImageMoment[]): ImageMoment[] {
   return scored.map(x => x.moment);
 }
 
+/* ── Time-range filter ───────────────────────────────────────── */
+
+export interface ImageTimeRange {
+  /** Window length in days; 0 means "All time" (no lower bound). */
+  days: number;
+  label: string;
+}
+
+/** Range options shown in the toolbar. Mirrors the Output tab pattern. */
+export const IMAGE_TIME_RANGES: ImageTimeRange[] = [
+  { days: 1, label: 'Last 24 hours' },
+  { days: 7, label: 'Last 7 days' },
+  { days: 30, label: 'Last 30 days' },
+  { days: 90, label: 'Last 3 months' },
+  { days: 0, label: 'All time' },
+];
+
+/** Lower-bound timestamp (ms) for a range. 0 days ("All time") returns 0. */
+export function rangeStartTimestamp(days: number, now: number = Date.now()): number {
+  return days <= 0 ? 0 : now - days * 86_400_000;
+}
+
+/** Keep only moments captured within the selected range. */
+export function filterMomentsByRange<T extends { timestamp: number }>(
+  moments: T[],
+  days: number,
+  now: number = Date.now(),
+): T[] {
+  const start = rangeStartTimestamp(days, now);
+  return start === 0 ? moments : moments.filter(m => m.timestamp >= start);
+}
+
+// Selected range in days (0 = all time). Module-level so the choice persists
+// across re-renders and navigation for the lifetime of the session.
+let activeRangeDays = 0;
+
 /* ── Render entry ────────────────────────────────────────────── */
 
 const PAGE_SIZE = 30;
@@ -146,20 +182,28 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
 
   /** Returns stories filtered to only include moments with confirmed images */
   function getConfirmedStories(): ImageStory[] {
+    const start = rangeStartTimestamp(activeRangeDays);
     return pickTopStories(data.stories, 8)
-      .map(s => ({
-        ...s,
-        moments: s.moments.filter(m => confirmedImageSet.has(m.id)),
-        totalImages: s.moments.filter(m => confirmedImageSet.has(m.id)).length,
-      }))
+      .map(s => {
+        const moments = s.moments.filter(
+          m => confirmedImageSet.has(m.id) && (start === 0 || m.timestamp >= start),
+        );
+        return { ...s, moments, totalImages: moments.length };
+      })
       .filter(s => s.moments.length >= 2)
       .slice(0, 5);
   }
 
+  /** Moments within the active time range (workspace filter not applied). */
+  function timeFilteredMoments(): ImageMoment[] {
+    return filterMomentsByRange(rankedMoments, activeRangeDays);
+  }
+
   function getFilterBase(): ImageMoment[] {
+    const base = timeFilteredMoments();
     return galleryFilter === 'all'
-      ? rankedMoments
-      : rankedMoments.filter(m => m.workspace === galleryFilter);
+      ? base
+      : base.filter(m => m.workspace === galleryFilter);
   }
 
   function hasUndiscoveredImages(base: ImageMoment[]): boolean {
@@ -208,15 +252,33 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
     return confirmedCount > visibleCount || hasUndiscoveredImages(base);
   }
 
+  function renderRangeBar(): ComponentChildren {
+    const count = getFilterBase().length;
+    return html`
+      <div class="cons-range-bar img-range-bar" id="img-range">
+        ${IMAGE_TIME_RANGES.map(r => html`
+          <button class=${`cons-range-btn${activeRangeDays === r.days ? ' active' : ''}`}
+                  onClick=${() => {
+                    if (activeRangeDays === r.days) return;
+                    activeRangeDays = r.days;
+                    visibleCount = PAGE_SIZE;
+                    void loadMoreAndRender(true);
+                  }}>${r.label}</button>`)}
+        <span class="img-range-count">${count} ${count === 1 ? 'moment' : 'moments'}</span>
+      </div>`;
+  }
+
   function rerenderPage(): void {
     const filtered = getFiltered();
-    const workspaces = [...new Set(rankedMoments.map(m => m.workspace))];
+    const inRange = timeFilteredMoments();
+    const workspaces = [...new Set(inRange.map(m => m.workspace))];
 
     render(html`
       <div class="img-gallery-page">
         ${renderHeader(data)}
+        ${renderRangeBar()}
         ${renderStoryReels(getConfirmedStories(), (s: ImageStory) => { openStoryPlayer(s); })}
-        ${renderWorkspaceFilter(workspaces, galleryFilter, rankedMoments, workspacesWithImages, (f: string) => { galleryFilter = f; visibleCount = PAGE_SIZE; void loadMoreAndRender(true); })}
+        ${renderWorkspaceFilter(workspaces, galleryFilter, inRange, workspacesWithImages, (f: string) => { galleryFilter = f; visibleCount = PAGE_SIZE; void loadMoreAndRender(true); })}
         <div class="img-grid" id="img-grid">
           ${filtered.map(m => renderMomentCard(m, (mm: ImageMoment) => {
             const story = storyBySession.get(mm.sessionId);
@@ -226,7 +288,12 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
             }
           }))}
         </div>
-        ${filtered.length === 0 && !canLoadMore() ? html`
+        ${inRange.length === 0 ? html`
+          <div class="page-empty">
+            <h2>No Coding Moments In This Range</h2>
+            <p class="text-muted">No screenshots were captured in the selected time range. Try a wider range.</p>
+          </div>`
+        : filtered.length === 0 && !canLoadMore() ? html`
           <div class="page-empty">
             <h2>No Loadable Images Found</h2>
             <p class="text-muted">These sessions referenced images, but the raw screenshots could not be loaded.</p>
