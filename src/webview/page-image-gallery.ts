@@ -88,10 +88,10 @@ export interface ImageTimeRange {
 
 /** Range options shown in the toolbar. Mirrors the Output tab pattern. */
 export const IMAGE_TIME_RANGES: ImageTimeRange[] = [
-  { days: 1, label: 'Last 24 hours' },
   { days: 7, label: 'Last 7 days' },
-  { days: 30, label: 'Last 30 days' },
+  { days: 28, label: 'Last 4 weeks' },
   { days: 90, label: 'Last 3 months' },
+  { days: 180, label: 'Last 6 months' },
   { days: 0, label: 'All time' },
 ];
 
@@ -195,8 +195,13 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
   }
 
   /** Moments within the active time range (workspace filter not applied). */
+  let cachedRangeDays: number | null = null;
+  let cachedInRange: ImageMoment[] = rankedMoments;
   function timeFilteredMoments(): ImageMoment[] {
-    return filterMomentsByRange(rankedMoments, activeRangeDays);
+    if (cachedRangeDays === activeRangeDays) return cachedInRange;
+    cachedRangeDays = activeRangeDays;
+    cachedInRange = filterMomentsByRange(rankedMoments, activeRangeDays);
+    return cachedInRange;
   }
 
   function getFilterBase(): ImageMoment[] {

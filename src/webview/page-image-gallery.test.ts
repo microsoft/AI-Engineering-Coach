@@ -24,7 +24,9 @@ describe('Coding Moments time-range filter', () => {
     const { IMAGE_TIME_RANGES } = await import('./page-image-gallery');
     const labels = IMAGE_TIME_RANGES.map(r => r.label);
     expect(labels).toContain('Last 7 days');
-    expect(labels).toContain('Last 30 days');
+    expect(labels).toContain('Last 4 weeks');
+    expect(labels).toContain('Last 3 months');
+    expect(labels).toContain('Last 6 months');
     expect(labels).toContain('All time');
     // "All time" is represented by days === 0.
     expect(IMAGE_TIME_RANGES.find(r => r.label === 'All time')?.days).toBe(0);

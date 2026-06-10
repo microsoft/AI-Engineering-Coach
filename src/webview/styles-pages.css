@@ -1378,6 +1378,7 @@
 .img-range-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   margin-bottom: 14px;
+  width: 100%;
 }
 .img-range-count {
   margin-left: auto; font-size: 11px; color: var(--text-muted);
