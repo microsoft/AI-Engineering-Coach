@@ -3,7 +3,11 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { readTextWithByteLimit } from './fetch-utils';
+
 export const CATALOG_BASE = 'https://awesome-copilot.github.com';
+
+const CATALOG_PAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 export interface RawCatalogItem {
   kind: 'skill' | 'agent' | 'instruction' | 'hook';
@@ -31,9 +35,9 @@ function stripHtml(text: string): string {
 
 async function fetchCatalogPage(slug: string, kind: RawCatalogItem['kind']): Promise<RawCatalogItem[]> {
   const url = `${CATALOG_BASE}/${slug}/`;
-  const response = await fetch(url);
+  const response = await fetch(url, { redirect: 'error' });
   if (!response.ok) return [];
-  const html = await response.text();
+  const html = await readTextWithByteLimit(response, CATALOG_PAGE_MAX_BYTES, 'Catalog page too large');
 
   const items: RawCatalogItem[] = [];
   const articleRegex = /<article\s+class="resource-item"[^>]*data-path="([^"]*)"[^>]*>([\s\S]*?)<\/article>/g;

@@ -23,7 +23,7 @@ import {
 import { runDetectors, runEmitters } from '../core/detector-registry';
 import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from '../core/rule-pipeline';
 import { parseRule, serializeRule } from '../core/rule-parser';
-import { getRuleLayerInfo, getPersonalRulesDir } from '../core/rule-loader';
+import { getRuleLayerInfo, getPersonalRulesDir, getProjectRulesDir } from '../core/rule-loader';
 import { getPending, approve as approveTrust, getDefaultTrustStore } from '../core/rule-trust';
 import { isoWeek } from '../core/helpers';
 import { FIELD_SCHEMA, METRIC_PRIMITIVES, FUNCTION_CATALOG, compileFilter, validateExpression  } from '../core/dsl/index';
@@ -50,6 +50,52 @@ type DslRow = Record<string, unknown>;
 function pickRows(scope: string, reqs: SessionRequest[], sessions: Session[]): DslRow[] {
   const isSessionScope = scope === 'sessions' || scope === 'session';
   return (isSessionScope ? sessions : reqs) as unknown as DslRow[];
+}
+
+function isPathUnder(pathMod: typeof import('path'), resolved: string, dir: string): boolean {
+  const base = pathMod.resolve(dir);
+  return resolved === base || resolved.startsWith(base + pathMod.sep);
+}
+
+// `inAllowed` gates the write entirely; `isPersonal` gates auto-trust.
+function classifyRuleWritePath(pathMod: typeof import('path'), filePath: string): {
+  resolved: string;
+  inAllowed: boolean;
+  isPersonal: boolean;
+} {
+  const personalDir = getPersonalRulesDir();
+  let workspaceRoot: string | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const vscode = require('vscode') as typeof import('vscode');
+    workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  } catch { /* test context */ }
+  const allowedDirs = [personalDir, ...(workspaceRoot ? [getProjectRulesDir(workspaceRoot)] : [])];
+  const resolved = pathMod.resolve(filePath);
+  return {
+    resolved,
+    inAllowed: allowedDirs.some(d => isPathUnder(pathMod, resolved, d)),
+    isPersonal: isPathUnder(pathMod, resolved, personalDir),
+  };
+}
+
+function resolveRuleFilePath(
+  fsMod: typeof import('fs'),
+  pathMod: typeof import('path'),
+  parsed: NonNullable<ReturnType<typeof parseRule>>,
+  ruleIdParam: string,
+): string {
+  if (ruleIdParam) {
+    const existing = getRule(ruleIdParam);
+    if (existing?.sourceFilePath && (existing.source === 'personal' || existing.source === 'project')) {
+      return existing.sourceFilePath;
+    }
+  }
+
+  const dir = getPersonalRulesDir();
+  try { fsMod.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+  const safeId = parsed.id.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '') || 'custom-rule';
+  return pathMod.join(dir, `${safeId}.md`);
 }
 
 export function validateDateFilter(p: Record<string, unknown>): DateFilter | undefined {
@@ -810,19 +856,10 @@ const rpcHandlers: TypedRpcHandlers = {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const path = require('path') as typeof import('path');
 
-    let filePath = '';
-    if (ruleIdParam) {
-      const existing = getRule(ruleIdParam);
-      if (existing?.sourceFilePath && (existing.source === 'personal' || existing.source === 'project')) {
-        filePath = existing.sourceFilePath;
-      }
-    }
-    if (!filePath) {
-      const dir = getPersonalRulesDir();
-      try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
-      const safeId = parsed.id.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '') || 'custom-rule';
-      filePath = path.join(dir, `${safeId}.md`);
-    }
+    const filePath = resolveRuleFilePath(fs, path, parsed, ruleIdParam);
+
+    const { inAllowed, isPersonal } = classifyRuleWritePath(path, filePath);
+    if (!inAllowed) return { ok: false, error: 'Refusing to write outside rules directories' };
 
     try {
       fs.writeFileSync(filePath, markdown, 'utf-8');
@@ -831,7 +868,7 @@ const rpcHandlers: TypedRpcHandlers = {
     }
 
     const store = getDefaultTrustStore();
-    if (store) {
+    if (store && isPersonal) {
       try { await approveTrust(store, filePath, markdown); } catch { /* ignore */ }
     }
 
@@ -1282,5 +1319,7 @@ function buildNumericHistogram(sorted: number[], buckets: number): { label: stri
 }
 
 export function getRpcHandler(method: string): RpcHandler | undefined {
-  return rpcHandlers[method as RpcMethodName];
+  if (!Object.prototype.hasOwnProperty.call(rpcHandlers, method)) return undefined;
+  const handler = rpcHandlers[method as RpcMethodName];
+  return typeof handler === 'function' ? handler : undefined;
 }

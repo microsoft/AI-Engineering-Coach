@@ -26,6 +26,18 @@ dist/**/*.map
 README.github.md
 SECURITY.md
 
+# Dev-only config & tooling — not needed at runtime
+.husky/**
+.devcontainer/**
+cspell.json
+knip.json
+playwright.config.ts
+.lockfile-lintrc.json
+.npmrc
+
+# Marketing assets are for the repo / store listing, not the shipped bundle
+marketing/**
+
 # Benchmark / perf outputs
 benchmark-*.json
 

@@ -12,6 +12,8 @@ AI Engineer Coach reads local log files from the following AI coding assistants.
 
 The primary harness. AI Engineer Coach parses the chat panel logs that GitHub Copilot writes to the VS Code extension host log directory. This captures every request, response, model used, token counts, tool calls, file references, and terminal commands.
 
+When VS Code connects through Remote-WSL, Remote-SSH, or a Dev Container, the logs live on the remote host under `~/.vscode-server/data/User/workspaceStorage/` (or `~/.vscode-server-insiders/data/User/workspaceStorage/` for Insiders) and appear in the dashboard as `Local Agent (Server)` or `Local Agent (Server Insiders)`.
+
 **What is tracked:**
 - Requests and responses with timestamps
 - Model selection (e.g., `claude-opus-4.6`, `gpt-5.4`, `auto`)

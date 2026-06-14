@@ -13,6 +13,7 @@ AI Engineer Coach reads logs from multiple AI coding tools:
 | Harness | Source |
 |---|---|
 | **Local Agent / Local Agent (Insiders)** | Chat panel logs in the extension host directory (VS Code / VS Code Insiders) |
+| **Local Agent (Server) / Local Agent (Server Insiders)** | Remote host chat panel logs under `~/.vscode-server/data/User/workspaceStorage/` or `~/.vscode-server-insiders/data/User/workspaceStorage/` |
 | **GitHub Copilot for Xcode** | Copilot Chat conversations from Apple's Xcode IDE |
 | **Claude** | Session files from Anthropic's CLI-based coding assistant |
 | **Codex** | Session history from OpenAI's terminal agent |

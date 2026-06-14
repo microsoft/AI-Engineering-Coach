@@ -1,23 +1,25 @@
-version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-    groups:
-      dev-dependencies:
-        dependency-type: development
-        update-types:
-          - minor
-          - patch
-      production-dependencies:
-        dependency-type: production
-        update-types:
-          - minor
-          - patch
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+- directory: /
+  groups:
+    dev-dependencies:
+      dependency-type: development
+      update-types:
+      - minor
+      - patch
+    production-dependencies:
+      dependency-type: production
+      update-types:
+      - minor
+      - patch
+  open-pull-requests-limit: 10
+  package-ecosystem: npm
+  schedule:
+    interval: weekly
+- directory: /
+  ignore:
+  - dependency-name: "github/gh-aw-actions/**" # Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump.
+  open-pull-requests-limit: 5
+  package-ecosystem: github-actions
+  schedule:
+    interval: weekly
+version: 2

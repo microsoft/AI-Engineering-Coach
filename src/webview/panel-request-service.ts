@@ -25,8 +25,9 @@ import {
   SCHEMA_TRIAGE,
 } from './panel-llm';
 import { getCatalogItems } from './panel-catalog';
+import { readTextWithByteLimit } from './fetch-utils';
 import { validateDateFilter } from './panel-rpc';
-import { isNumber, isOptionalString, isRecord, isString, postError, postEvent, postResponse, RequestMessage } from './panel-shared';
+import { isNumber, isOptionalString, isRecord, isString, postError, postEvent, postResponse, RequestMessage, safeJoinUnder } from './panel-shared';
 
 type CustomPanelMethodName =
   | 'createSkill'
@@ -75,6 +76,12 @@ type QuizQuestion = {
 };
 
 const QUIZ_DIFFICULTIES: ReadonlySet<QuizDifficulty> = new Set(['easy', 'medium', 'hard']);
+
+const CATALOG_MAX_BYTES = 1024 * 1024;
+
+async function readCappedText(response: Response): Promise<string> {
+  return readTextWithByteLimit(response, CATALOG_MAX_BYTES, 'Catalog item too large');
+}
 
 function getStringArray(value: unknown, limit: number): string[] {
   return Array.isArray(value) ? value.filter(isString).slice(0, limit) : [];
@@ -132,8 +139,9 @@ export class PanelRequestService {
   ) {}
 
   tryHandle(msg: RequestMessage): boolean {
+    if (!Object.prototype.hasOwnProperty.call(this.handlers, msg.method)) return false;
     const handler = this.handlers[msg.method as CustomPanelMethodName];
-    if (!handler) return false;
+    if (typeof handler !== 'function') return false;
     void Promise.resolve(handler(msg)).catch((error: unknown) => {
       postError(this.webview, msg.id, error instanceof Error ? error.message : 'Internal error');
     });
@@ -606,18 +614,21 @@ Respond with a JSON object: {"items":[{"title":"...","url":"https://...","type":
       postError(this.webview, msg.id, 'Missing filename or content');
       return;
     }
-    if (filename.includes('..') || filename.startsWith('/')) {
+
+    const homeDir = process.env.HOME || process.env.USERPROFILE;
+    if (!homeDir) {
+      postError(this.webview, msg.id, 'Cannot determine home directory');
+      return;
+    }
+    const targetPath = safeJoinUnder(path.join(homeDir, '.agents', 'skills'), filename.split('/'), { allowedExts: ['.md'] });
+    if (!targetPath) {
       postError(this.webview, msg.id, 'Invalid filename');
       return;
     }
 
     try {
-      const homeDir = process.env.HOME || process.env.USERPROFILE;
-      if (!homeDir) {
-        postError(this.webview, msg.id, 'Cannot determine home directory');
-        return;
-      }
-      const targetUri = vscode.Uri.file(`${homeDir}/.agents/skills/${filename}`);
+      const targetUri = vscode.Uri.file(targetPath);
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(targetPath)));
       await vscode.workspace.fs.writeFile(targetUri, Buffer.from(content, 'utf8'));
       postResponse(this.webview, msg.id, { ok: true, path: targetUri.fsPath });
     } catch (error: unknown) {
@@ -642,18 +653,21 @@ Respond with a JSON object: {"items":[{"title":"...","url":"https://...","type":
         postError(this.webview, msg.id, 'Invalid catalog URL');
         return;
       }
-      const response = await fetch(parsedUrl.toString());
+      const response = await fetch(parsedUrl.toString(), { redirect: 'error' });
       if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
-      const content = await response.text();
+      const content = await readCappedText(response);
 
       const homeDir = process.env.HOME || process.env.USERPROFILE;
       if (!homeDir) throw new Error('Cannot determine home directory');
       const subDir = kind === 'agent' ? 'agents' : 'skills';
       const slug = title.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/-+/g, '-').replaceAll(/^-|-$/g, '');
       const filename = catalogPath.split('/').pop() || `${slug}.md`;
-      if (slug.includes('..') || filename.includes('..')) throw new Error('Invalid path');
 
-      const targetUri = vscode.Uri.file(`${homeDir}/.agents/${subDir}/${slug}/${filename}`);
+      const targetPath = safeJoinUnder(path.join(homeDir, '.agents', subDir), [slug, filename], { allowedExts: ['.md'] });
+      if (!targetPath) throw new Error('Invalid path');
+
+      const targetUri = vscode.Uri.file(targetPath);
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(targetPath)));
       await vscode.workspace.fs.writeFile(targetUri, Buffer.from(content, 'utf8'));
       postResponse(this.webview, msg.id, { content, filename: `${slug}/${filename}` });
     } catch (error: unknown) {
@@ -1163,7 +1177,7 @@ ${contextSection}`;
     try {
       const prResponse = await fetch(
         `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&per_page=50&sort=updated&direction=desc`,
-        { headers },
+        { headers, redirect: 'error' },
       );
       if (!prResponse.ok) return stats;
 
@@ -1189,7 +1203,7 @@ ${contextSection}`;
 
   private async fetchGitHubCount(url: string, headers: Record<string, string>): Promise<number | null> {
     try {
-      const response = await fetch(url, { headers });
+      const response = await fetch(url, { headers, redirect: 'error' });
       if (!response.ok) return null;
       const data = await response.json() as { total_count?: number } | Array<unknown>;
       if (Array.isArray(data)) return data.length;
@@ -1203,7 +1217,7 @@ ${contextSection}`;
     try {
       const collabResponse = await fetch(
         `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/collaborators?per_page=100`,
-        { headers },
+        { headers, redirect: 'error' },
       );
       if (!collabResponse.ok) return [];
       const collaborators = await collabResponse.json() as Array<{ login?: string }>;
@@ -1312,8 +1326,13 @@ ${contextSection}`;
       postError(this.webview, msg.id, 'Missing owner/repo');
       return;
     }
+    if (owner !== '_auth_' && (!/^[A-Za-z0-9._-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(repo))) {
+      postError(this.webview, msg.id, 'Invalid owner/repo');
+      return;
+    }
 
-    const token = await this.getGitHubAccessToken(params.requestAuth === true);
+    const isAuthProbe = owner === '_auth_';
+    const token = await this.getGitHubAccessToken(isAuthProbe && params.requestAuth === true);
     if (!token) {
       postResponse(this.webview, msg.id, {
         authRequired: true,
@@ -1322,7 +1341,7 @@ ${contextSection}`;
       return;
     }
 
-    if (owner === '_auth_') {
+    if (isAuthProbe) {
       postResponse(this.webview, msg.id, { authRequired: false });
       return;
     }

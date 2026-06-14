@@ -9,7 +9,7 @@ import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import { reconstructFromJsonl } from './parser-vscode-files';
 import { parseCLIEventsFile } from './parser-vscode-cli';
-import { parseSessionFile, harnessFromPath, scanVsCodeDirs } from './parser-vscode';
+import { parseSessionFile, harnessFromPath, findVsCodeDirs, scanVsCodeDirs } from './parser-vscode';
 
 function withTempFile(name: string, content: string, run: (filePath: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
@@ -741,5 +741,56 @@ describe('parseSessionFile — skill detection', () => {
       expect(session).not.toBeNull();
       expect(session!.requests[0].skillsUsed).toContain('playwright-cli');
     });
+  });
+});
+describe('harnessFromPath — VS Code Server', () => {
+  it('returns "Local Agent (Server)" for .vscode-server paths', () => {
+    expect(harnessFromPath('/home/alice/.vscode-server/data/User/workspaceStorage')).toBe('Local Agent (Server)');
+  });
+
+  it('returns "Local Agent (Server Insiders)" for .vscode-server-insiders paths', () => {
+    expect(harnessFromPath('/home/alice/.vscode-server-insiders/data/User/workspaceStorage')).toBe('Local Agent (Server Insiders)');
+  });
+
+  it('does not match .vscode-server-insiders as plain .vscode-server', () => {
+    // .vscode-server-insiders contains the string ".vscode-server" — ensure
+    // the more-specific check fires first.
+    const result = harnessFromPath('/home/alice/.vscode-server-insiders/data/User/workspaceStorage');
+    expect(result).toBe('Local Agent (Server Insiders)');
+    expect(result).not.toBe('Local Agent (Server)');
+  });
+});
+
+describe('findVsCodeDirs — VS Code Server', () => {
+  it('includes server workspaceStorage paths on non-Windows hosts', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-vscode-'));
+    const home = process.env.HOME;
+    const userProfile = process.env.USERPROFILE;
+    // findVsCodeDirs() branches on process.platform: on win32 it reads editions from
+    // %APPDATA% and skips the .vscode-server block entirely. This test exercises the
+    // non-Windows layout (~/.config + ~/.vscode-server), so pin the platform rather than
+    // relying on the host OS — otherwise it (correctly) returns [] when run on Windows.
+    const realPlatform = process.platform;
+    const expected = [
+      path.join(root, '.config', 'Code', 'User', 'workspaceStorage'),
+      path.join(root, '.config', 'Code - Insiders', 'User', 'workspaceStorage'),
+      path.join(root, '.vscode-server', 'data', 'User', 'workspaceStorage'),
+      path.join(root, '.vscode-server-insiders', 'data', 'User', 'workspaceStorage'),
+    ];
+
+    for (const dir of expected) fs.mkdirSync(dir, { recursive: true });
+
+    process.env.HOME = root;
+    process.env.USERPROFILE = '';
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+
+    try {
+      expect(findVsCodeDirs()).toEqual(expected);
+    } finally {
+      process.env.HOME = home;
+      process.env.USERPROFILE = userProfile;
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

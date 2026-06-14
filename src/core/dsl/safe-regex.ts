@@ -159,20 +159,16 @@ export function isLikelySafe(pattern: string): boolean {
   return maxStarHeight <= 2;
 }
 
-function hasOverlappingAlternation(body: string): boolean {
+const CLASS_ESCAPES = new Set(['w', 'W', 'd', 'D', 's', 'S']);
+
+function splitTopLevelBranches(body: string): string[] {
   const branches: string[] = [];
   let depth = 0;
   let start = 0;
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (ch === '\\') { i++; continue; }
-    if (ch === '[') {
-      while (i < body.length && body[i] !== ']') {
-        if (body[i] === '\\') i++;
-        i++;
-      }
-      continue;
-    }
+    if (ch === '[') { i = skipCharacterClass(body, i); continue; }
     if (ch === '(') depth++;
     else if (ch === ')') depth--;
     else if (ch === '|' && depth === 0) {
@@ -180,23 +176,64 @@ function hasOverlappingAlternation(body: string): boolean {
       start = i + 1;
     }
   }
-  if (branches.length === 0) return false;
   branches.push(body.slice(start));
+  return branches;
+}
 
-  // If any two branches share a non-empty literal prefix, flag it.
-  for (let i = 0; i < branches.length; i++) {
-    for (let j = i + 1; j < branches.length; j++) {
-      const a = literalPrefix(branches[i]);
-      const b = literalPrefix(branches[j]);
-      if (a && b && (a === b || a.startsWith(b) || b.startsWith(a))) {
-        return true;
-      }
+// Alternation branches that can match the same first character cause
+// catastrophic backtracking under an unbounded quantifier (e.g. `(.|a)+`).
+function hasOverlappingAlternation(body: string): boolean {
+  const tokens = splitTopLevelBranches(body).map(firstToken);
+  if (tokens.length < 2) return false;
+
+  for (let i = 0; i < tokens.length; i++) {
+    for (let j = i + 1; j < tokens.length; j++) {
+      if (tokensOverlap(tokens[i], tokens[j])) return true;
     }
   }
   return false;
 }
 
-/** Return the leading literal-character run of a branch (no metachars). */
+// A branch's leading token: either a literal run or a single-char matcher
+// (`.`, a class escape, or a `[...]` class). `null` means indeterminate.
+type FirstToken =
+  | { set: false; literal: string }
+  | { set: true; source: string }
+  | null;
+
+function firstToken(branch: string): FirstToken {
+  const body = branch.startsWith('^') ? branch.slice(1) : branch;
+  if (body.length === 0) return null;
+
+  if (body[0] === '.') return { set: true, source: '.' };
+  if (body[0] === '[') return { set: true, source: body.slice(0, skipCharacterClass(body, 0) + 1) };
+  if (body[0] === '\\' && body.length > 1 && CLASS_ESCAPES.has(body[1])) {
+    return { set: true, source: body.slice(0, 2) };
+  }
+
+  const prefix = literalPrefix(body);
+  return prefix ? { set: false, literal: prefix } : null;
+}
+
+function tokensOverlap(a: FirstToken, b: FirstToken): boolean {
+  if (!a || !b) return false;
+  if (!a.set && !b.set) return a.literal.startsWith(b.literal) || b.literal.startsWith(a.literal);
+  if (a.set && b.set) return true;
+  const set = a.set ? a : (b as Extract<FirstToken, { set: true }>);
+  const literal = a.set ? (b as Extract<FirstToken, { set: false }>) : a;
+  return setMatchesChar(set.source, literal.literal[0]);
+}
+
+// Whether a single-char matcher source (e.g. `[a-z]`, `\w`, `.`) accepts `ch`.
+// An unparseable source is treated as a match (fail closed toward rejection).
+function setMatchesChar(source: string, ch: string): boolean {
+  try {
+    return new RegExp(`^(?:${source})$`).test(ch);
+  } catch {
+    return true;
+  }
+}
+
 function literalPrefix(branch: string): string {
   let out = '';
   for (let i = 0; i < branch.length; i++) {

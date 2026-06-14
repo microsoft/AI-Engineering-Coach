@@ -199,6 +199,28 @@ describe('reconstructFromJsonl', () => {
       expect(mode.id).toBe('agent');
     });
   });
+
+  it('does not pollute Object.prototype via a __proto__ set path', () => {
+    const lines = [
+      JSON.stringify({ kind: 0, v: { ok: true } }),
+      JSON.stringify({ kind: 1, k: ['__proto__', 'polluted'], v: 'pwned' }),
+    ].join('\n');
+    withTempFile('proto-set.jsonl', lines, (filePath) => {
+      reconstructFromJsonl(filePath);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+  });
+
+  it('does not pollute Object.prototype via a constructor.prototype append path', () => {
+    const lines = [
+      JSON.stringify({ kind: 0, v: { ok: true } }),
+      JSON.stringify({ kind: 2, k: ['constructor', 'prototype', 'tainted'], v: ['x'] }),
+    ].join('\n');
+    withTempFile('proto-append.jsonl', lines, (filePath) => {
+      reconstructFromJsonl(filePath);
+      expect(({} as Record<string, unknown>).tainted).toBeUndefined();
+    });
+  });
 });
 
 describe('parseWorkspaceName', () => {

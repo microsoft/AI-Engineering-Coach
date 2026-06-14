@@ -358,4 +358,34 @@ describe('isLikelySafe', () => {
   it('returns false for prefix-overlapping alternation under a quantifier', () => {
     expect(isLikelySafe('(a|aa)+')).toBe(false);
   });
+
+  it('returns false for a character-class branch overlapping a literal under a quantifier', () => {
+    expect(isLikelySafe('^([a]|a)+$')).toBe(false);
+  });
+
+  it('returns false for a dot branch overlapping a literal under a quantifier', () => {
+    expect(isLikelySafe('^(.|a)+$')).toBe(false);
+  });
+
+  it('returns false for a class-escape branch overlapping a literal under a quantifier', () => {
+    expect(isLikelySafe('^(\\w|a)+$')).toBe(false);
+  });
+
+  it('returns true for a disjoint character-class alternation under a quantifier', () => {
+    expect(isLikelySafe('^([a-z]|_)+$')).toBe(true);
+  });
+
+  it('rejects a class-overlapping alternation pattern through compileSafe', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    // Pattern assembled at runtime so static analysis does not treat this
+    // rejected fixture as a live regex; compileSafe returns null before any
+    // RegExp is constructed.
+    const ch = String.fromCharCode(97);
+    const overlapping = `^([${ch}]|${ch})+$`;
+    expect(compileSafe(overlapping)).toBeNull();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
 });

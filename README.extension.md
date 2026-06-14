@@ -55,6 +55,8 @@ The extension is organized into three sections: **Observe**, **Measure**, and **
 | --- | --- |
 | **Local Agent** | macOS: `~/Library/Application Support/Code/User/workspaceStorage/`<br>Linux: `~/.config/Code/User/workspaceStorage/`<br>Windows: `%APPDATA%\Code\User\workspaceStorage\` |
 | **Local Agent (Insiders)** | macOS: `~/Library/Application Support/Code - Insiders/User/workspaceStorage/`<br>Linux: `~/.config/Code - Insiders/User/workspaceStorage/`<br>Windows: `%APPDATA%\Code - Insiders\User\workspaceStorage\` |
+| **Local Agent (Server)** | Linux/macOS remote host: `~/.vscode-server/data/User/workspaceStorage/` |
+| **Local Agent (Server Insiders)** | Linux/macOS remote host: `~/.vscode-server-insiders/data/User/workspaceStorage/` |
 | **Xcode Copilot Chat** | `~/.config/github-copilot/xcode/` (requires `sqlite3`) |
 | **Claude** | macOS/Linux: `~/.claude/projects/`<br>Windows: `%USERPROFILE%\.claude\projects\` |
 | **Codex** | macOS/Linux: `~/.codex/sessions/`<br>Windows: `%USERPROFILE%\.codex\sessions\` |

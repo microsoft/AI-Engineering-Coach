@@ -107,6 +107,12 @@ type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string
 type JsonObject = Record<string, JsonValue>;
 type PathKey = string | number;
 
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isForbiddenKey(key: PathKey): boolean {
+  return typeof key === 'string' && FORBIDDEN_KEYS.has(key);
+}
+
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -135,16 +141,18 @@ function setAtPath(obj: JsonValue, keys: PathKey[], value: JsonValue): void {
   let current = obj;
   for (let i = 0; i < keys.length - 1; i++) {
     const key = keys[i];
+    if (isForbiddenKey(key)) return;
     if (typeof key === 'number' && Array.isArray(current)) {
       while (current.length <= key) current.push(null);
       if (current[key] === null) current[key] = {};
       current = current[key]!;
     } else if (typeof current === 'object' && current !== null && !Array.isArray(current)) {
-      if (!(key as string in current)) (current as JsonObject)[key as string] = {};
+      if (!Object.prototype.hasOwnProperty.call(current, key as string)) (current as JsonObject)[key as string] = {};
       current = (current as JsonObject)[key as string];
     }
   }
   const last = keys[keys.length - 1];
+  if (isForbiddenKey(last)) return;
   if (Array.isArray(current)) {
     while (current.length <= (last as number)) current.push(null);
     current[last as number] = value;
@@ -156,10 +164,11 @@ function setAtPath(obj: JsonValue, keys: PathKey[], value: JsonValue): void {
 function appendAtPath(obj: JsonValue, keys: PathKey[], items: JsonValue): void {
   let target: JsonValue = obj;
   for (const key of keys) {
+    if (isForbiddenKey(key)) return;
     if (typeof key === 'number' && Array.isArray(target)) {
       target = target[key];
     } else if (typeof target === 'object' && target !== null && !Array.isArray(target)) {
-      if (!(key as string in target)) (target as JsonObject)[key as string] = [];
+      if (!Object.prototype.hasOwnProperty.call(target, key as string)) (target as JsonObject)[key as string] = [];
       target = (target as JsonObject)[key as string];
     }
   }

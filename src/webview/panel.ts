@@ -18,7 +18,7 @@ import { getDashboardHtml, getErrorHtml } from './panel-html';
 import { getRpcHandler } from './panel-rpc';
 import { PanelRequestService } from './panel-request-service';
 import { DashboardSidebarProvider } from './panel-sidebar';
-import { isRequestMessage, postResponse, errorResult } from './panel-shared';
+import { isRequestMessage, isSafeExternalHttpsUrl, postResponse, errorResult } from './panel-shared';
 
 export { DashboardSidebarProvider } from './panel-sidebar';
 
@@ -273,11 +273,7 @@ export class DashboardPanel {
 
     // Open external URLs from webview
     if (msg.method === 'openExternal') {
-      const url = (msg.params as Record<string, unknown> | undefined)?.url;
-      if (typeof url === 'string') {
-        void vscode.env.openExternal(vscode.Uri.parse(url));
-        postResponse(this.panel.webview, msg.id, { ok: true });
-      }
+      this.handleOpenExternal(msg);
       return;
     }
 
@@ -328,6 +324,16 @@ export class DashboardPanel {
       if (!this.disposed) {
         try { postResponse(this.panel.webview, msg.id, data); } catch { /* disposed */ }
       }
+    }
+  }
+
+  private handleOpenExternal(msg: Extract<WebviewMessage, { type: 'request' }>): void {
+    const url = (msg.params as Record<string, unknown> | undefined)?.url;
+    if (isSafeExternalHttpsUrl(url)) {
+      void vscode.env.openExternal(vscode.Uri.parse(url));
+      try { postResponse(this.panel.webview, msg.id, { ok: true }); } catch { /* disposed */ }
+    } else {
+      try { postResponse(this.panel.webview, msg.id, errorResult('Invalid external URL')); } catch { /* disposed */ }
     }
   }
 

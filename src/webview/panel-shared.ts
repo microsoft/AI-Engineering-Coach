@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as crypto from 'crypto';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { WebviewMessage, ErrorResult } from '../core/types';
 
@@ -36,7 +37,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export function isRequestMessage(value: unknown): value is RequestMessage {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  return record.type === 'request' && isString(record.id) && isString(record.method);
+  if (record.type !== 'request' || !isString(record.id) || !isString(record.method)) return false;
+  // Handlers index into params by key, so reject arrays and primitives.
+  if (record.params !== undefined && !isRecord(record.params)) return false;
+  return true;
 }
 
 export function postResponse(webview: vscode.Webview, id: string, data: unknown): void {
@@ -63,4 +67,48 @@ export function escapeHtmlAttr(s: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function hasUrlControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1F || code === 0x7F) return true;
+  }
+  return false;
+}
+
+export function isSafeExternalHttpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || hasUrlControlChars(value) || !value.toLowerCase().startsWith('https://')) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname.length > 0 && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+/** Characters permitted in a single user-supplied path segment. */
+const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+export function safeJoinUnder(
+  baseDir: string,
+  segments: string[],
+  opts?: { allowedExts?: string[] },
+): string | null {
+  if (segments.length === 0) return null;
+  for (const segment of segments) {
+    if (!segment || segment === '.' || segment === '..' || !SAFE_SEGMENT.test(segment)) return null;
+  }
+
+  const finalSegment = segments[segments.length - 1];
+  if (opts?.allowedExts && !opts.allowedExts.includes(path.extname(finalSegment).toLowerCase())) {
+    return null;
+  }
+
+  const resolvedBase = path.resolve(baseDir);
+  const resolved = path.resolve(resolvedBase, ...segments);
+  if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep)) return null;
+  return resolved;
 }
