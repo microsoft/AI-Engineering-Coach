@@ -20,7 +20,7 @@ network: defaults
 
 # This workflow runs often, so use a small model to keep costs down.
 engine:
-  model: small
+  model: gpt-5-nano
 
 safe-outputs:
   add-labels:
