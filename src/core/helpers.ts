@@ -294,3 +294,25 @@ export function classifyWorkType(msg: string): WorkType {
   }
   return 'other';
 }
+
+/**
+ * Harness-injected session-start payloads that are recorded as `user` messages
+ * but are not real user prompts (e.g. Codex injects the repo `AGENTS.md` and
+ * environment/instruction context at session start). These should be treated as
+ * noise so they don't get clustered into workflow/skill recommendations.
+ *
+ * Matches a small set of known leading markers only — deliberately NOT a generic
+ * `#` markdown header or `<tag>` rule, both of which would suppress legitimate
+ * user prompts.
+ */
+const HARNESS_INJECTED_MARKERS: RegExp[] = [
+  /^# AGENTS\.md instructions\b/,
+  /^<environment_context\b/,
+  /^<INSTRUCTIONS\b/,
+  /^<user_instructions\b/,
+];
+
+export function isHarnessInjectedContext(text: string): boolean {
+  const t = text.trimStart();
+  return HARNESS_INJECTED_MARKERS.some(re => re.test(t));
+}

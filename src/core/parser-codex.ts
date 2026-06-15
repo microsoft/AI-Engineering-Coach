@@ -22,7 +22,7 @@ import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
 import { ModelUsage, Session, SessionRequest } from './types';
 import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, extractSkillPathsFromText } from './parser-shared';
-import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId } from './helpers';
+import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 
 interface CodexLine {
   type: string;
@@ -268,6 +268,9 @@ function extractFilePath(args: Record<string, unknown> | null | undefined): stri
 
 function handleUserMessageEvent(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
   const newMessage = stringValue(payload.message) || stringValue(payload.text);
+  // Harness-injected session-start context is recorded as a user message but is
+  // not a real prompt; ignore it before flushing or mutating turn state.
+  if (isHarnessInjectedContext(newMessage)) return;
   if (state.currentUserMessage && state.currentUserMessage === newMessage && isTurnEmpty(state)) {
     if (state.turnStartTs == null) state.turnStartTs = ts;
     return;
@@ -342,7 +345,7 @@ function handleTurnContext(payload: Record<string, unknown>, state: CodexParseSt
 
 function handleUserResponseItem(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
   for (const item of extractContentItems(payload.content)) {
-    if (item.type !== 'input_text' || !item.text || item.text.startsWith('<')) continue;
+    if (item.type !== 'input_text' || !item.text || item.text.startsWith('<') || isHarnessInjectedContext(item.text)) continue;
     if (!state.currentUserMessage) {
       flushCodexTurn(state, defaultModel);
       state.currentUserMessage = item.text;
