@@ -85,4 +85,12 @@ describe('page-learning-templates', () => {
     expect(result).toContain('data-choice="3"');
     expect(result).toContain('learn-quiz-skip');
   });
+
+  it('keys quiz cards by question index to avoid stale DOM reuse', () => {
+    const vnode = templates.renderQuiz([
+      { question: 'Q1', choices: ['A', 'B'], correctIndex: 0, explanation: '', difficulty: 'easy', topic: 'x' },
+    ] as never, 0) as { key?: unknown };
+
+    expect(vnode.key).toBe(0);
+  });
 });

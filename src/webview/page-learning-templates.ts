@@ -91,7 +91,7 @@ export function renderQuiz(questions: QuizQuestion[], index: number): ComponentC
 
   const question = questions[index];
   return html`
-    <div class="learn-quiz-card" data-index=${String(index)}>
+    <div class="learn-quiz-card" key=${index} data-index=${String(index)}>
       <div class="learn-quiz-meta">
         <span class=${`learn-quiz-diff learn-quiz-diff-${question.difficulty}`}>${question.difficulty}</span>
         <span class="learn-quiz-topic">${question.topic}</span>
