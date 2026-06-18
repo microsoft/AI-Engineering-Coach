@@ -46,13 +46,13 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
     const statsHtml = stats
       ? `
       <div class="sidebar-card">
-        <p class="sidebar-label">Detected harnesses</p>
+        <p class="sidebar-label">${vscode.l10n.t('Detected harnesses')}</p>
         <p class="sidebar-harnesses">${stats.harnesses.map(h => escapeHtmlAttr(h)).join(' \u00b7 ')}</p>
-        <p class="sidebar-note">Last synced ${new Date(stats.savedAt).toLocaleString()}</p>
+        <p class="sidebar-note">${vscode.l10n.t('Last synced')} ${new Date(stats.savedAt).toLocaleString()}</p>
       </div>`
       : `
       <div class="sidebar-card">
-        <p class="sidebar-note">No data yet — sync your sessions to get started.</p>
+        <p class="sidebar-note">${vscode.l10n.t('No data yet — sync your sessions to get started.')}</p>
       </div>`;
 
     return `<!DOCTYPE html>
@@ -63,10 +63,10 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
 <link href="${String(styleUri)}" rel="stylesheet">
 </head>
 <body>
-<h3>AI Engineer Coach</h3>
+<h3>${vscode.l10n.t('AI Engineer Coach')}</h3>
 <div id="content">${statsHtml}</div>
-<button id="open">Explore AI Insights</button>
-<button id="reload" class="secondary">Sync Sessions</button>
+<button id="open">${vscode.l10n.t('Explore AI Insights')}</button>
+<button id="reload" class="secondary">${vscode.l10n.t('Sync Sessions')}</button>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   document.getElementById('open').addEventListener('click', function() {
