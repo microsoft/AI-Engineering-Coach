@@ -124,4 +124,8 @@ export const CONTEXT_GROWING_SESSION_GROWTH_RATE = 0.8;   // 80%+ sequential inc
 export const TOKEN_DATA_AVAILABLE_FROM = '2026-04-01';
 
 /* ---- Feature flags ---- */
+// When flipping this back to `true`, also update the burndown e2e tests, which
+// are skipped while it is off and contain stale assertions + an incomplete mock:
+// tests/e2e/burndown.spec.ts and the getAiCreditBurndown mock in
+// tests/e2e/harness.html (see the TODO(FF_TOKEN_REPORTING_ENABLED) notes there).
 export const FF_TOKEN_REPORTING_ENABLED = false;

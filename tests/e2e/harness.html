@@ -327,6 +327,14 @@ function getMockData(method, params) {
       budgetLine: Array.from({ length: 31 }, () => 300),
       status: 'warning',
       recommendation: 'At current pace you will exceed your credit budget.'
+      // TODO(FF_TOKEN_REPORTING_ENABLED): This mock is INCOMPLETE. The real
+      // getAiCreditBurndown (src/core/analyzer-consumption.ts) also returns
+      // byModel, missingPct, countedRequests, partialRequests, pendingRequests,
+      // noDataRequests, finalizableRequests, delegatedRequests, coverageByDay,
+      // daysUntilExhaustion, safeDailyBudget, projectedOverage and totalRequests.
+      // Without them page-burndown.ts cannot render the status section. When the
+      // burndown feature flag is re-enabled, fill these in so tests/e2e/
+      // burndown.spec.ts can exercise the page (those tests are skipped today).
     }),
 
     getWorkflowOptimization: () => ({

@@ -16,3 +16,6 @@ local/
 test_output.txt
 scripts/verify-counts.ts
 marketing/
+
+# Playwright test results
+test-results/
