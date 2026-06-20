@@ -11,14 +11,15 @@ export function getDashboardHtml(webview: vscode.Webview, extensionUri: vscode.U
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview', 'app.js'));
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview', 'styles.css'));
   const nonce = getNonce();
+  const styleNonce = getNonce();
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; style-src-elem ${webview.cspSource}; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; require-trusted-types-for 'script'; trusted-types coach-html default;">
-<link href="${String(styleUri)}" rel="stylesheet">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${styleNonce}'; style-src-elem ${webview.cspSource} 'nonce-${styleNonce}'; style-src-attr 'none'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; require-trusted-types-for 'script'; trusted-types coach-html default;">
+<link href="${String(styleUri)}" rel="stylesheet" nonce="${styleNonce}">
 <title>AI Engineer Coach</title>
 </head>
 <body>
