@@ -478,6 +478,17 @@ function renderAchievementPage(
 
 /* ── Render ───────────────────────────────────────────────────────── */
 
+async function getAchievementConsumption(filter: DateFilter): Promise<{ modelTotals: Record<string, number> }> {
+  try {
+    return await rpc<{ modelTotals: Record<string, number> }>('getConsumption', filter as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Token reporting is temporarily disabled') {
+      return { modelTotals: {} };
+    }
+    throw error;
+  }
+}
+
 export async function renderAchievements(container: HTMLElement, filter: DateFilter): Promise<void> {
   render(html`<${LoadingScreen} message="Computing achievements..." />`, container);
 
@@ -499,7 +510,7 @@ export async function renderAchievements(container: HTMLElement, filter: DateFil
   const dailyActivity = await rpc<DailyActivity>('getDailyActivity',  filter as Record<string, unknown>);
   const allSessions = await rpc<{ total: number }>('getSessions', { page: 1, pageSize: 1, filter: filter as Record<string, unknown> });
   const codeByLang = await rpc<{ byLanguage: { labels: string[] } }>('getCodeProduction',  filter as Record<string, unknown>);
-  const consumption = await rpc<{ modelTotals: Record<string, number> }>('getConsumption',  filter as Record<string, unknown>);
+  const consumption = await getAchievementConsumption(filter);
   const workflows = await rpc<{ clusters: { id: string }[] }>('getWorkflowOptimization',  filter as Record<string, unknown>);
 
   const avgReqsPerSession = allSessions.total > 0 ? stats.totalRequests / allSessions.total : 0;
