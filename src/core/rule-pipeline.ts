@@ -143,6 +143,35 @@ function buildRuleContext(rule: DetectionRule): Record<string, unknown> {
 /**
  * Execute a pipeline against data to produce a DetectorEmission.
  */
+function buildDuplicateGroupExamples(extra: Record<string, unknown>): string[] | undefined {
+  const dupes = extra.dupes;
+  if (!dupes || typeof dupes !== 'object') return undefined;
+
+  const groups = (dupes as { groups?: unknown }).groups;
+  if (!Array.isArray(groups)) return undefined;
+
+  const examples = groups.slice(0, 3)
+    .map(group => {
+      if (!group || typeof group !== 'object') return '';
+
+      const record = group as Record<string, unknown>;
+      const sample = typeof record.sample === 'string'
+        ? record.sample
+        : typeof record.key === 'string'
+          ? record.key
+          : '';
+
+      if (!sample) return '';
+
+      const count = typeof record.count === 'number' ? record.count : 0;
+      const clipped = sample.length > 80 ? `${sample.substring(0, 77)}...` : sample;
+
+      return count > 0 ? `"${clipped}" (repeated ${count}x)` : `"${clipped}"`;
+    })
+    .filter(Boolean);
+
+  return examples.length > 0 ? examples : undefined;
+}
 function buildExamples(
   matched: Record<string, unknown>[],
   pipeline: Pipeline,
@@ -152,6 +181,9 @@ function buildExamples(
   ratio: number,
   extra: Record<string, unknown>,
 ): string[] {
+  const duplicateGroupExamples = buildDuplicateGroupExamples(extra);
+  if (duplicateGroupExamples) return duplicateGroupExamples;
+
   const examples: string[] = [];
   for (const row of matched.slice(0, 3)) {
     if (pipeline.examplesTemplate) {

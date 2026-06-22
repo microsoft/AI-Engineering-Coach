@@ -8,6 +8,7 @@ version: 1
 tags: [prompt, duplicate, waste]
 thresholds:
   minDuplicates: 3
+  minPromptLength: 20
   highThreshold: 20
 ---
 
@@ -26,9 +27,9 @@ If a prompt isn't working, rephrase it or provide more context instead of retryi
 # Detection Logic
 ```detect
 scan: requests
-match: messageLength > 0
+match: messageLength >= thresholds.minPromptLength AND NOT contains(messageText, "[$") AND NOT startsWith(messageText, "Репозиторий:") AND NOT startsWith(messageText, "Repository:") AND NOT contains(messageText, "AGENTS.md")
 aggregate: count
-dupes: duplicateGroups(matched, 10, thresholds.minDuplicates)
+dupes: duplicateGroups(matched, thresholds.minPromptLength, thresholds.minDuplicates)
 emitCount: dupes.totalDupes
 emitTotal: total
 distinctCount: dupes.distinctCount

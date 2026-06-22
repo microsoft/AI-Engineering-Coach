@@ -776,24 +776,58 @@ function computeExcessFileContextStats(
 
 /* ── Duplicate groups (repeated prompts) ── */
 
-function computeDuplicateGroups(reqs: Record<string, unknown>[], minKeyLen: number, minCount: number): { totalDupes: number; distinctCount: number; topKey: string; topCount: number } {
-  const map = new Map<string, number>();
-  for (const r of reqs) {
-    const msg = asStr(r.messageText);
-    const key = msg.substring(0, 100).toLowerCase().trim();
-    if (key.length >= minKeyLen) map.set(key, (map.get(key) || 0) + 1);
-  }
-  const dupes = [...map.entries()].filter(([, c]) => c >= minCount);
-  const totalDupes = dupes.reduce((s, [, c]) => s + c, 0);
-  dupes.sort((a, b) => b[1] - a[1]);
-  return {
-    totalDupes,
-    distinctCount: dupes.length,
-    topKey: dupes.length > 0 ? dupes[0][0] : '',
-    topCount: dupes.length > 0 ? dupes[0][1] : 0,
-  };
+type DuplicatePromptGroup = {
+  key: string;
+  count: number;
+  sample: string;
+};
+
+type DuplicateGroupsResult = {
+  totalDupes: number;
+  distinctCount: number;
+  topKey: string;
+  topCount: number;
+  groups: DuplicatePromptGroup[];
+};
+
+function normalizeDuplicatePromptKey(msg: string): string {
+  return msg
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
+function computeDuplicateGroups(reqs: Record<string, unknown>[], minKeyLen: number, minCount: number): DuplicateGroupsResult {
+  const map = new Map<string, { count: number; sample: string }>();
+
+  for (const r of reqs) {
+    const msg = asStr(r.messageText);
+    const key = normalizeDuplicatePromptKey(msg);
+    if (key.length < minKeyLen) continue;
+
+    const existing = map.get(key);
+    if (existing) {
+      existing.count++;
+    } else {
+      map.set(key, { count: 1, sample: msg });
+    }
+  }
+
+  const groups = [...map.entries()]
+    .filter(([, g]) => g.count >= minCount)
+    .map(([key, g]) => ({ key, count: g.count, sample: g.sample }))
+    .sort((a, b) => b.count - a.count);
+
+  const totalDupes = groups.reduce((s, g) => s + g.count, 0);
+
+  return {
+    totalDupes,
+    distinctCount: groups.length,
+    topKey: groups.length > 0 ? groups[0].key : '',
+    topCount: groups.length > 0 ? groups[0].count : 0,
+    groups,
+  };
+}
 /* ── Profanity matches across requests ── */
 
 function computeProfanityMatches(reqs: Record<string, unknown>[]): { count: number; total: number; flaggedWords: string[] } {
@@ -1656,7 +1690,7 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
       const reqs = evaluate(argNodes[0], ctx);
       const minKeyLen = argNodes.length > 1 ? toNum(evaluate(argNodes[1], ctx)) : 10;
       const minCount = argNodes.length > 2 ? toNum(evaluate(argNodes[2], ctx)) : 3;
-      if (!Array.isArray(reqs)) return { totalDupes: 0, distinctCount: 0, topKey: '', topCount: 0 };
+      if (!Array.isArray(reqs)) return { totalDupes: 0, distinctCount: 0, topKey: '', topCount: 0, groups: [] };
       return computeDuplicateGroups(reqs as Record<string, unknown>[], minKeyLen, minCount);
     }
   },

@@ -230,6 +230,44 @@ describe('DSL Interpreter', () => {
     expect(evaluate(ast, row)).toBe(true);
   });
 
+
+  it('does not group prompts that only share the first 100 characters', () => {
+    const sharedPrefix = 'Прочитай C:\\Users\\SALATE\\AppData\\Local\\Temp\\' + 'x'.repeat(120);
+
+    const reqs = [
+      { messageText: `${sharedPrefix}krutagidon-current-handoff.md` },
+      { messageText: `${sharedPrefix}krutagidon-issues-08-09-handoff.md` },
+      { messageText: `${sharedPrefix}krutagidon-other-context.md` },
+    ];
+
+    const ast = parse(lex('duplicateGroups(reqs, 10, 3)'));
+    const result = evaluate(ast, { reqs }) as {
+      totalDupes: number;
+      distinctCount: number;
+    };
+
+    expect(result.totalDupes).toBe(0);
+    expect(result.distinctCount).toBe(0);
+  });
+
+  it('groups repeated normalized prompts', () => {
+    const reqs = [
+      { messageText: 'Выполни handoff для следующей сессии' },
+      { messageText: 'выполни handoff для следующей сессии' },
+      { messageText: '  Выполни   handoff   для   следующей   сессии  ' },
+    ];
+
+    const ast = parse(lex('duplicateGroups(reqs, 10, 3)'));
+    const result = evaluate(ast, { reqs }) as {
+      totalDupes: number;
+      distinctCount: number;
+      topCount: number;
+    };
+
+    expect(result.totalDupes).toBe(3);
+    expect(result.distinctCount).toBe(1);
+    expect(result.topCount).toBe(3);
+  });
   it('evaluates flatUnique() across sub-arrays', () => {
     const ctx = {
       reqs: [
