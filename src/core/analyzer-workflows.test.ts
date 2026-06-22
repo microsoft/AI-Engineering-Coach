@@ -101,6 +101,21 @@ describe('WorkflowAnalyzer', () => {
       expect(result.clusters).toEqual([]);
     });
 
+    it('filters harness-injected AGENTS.md context as noise', () => {
+      const now = Date.now();
+      const injected = '# AGENTS.md instructions for /home/me/project\n\n<INSTRUCTIONS>\nfollow repo conventions\n</INSTRUCTIONS>';
+      const sessions = Array.from({ length: 5 }, (_, i) =>
+        makeSession({
+          sessionId: `inj-${i}`,
+          requests: [makeRequest({ messageText: injected, timestamp: now + i * 1000 })],
+          lastMessageDate: now + i * 1000,
+        })
+      );
+      const analyzer = createAnalyzer(sessions);
+      const result = analyzer.getWorkflowOptimization();
+      expect(result.clusters).toEqual([]);
+    });
+
     it('clusters repeated similar prompts', () => {
       const now = Date.now();
       // Need at least 3 occurrences with same fingerprint

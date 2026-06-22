@@ -7,7 +7,7 @@
 
 import { DateFilter, WorkflowCluster, WorkflowOptimizationData } from './types';
 import { AnalyzerBase } from './analyzer-base';
-import { toDateStr } from './helpers';
+import { isHarnessInjectedContext, toDateStr } from './helpers';
 
 /** Minimum prompt length to consider for clustering (skip trivial messages) */
 const MIN_PROMPT_LEN = 15;
@@ -53,6 +53,8 @@ function normalizePrompt(raw: string): string {
 /** Check if text is likely a system/bot message or noise rather than a user prompt */
 function isNoise(text: string): boolean {
   const t = text.trim();
+  // Harness-injected session-start context (e.g. Codex AGENTS.md / environment context)
+  if (isHarnessInjectedContext(t)) return true;
   // Decorative separators/borders
   if (/^[═─━=\-_*]{10,}/.test(t)) return true;
   // System auth/notification messages

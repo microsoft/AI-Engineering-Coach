@@ -186,6 +186,29 @@ describe('parseCodexSessions skillsUsed extraction', () => {
       expect(sessions[0].requests[0].skillsUsed).toEqual(['pdf']);
     });
   });
+
+  it('ignores harness-injected AGENTS.md context and captures the real prompt', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-inject-1', cwd: '/Users/me/proj' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+      // Session-start injected context recorded as a user response_item.
+      { type: 'response_item', timestamp: '2025-06-15T10:00:00Z',
+        payload: { type: 'message', role: 'user', content: [
+          { type: 'input_text', text: '# AGENTS.md instructions for /Users/me/proj\n\nfollow repo conventions' },
+          { type: 'input_text', text: '<environment_context>\n  <cwd>/Users/me/proj</cwd>\n</environment_context>' },
+        ] } },
+      // The actual user prompt.
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:05Z', payload: { type: 'user_message', message: 'what is this repo about?' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:06Z', payload: { type: 'assistant_message', content: 'a coach' } },
+    ], (sessionsDir) => {
+      const sessions = parseCodexSessions(sessionsDir);
+      expect(sessions).toHaveLength(1);
+      const texts = sessions[0].requests.map(r => r.messageText);
+      // The injected AGENTS.md / environment context must not be captured as a prompt.
+      expect(texts.some(t => t.startsWith('# AGENTS.md instructions'))).toBe(false);
+      expect(texts).toContain('what is this repo about?');
+    });
+  });
 });
 
 describe('findCodexDirs', () => {
