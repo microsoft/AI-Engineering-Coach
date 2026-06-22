@@ -984,20 +984,21 @@ Explain why this session triggered the rule.`;
   getRuleCoverage: (a, _p, params) => {
     try {
       const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
-      const reqs = a.filterRequests(filter);
       const sessions = a.filterSessions(filter);
       const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
 
-      // Enrich requests with session info (needed by rules that reference workspaceName/sessionId)
-      const sessionMap = new Map<string, { sessionId: string; workspaceName: string }>();
-      for (const s of sessions) for (const r of s.requests) sessionMap.set(r.requestId, { sessionId: s.sessionId, workspaceName: s.workspaceName });
-      const enrichedReqs = reqs.map(r => {
-        const s = sessionMap.get(r.requestId);
-        if (!s) return r;
-        const e = r as typeof r & { sessionId: string; workspaceName: string };
-        e.sessionId = s.sessionId; e.workspaceName = s.workspaceName;
-        return e;
-      });
+      // Enrich requests with session info while walking filtered sessions.
+      // This keeps detector occurrences tied to the workspace/session that actually owns them.
+      for (const s of sessions) {
+        for (const r of s.requests) {
+          const e = r as typeof r & { sessionId: string; workspaceName: string };
+          e.sessionId = s.sessionId;
+          e.workspaceName = s.workspaceName;
+        }
+      }
+
+      const sessionRequests = new Set(sessions.flatMap(s => s.requests));
+      const enrichedReqs = a.filterRequests(filter).filter(r => sessionRequests.has(r));
 
       const detectorResults = runDetectors(enrichedReqs, sessions, skipIde);
       // Build workspaces list (top N by session count)

@@ -243,25 +243,28 @@ export class PatternsAnalyzer extends AnalyzerBase {
     const reqs = this.filter(f);
     const sessions = this.filteredSessions(f);
 
-    // Enrich requests with session context for occurrence detail tracking
-    const sessionMap = new Map<string, Session>();
+    // Enrich requests with session context by object identity, not requestId.
+    // Codex requestIds are not guaranteed to be unique across sessions.
+    const sessionByRequest = new Map<SessionRequest, Session>();
     for (const s of sessions) {
       for (const r of s.requests) {
-        sessionMap.set(r.requestId, s);
+        sessionByRequest.set(r, s);
       }
     }
-    const enrichedReqs = reqs.map(r => {
-      const s = sessionMap.get(r.requestId);
-      if (!s) return r;
+
+    const enrichedReqs: SessionRequest[] = [];
+    for (const r of reqs) {
+      const s = sessionByRequest.get(r);
+      if (!s) continue;
       const enriched = r as SessionRequest & { sessionId: string; workspaceName: string };
       enriched.sessionId = s.sessionId;
       enriched.workspaceName = s.workspaceName;
-      return enriched;
-    });
+      enrichedReqs.push(enriched);
+    }
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
     const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors);
-    return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors);
+    return this.buildAntiPatternResult(patterns, enrichedReqs, skipIdeDetectors);
   }
 
   private buildAntiPatternResult(patterns: import('./types').AntiPattern[], reqs: SessionRequest[], skipIdeDetectors: boolean): AntiPatternData {
