@@ -62,6 +62,18 @@ function getTrustedRoots(): string[] {
     roots.push(path.resolve(home, '.claude'));
     roots.push(path.resolve(home, '.codex'));
     roots.push(path.resolve(home, '.local', 'share', 'opencode'));
+    // Cursor IDE
+    if (process.platform === 'win32') {
+      const appdata = process.env.APPDATA || '';
+      if (appdata) roots.push(path.resolve(appdata, 'Cursor', 'User', 'workspaceStorage'));
+    } else if (process.platform === 'darwin') {
+      roots.push(path.resolve(home, 'Library', 'Application Support', 'Cursor', 'User', 'workspaceStorage'));
+    } else {
+      roots.push(path.resolve(home, '.config', 'Cursor', 'User', 'workspaceStorage'));
+      // WSL: Windows Cursor data
+      const wslUser = process.env.USER || '';
+      if (wslUser) roots.push(/mnt/c/Users//AppData/Roaming/Cursor/User/workspaceStorage);
+    }
     roots.push(path.resolve(home, '.config', 'github-copilot'));
   }
 
