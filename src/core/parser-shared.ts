@@ -72,7 +72,7 @@ function getTrustedRoots(): string[] {
       roots.push(path.resolve(home, '.config', 'Cursor', 'User', 'workspaceStorage'));
       // WSL: Windows Cursor data
       const wslUser = process.env.USER || '';
-      if (wslUser) roots.push(/mnt/c/Users//AppData/Roaming/Cursor/User/workspaceStorage);
+      if (wslUser) roots.push('/mnt/c/Users/' + wslUser + '/AppData/Roaming/Cursor/User/workspaceStorage');
     }
     roots.push(path.resolve(home, '.config', 'github-copilot'));
   }
