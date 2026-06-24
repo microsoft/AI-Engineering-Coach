@@ -10,6 +10,7 @@ import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
+import { parseCursorSessions } from './parser-cursor';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -69,6 +70,20 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
       }
     },
   },
+  {
+    name: 'Cursor',
+    collectSync(_ctx) {
+      // Cursor sessions are async-only (sqlite3 CLI); collectAsync handles them.
+    },
+    async collectAsync(ctx, reportDetail) {
+      reportDetail?.('Scanning Cursor workspace databases...');
+      const sessions = await parseCursorSessions();
+      for (const session of sessions) {
+        addSession(ctx.workspaces, ctx.sessions, session, session.filePath ?? '');
+      }
+      reportDetail?.(`Found ${sessions.length} Cursor session(s)`);
+    },
+  },
 ];
 
 export interface ExternalHarnessProgressHandlers {
@@ -78,15 +93,10 @@ export interface ExternalHarnessProgressHandlers {
   yieldToLoop?: () => Promise<void>;
 }
 
-/** Returns true if any external-harness (Claude Code, Codex, OpenCode) session
+/** Returns true if any external-harness (Claude Code, Codex, OpenCode, Cursor) session
  *  source exists on disk. The dashboard uses this so it does not abort when the
- *  only available logs come from a non-VS Code harness — e.g. a headless
- *  Remote-SSH host that has Claude Code sessions under `~/.claude/projects` but
- *  no VS Code workspace storage or Copilot directories. */
+ *  only available logs come from a non-VS Code harness. */
 export function hasExternalHarnessSources(): boolean {
-  // Without a home directory the find* helpers would join against an empty
-  // string and probe relative paths (e.g. `.claude/projects`) under the current
-  // working directory, which could report false positives. Bail out instead.
   if (!process.env.HOME && !process.env.USERPROFILE) return false;
   return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
 }
@@ -98,14 +108,12 @@ export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions:
   }
 }
 
-/** Harness values set on sessions by external harness collectors.
- *  The cache reconciliation in parser.ts uses this set to identify and
- *  refresh cached external-harness sessions, so every value the collectors
- *  can produce must be listed here. */
+/** Harness values set on sessions by external harness collectors. */
 export const EXTERNAL_HARNESS_SET = new Set<string>([
   'Claude',
   'Codex',
   'OpenCode',
+  'Cursor',
 ]);
 
 export async function collectExternalHarnessesAsync(
