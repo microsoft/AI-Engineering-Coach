@@ -10,7 +10,7 @@ import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
-import { findAntigravityDirs, parseAntigravitySessions } from './parser-antigravity';
+import { findAntigravityDirs, parseAntigravitySessions, parseAntigravitySessionsAsync } from './parser-antigravity';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -75,6 +75,14 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
     collectSync(ctx) {
       for (const agDir of findAntigravityDirs()) {
         for (const session of parseAntigravitySessions(agDir)) addSession(ctx.workspaces, ctx.sessions, session, agDir);
+      }
+    },
+    async collectAsync(ctx, _reportDetail) {
+      for (const agDir of findAntigravityDirs()) {
+        const sessions = await parseAntigravitySessionsAsync(agDir);
+        for (const session of sessions) {
+          addSession(ctx.workspaces, ctx.sessions, session, agDir);
+        }
       }
     },
   },

@@ -30,6 +30,7 @@ vi.mock('./parser-harnesses', () => ({
 vi.mock('./parser-antigravity', () => ({
   findAntigravityDirs: vi.fn(() => []),
   parseAntigravitySessions: vi.fn(() => []),
+  parseAntigravitySessionsAsync: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock('./cache', () => ({
