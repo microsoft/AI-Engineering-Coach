@@ -116,61 +116,56 @@ interface StepRow {
   payload_hex: string;
 }
 
-function sqliteQuerySteps(dbPath: string): StepRow[] {
-  assertTrustedPath(dbPath);
-  try {
-    const sql = 'SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx';
-    const raw = execFileSync('sqlite3', ['-cmd', 'PRAGMA busy_timeout=1000', '-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
-    const jsonStart = raw.indexOf('[');
-    const jsonStr = jsonStart !== -1 ? raw.slice(jsonStart) : '';
-    if (!jsonStr.trim()) return [];
-    return JSON.parse(jsonStr) as StepRow[];
-  } catch {
-    return [];
-  }
-}
-
 interface MetadataResult {
   workspaceRootPath?: string;
   workspaceName: string;
   creationDate: number;
 }
 
-function parseWorkspaceMetadata(dbPath: string, birthtimeMs: number): MetadataResult {
+function decodeMetadataRows(metaRows: { hex_data?: string }[], birthtimeMs: number): MetadataResult {
   let workspaceRootPath: string | undefined;
   let workspaceName = 'Antigravity Workspace';
   let creationDate = birthtimeMs;
 
-  try {
-    const rawMeta = sqliteQuery(dbPath, "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'");
-    const jsonStart = rawMeta.indexOf('[');
-    const jsonStr = jsonStart !== -1 ? rawMeta.slice(jsonStart) : '';
-    if (jsonStr.trim()) {
-      const metaRows = JSON.parse(jsonStr) as { hex_data?: string }[];
-      if (metaRows[0] && metaRows[0].hex_data) {
-        const metaBuf = Buffer.from(metaRows[0].hex_data, 'hex');
-        const metaObj = decodeProtobuf(metaBuf);
-        const p7 = metaObj[7];
-        const p1 = metaObj[1];
-        if (typeof p7 === 'string') {
-          workspaceRootPath = p7.replace(/^file:\/\//, '');
-        } else if (typeof p1 === 'string') {
-          const m = p1.match(/file:\/\/[^\s"]+/);
-          if (m) workspaceRootPath = m[0].replace(/^file:\/\//, '');
-        }
-        if (workspaceRootPath) {
-          workspaceName = path.basename(workspaceRootPath);
-        }
-        const p2 = getRecord(metaObj[2]);
-        if (p2 && typeof p2[1] === 'number') {
-          creationDate = p2[1] * 1000;
-        }
-      }
+  if (metaRows[0] && metaRows[0].hex_data) {
+    const metaBuf = Buffer.from(metaRows[0].hex_data, 'hex');
+    const metaObj = decodeProtobuf(metaBuf);
+    const p7 = metaObj[7];
+    const p1 = metaObj[1];
+    if (typeof p7 === 'string') {
+      workspaceRootPath = p7.replace(/^file:\/\//, '');
+    } else if (typeof p1 === 'string') {
+      const m = p1.match(/file:\/\/[^\s"]+/);
+      if (m) workspaceRootPath = m[0].replace(/^file:\/\//, '');
     }
-  } catch {
-    // Keep defaults
+    if (workspaceRootPath) {
+      workspaceName = path.basename(workspaceRootPath);
+    }
+    const p2 = getRecord(metaObj[2]);
+    if (p2 && typeof p2[1] === 'number') {
+      creationDate = p2[1] * 1000;
+    }
   }
   return { workspaceRootPath, workspaceName, creationDate };
+}
+
+function parseSqliteMultiResult(stdout: string): string[] {
+  const results: string[] = [];
+  let depth = 0;
+  let startIdx = -1;
+  for (let i = 0; i < stdout.length; i++) {
+    if (stdout[i] === '[') {
+      if (depth === 0) startIdx = i;
+      depth++;
+    } else if (stdout[i] === ']') {
+      depth--;
+      if (depth === 0 && startIdx !== -1) {
+        results.push(stdout.slice(startIdx, i + 1));
+        startIdx = -1;
+      }
+    }
+  }
+  return results;
 }
 
 function processStepRow(
@@ -307,8 +302,21 @@ export function parseAntigravitySessions(conversationsDir: string): Session[] {
       // Keep default
     }
 
-    const meta = parseWorkspaceMetadata(dbPath, birthtimeMs);
-    const stepRows = sqliteQuerySteps(dbPath);
+    const sql = "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'; SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx;";
+    const raw = sqliteQuery(dbPath, sql);
+    const arrays = parseSqliteMultiResult(raw);
+    if (arrays.length < 2) continue;
+
+    let meta: MetadataResult;
+    let stepRows: StepRow[];
+    try {
+      const metaRows = JSON.parse(arrays[0]) as { hex_data?: string }[];
+      meta = decodeMetadataRows(metaRows, birthtimeMs);
+      stepRows = JSON.parse(arrays[1]) as StepRow[];
+    } catch {
+      continue;
+    }
+
     if (stepRows.length === 0) continue;
 
     const state = {
@@ -368,55 +376,6 @@ async function sqliteQueryAsync(dbPath: string, sql: string): Promise<string> {
   return sqliteExecAsync(dbPath, ['-json', dbPath, sql]);
 }
 
-async function sqliteQueryStepsAsync(dbPath: string): Promise<StepRow[]> {
-  try {
-    const sql = 'SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx';
-    const raw = await sqliteExecAsync(dbPath, ['-json', dbPath, sql]);
-    const jsonStart = raw.indexOf('[');
-    const jsonStr = jsonStart !== -1 ? raw.slice(jsonStart) : '';
-    if (!jsonStr.trim()) return [];
-    return JSON.parse(jsonStr) as StepRow[];
-  } catch {
-    return [];
-  }
-}
-
-async function parseWorkspaceMetadataAsync(dbPath: string, birthtimeMs: number): Promise<MetadataResult> {
-  let workspaceRootPath: string | undefined;
-  let workspaceName = 'Antigravity Workspace';
-  let creationDate = birthtimeMs;
-
-  try {
-    const rawMeta = await sqliteQueryAsync(dbPath, "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'");
-    const jsonStart = rawMeta.indexOf('[');
-    const jsonStr = jsonStart !== -1 ? rawMeta.slice(jsonStart) : '';
-    if (jsonStr.trim()) {
-      const metaRows = JSON.parse(jsonStr) as { hex_data?: string }[];
-      if (metaRows[0] && metaRows[0].hex_data) {
-        const metaBuf = Buffer.from(metaRows[0].hex_data, 'hex');
-        const metaObj = decodeProtobuf(metaBuf);
-        const p7 = metaObj[7];
-        const p1 = metaObj[1];
-        if (typeof p7 === 'string') {
-          workspaceRootPath = p7.replace(/^file:\/\//, '');
-        } else if (typeof p1 === 'string') {
-          const m = p1.match(/file:\/\/[^\s"]+/);
-          if (m) workspaceRootPath = m[0].replace(/^file:\/\//, '');
-        }
-        if (workspaceRootPath) {
-          workspaceName = path.basename(workspaceRootPath);
-        }
-        const p2 = getRecord(metaObj[2]);
-        if (p2 && typeof p2[1] === 'number') {
-          creationDate = p2[1] * 1000;
-        }
-      }
-    }
-  } catch {
-    // Keep defaults
-  }
-  return { workspaceRootPath, workspaceName, creationDate };
-}
 
 export async function parseAntigravitySessionsAsync(conversationsDir: string): Promise<Session[]> {
   const sessions: Session[] = [];
@@ -447,8 +406,21 @@ export async function parseAntigravitySessionsAsync(conversationsDir: string): P
       // Keep default
     }
 
-    const meta = await parseWorkspaceMetadataAsync(dbPath, birthtimeMs);
-    const stepRows = await sqliteQueryStepsAsync(dbPath);
+    const sql = "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'; SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx;";
+    const raw = await sqliteQueryAsync(dbPath, sql);
+    const arrays = parseSqliteMultiResult(raw);
+    if (arrays.length < 2) continue;
+
+    let meta: MetadataResult;
+    let stepRows: StepRow[];
+    try {
+      const metaRows = JSON.parse(arrays[0]) as { hex_data?: string }[];
+      meta = decodeMetadataRows(metaRows, birthtimeMs);
+      stepRows = JSON.parse(arrays[1]) as StepRow[];
+    } catch {
+      continue;
+    }
+
     if (stepRows.length === 0) continue;
 
     const state = {

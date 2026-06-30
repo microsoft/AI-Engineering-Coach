@@ -53,21 +53,12 @@ describe('Antigravity Discovery & Decoder', () => {
       if (cmd === 'sqlite3') {
         const arr = args as string[];
         const sql = arr?.[arr.length - 1] || '';
-        if (sql.includes('trajectory_metadata_blob')) {
-          // Proto bytes for trajectory_metadata_blob
-          // Field 7 = "file:///Users/alex/src/swazz", Field 2 -> 1 = 1779825166
-          // Hex representation
+        if (sql.includes('trajectory_metadata_blob') && sql.includes('steps')) {
           const metaHex = '3a1c66696c653a2f2f2f55736572732f616c65782f7372632f7377617a7a1206088ef4d7d006';
-          return JSON.stringify([{ hex_data: metaHex }]);
-        }
-        if (sql.includes('steps')) {
-          // Step 0: type 14 (user prompt). Prompt text field 19 -> 2 = "hello prompt"
-          // Step 1: type 15 (assistant response). Response text field 20 -> 1 = "hello response"
-          // Step 2: type 21 (tool call). Tool name field 5 -> 4 -> 2 = "write_file", args field 5 -> 4 -> 3 = '{"TargetFile":"/path/to/file"}'
           const step0Hex = '9a010e120c68656c6c6f2070726f6d7074';
           const step1Hex = 'a201100a0e68656c6c6f20726573706f6e7365';
           const step2Hex = '2a2e222c120a77726974655f66696c651a1e7b2254617267657446696c65223a222f706174682f746f2f66696c65227d';
-          return JSON.stringify([
+          return JSON.stringify([{ hex_data: metaHex }]) + '\n' + JSON.stringify([
             { idx: 0, step_type: 14, payload_hex: step0Hex },
             { idx: 1, step_type: 15, payload_hex: step1Hex },
             { idx: 2, step_type: 21, payload_hex: step2Hex },
@@ -103,18 +94,20 @@ describe('Antigravity Discovery & Decoder', () => {
       const cb = callback as (err: Error | null, stdout: string, stderr: string) => void;
       const arr = args as string[];
       const sql = arr?.[arr.length - 1] || '';
-      if (sql.includes('trajectory_metadata_blob')) {
+      if (sql.includes('trajectory_metadata_blob') && sql.includes('steps')) {
         const metaHex = '3a1c66696c653a2f2f2f55736572732f616c65782f7372632f7377617a7a1206088ef4d7d006';
-        cb(null, JSON.stringify([{ hex_data: metaHex }]), '');
-      } else if (sql.includes('steps')) {
         const step0Hex = '9a010e120c68656c6c6f2070726f6d7074';
         const step1Hex = 'a201100a0e68656c6c6f20726573706f6e7365';
         const step2Hex = '2a2e222c120a77726974655f66696c651a1e7b2254617267657446696c65223a222f706174682f746f2f66696c65227d';
-        cb(null, JSON.stringify([
-          { idx: 0, step_type: 14, payload_hex: step0Hex },
-          { idx: 1, step_type: 15, payload_hex: step1Hex },
-          { idx: 2, step_type: 21, payload_hex: step2Hex },
-        ]), '');
+        cb(
+          null,
+          JSON.stringify([{ hex_data: metaHex }]) + '\n' + JSON.stringify([
+            { idx: 0, step_type: 14, payload_hex: step0Hex },
+            { idx: 1, step_type: 15, payload_hex: step1Hex },
+            { idx: 2, step_type: 21, payload_hex: step2Hex },
+          ]),
+          ''
+        );
       } else {
         cb(null, '3.41.0', '');
       }
