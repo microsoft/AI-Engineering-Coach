@@ -77,9 +77,9 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
         for (const session of parseAntigravitySessions(agDir)) addSession(ctx.workspaces, ctx.sessions, session, agDir);
       }
     },
-    async collectAsync(ctx, _reportDetail) {
+    async collectAsync(ctx, reportDetail) {
       for (const agDir of findAntigravityDirs()) {
-        const sessions = await parseAntigravitySessionsAsync(agDir);
+        const sessions = await parseAntigravitySessionsAsync(agDir, reportDetail);
         for (const session of sessions) {
           addSession(ctx.workspaces, ctx.sessions, session, agDir);
         }

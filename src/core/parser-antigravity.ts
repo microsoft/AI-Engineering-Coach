@@ -48,41 +48,45 @@ export function decodeProtobuf(buf: Buffer, depth = 0): Record<number, unknown> 
       const key = readVarint(buf, offset);
       const fieldNum = key >> 3;
       const wireType = key & 0x07;
+      const shouldDecode = depth > 0 || fieldNum === 1 || fieldNum === 2 || fieldNum === 5 || fieldNum === 7 || fieldNum === 19 || fieldNum === 20 || fieldNum === 24 || fieldNum === 114;
+
       if (wireType === 0) {
-        result[fieldNum] = readVarint(buf, offset);
+        const val = readVarint(buf, offset);
+        if (shouldDecode) result[fieldNum] = val;
       } else if (wireType === 1) {
         if (offset.val + 8 > buf.length) break;
-        result[fieldNum] = buf.subarray(offset.val, offset.val + 8);
+        if (shouldDecode) result[fieldNum] = buf.subarray(offset.val, offset.val + 8);
         offset.val += 8;
       } else if (wireType === 2) {
         const len = readVarint(buf, offset);
         if (offset.val + len > buf.length) break;
-        const val = buf.subarray(offset.val, offset.val + len);
-        offset.val += len;
-
-        const str = val.toString('utf-8');
-        let isPrintable = true;
-        for (let i = 0; i < Math.min(str.length, 100); i++) {
-          const code = str.charCodeAt(i);
-          if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
-            isPrintable = false;
-            break;
+        if (shouldDecode) {
+          const val = buf.subarray(offset.val, offset.val + len);
+          const str = val.toString('utf-8');
+          let isPrintable = true;
+          for (let i = 0; i < Math.min(str.length, 100); i++) {
+            const code = str.charCodeAt(i);
+            if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
+              isPrintable = false;
+              break;
+            }
           }
-        }
-        if (isPrintable && val.length > 0) {
-          result[fieldNum] = str;
-        } else if (depth < 4 && val.length <= 16384) {
-          try {
-            result[fieldNum] = decodeProtobuf(val, depth + 1);
-          } catch {
+          if (isPrintable && val.length > 0) {
+            result[fieldNum] = str;
+          } else if (depth < 4 && val.length <= 16384) {
+            try {
+              result[fieldNum] = decodeProtobuf(val, depth + 1);
+            } catch {
+              result[fieldNum] = val;
+            }
+          } else {
             result[fieldNum] = val;
           }
-        } else {
-          result[fieldNum] = val;
         }
+        offset.val += len;
       } else if (wireType === 5) {
         if (offset.val + 4 > buf.length) break;
-        result[fieldNum] = buf.subarray(offset.val, offset.val + 4);
+        if (shouldDecode) result[fieldNum] = buf.subarray(offset.val, offset.val + 4);
         offset.val += 4;
       } else {
         break;
@@ -150,22 +154,20 @@ function decodeMetadataRows(metaRows: { hex_data?: string }[], birthtimeMs: numb
 }
 
 function parseSqliteMultiResult(stdout: string): string[] {
-  const results: string[] = [];
-  let depth = 0;
-  let startIdx = -1;
-  for (let i = 0; i < stdout.length; i++) {
-    if (stdout[i] === '[') {
-      if (depth === 0) startIdx = i;
-      depth++;
-    } else if (stdout[i] === ']') {
-      depth--;
-      if (depth === 0 && startIdx !== -1) {
-        results.push(stdout.slice(startIdx, i + 1));
-        startIdx = -1;
-      }
-    }
-  }
-  return results;
+  const firstClose = stdout.indexOf(']');
+  if (firstClose === -1) return [];
+  const firstOpen = stdout.indexOf('[');
+  if (firstOpen === -1 || firstOpen > firstClose) return [];
+  const firstArray = stdout.slice(firstOpen, firstClose + 1);
+
+  const secondPart = stdout.slice(firstClose + 1);
+  const secondOpen = secondPart.indexOf('[');
+  if (secondOpen === -1) return [firstArray];
+  const secondClose = secondPart.lastIndexOf(']');
+  if (secondClose === -1 || secondClose < secondOpen) return [firstArray];
+  const secondArray = secondPart.slice(secondOpen, secondClose + 1);
+
+  return [firstArray, secondArray];
 }
 
 function processStepRow(
@@ -377,7 +379,10 @@ async function sqliteQueryAsync(dbPath: string, sql: string): Promise<string> {
 }
 
 
-export async function parseAntigravitySessionsAsync(conversationsDir: string): Promise<Session[]> {
+export async function parseAntigravitySessionsAsync(
+  conversationsDir: string,
+  onDetail?: (detail: string) => void,
+): Promise<Session[]> {
   const sessions: Session[] = [];
   if (!fs.existsSync(conversationsDir)) return sessions;
 
@@ -394,7 +399,13 @@ export async function parseAntigravitySessionsAsync(conversationsDir: string): P
     return sessions;
   }
 
+  let fileIndex = 0;
   for (const file of files) {
+    fileIndex++;
+    if (onDetail) {
+      onDetail(`[${fileIndex}/${files.length}] ${file}`);
+    }
+
     const dbPath = path.join(conversationsDir, file);
     const sessionId = path.basename(file, '.db');
 
@@ -405,6 +416,8 @@ export async function parseAntigravitySessionsAsync(conversationsDir: string): P
     } catch {
       // Keep default
     }
+
+    const start = Date.now();
 
     const sql = "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'; SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx;";
     const raw = await sqliteQueryAsync(dbPath, sql);
@@ -453,6 +466,11 @@ export async function parseAntigravitySessionsAsync(conversationsDir: string): P
       workspaceRootPath: meta.workspaceRootPath,
     });
     sessions.push(session);
+
+    const duration = Date.now() - start;
+    if (duration > 150) {
+      console.log(`[Antigravity] WARNING: parsing ${file} took ${duration}ms (steps: ${stepRows.length})`);
+    }
 
     // Yield to event loop to keep the process responsive
     await new Promise<void>(r => setTimeout(r, 0));
