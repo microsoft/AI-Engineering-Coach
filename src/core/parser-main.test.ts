@@ -24,7 +24,12 @@ vi.mock('./parser-xcode', () => ({
 vi.mock('./parser-harnesses', () => ({
   collectExternalHarnessesSync: vi.fn(),
   collectExternalHarnessesAsync: vi.fn(() => Promise.resolve()),
-  EXTERNAL_HARNESS_SET: new Set(['Claude', 'Codex', 'OpenCode']),
+  EXTERNAL_HARNESS_SET: new Set(['Claude', 'Codex', 'OpenCode', 'Antigravity']),
+}));
+
+vi.mock('./parser-antigravity', () => ({
+  findAntigravityDirs: vi.fn(() => []),
+  parseAntigravitySessions: vi.fn(() => []),
 }));
 
 vi.mock('./cache', () => ({
