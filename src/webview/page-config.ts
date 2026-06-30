@@ -13,7 +13,7 @@ import { renderContextManagement } from './page-context-mgmt';
 import { llmAvailable, LLM_UNAVAILABLE_NOTE } from './capabilities';
 
 /* Harness colors */
-const HC: Record<string, string> = { 'Local Agent': '#007acc', 'Local Agent (Insiders)': '#24bfa5', 'Xcode': '#147efb', 'Claude Code': '#d97706', 'GitHub Copilot CLI': '#8b5cf6', 'GitHub Copilot App': '#a371f7', 'Codex CLI': '#ec4899', 'OpenCode': '#10b981' };
+const HC: Record<string, string> = { 'Local Agent': '#007acc', 'Local Agent (Insiders)': '#24bfa5', 'Xcode': '#147efb', 'Claude Code': '#d97706', 'GitHub Copilot CLI': '#8b5cf6', 'GitHub Copilot App': '#a371f7', 'Codex CLI': '#ec4899', 'OpenCode': '#10b981', 'Antigravity': '#d97706' };
 function hc(h: string): string { return HC[h] || COLORS.muted; }
 
 /** Active treemap chart reference + workspace data for review highlighting */
