@@ -51,7 +51,8 @@ describe('Antigravity Discovery & Decoder', () => {
     // Mock sqlite3 responses
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       if (cmd === 'sqlite3') {
-        const sql = (args as string[])?.[2] || '';
+        const arr = args as string[];
+        const sql = arr?.[arr.length - 1] || '';
         if (sql.includes('trajectory_metadata_blob')) {
           // Proto bytes for trajectory_metadata_blob
           // Field 7 = "file:///Users/alex/src/swazz", Field 2 -> 1 = 1779825166
@@ -100,7 +101,8 @@ describe('Antigravity Discovery & Decoder', () => {
     const { execFile: mockedExecFile } = await import('child_process');
     vi.mocked(mockedExecFile).mockImplementation((_cmd, args, _opts, callback) => {
       const cb = callback as (err: Error | null, stdout: string, stderr: string) => void;
-      const sql = (args as string[])?.[2] || '';
+      const arr = args as string[];
+      const sql = arr?.[arr.length - 1] || '';
       if (sql.includes('trajectory_metadata_blob')) {
         const metaHex = '3a1c66696c653a2f2f2f55736572732f616c65782f7372632f7377617a7a1206088ef4d7d006';
         cb(null, JSON.stringify([{ hex_data: metaHex }]), '');

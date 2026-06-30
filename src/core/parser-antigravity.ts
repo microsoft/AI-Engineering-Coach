@@ -10,7 +10,7 @@ import * as os from 'os';
 import { Session, SessionRequest } from './types';
 import { assertTrustedPath, createRequest, createSession } from './parser-shared';
 
-const SQLITE_QUERY_OPTS = { timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 50 * 1024 * 1024, cwd: os.tmpdir() } as const;
+const SQLITE_QUERY_OPTS = { timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 50 * 1024 * 1024, cwd: os.tmpdir() } as const;
 
 export function findAntigravityDirs(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
@@ -40,7 +40,7 @@ function readVarint(buf: Buffer, offset: { val: number }): number {
   return result;
 }
 
-export function decodeProtobuf(buf: Buffer): Record<number, unknown> {
+export function decodeProtobuf(buf: Buffer, depth = 0): Record<number, unknown> {
   const result: Record<number, unknown> = {};
   const offset = { val: 0 };
   while (offset.val < buf.length) {
@@ -71,12 +71,14 @@ export function decodeProtobuf(buf: Buffer): Record<number, unknown> {
         }
         if (isPrintable && val.length > 0) {
           result[fieldNum] = str;
-        } else {
+        } else if (depth < 4 && val.length <= 16384) {
           try {
-            result[fieldNum] = decodeProtobuf(val);
+            result[fieldNum] = decodeProtobuf(val, depth + 1);
           } catch {
             result[fieldNum] = val;
           }
+        } else {
+          result[fieldNum] = val;
         }
       } else if (wireType === 5) {
         if (offset.val + 4 > buf.length) break;
@@ -102,7 +104,7 @@ function getRecord(obj: unknown): Record<number, unknown> | undefined {
 function sqliteQuery(dbPath: string, sql: string): string {
   assertTrustedPath(dbPath);
   try {
-    return execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
+    return execFileSync('sqlite3', ['-cmd', 'PRAGMA busy_timeout=1000', '-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
   } catch {
     return '';
   }
@@ -118,9 +120,11 @@ function sqliteQuerySteps(dbPath: string): StepRow[] {
   assertTrustedPath(dbPath);
   try {
     const sql = 'SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx';
-    const raw = execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
-    if (!raw.trim()) return [];
-    return JSON.parse(raw) as StepRow[];
+    const raw = execFileSync('sqlite3', ['-cmd', 'PRAGMA busy_timeout=1000', '-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
+    const jsonStart = raw.indexOf('[');
+    const jsonStr = jsonStart !== -1 ? raw.slice(jsonStart) : '';
+    if (!jsonStr.trim()) return [];
+    return JSON.parse(jsonStr) as StepRow[];
   } catch {
     return [];
   }
@@ -139,8 +143,10 @@ function parseWorkspaceMetadata(dbPath: string, birthtimeMs: number): MetadataRe
 
   try {
     const rawMeta = sqliteQuery(dbPath, "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'");
-    if (rawMeta.trim()) {
-      const metaRows = JSON.parse(rawMeta) as { hex_data?: string }[];
+    const jsonStart = rawMeta.indexOf('[');
+    const jsonStr = jsonStart !== -1 ? rawMeta.slice(jsonStart) : '';
+    if (jsonStr.trim()) {
+      const metaRows = JSON.parse(jsonStr) as { hex_data?: string }[];
       if (metaRows[0] && metaRows[0].hex_data) {
         const metaBuf = Buffer.from(metaRows[0].hex_data, 'hex');
         const metaObj = decodeProtobuf(metaBuf);
@@ -342,8 +348,13 @@ export function parseAntigravitySessions(conversationsDir: string): Session[] {
 
 function sqliteExecAsync(dbPath: string, args: string[]): Promise<string> {
   assertTrustedPath(dbPath);
+  const newArgs = [...args];
+  const idx = newArgs.indexOf('-json');
+  if (idx !== -1) {
+    newArgs.splice(idx, 0, '-cmd', 'PRAGMA busy_timeout=1000');
+  }
   return new Promise(resolve => {
-    execFile('sqlite3', args, { encoding: 'utf-8', ...SQLITE_QUERY_OPTS }, (err, stdout) => {
+    execFile('sqlite3', newArgs, { encoding: 'utf-8', ...SQLITE_QUERY_OPTS }, (err, stdout) => {
       if (err) {
         resolve('');
       } else {
@@ -361,8 +372,10 @@ async function sqliteQueryStepsAsync(dbPath: string): Promise<StepRow[]> {
   try {
     const sql = 'SELECT idx, step_type, hex(step_payload) as payload_hex FROM steps ORDER BY idx';
     const raw = await sqliteExecAsync(dbPath, ['-json', dbPath, sql]);
-    if (!raw.trim()) return [];
-    return JSON.parse(raw) as StepRow[];
+    const jsonStart = raw.indexOf('[');
+    const jsonStr = jsonStart !== -1 ? raw.slice(jsonStart) : '';
+    if (!jsonStr.trim()) return [];
+    return JSON.parse(jsonStr) as StepRow[];
   } catch {
     return [];
   }
@@ -375,8 +388,10 @@ async function parseWorkspaceMetadataAsync(dbPath: string, birthtimeMs: number):
 
   try {
     const rawMeta = await sqliteQueryAsync(dbPath, "SELECT hex(data) as hex_data FROM trajectory_metadata_blob WHERE id = 'main'");
-    if (rawMeta.trim()) {
-      const metaRows = JSON.parse(rawMeta) as { hex_data?: string }[];
+    const jsonStart = rawMeta.indexOf('[');
+    const jsonStr = jsonStart !== -1 ? rawMeta.slice(jsonStart) : '';
+    if (jsonStr.trim()) {
+      const metaRows = JSON.parse(jsonStr) as { hex_data?: string }[];
       if (metaRows[0] && metaRows[0].hex_data) {
         const metaBuf = Buffer.from(metaRows[0].hex_data, 'hex');
         const metaObj = decodeProtobuf(metaBuf);
