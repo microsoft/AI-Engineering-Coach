@@ -338,6 +338,8 @@ function encodeComponentForMatch(name: string): string {
  * @param encoded  The encoded project directory name.
  * @param _projectsDir  The `.claude/projects` directory containing this project.
  */
+const resolvedDirCache = new Map<string, { name: string; encoded: string }[]>();
+
 function projectNameFromEncoded(encoded: string, _projectsDir: string): string {
   const segments = encoded.split('-');
   let root: string;
@@ -362,16 +364,19 @@ function projectNameFromEncoded(encoded: string, _projectsDir: string): string {
   let offset = 0;
 
   while (offset < remaining.length) {
-    let dirEntries: { name: string; encoded: string }[];
-    try {
-      dirEntries = fs.readdirSync(resolved, { withFileTypes: true })
-        .filter(e => e.isDirectory() || e.isSymbolicLink())
-        .map(e => ({ name: e.name, encoded: encodeComponentForMatch(e.name) }))
-        // Longest encoded form first — greedy match avoids splitting names
-        // that contain hyphens (e.g. `AI-Engineering-Coach`).
-        .sort((a, b) => b.encoded.length - a.encoded.length);
-    } catch {
-      break;
+    let dirEntries = resolvedDirCache.get(resolved);
+    if (!dirEntries) {
+      try {
+        dirEntries = fs.readdirSync(resolved, { withFileTypes: true })
+          .filter(e => e.isDirectory() || e.isSymbolicLink())
+          .map(e => ({ name: e.name, encoded: encodeComponentForMatch(e.name) }))
+          // Longest encoded form first — greedy match avoids splitting names
+          // that contain hyphens (e.g. `AI-Engineering-Coach`).
+          .sort((a, b) => b.encoded.length - a.encoded.length);
+        resolvedDirCache.set(resolved, dirEntries);
+      } catch {
+        break;
+      }
     }
 
     const rest = remaining.slice(offset);
@@ -518,6 +523,7 @@ function parseClaudeProjectSessions(
 }
 
 export function parseClaudeSessions(projectsDir: string): { sessions: Session[]; workspaceId: string; workspaceName: string }[] {
+  resolvedDirCache.clear();
   const results: { sessions: Session[]; workspaceId: string; workspaceName: string }[] = [];
 
   let projectDirs: fs.Dirent[];
@@ -539,6 +545,7 @@ export async function parseClaudeSessionsAsync(
   projectsDir: string,
   onProject?: (idx: number, total: number, name: string) => void,
 ): Promise<{ sessions: Session[]; workspaceId: string; workspaceName: string }[]> {
+  resolvedDirCache.clear();
   const results: { sessions: Session[]; workspaceId: string; workspaceName: string }[] = [];
 
   let projectDirs: string[];
