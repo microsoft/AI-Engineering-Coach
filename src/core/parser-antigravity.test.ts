@@ -221,7 +221,8 @@ describe('Antigravity Discovery & Decoder', () => {
       return '3.41.0';
     });
 
-    const images = extractAntigravityImages('/path/to/session.db', 'session-1-123');
+    const testDbPath = path.join(os.tmpdir(), 'session.db');
+    const images = extractAntigravityImages(testDbPath, 'session-1-123');
     expect(images.length).toBe(1);
     expect(images[0]).toBe('data:image/png;base64,ZmFrZS1pbWFnZS1ieXRlcw==');
   });

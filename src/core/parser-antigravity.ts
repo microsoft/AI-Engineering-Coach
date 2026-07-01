@@ -66,6 +66,19 @@ function isFieldAllowed(path: number[]): boolean {
   return false;
 }
 
+function isNestedMessage(path: number[]): boolean {
+  if (path.length === 1) {
+    const p0 = path[0];
+    return p0 === 2 || p0 === 5 || p0 === 19 || p0 === 20 || p0 === 24 || p0 === 114;
+  }
+  if (path.length === 2) {
+    const p0 = path[0], p1 = path[1];
+    if (p0 === 5) return p1 === 1 || p1 === 2 || p1 === 4 || p1 === 9;
+    if (p0 === 24) return p1 === 3;
+  }
+  return false;
+}
+
 export function decodeProtobuf(buf: Buffer, path: number[] = []): Record<number, unknown> {
   const result: Record<number, unknown> = {};
   const offset = { val: 0 };
@@ -99,7 +112,7 @@ export function decodeProtobuf(buf: Buffer, path: number[] = []): Record<number,
               break;
             }
           }
-          if (isPrintable && val.length > 0) {
+          if (!isNestedMessage(currentPath) && isPrintable && val.length > 0) {
             result[fieldNum] = val.toString('utf-8');
           } else if (currentPath.length < 4 && val.length <= 16384) {
             try {
