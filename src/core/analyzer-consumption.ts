@@ -114,7 +114,7 @@ function attributeSessionLevel(
   const byModel = new Map<string, SessionRequest[]>();
   for (const r of session.requests) {
     if (delegatedRequests?.has(r)) continue;
-    const m = normalizeModel(r.modelId || 'untracked');
+    const m = normalizeModel(r.modelId || 'untracked', true);
     if (!byModel.has(m)) byModel.set(m, []);
     byModel.get(m)!.push(r);
   }
@@ -219,7 +219,7 @@ export class ConsumptionAnalyzer extends AnalyzerBase {
     const defaultMultipliers: Record<string, number> = {};
 
     for (const r of reqs) {
-      const model = normalizeModel(r.modelId || 'untracked');
+      const model = normalizeModel(r.modelId || 'untracked', true);
       const mult = modelMultiplier(model);
       defaultMultipliers[model] = mult;
       modelTotals.set(model, (modelTotals.get(model) || 0) + 1);
@@ -289,7 +289,7 @@ export class ConsumptionAnalyzer extends AnalyzerBase {
     const dailyReqs = new Map<number, number>();
     for (const r of reqs) {
       const d = new Date(r.timestamp!).getDate();
-      const mult = modelMultiplier(normalizeModel(r.modelId || 'untracked'));
+      const mult = modelMultiplier(normalizeModel(r.modelId || 'untracked', true));
       dailyReqs.set(d, (dailyReqs.get(d) || 0) + mult);
     }
 
@@ -426,7 +426,7 @@ export class ConsumptionAnalyzer extends AnalyzerBase {
     request: SessionRequest,
     billing: RequestBilling | undefined,
   ): void {
-    const model = normalizeModel(request.modelId || 'untracked');
+    const model = normalizeModel(request.modelId || 'untracked', true);
     const resolvedBilling: RequestBilling = billing ?? {
       uncachedInput: 0,
       totalInput: 0,
@@ -754,7 +754,7 @@ export class ConsumptionAnalyzer extends AnalyzerBase {
         countedCount++;
         const tokens = (requestBilling?.totalInput ?? 0) + (requestBilling?.output ?? 0);
         dailyTokens.set(dayIdx + 1, (dailyTokens.get(dayIdx + 1) || 0) + tokens);
-        const model = normalizeModel(request.modelId ?? 'unknown');
+        const model = normalizeModel(request.modelId ?? 'unknown', true);
         if (!dailyTokensByModel.has(model)) dailyTokensByModel.set(model, new Map());
         const modelDay = dailyTokensByModel.get(model)!;
         modelDay.set(dayIdx + 1, (modelDay.get(dayIdx + 1) || 0) + tokens);

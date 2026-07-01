@@ -27,7 +27,7 @@ export class ProductionAnalyzer extends AnalyzerBase {
       const day = toDateStr(request.timestamp!);
       const session = this.requestSessionMap.get(request);
       const workspaceName = session?.workspaceName || '';
-      const model = normalizeModel(request.modelId || 'unknown');
+      const model = normalizeModel(request.modelId || 'unknown', true);
       const harness = session?.harness || 'unknown';
       for (const block of request.aiCode) {
         totalAiLoc += block.loc;
@@ -46,7 +46,7 @@ export class ProductionAnalyzer extends AnalyzerBase {
       const day = request.timestamp ? toDateStr(request.timestamp) : null;
       const session = this.requestSessionMap.get(request);
       const workspaceName = session?.workspaceName || '';
-      const model = normalizeModel(request.modelId || 'unknown');
+      const model = normalizeModel(request.modelId || 'unknown', true);
       const harness = session?.harness || 'unknown';
       for (const [file, loc] of editLocs) {
         totalAiLoc += loc;

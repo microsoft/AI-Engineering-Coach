@@ -111,7 +111,7 @@ export function fillMonthRange(months: string[]): string[] {
  *  while the effort value is captured separately via extractReasoningEffortFromModelId. */
 const EFFORT_SUFFIX_RE = /-(xhigh|extra-high|max|high|medium|med|low|minimal)$/;
 
-export function normalizeModel(modelId: string): string {
+export function normalizeModel(modelId: string, keepSuffix = false): string {
   let m = modelId.trim();
   for (const prefix of ['copilot/', 'github.copilot-chat/', 'github/']) {
     if (m.startsWith(prefix)) { m = m.slice(prefix.length); break; }
@@ -128,7 +128,7 @@ export function normalizeModel(modelId: string): string {
   }
   // Strip effort suffixes ONLY for known reasoning-capable families (avoid
   // false positives on models like gpt-5.4-mini or gemini-3-flash).
-  if (EFFORT_BEARING_RE.test(m) && !NON_EFFORT_SUFFIXES_RE.test(m)) {
+  if (!keepSuffix && EFFORT_BEARING_RE.test(m) && !NON_EFFORT_SUFFIXES_RE.test(m)) {
     m = m.replace(EFFORT_SUFFIX_RE, '');
   }
   return m.trim();
