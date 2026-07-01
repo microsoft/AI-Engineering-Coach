@@ -116,7 +116,7 @@ export function normalizeModel(modelId: string): string {
   for (const prefix of ['copilot/', 'github.copilot-chat/', 'github/']) {
     if (m.startsWith(prefix)) { m = m.slice(prefix.length); break; }
   }
-  m = m.replace(/-thought$/, '').replace(/-preview$/, '').replace(/-latest$/, '');
+  m = m.replace(/-(thought|thinking)$/, '').replace(/-preview$/, '').replace(/-latest$/, '');
   // Claude's API returns hyphenated version numbers (claude-opus-4-6) where
   // our rate tables use dots (claude-opus-4.6). Also strip -YYYYMMDD date
   // suffixes that older API responses append (claude-haiku-4-5-20251001).
@@ -137,7 +137,8 @@ export function normalizeModel(modelId: string): string {
 export function modelMultiplier(modelId: string): number {
   const key = normalizeModel(modelId);
   if (MODEL_MULTIPLIERS[key] !== undefined) return MODEL_MULTIPLIERS[key];
-  for (const [k, v] of Object.entries(MODEL_MULTIPLIERS)) {
+  const sortedEntries = Object.entries(MODEL_MULTIPLIERS).sort((a, b) => b[0].length - a[0].length);
+  for (const [k, v] of sortedEntries) {
     if (key.startsWith(k)) return v;
   }
   return 1;
@@ -263,7 +264,17 @@ export function tokenCostInCredits(
   cacheReadTokens: number = 0,
   cacheWriteTokens: number = 0,
 ): number {
-  const rates = MODEL_TOKEN_RATES[normalizeModel(model)];
+  let rates = MODEL_TOKEN_RATES[normalizeModel(model)];
+  if (!rates) {
+    const norm = normalizeModel(model);
+    const sortedRates = Object.entries(MODEL_TOKEN_RATES).sort((a, b) => b[0].length - a[0].length);
+    for (const [k, v] of sortedRates) {
+      if (norm.startsWith(k)) {
+        rates = v;
+        break;
+      }
+    }
+  }
   if (!rates) {
     // Fallback: use model multiplier as rough proxy (1 PRU ≈ 1 credit)
     return modelMultiplier(model);

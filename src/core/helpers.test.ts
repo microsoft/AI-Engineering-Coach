@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, it, expect } from 'vitest';
-import { fileUriToPath, toDateStr, startOfDay, endOfDay, isoWeek, normalizeModel, modelMultiplier, classifyWorkType } from './helpers';
+import { fileUriToPath, toDateStr, startOfDay, endOfDay, isoWeek, normalizeModel, modelMultiplier, classifyWorkType, tokenCostInCredits } from './helpers';
 
 describe('fileUriToPath', () => {
   it('converts a Windows file URI', () => {
@@ -149,6 +149,30 @@ describe('modelMultiplier', () => {
 
   it('returns 1 for unknown models', () => {
     expect(modelMultiplier('totally-unknown-model')).toBe(1);
+  });
+
+  it('correctly maps Antigravity model variants via prefix matching', () => {
+    expect(modelMultiplier('gemini-3.5-flash-low')).toBe(0.33);
+    expect(modelMultiplier('gemini-3.5-flash-medium')).toBe(0.33);
+    expect(modelMultiplier('gemini-3.1-pro-high')).toBe(1);
+    expect(modelMultiplier('claude-sonnet-4.6-thinking')).toBe(1);
+    expect(modelMultiplier('claude-opus-4.6-thinking')).toBe(3);
+    expect(modelMultiplier('gpt-oss-120b-medium')).toBe(0.5);
+  });
+});
+
+describe('tokenCostInCredits', () => {
+  it('calculates cost using prefix match rates', () => {
+    // gemini-3.5-flash-low should use gemini-3.5-flash rates (input: 0.50, output: 3.00)
+    // 1M input tokens * $0.50 + 1M output tokens * $3.00 = $3.50 * 100 = 350 credits
+    const cost = tokenCostInCredits('gemini-3.5-flash-low', 1_000_000, 1_000_000);
+    expect(cost).toBe(350);
+  });
+
+  it('falls back to modelMultiplier when no prefix rate matches', () => {
+    // unknown-model-here should fallback to modelMultiplier (1) = 1 credit
+    const cost = tokenCostInCredits('unknown-model-here', 1_000, 1_000);
+    expect(cost).toBe(1);
   });
 });
 

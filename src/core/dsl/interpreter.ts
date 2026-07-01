@@ -278,8 +278,9 @@ const MODEL_TIERS: Record<string, number> = {
   'o4-mini': 2, 'o3-mini': 1, 'o3': 3, 'o1-mini': 1, 'o1-preview': 2, 'o1': 2,
   'gpt-4.1-nano': 0.2, 'gpt-4.1-mini': 0.5, 'gpt-4.1': 1,
   'gpt-4-turbo': 1, 'gpt-4': 1,
-  'gemini-3.1-pro': 1, 'gemini-3-pro': 1, 'gemini-3-flash': 0.33,
+  'gemini-3.5-flash': 0.33, 'gemini-3.1-flash': 0.33, 'gemini-3.1-pro': 1, 'gemini-3-pro': 1, 'gemini-3-flash': 0.33,
   'gemini-2.5-pro': 1, 'gemini-2.0-flash': 0.3,
+  'gpt-oss-120b': 0.5,
   'grok-code-fast-1': 0.25,
 };
 

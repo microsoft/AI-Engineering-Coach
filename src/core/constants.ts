@@ -19,7 +19,8 @@ export const MODEL_MULTIPLIERS: Record<string, number> = {
   'claude-opus-4.7': 7.5,
   'claude-haiku-4.5': 0.33,
   'gemini-2.0-flash': 0.25, 'gemini-2.5-pro': 1, 'gemini-3-flash': 0.33,
-  'gemini-3-pro': 1, 'gemini-3.1-pro': 1, 'gemini-3.5-flash': 0.33,
+  'gemini-3-pro': 1, 'gemini-3.1-pro': 1, 'gemini-3.5-flash': 0.33, 'gemini-3.1-flash': 0.33,
+  'gpt-oss-120b': 0.5,
   'grok-code-fast-1': 0.25, 'raptor-mini': 0, 'goldeneye': 1,
   'copilot-internal': 0, 'auto': 1, 'custom-model': 1,
 };
@@ -60,6 +61,8 @@ export const MODEL_TOKEN_RATES: Record<string, TokenRate> = {
   'gemini-3-pro':       { input: 2.00, cached: 0.20,  output: 12.00 },
   'gemini-3.1-pro':     { input: 2.00, cached: 0.20,  output: 12.00 },
   'gemini-3.5-flash':   { input: 0.50, cached: 0.05,  output: 3.00 },
+  'gemini-3.1-flash':   { input: 0.50, cached: 0.05,  output: 3.00 },
+  'gpt-oss-120b':       { input: 1.00, cached: 0.10,  output: 4.00 },
   'grok-code-fast-1':   { input: 0.20, cached: 0.02,  output: 1.50 },
   'raptor-mini':        { input: 0.25, cached: 0.025, output: 2.00 },
   'goldeneye':          { input: 1.25, cached: 0.125, output: 10.00 },
