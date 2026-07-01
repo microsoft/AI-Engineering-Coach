@@ -47,7 +47,7 @@ function isFieldAllowed(path: number[]): boolean {
   if (path.length === 2) {
     const p0 = path[0], p1 = path[1];
     if (p0 === 2) return p1 === 1;
-    if (p0 === 5) return p1 === 1 || p1 === 4 || p1 === 9;
+    if (p0 === 5) return p1 === 1 || p1 === 2 || p1 === 4 || p1 === 9;
     if (p0 === 19) return p1 === 2;
     if (p0 === 20) return p1 === 1;
     if (p0 === 24) return p1 === 3;
@@ -57,6 +57,7 @@ function isFieldAllowed(path: number[]): boolean {
   if (path.length === 3) {
     const p0 = path[0], p1 = path[1], p2 = path[2];
     if (p0 === 5 && p1 === 1) return p2 === 1;
+    if (p0 === 5 && p1 === 2) return p2 === 1 || p2 === 4;
     if (p0 === 5 && p1 === 4) return p2 === 2 || p2 === 3 || p2 === 9;
     if (p0 === 5 && p1 === 9) return p2 === 1 || p2 === 2;
     if (p0 === 24 && p1 === 3) return p2 === 1 || p2 === 5;

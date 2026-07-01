@@ -143,19 +143,27 @@ describe('Antigravity Discovery & Decoder', () => {
           
           const prompt = 'Use skill /Users/alex/.gemini/config/skills/brainstorming/SKILL.md to brainstorm';
           const promptBuf = Buffer.from(prompt, 'utf-8');
+          const p2Buf = Buffer.concat([
+            Buffer.from([0x12, promptBuf.length]),
+            promptBuf,
+          ]);
           const modelBuf = Buffer.from('model: claude-3-5-sonnet', 'utf-8');
           const payload0 = Buffer.concat([
-            Buffer.from([0x9a, 0x01, promptBuf.length]),
-            promptBuf,
+            Buffer.from([0x9a, 0x01, p2Buf.length]),
+            p2Buf,
             modelBuf,
           ]);
           
           const step0Hex = payload0.toString('hex');
           
           const respBuf = Buffer.from('done brainstorming', 'utf-8');
-          const payload1 = Buffer.concat([
-            Buffer.from([0xa2, 0x01, respBuf.length]),
+          const p1Buf = Buffer.concat([
+            Buffer.from([0x0a, respBuf.length]),
             respBuf,
+          ]);
+          const payload1 = Buffer.concat([
+            Buffer.from([0xa2, 0x01, p1Buf.length]),
+            p1Buf,
           ]);
           const step1Hex = payload1.toString('hex');
 
