@@ -278,15 +278,21 @@ const MODEL_TIERS: Record<string, number> = {
   'o4-mini': 2, 'o3-mini': 1, 'o3': 3, 'o1-mini': 1, 'o1-preview': 2, 'o1': 2,
   'gpt-4.1-nano': 0.2, 'gpt-4.1-mini': 0.5, 'gpt-4.1': 1,
   'gpt-4-turbo': 1, 'gpt-4': 1,
-  'gemini-3.5-flash': 0.33, 'gemini-3.1-flash': 0.33, 'gemini-3.1-pro': 1, 'gemini-3-pro': 1, 'gemini-3-flash': 0.33,
+  'gemini-3.5-flash-low': 0.33, 'gemini-3.5-flash-medium': 0.33, 'gemini-3.5-flash-high': 0.33,
+  'gemini-3.5-flash': 0.33, 
+  'gemini-3.1-flash-image2': 0.33, 'gemini-3.1-flash': 0.33,
+  'gemini-3.1-pro-low': 1, 'gemini-3.1-pro-high': 1, 'gemini-3.1-pro': 1,
+  'gemini-3-pro': 1, 'gemini-3-flash': 0.33,
   'gemini-2.5-pro': 1, 'gemini-2.0-flash': 0.3,
-  'gpt-oss-120b': 0.5,
+  'claude-sonnet-4.6-thinking': 1, 'claude-opus-4.6-thinking': 3,
+  'gpt-oss-120b-medium': 0.5, 'gpt-oss-120b': 0.5,
   'grok-code-fast-1': 0.25,
 };
 
 function modelTierLookup(raw: string): number {
   const id = raw.replace(/^(openai\/|anthropic\/|google\/)/, '').replace(/-\d{4}-\d{2}-\d{2}$/, '').toLowerCase();
-  for (const [k, v] of Object.entries(MODEL_TIERS)) {
+  const sortedTiers = Object.entries(MODEL_TIERS).sort((a, b) => b[0].length - a[0].length);
+  for (const [k, v] of sortedTiers) {
     if (id.includes(k)) return v;
   }
   return 0;
