@@ -266,7 +266,7 @@ function compactTextForStorage(text: string, maxChars: number): string {
   return text.slice(0, headChars) + marker + text.slice(text.length - tailChars);
 }
 
-function textForCodeScan(text: string): string {
+export function textForCodeScan(text: string): string {
   if (text.length <= MAX_CODE_SCAN_CHARS) return text;
   return text.slice(0, MAX_CODE_SCAN_CHARS);
 }

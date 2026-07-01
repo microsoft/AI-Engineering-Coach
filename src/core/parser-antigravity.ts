@@ -8,7 +8,7 @@ import * as path from 'path';
 import { execFileSync, execFile } from 'child_process';
 import * as os from 'os';
 import { Session, SessionRequest } from './types';
-import { assertTrustedPath, createRequest, createSession } from './parser-shared';
+import { assertTrustedPath, createRequest, createSession, extractCodeBlocks, textForCodeScan, extractSkillPathsFromText, extractSkillNameFromPath } from './parser-shared';
 
 const SQLITE_QUERY_OPTS = { timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 50 * 1024 * 1024, cwd: os.tmpdir() } as const;
 
@@ -40,7 +40,32 @@ function readVarint(buf: Buffer, offset: { val: number }): number {
   return result;
 }
 
-export function decodeProtobuf(buf: Buffer, depth = 0): Record<number, unknown> {
+function isFieldAllowed(path: number[]): boolean {
+  if (path.length === 1) {
+    return path[0] === 1 || path[0] === 2 || path[0] === 5 || path[0] === 7 || path[0] === 19 || path[0] === 20 || path[0] === 24 || path[0] === 114;
+  }
+  if (path.length === 2) {
+    const p0 = path[0], p1 = path[1];
+    if (p0 === 2) return p1 === 1;
+    if (p0 === 5) return p1 === 1 || p1 === 4 || p1 === 9;
+    if (p0 === 19) return p1 === 2;
+    if (p0 === 20) return p1 === 1;
+    if (p0 === 24) return p1 === 3;
+    if (p0 === 114) return p1 === 1;
+    return false;
+  }
+  if (path.length === 3) {
+    const p0 = path[0], p1 = path[1], p2 = path[2];
+    if (p0 === 5 && p1 === 1) return p2 === 1;
+    if (p0 === 5 && p1 === 4) return p2 === 2 || p2 === 3 || p2 === 9;
+    if (p0 === 5 && p1 === 9) return p2 === 1 || p2 === 2;
+    if (p0 === 24 && p1 === 3) return p2 === 1 || p2 === 5;
+    return false;
+  }
+  return false;
+}
+
+export function decodeProtobuf(buf: Buffer, path: number[] = []): Record<number, unknown> {
   const result: Record<number, unknown> = {};
   const offset = { val: 0 };
   while (offset.val < buf.length) {
@@ -48,7 +73,9 @@ export function decodeProtobuf(buf: Buffer, depth = 0): Record<number, unknown> 
       const key = readVarint(buf, offset);
       const fieldNum = key >> 3;
       const wireType = key & 0x07;
-      const shouldDecode = depth > 0 || fieldNum === 1 || fieldNum === 2 || fieldNum === 5 || fieldNum === 7 || fieldNum === 19 || fieldNum === 20 || fieldNum === 24 || fieldNum === 114;
+      
+      const currentPath = [...path, fieldNum];
+      const shouldDecode = isFieldAllowed(currentPath);
 
       if (wireType === 0) {
         const val = readVarint(buf, offset);
@@ -62,20 +89,20 @@ export function decodeProtobuf(buf: Buffer, depth = 0): Record<number, unknown> 
         if (offset.val + len > buf.length) break;
         if (shouldDecode) {
           const val = buf.subarray(offset.val, offset.val + len);
-          const str = val.toString('utf-8');
           let isPrintable = true;
-          for (let i = 0; i < Math.min(str.length, 100); i++) {
-            const code = str.charCodeAt(i);
+          const checkLen = Math.min(val.length, 100);
+          for (let i = 0; i < checkLen; i++) {
+            const code = val[i];
             if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
               isPrintable = false;
               break;
             }
           }
           if (isPrintable && val.length > 0) {
-            result[fieldNum] = str;
-          } else if (depth < 4 && val.length <= 16384) {
+            result[fieldNum] = val.toString('utf-8');
+          } else if (currentPath.length < 4 && val.length <= 16384) {
             try {
-              result[fieldNum] = decodeProtobuf(val, depth + 1);
+              result[fieldNum] = decodeProtobuf(val, currentPath);
             } catch {
               result[fieldNum] = val;
             }
@@ -174,9 +201,16 @@ function processStepRow(
   row: StepRow,
   sessionId: string,
   creationDate: number,
-  state: { currentReq: SessionRequest | null; requests: SessionRequest[]; lastMessageDate: number },
+  state: { currentReq: SessionRequest | null; requests: SessionRequest[]; lastMessageDate: number; modelId?: string },
 ): void {
   if (!row.payload_hex) return;
+
+  if (!state.modelId) {
+    const bufStr = Buffer.from(row.payload_hex, 'hex').toString('utf-8');
+    const m = bufStr.match(/(gemini-[a-zA-Z0-9.-]+|claude-[a-zA-Z0-9.-]+|gpt-[a-zA-Z0-9.-]+|o[13]-[a-zA-Z0-9.-]+)/i);
+    if (m) state.modelId = m[1];
+  }
+
   const payloadBuf = Buffer.from(row.payload_hex, 'hex');
   const payloadObj = decodeProtobuf(payloadBuf);
 
@@ -193,7 +227,21 @@ function processStepRow(
   if (row.step_type === 14) {
     const p19 = getRecord(payloadObj[19]);
     const promptText = (p19 && typeof p19[2] === 'string') ? p19[2] : '';
-    if (state.currentReq) state.requests.push(state.currentReq);
+    let imageCount = 0;
+    const p5 = getRecord(payloadObj[5]);
+    if (p5 && p5[2]) {
+      const attachments = Array.isArray(p5[2]) ? p5[2] : [p5[2]];
+      for (const att of attachments) {
+        const attRec = getRecord(att);
+        if (attRec && typeof attRec[1] === 'string') {
+          const fn = attRec[1].toLowerCase();
+          if (fn.endsWith('.png') || fn.endsWith('.jpg') || fn.endsWith('.jpeg') || fn.endsWith('.webp')) {
+            imageCount++;
+          }
+        }
+      }
+    }
+    if (state.currentReq) { finalizeRequest(state.currentReq); state.requests.push(state.currentReq); }
     state.currentReq = createRequest({
       requestId: `${sessionId}-${row.idx}`,
       timestamp: stepTime,
@@ -206,7 +254,7 @@ function processStepRow(
       referencedFiles: [],
       promptTokens: 0,
       completionTokens: 0,
-      variableKinds: {},
+      variableKinds: imageCount > 0 ? { image: imageCount } : {},
     });
   } else if (state.currentReq) {
     handleAssistantOrToolStep(row, payloadObj, state.currentReq);
@@ -325,18 +373,19 @@ export function parseAntigravitySessions(conversationsDir: string): Session[] {
       currentReq: null as SessionRequest | null,
       requests: [] as SessionRequest[],
       lastMessageDate: meta.creationDate,
+      modelId: undefined as string | undefined,
     };
 
     for (const row of stepRows) {
       processStepRow(row, sessionId, meta.creationDate, state);
     }
 
-    if (state.currentReq) state.requests.push(state.currentReq);
+    if (state.currentReq) { finalizeRequest(state.currentReq); state.requests.push(state.currentReq); }
     if (state.requests.length === 0) continue;
 
-    const modelId = 'gemini-3.5-flash';
+    const finalModelId = state.modelId || 'gemini-3.5-flash';
     for (const r of state.requests) {
-      r.modelId = modelId;
+      r.modelId = finalModelId;
     }
 
     const session = createSession({
@@ -440,18 +489,19 @@ export async function parseAntigravitySessionsAsync(
       currentReq: null as SessionRequest | null,
       requests: [] as SessionRequest[],
       lastMessageDate: meta.creationDate,
+      modelId: undefined as string | undefined,
     };
 
     for (const row of stepRows) {
       processStepRow(row, sessionId, meta.creationDate, state);
     }
 
-    if (state.currentReq) state.requests.push(state.currentReq);
+    if (state.currentReq) { finalizeRequest(state.currentReq); state.requests.push(state.currentReq); }
     if (state.requests.length === 0) continue;
 
-    const modelId = 'gemini-3.5-flash';
+    const finalModelId = state.modelId || 'gemini-3.5-flash';
     for (const r of state.requests) {
-      r.modelId = modelId;
+      r.modelId = finalModelId;
     }
 
     const session = createSession({
@@ -477,4 +527,79 @@ export async function parseAntigravitySessionsAsync(
   }
 
   return sessions;
+}
+
+export function extractAntigravityImages(filePath: string, requestId: string): string[] {
+  try {
+    const idxStr = requestId.split('-').pop();
+    if (!idxStr) return [];
+    const idx = parseInt(idxStr, 10);
+    if (Number.isNaN(idx)) return [];
+
+    const sql = `SELECT hex(step_payload) as h FROM steps WHERE idx = ${idx};`;
+    const out = sqliteQuery(filePath, sql);
+    if (!out) return [];
+    
+    let hex = '';
+    try {
+      const arr = JSON.parse(out) as { h?: string }[];
+      if (arr && arr.length > 0 && typeof arr[0].h === 'string') hex = arr[0].h;
+    } catch {
+      return [];
+    }
+    
+    if (!hex) return [];
+    
+    const buf = Buffer.from(hex, 'hex');
+    const payloadObj = decodeProtobuf(buf, []);
+    
+    const p5 = getRecord(payloadObj[5]);
+    if (!p5) return [];
+    
+    const attachments = p5[2];
+    if (!attachments) return [];
+    
+    const arr = Array.isArray(attachments) ? attachments : [attachments];
+    const uris: string[] = [];
+    const artifactsDir = path.join(path.dirname(filePath), 'artifacts');
+    
+    for (const att of arr) {
+      const attRec = getRecord(att);
+      if (!attRec) continue;
+      
+      const filename = typeof attRec[1] === 'string' ? attRec[1] : null;
+      if (!filename) continue;
+      
+      let mime = 'image/png';
+      if (typeof attRec[4] === 'string') mime = attRec[4];
+      else if (filename.endsWith('.jpeg') || filename.endsWith('.jpg')) mime = 'image/jpeg';
+      else if (filename.endsWith('.webp')) mime = 'image/webp';
+      
+      const imgPath = path.join(artifactsDir, filename);
+      if (fs.existsSync(imgPath)) {
+        const fileBuf = fs.readFileSync(imgPath);
+        uris.push(`data:${mime};base64,${fileBuf.toString('base64')}`);
+        if (uris.length >= 4) break;
+      }
+    }
+    return uris;
+  } catch {
+    return [];
+  }
+}
+
+function finalizeRequest(req: SessionRequest): void {
+  req.messageLength = req.messageText.length;
+  req.responseLength = req.responseText.length;
+  req.userCode = extractCodeBlocks(textForCodeScan(req.messageText));
+  req.aiCode = extractCodeBlocks(textForCodeScan(req.responseText));
+  
+  const skillNames = new Set<string>();
+  const allText = req.messageText + '\n' + req.responseText;
+  const paths = extractSkillPathsFromText(allText);
+  for (const p of paths) {
+    const name = extractSkillNameFromPath(p);
+    if (name) skillNames.add(name);
+  }
+  req.skillsUsed = [...skillNames];
 }

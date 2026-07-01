@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { StringDecoder } from 'string_decoder';
 import { assertTrustedPath, prefetchCache, readFileSafe, recordFailedFile, recordSkippedLines } from './parser-shared';
 import { fileUriToPath } from './helpers';
+import { extractAntigravityImages } from './parser-antigravity';
 import { debugCore, warnCore } from './log';
 
 export function readFile(fpath: string): string {
@@ -451,6 +452,11 @@ function extractImagesFromVariables(variables: RawImageVariable[]): string[] {
 export function extractSessionImages(filePath: string, requestId: string): string[] {
   try {
     assertTrustedPath(filePath);
+
+    if (filePath.endsWith('.db') && filePath.includes('antigravity')) {
+      return extractAntigravityImages(filePath, requestId);
+    }
+
     // Bounded read (50 MB cap) so a huge session file can't OOM the extension
     // host when the image gallery requests it on the main thread.
     const raw = readFileSafe(filePath);

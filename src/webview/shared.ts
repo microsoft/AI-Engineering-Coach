@@ -342,16 +342,18 @@ export const COLORS = {
 export const PALETTE = [COLORS.blue, COLORS.green, COLORS.purple, COLORS.yellow, COLORS.red, COLORS.cyan, COLORS.orange, COLORS.pink];
 
 export const HARNESS_COLORS: Record<string, string> = {
-  'Local Agent': '#007ACC',
-  'Local Agent (Insiders)': '#24bfa5',
-  'Xcode': '#147EFB',
-  'GitHub Copilot CLI': '#6e40c9',
-  'GitHub Copilot App': '#8957e5',
-  'Claude': '#d97706',
-
-  'Codex': '#10b981',
-  'OpenCode': '#8b5cf6',
-  'Antigravity': '#d97706',
+  'VS Code': COLORS.blue,
+  'Windsurf': COLORS.cyan,
+  'Cursor': COLORS.purple,
+  'Cline': COLORS.orange,
+  'Roo Code': COLORS.orange,
+  'GitHub Copilot CLI': COLORS.purple,
+  'GitHub Copilot App': COLORS.purple,
+  'Xcode': COLORS.blue,
+  'Codex': COLORS.green,
+  'Aider': COLORS.red,
+  'Copilot for Xcode': COLORS.blue,
+  'Antigravity': COLORS.purple,
 };
 
 export function harnessColor(name: string, idx: number): string {
