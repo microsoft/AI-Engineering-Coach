@@ -112,14 +112,23 @@ export function decodeProtobuf(buf: Buffer, path: number[] = []): Record<number,
               break;
             }
           }
-          if (!isNestedMessage(currentPath) && isPrintable && val.length > 0) {
-            result[fieldNum] = val.toString('utf-8');
-          } else if (currentPath.length < 4 && val.length <= 16384) {
+          
+          let decoded: Record<number, unknown> | null = null;
+          if (isNestedMessage(currentPath) && currentPath.length < 4 && val.length <= 16384) {
             try {
-              result[fieldNum] = decodeProtobuf(val, currentPath);
+              const rec = decodeProtobuf(val, currentPath);
+              if (Object.keys(rec).length > 0) {
+                decoded = rec;
+              }
             } catch {
-              result[fieldNum] = val;
+              // Ignore
             }
+          }
+
+          if (decoded !== null) {
+            result[fieldNum] = decoded;
+          } else if (isPrintable && val.length > 0) {
+            result[fieldNum] = val.toString('utf-8');
           } else {
             result[fieldNum] = val;
           }
