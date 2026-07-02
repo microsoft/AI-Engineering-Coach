@@ -1,7 +1,7 @@
 {
   "name": "ai-engineer-coach",
   "displayName": "AI Engineer Coach",
-  "description": "Analyze your AI coding assistant usage across VS Code, Xcode, Claude, Codex, and OpenCode. Read-only, zero telemetry.",
+  "description": "Analyze your AI coding assistant usage across VS Code, Xcode, Claude, Codex, OpenCode, Pi, and Antigravity. Read-only, zero telemetry.",
   "version": "0.1.0",
   "publisher": "ai-engineer-coach",
   "author": {
