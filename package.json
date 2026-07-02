@@ -290,9 +290,15 @@
       }
     ]
   },
+  "bin": {
+    "aicoach": "./dist/cli.js",
+    "ai-engineer-coach": "./dist/cli.js"
+  },
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs",
+    "build:cli": "node esbuild-cli.mjs",
+    "cli": "node dist/cli.js",
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src/",
     "bench": "vitest bench",
