@@ -5,10 +5,18 @@
 
 /* OpenCode session parser
  *
- * Data layout (macOS):
+ * Legacy data layout (JSON files, macOS/Linux):
  *   ~/.local/share/opencode/storage/session/global/<session-id>.json   -- session metadata
  *   ~/.local/share/opencode/storage/message/<session-id>/<msg-id>.json -- message metadata
  *   ~/.local/share/opencode/storage/part/<msg-id>/<part-id>.json       -- content parts (text, tool, step-start/finish)
+ *
+ * Current data layout (newer OpenCode versions migrate the JSON files into SQLite):
+ *   ~/.local/share/opencode/opencode.db
+ *     session(id, slug, directory, title, time_created, time_updated, ...)  -- plain columns
+ *     message(id, session_id, data)  -- data = OcMessage JSON without id/sessionID (ids live in columns)
+ *     part(id, message_id, session_id, data)  -- data = OcPart JSON without ids
+ *   Read via the node:sqlite builtin (Node >= 22.5). When unavailable (e.g. an
+ *   older extension host) the SQLite source is skipped gracefully.
  *
  * Sessions have: id, slug, version, projectID, directory, title, time.created/updated
  * Messages have: id, sessionID, role (user|assistant), time, agent, model {providerID, modelID}, tokens, cost
@@ -81,9 +89,11 @@ export function findOpenCodeDirs(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const dirs: string[] = [];
 
-  // macOS / Linux
-  const linuxPath = path.join(home, '.local', 'share', 'opencode', 'storage');
-  if (fs.existsSync(linuxPath)) dirs.push(linuxPath);
+  // macOS / Linux — the storage dir may be gone after the SQLite migration,
+  // so the presence of opencode.db alone also qualifies the install.
+  const base = path.join(home, '.local', 'share', 'opencode');
+  const storagePath = path.join(base, 'storage');
+  if (fs.existsSync(storagePath) || fs.existsSync(path.join(base, 'opencode.db'))) dirs.push(storagePath);
 
   return dirs;
 }
@@ -261,15 +271,9 @@ function buildOpenCodeRequest(
   });
 }
 
-function parseOpenCodeSession(rawSession: OcSession, storageDir: string): Session | null {
-  if (!rawSession.id) return null;
-
-  const msgDir = path.join(storageDir, 'message', rawSession.id);
-  const rawMessages = readAllJsonInDir<OcMessage>(msgDir);
-  rawMessages.sort((a, b) => (a.time?.created || 0) - (b.time?.created || 0));
+function assembleOpenCodeSession(rawSession: OcSession, rawMessages: OcMessage[], partsByMsg: Map<string, OcPart[]>): Session | null {
   if (rawMessages.length === 0) return null;
 
-  const partsByMsg = indexPartsByMessage(rawMessages, storageDir);
   const { wsId, wsName } = getOpenCodeWorkspace(rawSession);
   const requests: SessionRequest[] = [];
   let firstTs: number | null = null;
@@ -304,6 +308,140 @@ function parseOpenCodeSession(rawSession: OcSession, storageDir: string): Sessio
   });
 }
 
+function parseOpenCodeSession(rawSession: OcSession, storageDir: string): Session | null {
+  if (!rawSession.id) return null;
+
+  const msgDir = path.join(storageDir, 'message', rawSession.id);
+  const rawMessages = readAllJsonInDir<OcMessage>(msgDir);
+  rawMessages.sort((a, b) => (a.time?.created || 0) - (b.time?.created || 0));
+  if (rawMessages.length === 0) return null;
+
+  const partsByMsg = indexPartsByMessage(rawMessages, storageDir);
+  return assembleOpenCodeSession(rawSession, rawMessages, partsByMsg);
+}
+
+type NodeSqlite = typeof import('node:sqlite');
+
+interface SqliteSessionRow {
+  id: string;
+  slug: string | null;
+  directory: string | null;
+  title: string | null;
+  time_created: number | null;
+  time_updated: number | null;
+}
+
+interface SqliteMessageRow { id: string; session_id: string; data: string }
+interface SqlitePartRow { id: string; message_id: string; session_id: string; data: string }
+
+/* node:sqlite ships with Node >= 22.5 but not with every extension host, so it
+ * is loaded lazily; callers skip the SQLite source when it is unavailable. */
+function loadNodeSqlite(): NodeSqlite | null {
+  try {
+    const getBuiltinModule = (process as { getBuiltinModule?: (id: string) => unknown }).getBuiltinModule;
+    return (getBuiltinModule?.call(process, 'node:sqlite') as NodeSqlite | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function parseDbJson<T>(data: string): T | null {
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return null;
+  }
+}
+
+function indexDbMessagesBySession(rows: SqliteMessageRow[]): Map<string, OcMessage[]> {
+  const messagesBySession = new Map<string, OcMessage[]>();
+  for (const row of rows) {
+    const parsed = parseDbJson<Omit<OcMessage, 'id' | 'sessionID'>>(row.data);
+    if (!parsed) continue;
+    const msg: OcMessage = {
+      ...parsed,
+      id: row.id,
+      sessionID: row.session_id,
+      // The db payload nests the model; the parser reads the flat modelID.
+      modelID: parsed.modelID ?? parsed.model?.modelID,
+    };
+    const list = messagesBySession.get(row.session_id);
+    if (list) list.push(msg);
+    else messagesBySession.set(row.session_id, [msg]);
+  }
+  return messagesBySession;
+}
+
+function indexDbPartsByMessage(rows: SqlitePartRow[]): Map<string, OcPart[]> {
+  const partsByMsg = new Map<string, OcPart[]>();
+  for (const row of rows) {
+    const parsed = parseDbJson<Omit<OcPart, 'id' | 'sessionID' | 'messageID'>>(row.data);
+    if (!parsed) continue;
+    const part: OcPart = { ...parsed, id: row.id, sessionID: row.session_id, messageID: row.message_id };
+    const list = partsByMsg.get(row.message_id);
+    if (list) list.push(part);
+    else partsByMsg.set(row.message_id, [part]);
+  }
+  return partsByMsg;
+}
+
+function dbRowToOcSession(row: SqliteSessionRow): OcSession {
+  return {
+    id: row.id,
+    slug: row.slug ?? undefined,
+    directory: row.directory ?? undefined,
+    title: row.title ?? undefined,
+    time: { created: row.time_created ?? undefined, updated: row.time_updated ?? undefined },
+  };
+}
+
+/** Parses sessions from the OpenCode SQLite database (`opencode.db`). The db
+ *  stores the same JSON payloads as the legacy file layout in `data` columns,
+ *  minus the id fields, which live in dedicated columns and are re-attached
+ *  here. `knownIds` skips sessions already parsed from the legacy layout. */
+export function parseOpenCodeDbSessions(dbPath: string, knownIds?: ReadonlySet<string>): Session[] {
+  const sqlite = loadNodeSqlite();
+  if (!sqlite) return [];
+
+  const sessions: Session[] = [];
+  let db: InstanceType<NodeSqlite['DatabaseSync']> | null = null;
+  try {
+    assertTrustedPath(dbPath);
+    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+
+    const sessionRows = db.prepare(
+      'SELECT id, slug, directory, title, time_created, time_updated FROM session',
+    ).all() as unknown as SqliteSessionRow[];
+    const messageRows = db.prepare(
+      'SELECT id, session_id, data FROM message ORDER BY time_created',
+    ).all() as unknown as SqliteMessageRow[];
+    const partRows = db.prepare(
+      'SELECT id, message_id, session_id, data FROM part',
+    ).all() as unknown as SqlitePartRow[];
+
+    const messagesBySession = indexDbMessagesBySession(messageRows);
+    const partsByMsg = indexDbPartsByMessage(partRows);
+
+    for (const row of sessionRows) {
+      if (!row.id || knownIds?.has(row.id)) continue;
+      const rawMessages = messagesBySession.get(row.id);
+      if (!rawMessages || rawMessages.length === 0) continue;
+      rawMessages.sort((a, b) => (a.time?.created || 0) - (b.time?.created || 0));
+
+      const session = assembleOpenCodeSession(dbRowToOcSession(row), rawMessages, partsByMsg);
+      if (session) sessions.push(session);
+    }
+  } catch {
+    // Unreadable/locked db (e.g. concurrent OpenCode process mid-migration):
+    // return whatever was assembled, mirroring readJsonSafe's tolerance.
+    return sessions;
+  } finally {
+    db?.close();
+  }
+
+  return sessions;
+}
+
 export function parseOpenCodeSessions(storageDir: string): Session[] {
   const sessions: Session[] = [];
   const sessionDir = path.join(storageDir, 'session', 'global');
@@ -312,6 +450,14 @@ export function parseOpenCodeSessions(storageDir: string): Session[] {
   for (const rawSession of rawSessions) {
     const session = parseOpenCodeSession(rawSession, storageDir);
     if (session) sessions.push(session);
+  }
+
+  // Newer OpenCode versions migrate the JSON layout into a SQLite db that
+  // lives one level above the storage dir (~/.local/share/opencode/opencode.db).
+  const dbPath = path.join(path.dirname(storageDir), 'opencode.db');
+  if (fs.existsSync(dbPath)) {
+    const knownIds = new Set(sessions.map((s) => s.sessionId));
+    sessions.push(...parseOpenCodeDbSessions(dbPath, knownIds));
   }
 
   return sessions;
