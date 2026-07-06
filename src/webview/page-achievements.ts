@@ -42,6 +42,7 @@ interface AchievementStats {
   topLanguage: string;
   oldTechCount: number;
   hourlyPeak: number;
+  tokenReportingDisabled: boolean;
   /** Historical daily data for date estimation */
   dailyLabels: string[];
   dailyCumulativeLoc: number[];
@@ -163,7 +164,9 @@ const ACHIEVEMENTS: Achievement[] = [
     id: 'model-explorer', title: 'Model Explorer', icon: SVG.microscope,
     tier: 'silver', xp: 20, category: 'diversity',
     description: 'Used 5+ different AI models',
-    evaluate: thresholdEval('uniqueModels', 5, (v) => `${v} / 5 models`),
+    evaluate: (s) => s.tokenReportingDisabled
+      ? { progress: 0, label: 'Token reporting disabled', unlocked: false }
+      : thresholdEval('uniqueModels', 5, (v) => `${v} / 5 models`)(s),
   },
 
   // Mastery
@@ -320,6 +323,22 @@ function buildDailyCumulative(labels: string[], loc: number[], reqs: number[], s
     dailyCumulativeSessions.push(cumSess);
   }
   return { dailyLabels: labels, dailyCumulativeLoc, dailyCumulativeReqs, dailyCumulativeSessions };
+}
+
+function isTokenReportingDisabledError(err: unknown): boolean {
+  return err instanceof Error && err.message === 'Token reporting is temporarily disabled';
+}
+
+async function getConsumptionForAchievements(filter: DateFilter): Promise<{ modelTotals: Record<string, number>; tokenReportingDisabled: boolean }> {
+  try {
+    const consumption = await rpc<{ modelTotals: Record<string, number> }>('getConsumption', filter as Record<string, unknown>);
+    return { modelTotals: consumption.modelTotals, tokenReportingDisabled: false };
+  } catch (err) {
+    if (isTokenReportingDisabledError(err)) {
+      return { modelTotals: {}, tokenReportingDisabled: true };
+    }
+    throw err;
+  }
 }
 
 function evaluateAchievements(stats: AchievementStats): { evaluated: EvaluatedAchievement[]; unlocked: EvaluatedAchievement[]; locked: EvaluatedAchievement[] } {
@@ -495,11 +514,11 @@ export async function renderAchievements(container: HTMLElement, filter: DateFil
     { hours: [] },
   ] as const);
 
-  const sessions = await rpc<{ total: number; sessions: { sessionId: string; requestCount: number; firstMessage: string }[] }>('getSessions', { page: 1, pageSize: 100, filter: filter as Record<string, unknown> });
+  const sessions = await rpc<{ total: number; sessions: { sessionId: string; requestCount: number; firstMessage: string }[] }>('getSessions', { page: 1, pageSize: 100, filter });
   const dailyActivity = await rpc<DailyActivity>('getDailyActivity',  filter as Record<string, unknown>);
-  const allSessions = await rpc<{ total: number }>('getSessions', { page: 1, pageSize: 1, filter: filter as Record<string, unknown> });
+  const allSessions = await rpc<{ total: number }>('getSessions', { page: 1, pageSize: 1, filter });
   const codeByLang = await rpc<{ byLanguage: { labels: string[] } }>('getCodeProduction',  filter as Record<string, unknown>);
-  const consumption = await rpc<{ modelTotals: Record<string, number> }>('getConsumption',  filter as Record<string, unknown>);
+  const consumption = await getConsumptionForAchievements(filter);
   const workflows = await rpc<{ clusters: { id: string }[] }>('getWorkflowOptimization',  filter as Record<string, unknown>);
 
   const avgReqsPerSession = allSessions.total > 0 ? stats.totalRequests / allSessions.total : 0;
@@ -537,6 +556,7 @@ export async function renderAchievements(container: HTMLElement, filter: DateFil
     topLanguage: codeByLang.byLanguage.labels[0] ?? 'Unknown',
     oldTechCount,
     hourlyPeak: Math.max(...(hourly.hours ?? [0])),
+    tokenReportingDisabled: consumption.tokenReportingDisabled,
     ...buildDailyCumulative(dailyActivity.labels, dailyActivity.loc, dailyActivity.values, dailyActivity.sessions),
   };
 
@@ -545,7 +565,7 @@ export async function renderAchievements(container: HTMLElement, filter: DateFil
 
   // Wire tab switching
   const tabs = container.querySelectorAll<HTMLButtonElement>('.ach-tab');
-  const list = container.querySelector('#ach-list')!;
+  const list = container.querySelector<HTMLElement>('#ach-list')!;
   for (const tab of tabs) {
     tab.addEventListener('click', () => {
       for (const t of tabs) t.classList.remove('ach-tab-active');
@@ -554,7 +574,7 @@ export async function renderAchievements(container: HTMLElement, filter: DateFil
       const filtered = cat === 'all' ? evaluated : evaluated.filter(a => a.category === cat);
       const fUnlocked = filtered.filter(a => a.result.unlocked);
       const fLocked = filtered.filter(a => !a.result.unlocked).sort((a, b) => b.result.progress - a.result.progress);
-      render(renderAchList(fUnlocked, fLocked), list as HTMLElement);
+      render(renderAchList(fUnlocked, fLocked), list);
       wireShareButtons(container);
     });
   }
