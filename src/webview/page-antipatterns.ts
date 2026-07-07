@@ -215,12 +215,26 @@ function thresholdRow(key: string, value: number, ruleId: string): ComponentChil
   </div>`;
 }
 
+/* ── Module-level view state ── */
+let activeRangeDays = 0;
+
+function buildRangeFilter(f: DateFilter): Record<string, unknown> {
+  const filter: Record<string, unknown> = { ...f };
+  if (activeRangeDays > 0) {
+    const d = new Date();
+    d.setDate(d.getDate() - activeRangeDays);
+    filter.fromDate = d.toISOString().slice(0, 10);
+  }
+  return filter;
+}
+
 /* ── Main render ── */
 
 export async function renderAntiPatterns(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
+  const filter = buildRangeFilter(currentFilter);
   const [apData, ruleData] = await Promise.all([
-    rpc<ApData>('getAntiPatterns', currentFilter as Record<string, unknown>),
-    rpc<RuleEditorData>('getRuleEditor', currentFilter as Record<string, unknown>),
+    rpc<ApData>('getAntiPatterns', filter),
+    rpc<RuleEditorData>('getRuleEditor', filter),
   ]);
 
   const patterns = apData.patterns || [];
@@ -244,6 +258,14 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
     <div class="ap-page-header">
       <h1>Anti-Patterns</h1>
       <p class="ap-page-intro">Review health scores across practice groups, drill into individual findings, and manage the rules that detect them. Switch to the <strong>Rules</strong> tab to browse, create, or edit detection rules using the built-in DSL.</p>
+    </div>
+
+    <div class="cons-range-bar" id="antiPatternsRange">
+      <button class=${`cons-range-btn${activeRangeDays === 7 ? ' active' : ''}`} data-range="7">Last 7 days</button>
+      <button class=${`cons-range-btn${activeRangeDays === 28 ? ' active' : ''}`} data-range="28">Last 4 weeks</button>
+      <button class=${`cons-range-btn${activeRangeDays === 90 ? ' active' : ''}`} data-range="90">Last 3 months</button>
+      <button class=${`cons-range-btn${activeRangeDays === 180 ? ' active' : ''}`} data-range="180">Last 6 months</button>
+      <button class=${`cons-range-btn${activeRangeDays === 0 ? ' active' : ''}`} data-range="0">All time</button>
     </div>
 
     <div class="ap-tab-bar">
@@ -539,8 +561,17 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
   // Wire tab switching
   wireTabBar(container);
 
+  // Wire date range filter
+  container.querySelector('#antiPatternsRange')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-range]');
+    const range = btn?.dataset.range;
+    if (!btn || !range) return;
+    activeRangeDays = Number(range);
+    void renderAntiPatterns(container, currentFilter);
+  });
+
   // Wire up rules section
-  wireRulesSection(container, rules, previewMap, currentFilter);
+  wireRulesSection(container, rules, previewMap, filter);
 }
 
 /* ── Tab switching ── */
@@ -1231,4 +1262,3 @@ function renderLayerStatus(layers: RuleLayerInfo[], layerName: string): Componen
   if (!info.exists) return html`<span class="rule-help-status rule-help-missing">Directory not found</span>`;
   return html`<span class="rule-help-status rule-help-ok">${info.ruleCount} rule${info.ruleCount !== 1 ? 's' : ''} loaded</span>`;
 }
-

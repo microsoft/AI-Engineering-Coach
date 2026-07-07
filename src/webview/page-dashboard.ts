@@ -14,6 +14,7 @@ import { llmAvailable } from './capabilities';
 
 // Module-level view state — survives filter/harness changes.
 let activeMetric = 'requests';
+let activeRangeDays = 0;
 
 const DASHBOARD_LANGUAGE_ALIASES: Record<string, string> = {
   py: 'python',
@@ -96,6 +97,7 @@ function renderDashboardMarkup(
   totalSessions: number,
   totalLoc: number,
   skillCache: ReturnType<typeof getSkillCache>,
+  currentFilter: DateFilter,
 ): void {
   const harnesses = harnessBreakdown.labels || [];
   const overallScore = scores.length > 0 ? Math.round(scores.reduce((s, g) => s + g.score, 0) / scores.length) : 0;
@@ -125,8 +127,13 @@ function renderDashboardMarkup(
         ${harnesses.length > 0 && html`<div class="dash-harnesses dash-harnesses-right">${harnesses.map((h, i) => html`<span class="dash-harness-tag" style=${'border-color:' + harnessColor(h, i) + ';color:' + harnessColor(h, i)}>${h}</span>`)}</div>`}
       </div>
     </div>
-    ${!FF_TOKEN_REPORTING_ENABLED && html`<div class="dash-info-banner"><span class="dash-info-icon">\u2139</span><div><strong>Token Usage & Burndown temporarily hidden</strong><p>These features are disabled until we can verify that reported numbers align with GitHub's billing data. They will be re-enabled once validated.</p></div></div>`}
-    ${scores.length > 0 && html`<section class="dash-section"><div class="dash-section-header"><h3>Anti-Patterns Summary</h3><a href="#" data-page="anti-patterns" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>View All Anti-Patterns \u2192</a></div><div class="ap-score-grid">${scores.map(g => html`<${PracticeCard} g=${g} />`)}</div></section>`}
+    ${!FF_TOKEN_REPORTING_ENABLED && html`<div class="dash-info-banner"><span class="dash-info-icon">\u2139</span><div><strong>Token Usage & Burndown temporarily hidden</strong><p>These features are disabled until we can verify that reported numbers align with GitHub's billing data. They will be re-enabled once validated.</p></div></div>`}    <div class="cons-range-bar" id="dashboardRange">
+      <button class=${`cons-range-btn${activeRangeDays === 7 ? ' active' : ''}`} data-range="7">Last 7 days</button>
+      <button class=${`cons-range-btn${activeRangeDays === 28 ? ' active' : ''}`} data-range="28">Last 4 weeks</button>
+      <button class=${`cons-range-btn${activeRangeDays === 90 ? ' active' : ''}`} data-range="90">Last 3 months</button>
+      <button class=${`cons-range-btn${activeRangeDays === 180 ? ' active' : ''}`} data-range="180">Last 6 months</button>
+      <button class=${`cons-range-btn${activeRangeDays === 0 ? ' active' : ''}`} data-range="0">All time</button>
+    </div>    ${scores.length > 0 && html`<section class="dash-section"><div class="dash-section-header"><h3>Anti-Patterns Summary</h3><a href="#" data-page="anti-patterns" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>View All Anti-Patterns \u2192</a></div><div class="ap-score-grid">${scores.map(g => html`<${PracticeCard} g=${g} />`)}</div></section>`}
     ${llmAvailable() && html`<section class="dash-section"><div class="dash-section-header"><h3>Skill Finder</h3><a href="#" data-page="skills" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>Open Full View \u2192</a></div><p class="dash-section-desc">Scans your prompt history for repeated patterns that waste time re-explaining the same tasks.</p><div id="dashSkillContent" class="dash-card">${!skillCache && html`<div style="text-align:center;"><p style="color:var(--text-muted);margin:0 0 12px 0;font-size:13px;">Analyze your prompt history to discover skill opportunities.</p><button id="dashScanBtn" class="dash-scan-btn">Scan for Skills</button></div>`}</div></section>`}
     <section class="dash-section"><div style="display:flex;align-items:baseline;gap:16px;margin-bottom:8px;flex-wrap:wrap;"><h3 style="margin:0;">Daily Activity</h3><div id="activityTabs" class="dash-tabs"><button class=${'dash-tab' + (activeMetric === 'requests' ? ' dash-tab-active' : '')} data-metric="requests">Requests <strong>${formatNum(totalReqs)}</strong></button><button class=${'dash-tab' + (activeMetric === 'sessions' ? ' dash-tab-active' : '')} data-metric="sessions">Sessions <strong>${formatNum(totalSessions)}</strong></button><button class=${'dash-tab' + (activeMetric === 'loc' ? ' dash-tab-active' : '')} data-metric="loc">LoC <strong>${formatNum(totalLoc)}</strong></button><button class=${'dash-tab' + (activeMetric === 'workspaces' ? ' dash-tab-active' : '')} data-metric="workspaces">Workspaces <strong>${formatNum(stats.totalWorkspaces)}</strong></button></div></div><${CanvasEl} id="dailyChart" height=${160} /></section>
     <div class="two-col" style="margin-bottom:16px;"><${CanvasEl} id="wsChart" height=${140} title="Top Workspaces by Requests" /><${CanvasEl} id="harnessChart" height=${140} title="Requests by Harness" /></div>
@@ -184,16 +191,27 @@ function renderDashboardSkillFinder(skillCache: ReturnType<typeof getSkillCache>
   });
 }
 
+function buildRangeFilter(f: DateFilter): Record<string, unknown> {
+  const filter: Record<string, unknown> = { ...f };
+  if (activeRangeDays > 0) {
+    const d = new Date();
+    d.setDate(d.getDate() - activeRangeDays);
+    filter.fromDate = d.toISOString().slice(0, 10);
+  }
+  return filter;
+}
+
 export async function renderDashboard(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const emptyDaily: DailyActivity = { labels: [], values: [], sessions: [], loc: [], workspaces: [], byHarness: [] };
   const emptyCodeProd: CodeProductionData = { summary: { totalAiLoc: 0, totalUserLoc: 0, totalLoc: 0, aiBlocks: 0, userBlocks: 0, aiRatio: 0, locCost2010: 0, costPerLoc: 0 }, byLanguage: { labels: [], aiLoc: [], userLoc: [] }, dailyTimeline: { labels: [], aiLoc: [], userLoc: [] }, byWorkspace: { labels: [], aiLoc: [], userLoc: [] }, dailyByWorkspace: {}, dailyByModel: {}, dailyByHarness: {} };
+  const filter = buildRangeFilter(currentFilter);
   const [stats, daily, wsBreakdown, harnessBreakdown, antiPatterns, codeProd] = await rpcAllSettled([
-    rpc<{ totalSessions: number; totalWorkspaces: number; totalRequests: number }>('getStats', currentFilter as Record<string, unknown>),
-    rpc<DailyActivity>('getDailyActivity', currentFilter as Record<string, unknown>),
-    rpc<{ labels: string[]; values: number[] }>('getWorkspaceBreakdown', currentFilter as Record<string, unknown>),
-    rpc<{ labels: string[]; requests: number[] }>('getHarnessBreakdown', currentFilter as Record<string, unknown>),
-    rpc<AntiPatternData>('getAntiPatterns', currentFilter as Record<string, unknown>),
-    rpc<CodeProductionData>('getCodeProduction', currentFilter as Record<string, unknown>),
+    rpc<{ totalSessions: number; totalWorkspaces: number; totalRequests: number }>('getStats', filter),
+    rpc<DailyActivity>('getDailyActivity', filter),
+    rpc<{ labels: string[]; values: number[] }>('getWorkspaceBreakdown', filter),
+    rpc<{ labels: string[]; requests: number[] }>('getHarnessBreakdown', filter),
+    rpc<AntiPatternData>('getAntiPatterns', filter),
+    rpc<CodeProductionData>('getCodeProduction', filter),
   ] as const, [
     { totalSessions: 0, totalWorkspaces: 0, totalRequests: 0 },
     emptyDaily,
@@ -236,6 +254,7 @@ export async function renderDashboard(container: HTMLElement, currentFilter: Dat
     totalSessions,
     totalLoc,
     skillCache,
+    currentFilter,
   );
 
   // ── Activity chart with switchable metrics ──
@@ -294,6 +313,15 @@ export async function renderDashboard(container: HTMLElement, currentFilter: Dat
   }
 
   renderActivityChart();
+
+  // Range filter switching
+  document.getElementById('dashboardRange')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-range]');
+    const range = btn?.dataset.range;
+    if (!btn || !range) return;
+    activeRangeDays = Number(range);
+    void renderDashboard(container, currentFilter);
+  });
 
   // Tab switching
   document.getElementById('activityTabs')?.addEventListener('click', (e) => {
