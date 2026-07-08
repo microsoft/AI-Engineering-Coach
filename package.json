@@ -357,7 +357,7 @@
     "chartjs-chart-treemap": "3.1.0",
     "htm": "3.1.1",
     "leo-profanity": "1.9.0",
-    "preact": "10.29.3",
+    "preact": "10.29.6",
     "zod": "4.4.3"
   }
 }
