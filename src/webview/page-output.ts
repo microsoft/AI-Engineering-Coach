@@ -6,7 +6,7 @@
 /* Output page renderer -- merges Production & Consumption into a single tabbed view */
 
 import { DateFilter } from '../core/types';
-import { TOKEN_DATA_AVAILABLE_FROM, FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
+import { TOKEN_DATA_AVAILABLE_FROM } from '../core/constants';
 import { isoWeek } from '../core/helpers';
 import { rpc, createChart, formatNum, $$, PALETTE, COLORS, HARNESS_COLORS } from './shared';
 import { html, render, StatCard, CanvasEl, ComponentChildren } from './render';
@@ -115,10 +115,6 @@ let activeRangeDays = 0;
 let activeTab: OutputTab = 'production';
 
 export async function renderOutput(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
-  if (!FF_TOKEN_REPORTING_ENABLED && activeTab === 'token-usage') {
-    activeTab = 'production';
-  }
-
   // Disclaimer banner shown above the Token Usage tab.
   // Computed from local session files only, so cannot see activity from
   // other devices, cloud-hosted agents, or harnesses we don't read.
@@ -235,7 +231,7 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
     <div class="cons-range-bar" id="outputRange"></div>
     <div class="tab-bar" id="output-tabs">
       <button class=${`tab${activeTab === 'production' ? ' active' : ''}`} data-tab="production">Code Output</button>
-      ${FF_TOKEN_REPORTING_ENABLED ? html`<button class=${`tab${activeTab === 'token-usage' ? ' active' : ''}`} data-tab="token-usage">Token Usage</button>` : ''}
+      <button class=${`tab${activeTab === 'token-usage' ? ' active' : ''}`} data-tab="token-usage">Token Usage</button>
     </div>
     <div id="output-tab-content"></div>
   `, container);
@@ -684,28 +680,8 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
 
 
   async function renderActiveTab(): Promise<void> {
-    if (!FF_TOKEN_REPORTING_ENABLED && activeTab === 'token-usage') {
-      activeTab = 'production';
-    }
     if (activeTab === 'production') await renderProductionTab();
-    else if (!FF_TOKEN_REPORTING_ENABLED) renderTokenUsageGated();
     else await renderTokenUsageTab();
-  }
-
-  /** Shown when token-usage is gated behind the feature flag. */
-  function renderTokenUsageGated(): void {
-    const target = document.getElementById('output-tab-content')!;
-    render(html`
-      <div class="feature-gated-notice">
-        <h2>Token Usage is temporarily disabled</h2>
-        <p>
-          This feature has been disabled temporarily until we are able to verify
-          that the reporting is aligned with what is reported by GitHub.
-          It will be re-enabled once the billing system is active and numbers
-          can be validated.
-        </p>
-      </div>
-    `, target);
   }
 
   // Initial render — honour the persisted active tab
@@ -765,7 +741,6 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
       btn.classList.add('active');
       const tab = btn.dataset.tab;
       if (!tab) return;
-      if (!FF_TOKEN_REPORTING_ENABLED && tab === 'token-usage') return;
       activeTab = tab as OutputTab;
       snapActiveRangeIfDisabled();
       refreshRangeBar();

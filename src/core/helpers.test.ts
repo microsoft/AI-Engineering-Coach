@@ -4,7 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, it, expect } from 'vitest';
-import { fileUriToPath, toDateStr, startOfDay, endOfDay, isoWeek, normalizeModel, modelMultiplier, classifyWorkType } from './helpers';
+import {
+  fileUriToPath, toDateStr, startOfDay, endOfDay, isoWeek, normalizeModel, modelMultiplier,
+  classifyWorkType, resolveTokens, resolveContextTier, tokenCostInCredits,
+} from './helpers';
 
 describe('fileUriToPath', () => {
   it('converts a Windows file URI', () => {
@@ -183,5 +186,74 @@ describe('classifyWorkType', () => {
 
   it('matches higher-priority pattern first (bug fix before feature)', () => {
     expect(classifyWorkType('fix and add new feature')).toBe('bug fix');
+  });
+});
+
+describe('resolveContextTier', () => {
+  it('returns default for models without a longContext tier', () => {
+    expect(resolveContextTier('gpt-4.1', 200_000)).toBe('default');
+  });
+
+  it('returns default when promptTokens is null', () => {
+    expect(resolveContextTier('gpt-5.6-terra', null)).toBe('default');
+  });
+
+  it('returns default when input is at or below the 128k threshold', () => {
+    expect(resolveContextTier('gpt-5.6-terra', 128_000)).toBe('default');
+    expect(resolveContextTier('copilot/gpt-5.6-terra', 100_000)).toBe('default');
+  });
+
+  it('returns longContext when input exceeds the 128k threshold', () => {
+    expect(resolveContextTier('gpt-5.6-terra', 128_001)).toBe('longContext');
+    expect(resolveContextTier('copilot/gpt-5.6-terra', 200_000)).toBe('longContext');
+  });
+});
+
+describe('resolveTokens', () => {
+  it('reports default context tier for normal inputs', () => {
+    const t = resolveTokens(10_000, 5_000, 0, 0, 'gpt-5.6-terra');
+    expect(t.contextTier).toBe('default');
+  });
+
+  it('reports longContext tier for inputs above the threshold', () => {
+    const t = resolveTokens(200_000, 5_000, 0, 0, 'gpt-5.6-terra');
+    expect(t.contextTier).toBe('longContext');
+  });
+
+  it('defaults to default tier when modelId is omitted', () => {
+    const t = resolveTokens(200_000, 5_000);
+    expect(t.contextTier).toBe('default');
+  });
+});
+
+describe('tokenCostInCredits', () => {
+  it('uses default GPT-5.6 Terra rates below the long-context threshold', () => {
+    // 1M input + 500k output, no cache
+    const credits = tokenCostInCredits('gpt-5.6-terra', 1_000_000, 500_000, 0, 0, 'default');
+    // (1 * $2.00 + 0.5 * $12.00) / $0.01 = 200 + 600 = 800 credits
+    expect(credits).toBe(800);
+  });
+
+  it('uses long-context GPT-5.6 Terra rates above the threshold', () => {
+    const credits = tokenCostInCredits('gpt-5.6-terra', 1_000_000, 500_000, 0, 0, 'longContext');
+    // (1 * $4.00 + 0.5 * $18.00) / $0.01 = 400 + 900 = 1300 credits
+    expect(credits).toBe(1300);
+  });
+
+  it('falls back to default rates when longContext is requested but not defined', () => {
+    const credits = tokenCostInCredits('gpt-4.1', 1_000_000, 500_000, 0, 0, 'longContext');
+    // (1 * $2.00 + 0.5 * $8.00) / $0.01 = 200 + 400 = 600 credits
+    expect(credits).toBe(600);
+  });
+
+  it('bills cache reads and writes at the cached rates', () => {
+    // 1M total input: 800k cache read + 200k cache write + 0 uncached; 0 output
+    const credits = tokenCostInCredits('gpt-5.6-terra', 0, 0, 800_000, 200_000, 'default');
+    // (0.8 * $0.20 + 0.2 * $2.50) / $0.01 = 16 + 50 = 66 credits
+    expect(credits).toBe(66);
+  });
+
+  it('falls back to model multiplier for unknown models', () => {
+    expect(tokenCostInCredits('unknown-premium-model', 1_000_000, 500_000)).toBe(1);
   });
 });

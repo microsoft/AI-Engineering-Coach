@@ -39,7 +39,6 @@ import { compileNaturalLanguageRule } from '../core/rule-compiler';
 import type { SessionRequest, Session } from '../core/types';
 import { errorResult, isString, isNumber, isOptionalString, isRecord } from './panel-shared';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
-import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 
 /**
  * Pick `reqs` or `sessions` based on scope and return them typed as
@@ -684,17 +683,17 @@ const rpcHandlers: TypedRpcHandlers = {
   getHourlyDistribution: (a, _p, params) => a.getHourlyDistribution(validateDateFilter(params)),
   getHeatmap: (a, _p, params) => a.getHeatmap(validateDateFilter(params)),
   getCodeProduction: (a, _p, params) => a.getCodeProduction(validateDateFilter(params)),
-  getConsumption: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getConsumption(validateDateFilter(params)) : errorResult('Token reporting is temporarily disabled'),
-  getBurndown: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getBurndown(
+  getConsumption: (a, _p, params) => a.getConsumption(validateDateFilter(params)),
+  getBurndown: (a, _p, params) => a.getBurndown(
     validateBurndownConfig(params?.config),
     isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined,
-  ) : errorResult('Token reporting is temporarily disabled'),
-  getAiCredits: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getAiCredits(validateDateFilter(params)) : errorResult('Token reporting is temporarily disabled'),
-  getAiCreditBurndown: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getAiCreditBurndown(
+  ),
+  getAiCredits: (a, _p, params) => a.getAiCredits(validateDateFilter(params)),
+  getAiCreditBurndown: (a, _p, params) => a.getAiCreditBurndown(
     validateBurndownConfig(params?.config),
     isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined,
-  ) : errorResult('Token reporting is temporarily disabled'),
-  getTokenCoverage: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getTokenCoverage(validateDateFilter(params)) : errorResult('Token reporting is temporarily disabled'),
+  ),
+  getTokenCoverage: (a, _p, params) => a.getTokenCoverage(validateDateFilter(params)),
   getDayTimeline: (a, _p, params) => a.getDayTimeline(
     isOptionalString(params?.date) ? params.date : undefined,
     isOptionalString(params?.mode) ? params.mode : undefined,

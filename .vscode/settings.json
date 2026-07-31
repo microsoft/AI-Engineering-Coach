@@ -1,5 +1,6 @@
 {
     "github.copilot.enable": {
         "markdown": true
-    }
+    },
+    "chat.sessionSync.enabled": true
 }

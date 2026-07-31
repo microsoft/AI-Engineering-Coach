@@ -28,7 +28,20 @@ export const LOC_COST_2010 = 20;
 
 /* ---- Per-token rates in USD per 1M tokens (May 2026 pricing) ---- */
 /* https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing */
-export interface TokenRate { input: number; cached: number; output: number; cacheWrite?: number }
+export interface TokenRate {
+  input: number;
+  cached: number;
+  output: number;
+  cacheWrite?: number;
+  /** Optional higher-cost tier used when the request exceeds the model's
+   *  long-context threshold (e.g. GPT-5.6 Terra long-context pricing). */
+  longContext?: { input: number; cached: number; output: number; cacheWrite?: number };
+}
+
+/** Token threshold above which a request is billed at the model's long-context
+ *  rate, when one is defined. Matches GPT-5.6 Terra's 128k boundary. */
+export const LONG_CONTEXT_THRESHOLD = 128_000;
+
 export const MODEL_TOKEN_RATES: Record<string, TokenRate> = {
   'gpt-4.1':            { input: 2.00, cached: 0.50,  output: 8.00 },
   'gpt-4.1-mini':       { input: 0.25, cached: 0.025, output: 2.00 },
@@ -45,6 +58,10 @@ export const MODEL_TOKEN_RATES: Record<string, TokenRate> = {
   'gpt-5.4-mini':       { input: 0.75, cached: 0.075, output: 4.50 },
   'gpt-5.4-nano':       { input: 0.20, cached: 0.02,  output: 1.25 },
   'gpt-5.5':            { input: 5.00, cached: 0.50,  output: 30.00 },
+  'gpt-5.6-terra':      {
+    input: 2.00, cached: 0.20, output: 12.00, cacheWrite: 2.50,
+    longContext: { input: 4.00, cached: 0.40, output: 18.00, cacheWrite: 5.00 },
+  },
   'claude-haiku-4.5':   { input: 1.00, cached: 0.10,  output: 5.00,  cacheWrite: 1.25 },
   'claude-3.5-sonnet':  { input: 3.00, cached: 0.30,  output: 15.00, cacheWrite: 3.75 },
   'claude-3.7-sonnet':  { input: 3.00, cached: 0.30,  output: 15.00, cacheWrite: 3.75 },
@@ -128,4 +145,4 @@ export const TOKEN_DATA_AVAILABLE_FROM = '2026-04-01';
 // are skipped while it is off and contain stale assertions + an incomplete mock:
 // tests/e2e/burndown.spec.ts and the getAiCreditBurndown mock in
 // tests/e2e/harness.html (see the TODO(FF_TOKEN_REPORTING_ENABLED) notes there).
-export const FF_TOKEN_REPORTING_ENABLED = false;
+export const FF_TOKEN_REPORTING_ENABLED = true;

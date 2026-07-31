@@ -6,7 +6,6 @@
 /* Webview entry -- runs in the browser context inside the VS Code webview */
 
 import { AntiPatternData, DateFilter, StatsResult } from '../core/types';
-import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { $, $$, rpc, destroyCharts, initMessageListener, withErrorBoundary, type WorkerTelemetry } from './shared';
 import { updateTelemetry } from './telemetry-strip';
 import { formatStatCount } from './loading-grid-model';
@@ -27,17 +26,6 @@ import { renderLevelUp } from './page-experiments';
 import { renderDataExplorer } from './page-data-explorer';
 import { renderRulePlayground } from './page-rule-playground';
 import { renderImageGallery } from './page-image-gallery';
-
-function normalizePageForFeatureFlags(page: string): string {
-  if (!FF_TOKEN_REPORTING_ENABLED && page === 'burndown') return 'dashboard';
-  return page;
-}
-
-/* ---- Feature-flag gating: hide token-reporting nav items ---- */
-if (!FF_TOKEN_REPORTING_ENABLED) {
-  const burndownLink = document.querySelector<HTMLElement>('[data-page="burndown"]');
-  burndownLink?.parentElement?.remove();
-}
 
 /* ---- Global state ---- */
 let currentPage = 'dashboard';
@@ -355,7 +343,6 @@ document.addEventListener('click', (e) => {
 });
 
 export function navigateTo(page: string): void {
-  page = normalizePageForFeatureFlags(page);
   if (!llmAvailable() && (page === 'skills' || page === 'level-up')) page = 'dashboard';
   currentPage = page;
   for (const a of $$<HTMLAnchorElement>('.nav-links a')) a.classList.toggle('active', a.dataset.page === page);
@@ -514,7 +501,6 @@ if (harnessFilter) {
 
 /* ---- Page Router ---- */
 function renderPage(page: string): void {
-  page = normalizePageForFeatureFlags(page);
   currentPage = page;
   const content = $('#content')!;
   // Unmount the previous Preact tree and clear imperative children (e.g. the

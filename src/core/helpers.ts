@@ -6,7 +6,7 @@
 /* Shared date and model helpers used across analyzer modules */
 
 import { WorkType } from './types';
-import { MODEL_MULTIPLIERS, MODEL_TOKEN_RATES } from './constants';
+import { MODEL_MULTIPLIERS, MODEL_TOKEN_RATES, LONG_CONTEXT_THRESHOLD } from './constants';
 
 /* ---- File-URI helper ---- */
 
@@ -199,6 +199,22 @@ export function canonicalizeReasoningEffort(
 /* ---- Native token resolution ---- */
 
 /**
+ * Determine whether a request should be billed at the model's long-context
+ * tier. Uses the total input size (`promptTokens`) as the signal because
+ * that's what the Copilot model router exposes; output volume alone does not
+ * trigger the higher tier. Falls back to false when the input count is unknown.
+ */
+export function resolveContextTier(
+  modelId: string,
+  promptTokens: number | null,
+): 'default' | 'longContext' {
+  if (promptTokens == null) return 'default';
+  const rates = MODEL_TOKEN_RATES[normalizeModel(modelId)];
+  if (!rates?.longContext) return 'default';
+  return promptTokens > LONG_CONTEXT_THRESHOLD ? 'longContext' : 'default';
+}
+
+/**
  * Resolve token counts for a request.
  *
  * Returns *only* native counts reported by the harness. No char-based
@@ -217,6 +233,7 @@ export function resolveTokens(
   completionTokens: number | null,
   cacheReadTokens: number | null = null,
   cacheWriteTokens: number | null = null,
+  modelId?: string,
 ): {
   input: number;
   output: number;
@@ -226,6 +243,7 @@ export function resolveTokens(
   hasInput: boolean;
   hasOutput: boolean;
   missing: boolean;
+  contextTier: 'default' | 'longContext';
 } {
   const hasInput = promptTokens != null;
   const hasOutput = completionTokens != null;
@@ -236,6 +254,7 @@ export function resolveTokens(
   // Uncached input cannot be negative even if cache totals exceed prompt
   // (which can happen with rounding from session-level totals).
   const uncachedInput = Math.max(0, input - cacheRead - cacheWrite);
+  const contextTier = modelId ? resolveContextTier(modelId, promptTokens) : 'default';
   return {
     input,
     output,
@@ -245,6 +264,7 @@ export function resolveTokens(
     hasInput,
     hasOutput,
     missing: !hasInput || !hasOutput,
+    contextTier,
   };
 }
 
@@ -255,6 +275,9 @@ export function resolveTokens(
  * `inputTokens` is the *uncached* input portion (billed at the input rate).
  * `cacheReadTokens` and `cacheWriteTokens` (defaulting to 0) are billed at
  * their lower respective rates. Returns credits, not dollars.
+ *
+ * `contextTier` selects the model's long-context pricing when available
+ * (e.g. GPT-5.6 Terra charges more above 128k input tokens).
  */
 export function tokenCostInCredits(
   model: string,
@@ -262,16 +285,18 @@ export function tokenCostInCredits(
   outputTokens: number,
   cacheReadTokens: number = 0,
   cacheWriteTokens: number = 0,
+  contextTier: 'default' | 'longContext' = 'default',
 ): number {
   const rates = MODEL_TOKEN_RATES[normalizeModel(model)];
   if (!rates) {
     // Fallback: use model multiplier as rough proxy (1 PRU ≈ 1 credit)
     return modelMultiplier(model);
   }
-  const inputCost = (inputTokens / 1_000_000) * rates.input;
-  const outputCost = (outputTokens / 1_000_000) * rates.output;
-  const cacheReadCost = (cacheReadTokens / 1_000_000) * rates.cached;
-  const cacheWriteCost = (cacheWriteTokens / 1_000_000) * (rates.cacheWrite ?? rates.input);
+  const tier = contextTier === 'longContext' && rates.longContext ? rates.longContext : rates;
+  const inputCost = (inputTokens / 1_000_000) * tier.input;
+  const outputCost = (outputTokens / 1_000_000) * tier.output;
+  const cacheReadCost = (cacheReadTokens / 1_000_000) * tier.cached;
+  const cacheWriteCost = (cacheWriteTokens / 1_000_000) * (tier.cacheWrite ?? tier.input);
   // Convert USD to credits (1 credit = $0.01)
   return (inputCost + outputCost + cacheReadCost + cacheWriteCost) * 100;
 }

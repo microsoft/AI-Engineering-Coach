@@ -6,8 +6,6 @@
 /* Burndown page renderer — token consumption only */
 
 import { DateFilter } from '../core/types';
-import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
-
 import { rpc, createChart, destroyChartById, COLORS, formatNum, vscode } from './shared';
 import { html, render, CanvasEl, StatCard } from './render';
 
@@ -120,22 +118,6 @@ async function loadModelBudgetsFromDisk(): Promise<void> {
 }
 
 export function renderBurndown(container: HTMLElement, currentFilter: DateFilter): void {
-  if (!FF_TOKEN_REPORTING_ENABLED) {
-    render(html`
-      <h1>Burndown</h1>
-      <div class="feature-gated-notice">
-        <h2>Burndown is temporarily disabled</h2>
-        <p>
-          This feature has been disabled temporarily until we are able to verify
-          that the reporting is aligned with what is reported by GitHub.
-          It will be re-enabled once the billing system is active and numbers
-          can be validated.
-        </p>
-      </div>
-    `, container);
-    return;
-  }
-
   // Load disk-persisted budgets on first render
   void loadModelBudgetsFromDisk();
 
