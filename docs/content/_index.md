@@ -18,6 +18,7 @@ AI Engineer Coach reads logs from multiple AI coding tools:
 | **Claude** | Session files from Anthropic's CLI-based coding assistant |
 | **Codex** | Session history from OpenAI's terminal agent |
 | **OpenCode** | Session logs from the open-source terminal coding tool |
+| **Cursor** | Cursor Agent transcripts under `~/.cursor/projects/**/agent-transcripts/` |
 | **GitHub Copilot CLI** | Session state and history from the Copilot CLI terminal agent |
 
 ## How It Works

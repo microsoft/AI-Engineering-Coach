@@ -34,6 +34,16 @@ Reads session history from OpenAI's Codex terminal agent. Captures prompts, comp
 
 Parses session logs from the open-source OpenCode terminal tool that supports multiple LLM backends.
 
+## Cursor Agent
+
+Parses Cursor Agent transcripts from the local Cursor projects directory. Each chat session under `agent-transcripts/` becomes a session; user turns wrapped in `<user_query>` become requests. Tool calls (Read, Write, Glob, Shell, and others) are mapped into the shared analytics model. Subagent transcripts under `subagents/` are merged into the parent session.
+
+Token and model usage are not present in Cursor Agent transcripts, so those metrics stay unavailable for this harness (same honest `no-data` approach used for sources without usage fields).
+
+**Default location:**
+- macOS/Linux: `~/.cursor/projects/`
+- Windows: `%USERPROFILE%\.cursor\projects\`
+
 ## GitHub Copilot for Xcode
 
 Reads Copilot Chat conversation logs from Apple's Xcode IDE. Sessions are parsed from SQLite databases stored in the GitHub Copilot configuration directory.

@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { Workspace, Session } from './types';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
+import { findCursorDirs, parseCursorSessions, parseCursorSessionsAsync } from './parser-cursor';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
 
 type WorkspaceMap = Map<string, Workspace>;
@@ -69,6 +70,26 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
       }
     },
   },
+  {
+    name: 'Cursor Agent',
+    collectSync(ctx) {
+      for (const cursorDir of findCursorDirs()) {
+        for (const { sessions } of parseCursorSessions(cursorDir)) {
+          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, cursorDir);
+        }
+      }
+    },
+    async collectAsync(ctx, reportDetail) {
+      for (const cursorDir of findCursorDirs()) {
+        const results = await parseCursorSessionsAsync(cursorDir, (idx, total, name) => {
+          reportDetail?.(`${idx}/${total}: ${name}`);
+        });
+        for (const { sessions } of results) {
+          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, cursorDir);
+        }
+      }
+    },
+  },
 ];
 
 export interface ExternalHarnessProgressHandlers {
@@ -78,17 +99,20 @@ export interface ExternalHarnessProgressHandlers {
   yieldToLoop?: () => Promise<void>;
 }
 
-/** Returns true if any external-harness (Claude Code, Codex, OpenCode) session
- *  source exists on disk. The dashboard uses this so it does not abort when the
- *  only available logs come from a non-VS Code harness — e.g. a headless
- *  Remote-SSH host that has Claude Code sessions under `~/.claude/projects` but
- *  no VS Code workspace storage or Copilot directories. */
+/** Returns true if any external-harness (Claude Code, Codex, OpenCode, Cursor)
+ *  session source exists on disk. The dashboard uses this so it does not abort
+ *  when the only available logs come from a non-VS Code harness — e.g. a
+ *  headless Remote-SSH host that has Claude Code sessions under
+ *  `~/.claude/projects` but no VS Code workspace storage or Copilot directories. */
 export function hasExternalHarnessSources(): boolean {
   // Without a home directory the find* helpers would join against an empty
   // string and probe relative paths (e.g. `.claude/projects`) under the current
   // working directory, which could report false positives. Bail out instead.
   if (!process.env.HOME && !process.env.USERPROFILE) return false;
-  return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
+  return findClaudeDirs().length > 0
+    || findCodexDirs().length > 0
+    || findOpenCodeDirs().length > 0
+    || findCursorDirs().length > 0;
 }
 
 export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {
@@ -106,6 +130,7 @@ export const EXTERNAL_HARNESS_SET = new Set<string>([
   'Claude',
   'Codex',
   'OpenCode',
+  'Cursor',
 ]);
 
 export async function collectExternalHarnessesAsync(

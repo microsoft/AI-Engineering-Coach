@@ -61,6 +61,7 @@ function getTrustedRoots(): string[] {
     roots.push(path.resolve(home, '.copilot'));
     roots.push(path.resolve(home, '.claude'));
     roots.push(path.resolve(home, '.codex'));
+    roots.push(path.resolve(home, '.cursor'));
     roots.push(path.resolve(home, '.local', 'share', 'opencode'));
     roots.push(path.resolve(home, '.config', 'github-copilot'));
   }

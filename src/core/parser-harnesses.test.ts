@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect } from 'vitest';
-import { hasExternalHarnessSources } from './parser-harnesses';
+import { EXTERNAL_HARNESS_SET, hasExternalHarnessSources } from './parser-harnesses';
 
 function setEnv(key: 'HOME' | 'USERPROFILE', value: string | undefined): void {
   if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -36,6 +36,12 @@ function withHome(setup: (home: string) => void, body: () => void): void {
   }
 }
 
+describe('EXTERNAL_HARNESS_SET', () => {
+  it('includes the canonical Cursor harness id', () => {
+    expect(EXTERNAL_HARNESS_SET.has('Cursor')).toBe(true);
+  });
+});
+
 describe('hasExternalHarnessSources', () => {
   it('returns false when no external-harness directories exist', () => {
     withHome(() => { /* empty home */ }, () => {
@@ -46,6 +52,14 @@ describe('hasExternalHarnessSources', () => {
   it('returns true when a Claude Code projects directory exists', () => {
     withHome(home => {
       fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
+    }, () => {
+      expect(hasExternalHarnessSources()).toBe(true);
+    });
+  });
+
+  it('returns true when a Cursor projects directory exists', () => {
+    withHome(home => {
+      fs.mkdirSync(path.join(home, '.cursor', 'projects'), { recursive: true });
     }, () => {
       expect(hasExternalHarnessSources()).toBe(true);
     });
