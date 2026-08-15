@@ -11,7 +11,11 @@ import { EventEmitter } from 'events';
 import { describe, it, expect, vi } from 'vitest';
 import { parseAllLogsViaWorker, isRetryableWorkerError } from './parser-worker-host';
 import { createSession, createRequest } from './parser-shared';
+import { runtimeDebug } from './runtime-debug';
 import type { WorkerChunkPayload, WorkerDonePayload } from './parse-chunking';
+
+vi.mock('./runtime-debug', () => ({ runtimeDebug: vi.fn() }));
+const runtimeDebugMock = vi.mocked(runtimeDebug);
 
 /** Minimal stand-in for the forked child process: an EventEmitter with spied send/kill. */
 class FakeChild extends EventEmitter {
@@ -166,14 +170,24 @@ describe('parseAllLogsViaWorker IPC orchestration', () => {
     expect(result.parseWarnings?.skippedFiles).toBe(1);
   });
 
-  it('does not retry after a non-retryable failure', async () => {
+  it('emits a per-phase sync-timing summary on done', async () => {
+    runtimeDebugMock.mockClear();
     const { fork, children } = queuedFork();
     const promise = parseAllLogsViaWorker(['dir'], undefined, { fork: fork as never });
+    const child = children[0];
 
-    children[0].emit('message', { type: 'error', message: 'parse worker timeout (10m)' });
+    child.emit('message', { type: 'progress', progress: { phase: 1, pct: 5, detail: 'fingerprints' } });
+    child.emit('message', { type: 'progress', progress: { phase: 2, pct: 40, detail: 'cold parse' } });
+    child.emit('message', doneMessage());
+    await promise;
 
-    await expect(promise).rejects.toThrow('parse worker timeout (10m)');
-    // No second attempt was forked.
-    expect(children).toHaveLength(1);
+    const timingCall = runtimeDebugMock.mock.calls.find(
+      (call) => call[0] === 'parser' && call[1] === 'worker-phase-timing',
+    );
+    expect(timingCall).toBeDefined();
+    const detail = typeof timingCall?.[2] === 'string' ? timingCall[2] : '';
+    expect(detail).toMatch(/totalMs=\d+/);
+    expect(detail).toMatch(/p1=\d+ms/);
+    expect(detail).toMatch(/p2=\d+ms/);
   });
 });

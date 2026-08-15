@@ -203,6 +203,8 @@ export class DashboardPanel {
         this.updateSidebarStats();
         this.dataReady = true;
         safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
+        runtimeDebug('panel', 'sync-timing',
+          `result=warm-cache totalMs=${Date.now() - t0} sessions=${this.parseResult.sessions.length}`);
         return;
       }
 
@@ -210,7 +212,9 @@ export class DashboardPanel {
       await flush();
       if (this.disposed) return;
 
+      const tDiscover = Date.now();
       const dirs = findLogsDirs();
+      const discoverMs = Date.now() - tDiscover;
       const hasExternal = hasExternalHarnessSources();
       runtimeDebug('panel', 'logs-dirs-found', `count=${dirs.length} external=${hasExternal}`);
       // External harnesses (Claude Code, Codex, OpenCode) are collected by the
@@ -225,7 +229,9 @@ export class DashboardPanel {
         return;
       }
 
+      const tParse = Date.now();
       this.parseResult = await parseAllLogsViaWorker(dirs, progress => sendProgress(progress));
+      const parseMs = Date.now() - tParse;
       if (this.disposed) return;
       runtimeDebug('panel', 'parse-complete', `sessions=${this.parseResult.sessions.length} workspaces=${this.parseResult.workspaces.size}`);
       const sessionCount = this.parseResult.sessions.length;
@@ -234,7 +240,9 @@ export class DashboardPanel {
       await flush();
       if (this.disposed) return;
 
+      const tAnalyzer = Date.now();
       this.analyzer = new Analyzer(this.parseResult.sessions, this.parseResult.editLocIndex, this.parseResult.workspaces);
+      const analyzerMs = Date.now() - tAnalyzer;
       runtimeDebug('panel', 'analyzer-built', `elapsedMs=${Date.now() - t0}`);
 
       sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: sessionCount });
@@ -248,15 +256,26 @@ export class DashboardPanel {
       // are handled immediately instead of being queued behind warmUp().
       this.dataReady = true;
 
+      const dataReadyMs = Date.now() - t0;
       safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
-      runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${Date.now() - t0}`);
+      runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${dataReadyMs}`);
 
+      const tWarmUp = Date.now();
       try {
         await this.analyzer.warmUp();
       } catch (error) {
         runtimeDebug('panel', 'warmUp-failed', error);
       }
+      const warmUpMs = Date.now() - tWarmUp;
       runtimeDebug('panel', 'warmUp-done', `elapsedMs=${Date.now() - t0}`);
+
+      // Local-only sync timing summary (issue #106 follow-up). Surfaces a single, parseable
+      // breakdown of where a cold Sync spends wall-clock time in the "AI Engineer Coach"
+      // output channel. Never leaves the machine — routed through the same runtimeDebug hook.
+      runtimeDebug('panel', 'sync-timing',
+        `result=cold totalMs=${Date.now() - t0} dataReadyMs=${dataReadyMs} ` +
+        `discoverMs=${discoverMs} parseMs=${parseMs} analyzerMs=${analyzerMs} warmUpMs=${warmUpMs} ` +
+        `sessions=${sessionCount} dirs=${dirs.length}`);
       if (this.disposed) return;
 
       for (const message of this.pendingMessages) {

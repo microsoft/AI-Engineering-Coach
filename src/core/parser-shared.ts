@@ -172,7 +172,56 @@ export function maybeForceGc(): void {
   if (now - lastForcedGcAt < FORCE_GC_MIN_INTERVAL_MS) return;
   if (process.memoryUsage().rss < FORCE_GC_RSS_THRESHOLD) return;
   lastForcedGcAt = now;
-  try { gc(); } catch { /* gc unavailable */ }
+  // Count only a GC that actually ran, so `forcedGc` matches its documented meaning even if the
+  // engine's gc() ever throws (the !gc guard above already handles the unavailable case).
+  try {
+    gc();
+    parseTiming.forcedGc++;
+  } catch { /* gc unavailable */ }
+}
+
+/* ---- Cold-parse sub-phase attribution (issue #106 follow-up) ----
+ * The end-to-end `sync-timing` line proved phase-2 parse is ~99% of sync wall-clock. These
+ * counters break that phase down by sub-step so a single re-run shows where the time actually
+ * goes (chat-file parse vs edit-state parse vs CLI events vs forced-GC pauses) instead of guessing.
+ * Pure measurement: never alters parsed output. Reset per parse run. */
+export interface ParseTiming {
+  /** Cumulative ms spent in parseSessionFile (read + strip + JSON.parse + request build). */
+  chatMs: number;
+  /** Cumulative ms spent parsing chatEditingSessions state files. */
+  editMs: number;
+  /** Cumulative ms spent parsing CLI events.jsonl files. */
+  cliMs: number;
+  /** Number of chat session files parsed. */
+  chatFiles: number;
+  /** Number of edit-state files parsed. */
+  editFiles: number;
+  /** Number of times a proactive full GC was actually forced. */
+  forcedGc: number;
+}
+
+const parseTiming: ParseTiming = { chatMs: 0, editMs: 0, cliMs: 0, chatFiles: 0, editFiles: 0, forcedGc: 0 };
+
+/** Accumulate elapsed time (ms) for a cold-parse sub-step. */
+export function addParseTiming(kind: 'chat' | 'edit' | 'cli', ms: number): void {
+  if (kind === 'chat') { parseTiming.chatMs += ms; parseTiming.chatFiles++; }
+  else if (kind === 'edit') { parseTiming.editMs += ms; parseTiming.editFiles++; }
+  else parseTiming.cliMs += ms;
+}
+
+/** Reset all sub-phase counters at the start of a parse run. */
+export function resetParseTiming(): void {
+  parseTiming.chatMs = 0;
+  parseTiming.editMs = 0;
+  parseTiming.cliMs = 0;
+  parseTiming.chatFiles = 0;
+  parseTiming.editFiles = 0;
+  parseTiming.forcedGc = 0;
+}
+
+/** Snapshot the current sub-phase counters for logging. */
+export function getParseTiming(): ParseTiming {
+  return { ...parseTiming };
 }
 
 export const CODE_BLOCK_RE = /```(\w+)?\n([\s\S]*?)```/g;

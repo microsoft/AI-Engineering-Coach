@@ -90,6 +90,16 @@ export async function parseAllLogsViaWorker(
       let lastWorkspaceLogged = 0;
       let settled = false;
 
+      // Per-phase wall-clock accounting for the local sync-timing summary (issue #106 follow-up).
+      const attemptStart = Date.now();
+      let phaseStart = attemptStart;
+      const phaseDurations = new Map<number, number>();
+      const recordPhaseEnd = (phase: number): void => {
+        if (phase < 0) return;
+        phaseDurations.set(phase, (phaseDurations.get(phase) ?? 0) + (Date.now() - phaseStart));
+        phaseStart = Date.now();
+      };
+
       // Chunked-IPC assembler (issue #106, S1). Declared per-attempt so a retry starts fresh.
       const assembler = new ChunkAssembler();
 
@@ -113,6 +123,7 @@ export async function parseAllLogsViaWorker(
       child.on('message', (msg: { type: 'progress'; progress: LoadProgress } | { type: 'chunk'; seq: number; payload: WorkerChunkPayload } | { type: 'done'; payload: WorkerDoneMessagePayload } | { type: 'error'; message?: string }) => {
         if (msg.type === 'progress') {
           if (msg.progress.phase !== lastPhase) {
+            recordPhaseEnd(lastPhase);
             lastPhase = msg.progress.phase;
             runtimeDebug('parser', 'child-progress-phase', `attempt=${attempt} phase=${msg.progress.phase} detail=${msg.progress.detail || ''}`);
           }
@@ -143,8 +154,15 @@ export async function parseAllLogsViaWorker(
         }
 
         if (msg.type === 'done') {
+          recordPhaseEnd(lastPhase);
           const assembled = assembler.finish(msg.payload);
           runtimeDebug('parser', 'child-done', `attempt=${attempt} chunks=${assembler.chunkCount} workspaces=${msg.payload.workspaces.length} sessions=${assembled.sessions.length}`);
+          const phaseBreakdown = [...phaseDurations.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([phase, ms]) => `p${phase}=${ms}ms`)
+            .join(' ');
+          runtimeDebug('parser', 'worker-phase-timing',
+            `attempt=${attempt} totalMs=${Date.now() - attemptStart} ${phaseBreakdown}`);
           logParseWarnings(msg.payload.parseWarnings);
           finish(() => {
             const result: ParseResult = {

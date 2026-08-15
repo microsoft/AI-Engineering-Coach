@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Session, SessionRequest } from './types';
-import { createRequest, createSession, detectDevcontainerFromRequests, ParseContext, prefetchCache, stripSingleSession, maybeForceGc } from './parser-shared';
+import { createRequest, createSession, detectDevcontainerFromRequests, ParseContext, prefetchCache, stripSingleSession, maybeForceGc, addParseTiming } from './parser-shared';
 import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort } from './helpers';
 import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
@@ -553,7 +553,9 @@ export async function processWorkspaceEntryAsync(
   let completed = 0;
 
   for (let i = 0; i < chatFiles.length; i++) {
+    const tChat = Date.now();
     const session = parseSessionFile(chatFiles[i], wsId, wsName, harness, customInstructionsBytes);
+    addParseTiming('chat', Date.now() - tChat);
     if (session) {
       // Strip heavy text the moment a session is parsed so a workspace with many large
       // sessions can't accumulate its full text before the workspace finishes (issue #106).
@@ -613,7 +615,9 @@ export async function processWorkspaceEntryAsync(
   }
 
   const eventsFile = path.join(entryPath, 'events.jsonl');
+  const tCli = Date.now();
   const cliSession = parseCLIEventsFile(eventsFile, wsId, wsName, customInstructionsBytes);
+  addParseTiming('cli', Date.now() - tCli);
   if (cliSession) {
     stripSingleSession(cliSession);
     sessions.push(cliSession);
@@ -627,7 +631,9 @@ export async function processWorkspaceEntryAsync(
   }
 
   for (let i = 0; i < editStateFiles.length; i++) {
+    const tEdit = Date.now();
     parseEditStateFile(editStateFiles[i], editLocIndex);
+    addParseTiming('edit', Date.now() - tEdit);
     completed++;
     if (shouldReportChunk(i, editStateFiles.length, editEvery)) {
       onProgress?.({

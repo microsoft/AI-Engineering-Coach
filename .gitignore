@@ -16,6 +16,8 @@ docs/proposals/
 local/
 test_output.txt
 scripts/verify-counts.ts
+scripts/.parity-out/
+scripts/.parity-tmp-entry.ts
 marketing/
 
 # Playwright test results

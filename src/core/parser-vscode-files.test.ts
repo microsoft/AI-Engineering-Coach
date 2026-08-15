@@ -392,6 +392,17 @@ describe('forEachJsonlLine (sync streaming reader)', () => {
       expect(lines[1]).toBe('b');
     });
   });
+
+  it('emits a single line that spans many read chunks intact', () => {
+    // A Copilot CLI events.jsonl line can embed tens of MB of inline base64. The reader must scan
+    // only each freshly read chunk for newlines rather than re-splitting the whole growing buffer,
+    // or one long line costs O(n^2) CPU (issue #106 follow-up). This line spans ~3.5 read chunks.
+    const big = 'x'.repeat(READ_CHUNK * 3 + 512);
+    withTempFile('huge.jsonl', `first\n${big}\nlast\n`, (fp) => {
+      const lines = collectLines((cb) => forEachJsonlLine(fp, cb));
+      expect(lines).toEqual(['first', big, 'last']);
+    });
+  });
 });
 
 describe('forEachJsonlLineAsync (async streaming reader)', () => {
@@ -402,6 +413,16 @@ describe('forEachJsonlLineAsync (async streaming reader)', () => {
     const lines: string[] = [];
     await forEachJsonlLineAsync(fp, (line) => lines.push(line));
     expect(lines).toEqual(['one', 'two', 'last']);
+  });
+
+  it('emits a single line that spans many read chunks intact', async () => {
+    // Guards the same O(n^2) regression as the sync reader: the async cold-parse path streams the
+    // large CLI events.jsonl files, where a single inline-base64 line can span many chunks.
+    const big = 'y'.repeat(READ_CHUNK * 3 + 512);
+    const fp = makeTempFile('huge-async.jsonl', `first\n${big}\nlast\n`);
+    const lines: string[] = [];
+    await forEachJsonlLineAsync(fp, (line) => lines.push(line));
+    expect(lines).toEqual(['first', big, 'last']);
   });
 
   it('reports final byte progress equal to the file size', async () => {

@@ -8,7 +8,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { Workspace } from './types';
-import { ParseContext, prefetchCache, stripSingleSession, maybeForceGc, recordFailedFile, resetParseWarnings } from './parser-shared';
+import { ParseContext, prefetchCache, stripSingleSession, maybeForceGc, recordFailedFile, resetParseWarnings, resetParseTiming, getParseTiming } from './parser-shared';
 import { getMemoryCache, setMemoryCache, computeDirMetasAsync, loadCacheData, saveCacheData, findStaleDirs, clearCache, stripSessionsForMemory } from './cache';
 import type { DirMetas, ParseResult, SessionSource } from './cache';
 import { findVsCodeDirs, scanVsCodeDirs, processWorkspaceEntry, processWorkspaceEntryAsync, harnessFromPath } from './parser-vscode';
@@ -16,6 +16,7 @@ import { computeSessionTotals, createRunningTotals, type SessionTotals } from '.
 import { findXcodeDirs, parseXcodeDatabases, parseXcodeDatabasesAsync } from './parser-xcode';
 import { collectExternalHarnessesAsync, collectExternalHarnessesSync, EXTERNAL_HARNESS_SET } from './parser-harnesses';
 import { warnCore } from './log';
+import { runtimeDebug } from './runtime-debug';
 
 export type { ParseResult };
 export { clearCache };
@@ -357,8 +358,16 @@ async function processWorkspaces(
     ? Math.min(COLD_PARSE_MAX_PREFETCH_FILES, MAX_PREFETCH_FILES)
     : MAX_PREFETCH_FILES;
   const effectiveMaxPrefetchBytes = isColdParse ? COLD_PARSE_MAX_PREFETCH_BYTES : MAX_PREFETCH_BYTES;
+  const tWorkList = Date.now();
   const work = await buildWorkspaceWorkList(entries);
+  const workListMs = Date.now() - tWorkList;
   const planItems = buildWorkspacePlan(work);
+
+  // Phase-2 gap attribution (issue #106 follow-up). The cold-parse-breakdown showed the actual
+  // file parsing is a small fraction of phase 2; these accumulators reveal where the rest of the
+  // wall-clock goes (workspace listing vs prefetch I/O wait vs per-workspace processing).
+  let prefetchWaitMs = 0;
+  let entryWallMs = 0;
 
   // Build the workspace-level loading plan in processing order.
   if (onProgress && planItems.length > 0) {
@@ -386,7 +395,11 @@ async function processWorkspaces(
       const batch = work.slice(i, i + BATCH_SIZE);
       const nextBatch = work.slice(i + BATCH_SIZE, i + BATCH_SIZE * 2);
 
-      if (i === 0) await prefetchBatch(batch, effectiveMaxPrefetch, effectiveMaxPrefetchBytes);
+      if (i === 0) {
+        const tPre = Date.now();
+        await prefetchBatch(batch, effectiveMaxPrefetch, effectiveMaxPrefetchBytes);
+        prefetchWaitMs += Date.now() - tPre;
+      }
 
       const nextPrefetch = nextBatch.length > 0 ? prefetchBatch(nextBatch, effectiveMaxPrefetch, effectiveMaxPrefetchBytes) : Promise.resolve();
 
@@ -414,6 +427,7 @@ async function processWorkspaces(
           recordFailedFile('parser', logsDir, e);
         }
         const elapsed = Date.now() - start;
+        entryWallMs += elapsed;
 
         // Incrementally compute stats from newly added sessions
         foldNewSessions();
@@ -436,7 +450,9 @@ async function processWorkspaces(
         );
       }
 
+      const tWait = Date.now();
       await nextPrefetch;
+      prefetchWaitMs += Date.now() - tWait;
       await yieldToLoop();
       // Backstop: reclaim any transient batch garbage before reading the next batch, keeping RSS
       // under Electron's ~2GB allocator OOM ceiling during large cold parses (issue #106).
@@ -445,6 +461,9 @@ async function processWorkspaces(
   } finally {
     prefetchCache.clear();
   }
+  runtimeDebug('parser', 'phase2-attribution',
+    `workspaces=${work.length} workListMs=${workListMs} prefetchWaitMs=${prefetchWaitMs} ` +
+    `entryWallMs=${entryWallMs} totalMs=${Date.now() - tWorkList}`);
 }
 
 async function collectXcode(
@@ -532,6 +551,16 @@ export async function parseAllLogsAsyncDetailed(
   // Clear any warnings from a previous parse in this process (the worker is fresh per run, but
   // the in-process path can be invoked repeatedly).
   resetParseWarnings();
+  resetParseTiming();
+
+  // Emit the cold-parse sub-phase attribution once, just before returning, so a single run shows
+  // exactly where phase-2 wall-clock went (issue #106 follow-up). Pure measurement.
+  const logParseBreakdown = (mode: string): void => {
+    const t = getParseTiming();
+    runtimeDebug('parser', 'cold-parse-breakdown',
+      `mode=${mode} chatMs=${t.chatMs} editMs=${t.editMs} cliMs=${t.cliMs} ` +
+      `chatFiles=${t.chatFiles} editFiles=${t.editFiles} forcedGc=${t.forcedGc}`);
+  };
 
   report({ phase: 1, detail: 'Computing directory fingerprints' });
   await yieldToLoop();
@@ -620,6 +649,7 @@ export async function parseAllLogsAsyncDetailed(
     stripSessionsForMemory(result.sessions);
     setMemoryCache(result, currentMetas);
     saveCacheData(result, currentMetas);
+    logParseBreakdown('incremental');
     return { result, dirMetas: currentMetas };
   }
 
@@ -642,6 +672,7 @@ export async function parseAllLogsAsyncDetailed(
   stripSessionsForMemory(result.sessions);
   setMemoryCache(result, currentMetas);
   saveCacheData(result, currentMetas);
+  logParseBreakdown('cold');
   return { result, dirMetas: currentMetas };
 }
 

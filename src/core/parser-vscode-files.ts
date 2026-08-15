@@ -30,6 +30,37 @@ export function readFile(fpath: string): string {
 const JSONL_READ_CHUNK = 1024 * 1024;
 
 /**
+ * Emit every complete newline-delimited line contained in `pending + chunk`, returning the new
+ * trailing partial line (carried into the next chunk).
+ *
+ * Scans only the freshly decoded `chunk` with `indexOf`, joining the carried `pending` only when
+ * the first newline of the chunk is found. The earlier implementation did `pending += chunk` and
+ * `pending.split('\n')` on every read; when a single JSONL line spans many chunks — Copilot CLI
+ * `events.jsonl` lines can embed tens of MB of inline base64 — that re-scanned and re-allocated
+ * the entire growing buffer on each 1 MB read, making one long line cost O(n²) CPU plus heavy GC.
+ * Searching only the new chunk keeps total work linear in the file size while producing the exact
+ * same sequence of lines.
+ */
+function emitChunkLines(pending: string, chunk: string, onLine: (line: string) => void): string {
+  let nl = chunk.indexOf('\n');
+  if (nl < 0) {
+    // No line boundary in this chunk: accumulate (V8 keeps this as a cheap cons-string, flattened
+    // once when the line finally completes) and keep reading.
+    return pending + chunk;
+  }
+  // The first newline completes the line carried over from previous chunks.
+  onLine(pending + chunk.slice(0, nl));
+  let start = nl + 1;
+  nl = chunk.indexOf('\n', start);
+  while (nl >= 0) {
+    onLine(chunk.slice(start, nl));
+    start = nl + 1;
+    nl = chunk.indexOf('\n', start);
+  }
+  return chunk.slice(start);
+}
+
+/**
  * Invoke `onLine` for each newline-delimited line in a (possibly very large) JSONL file, reading
  * the file in fixed-size chunks rather than loading it whole.
  *
@@ -66,11 +97,7 @@ export function forEachJsonlLine(fpath: string, onLine: (line: string) => void):
     let pending = '';
     let bytesRead: number;
     while ((bytesRead = fs.readSync(fd, buf, 0, JSONL_READ_CHUNK, null)) > 0) {
-      pending += decoder.write(buf.subarray(0, bytesRead));
-      const parts = pending.split('\n');
-      // The last element is an incomplete line (or '') — carry it to the next chunk.
-      pending = parts.pop() ?? '';
-      for (const line of parts) onLine(line);
+      pending = emitChunkLines(pending, decoder.write(buf.subarray(0, bytesRead)), onLine);
     }
     pending += decoder.end();
     if (pending.length > 0) onLine(pending);
@@ -126,11 +153,7 @@ export async function forEachJsonlLineAsync(
     while ((bytesRead = fs.readSync(fd, buf, 0, JSONL_READ_CHUNK, null)) > 0) {
       totalRead += bytesRead;
       sinceYield += bytesRead;
-      pending += decoder.write(buf.subarray(0, bytesRead));
-      const parts = pending.split('\n');
-      // The last element is an incomplete line (or '') — carry it to the next chunk.
-      pending = parts.pop() ?? '';
-      for (const line of parts) onLine(line);
+      pending = emitChunkLines(pending, decoder.write(buf.subarray(0, bytesRead)), onLine);
       if (sinceYield >= JSONL_YIELD_BYTES) {
         sinceYield = 0;
         onProgress?.(totalRead, totalBytes);
