@@ -7,11 +7,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # sign the build provenance attestation
+      attestations: write
 
     steps:
       - name: Checkout
@@ -45,6 +50,9 @@ jobs:
       - name: Package VSIX
         run: npm run package
 
+      - name: Check bundle size
+        run: npm run check-size
+
       - name: Capture VSIX path
         id: vsix
         run: |
@@ -53,14 +61,44 @@ jobs:
             echo "No VSIX package was produced"
             exit 1
           fi
+          VSIX_NAME="$(basename "$VSIX_PATH")"
+          sha256sum "$VSIX_NAME" > "$VSIX_NAME.sha256"
           echo "path=$VSIX_PATH" >> "$GITHUB_OUTPUT"
+          echo "checksum=$VSIX_NAME.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.vsix.outputs.path }}
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          files: ${{ steps.vsix.outputs.path }}
+          files: |
+            ${{ steps.vsix.outputs.path }}
+            ${{ steps.vsix.outputs.checksum }}
           generate_release_notes: true
+
+      # Marketplace publishing stays inert until a maintainer registers the publisher and sets
+      # the PUBLISH_MARKETPLACE repository variable plus the VSCE_PAT secret. The exact bytes
+      # attached to the release are the bytes published, so the checksum and attestation hold.
+      - name: Publish to VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/') && vars.PUBLISH_MARKETPLACE == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSIX_PATH: ${{ steps.vsix.outputs.path }}
+        run: npx vsce publish --packagePath "$VSIX_PATH" --skip-duplicate
+
+      # Open VSX serves VS Code OSS builds (VSCodium, Antigravity and friends), which cannot
+      # reach the Microsoft Marketplace. Gated the same way, on PUBLISH_OPENVSX and OVSX_PAT.
+      - name: Publish to Open VSX
+        if: startsWith(github.ref, 'refs/tags/') && vars.PUBLISH_OPENVSX == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VSIX_PATH: ${{ steps.vsix.outputs.path }}
+        run: npx --yes ovsx@1.1.1 publish "$VSIX_PATH" --skip-duplicate
 
       - name: Upload VSIX artifact
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
