@@ -25,6 +25,16 @@ dist/**/*.map
 # Docs scaffolding (only publish README + LICENSE + dist)
 README.github.md
 SECURITY.md
+AGENTS.md
+
+# Screenshots belong to the GitHub README and the store listing, not to every install.
+# assets/icon.png stays — it is the extension icon and the chat participant icon.
+assets/screen-*.png
+assets/icon.svg
+
+# Repo-authoring context for agents working on this codebase — nothing reads it at runtime
+skills/**
+.claude/**
 
 # Dev-only config & tooling — not needed at runtime
 .husky/**
