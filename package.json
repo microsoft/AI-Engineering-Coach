@@ -343,13 +343,13 @@
     "eslint-plugin-unicorn": "72.0.0",
     "husky": "9.1.7",
     "jsdom": "29.1.1",
-    "knip": "6.32.0",
+    "knip": "6.32.2",
     "lint-staged": "17.3.0",
-    "lockfile-lint": "5.0.0",
+    "lockfile-lint": "5.0.1",
     "preact-render-to-string": "6.7.0",
     "serve": "14.2.6",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.66.0",
+    "typescript-eslint": "8.67.0",
     "vitest": "4.1.10"
   },
   "dependencies": {
