@@ -18,7 +18,7 @@ beforeAll(() => {
 });
 
 describe('GitHub App issue credits page', () => {
-  it('renders credit totals above 100 without invalid number options', async () => {
+  it('renders rough relative percentages without absolute credit figures', async () => {
     const { renderGitHubAppIssueCredits } = await import('./page-github-app-issue-credits');
     const container = document.createElement('main');
     document.body.appendChild(container);
@@ -26,21 +26,33 @@ describe('GitHub App issue credits page', () => {
     expect(() => renderGitHubAppIssueCredits(container, {
       status: 'ready',
       metrics: {
-        issues: [{
-          repository: 'microsoft/AI-Engineering-Coach',
-          issueNumber: 314,
-          linkedSessionCount: 6,
-          pricedSessionCount: 6,
-          estimatedCredits: 184.72,
-        }],
-        linkedSessionCount: 6,
-        pricedSessionCount: 6,
-        estimatedCredits: 360.31,
+        issues: [
+          {
+            repository: 'microsoft/AI-Engineering-Coach',
+            issueNumber: 314,
+            linkedSessionCount: 6,
+            pricedSessionCount: 6,
+            estimatedCredits: 180,
+          },
+          {
+            repository: 'microsoft/AI-Engineering-Coach',
+            issueNumber: 287,
+            linkedSessionCount: 2,
+            pricedSessionCount: 2,
+            estimatedCredits: 60,
+          },
+        ],
+        linkedSessionCount: 8,
+        pricedSessionCount: 8,
+        estimatedCredits: 240,
       },
     })).not.toThrow();
 
-    expect(container.textContent).toContain('360.3');
-    expect(container.textContent).toContain('184.7');
+    expect(container.textContent).toContain('75.0%');
+    expect(container.textContent).toContain('25.0%');
+    expect(container.textContent).toContain('not accurate AI Credit or billing figures');
+    expect(container.textContent).not.toContain('180');
+    expect(container.textContent).not.toContain('240');
     const avatar = container.querySelector<HTMLImageElement>('.gha-org-avatar img');
     expect(avatar?.src).toBe('https://github.com/microsoft.png?size=52');
     expect(avatar?.getAttribute('referrer' + 'policy')).toBe('no-referrer');

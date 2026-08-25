@@ -34,12 +34,19 @@ function organizationAvatar(repository: string, size: number): ComponentChildren
     </span>`;
 }
 
-function formatCredits(value: number): string {
-  const fractionDigits = value >= 100 ? 1 : 2;
-  return value.toLocaleString(undefined, {
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  });
+function formatPercentage(value: number): string {
+  return `${value.toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}%`;
+}
+
+function totalIssueEstimate(issues: readonly GitHubAppIssueCreditEstimate[]): number {
+  return issues.reduce((total, issue) => total + issue.estimatedCredits, 0);
+}
+
+function estimateShare(estimate: number, total: number): number {
+  return total > 0 ? estimate / total * 100 : 0;
 }
 
 function compareIssues(
@@ -68,7 +75,7 @@ function renderUnavailable(container: HTMLElement): void {
       <header class="gha-header">
         <div>
           <h1>Issue credits</h1>
-          <p>Estimated AI Credits for GitHub issues from local GitHub Copilot app sessions.</p>
+          <p>Rough relative usage estimates for GitHub issues from local GitHub Copilot app sessions.</p>
         </div>
       </header>
       <div class="gha-empty" role="status">
@@ -86,36 +93,37 @@ function summary(metrics: GitHubAppIssueCreditsMetrics): ComponentChildren {
     ? Math.round(metrics.pricedSessionCount / metrics.linkedSessionCount * 100)
     : 0;
   const topIssue = [...metrics.issues].sort(compareIssues('credits'))[0];
+  const totalEstimate = totalIssueEstimate(metrics.issues);
   return html`
     <section class="gha-credit-overview" aria-label="Issue credit summary">
       <div class="gha-credit-total">
-        <span>Estimated AI Credits</span>
-        <strong>${formatCredits(metrics.estimatedCredits)}</strong>
-        <p>Across ${formatNum(metrics.linkedSessionCount)} unique issue-linked sessions</p>
+        <span>Mapped usage share</span>
+        <strong>${metrics.issues.length > 0 ? '100%' : '0%'}</strong>
+        <p>Normalized across ${formatNum(metrics.linkedSessionCount)} unique issue-linked sessions</p>
       </div>
       ${topIssue
         ? html`
           <div class="gha-credit-leader">
-            <span>Highest estimate</span>
+            <span>Highest rough share</span>
             <div>
               ${organizationAvatar(topIssue.repository, 26)}
               <strong>${topIssue.repository}<b>#${topIssue.issueNumber}</b></strong>
-              <em>${formatCredits(topIssue.estimatedCredits)} credits</em>
+              <em>${formatPercentage(estimateShare(topIssue.estimatedCredits, totalEstimate))}</em>
             </div>
           </div>`
         : null}
       <dl class="gha-credit-facts">
         <div><dt>Issues found</dt><dd>${formatNum(metrics.issues.length)}</dd></div>
-        <div><dt>Credit coverage</dt><dd>${coverage}%</dd></div>
-        <div><dt>Priced sessions</dt><dd>${formatNum(metrics.pricedSessionCount)}<small> / ${formatNum(metrics.linkedSessionCount)}</small></dd></div>
+        <div><dt>Usage coverage</dt><dd>${coverage}%</dd></div>
+        <div><dt>Usage records</dt><dd>${formatNum(metrics.pricedSessionCount)}<small> / ${formatNum(metrics.linkedSessionCount)}</small></dd></div>
       </dl>
     </section>`;
 }
 
 function issueRows(issues: readonly GitHubAppIssueCreditEstimate[]): ComponentChildren {
-  const topCredits = Math.max(...issues.map(issue => issue.estimatedCredits), 0);
+  const totalEstimate = totalIssueEstimate(issues);
   return issues.map((issue, index) => {
-    const creditShare = topCredits > 0 ? issue.estimatedCredits / topCredits * 100 : 0;
+    const creditShare = estimateShare(issue.estimatedCredits, totalEstimate);
     const coverage = issue.linkedSessionCount > 0
       ? issue.pricedSessionCount / issue.linkedSessionCount * 100
       : 0;
@@ -133,7 +141,7 @@ function issueRows(issues: readonly GitHubAppIssueCreditEstimate[]): ComponentCh
       </td>
       <td class="gha-session-coverage">
         <div><strong>${formatNum(issue.pricedSessionCount)}</strong><span> of ${formatNum(issue.linkedSessionCount)}</span></div>
-        <span class="gha-session-meter" aria-label=${`${Math.round(coverage)}% credit coverage`}>
+        <span class="gha-session-meter" aria-label=${`${Math.round(coverage)}% usage coverage`}>
           <i style=${`width:${coverage}%`}></i>
         </span>
         ${issue.pricedSessionCount < issue.linkedSessionCount
@@ -141,7 +149,7 @@ function issueRows(issues: readonly GitHubAppIssueCreditEstimate[]): ComponentCh
           : null}
       </td>
       <td class="gha-credit-value">
-        <div><strong>${formatCredits(issue.estimatedCredits)}</strong><span>${Math.round(creditShare)}% of top</span></div>
+        <div><strong>${formatPercentage(creditShare)}</strong><span>of mapped spend</span></div>
         <span class="gha-credit-bar"><i style=${`width:${creditShare}%`}></i></span>
       </td>
     </tr>`;
@@ -154,13 +162,13 @@ function issueTable(metrics: GitHubAppIssueCreditsMetrics, sort: IssueCreditSort
     <section class="gha-credit-table-card" aria-labelledby="gha-issue-credit-table-title">
       <div class="gha-section-heading gha-credit-table-heading">
         <div>
-          <h2 id="gha-issue-credit-table-title">Credits by issue</h2>
+          <h2 id="gha-issue-credit-table-title">Approximate spend by issue</h2>
           <p>Sessions are reconciled through workspace IDs, aliases, creator IDs, coordinating creator IDs, local issue references, and issue links pasted when a session starts.</p>
         </div>
         <label class="gha-credit-sort">
           <span>Sort by</span>
           <select id="gha-credit-sort">
-            <option value="credits" selected=${sort === 'credits'}>Estimated credits</option>
+            <option value="credits" selected=${sort === 'credits'}>Approximate spend share</option>
             <option value="sessions" selected=${sort === 'sessions'}>Linked sessions</option>
             <option value="issue" selected=${sort === 'issue'}>Repository and issue</option>
           </select>
@@ -175,7 +183,7 @@ function issueTable(metrics: GitHubAppIssueCreditsMetrics, sort: IssueCreditSort
                 <tr>
                   <th>Issue</th>
                   <th>Session coverage</th>
-                  <th>Estimated AI Credits</th>
+                  <th>Approximate spend share</th>
                 </tr>
               </thead>
               <tbody>${issueRows(sorted)}</tbody>
@@ -193,15 +201,16 @@ function renderMetrics(container: HTMLElement, metrics: GitHubAppIssueCreditsMet
         <header class="gha-header">
           <div>
             <h1>Issue credits</h1>
-            <p>Estimate the AI effort for each GitHub issue across all related local sessions.</p>
+            <p>Roughly compare where AI usage was spent across related local sessions.</p>
           </div>
-          <span class="gha-estimate-label">Local estimate</span>
+          <span class="gha-estimate-label">Rough estimate only</span>
         </header>
         ${summary(metrics)}
         ${issueTable(metrics, sort)}
         <p class="gha-credit-method">
-          Estimates use the locally recorded billed value <code>total_nano_aiu</code>, where 1 AI Credit equals 1,000,000,000 nano-AIU.
-          Each issue total counts a linked session once. The summary also counts a session once if it is shared by more than one issue.
+          These percentages are rough relative estimates, not accurate AI Credit or billing figures.
+          They normalize locally recorded <code>total_nano_aiu</code> usage across linked issues to show approximately where usage was spent.
+          Each issue counts a linked session once; shared sessions can contribute to more than one issue before the percentages are normalized.
           Pasted links are accepted from the first two turns so later research links do not create unrelated issue entries.
           Organization avatars are loaded directly from GitHub.
         </p>

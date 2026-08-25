@@ -165,17 +165,17 @@ This section appears only when the local GitHub Copilot app is installed.
 | Page              | Description                                                                                                      |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Productivity**  | Project sessions with and without issues, pull request and merge conversion, and a seven-day PR merge-ratio trend |
-| **Issue credits** | Estimated AI Credits per GitHub issue across linked workspace, alias, creator, and coordinating sessions          |
+| **Issue credits** | Rough relative AI spend per GitHub issue across linked workspace, alias, creator, and coordinating sessions       |
 
-Issue credit estimates use the billed usage value stored in the local GitHub Copilot app
-session database. The dashboard converts `total_nano_aiu` to AI Credits with
-`1 AI Credit = 1,000,000,000 nano-AIU`. The billed usage value is exact when present. The issue
-total is an estimate because the dashboard assigns sessions to issues from local workspace and
-issue-reference links. Explicit GitHub issue URLs pasted in either of the first two session turns
-also establish the issue link; URLs pasted later are excluded to avoid treating research links as
-the session's source issue. All reconciliation and aggregation is local and read-only. The small
-organization avatars on this page are loaded directly from GitHub using the repository owner name;
-no session content or credit data is included in these image requests.
+Issue credit percentages are rough relative estimates, not accurate AI Credit or billing figures.
+They normalize the locally recorded `total_nano_aiu` usage across linked issues to show approximately
+where AI usage was spent. The percentages depend on issue links inferred from local workspace and
+issue-reference data and must not be used for billing reconciliation. Explicit GitHub issue URLs
+pasted in either of the first two session turns also establish the issue link; URLs pasted later are
+excluded to avoid treating research links as the session's source issue. All reconciliation and
+aggregation is local and read-only. The small organization avatars on this page are loaded directly
+from GitHub using the repository owner name; no session content or usage data is included in these
+image requests.
 
 ### Improve
 
