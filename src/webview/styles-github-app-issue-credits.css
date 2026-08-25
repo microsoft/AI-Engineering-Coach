@@ -1,0 +1,365 @@
+.gha-estimate-label {
+  padding: 4px 9px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, var(--border));
+  border-radius: 999px;
+  color: var(--accent-blue);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.gha-credit-overview {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.15fr) minmax(240px, 1fr) minmax(260px, 1fr);
+  min-height: 142px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent-blue) 7%, var(--card-bg));
+}
+
+.gha-credit-total,
+.gha-credit-leader,
+.gha-credit-facts {
+  min-width: 0;
+  padding: 20px;
+}
+
+.gha-credit-total {
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--accent-blue) 13%, var(--card-bg));
+}
+
+.gha-credit-total span,
+.gha-credit-leader > span {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.gha-credit-total > strong {
+  margin-top: 5px;
+  color: var(--accent-blue);
+  font-size: clamp(30px, 4vw, 42px);
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+
+.gha-credit-total p {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.gha-credit-leader {
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+.gha-credit-leader > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.gha-credit-leader strong {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.gha-credit-leader b {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.gha-credit-leader em {
+  flex-shrink: 0;
+  color: var(--accent-purple);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.gha-credit-facts {
+  display: grid;
+  align-content: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-left: 1px solid var(--border);
+}
+
+.gha-credit-facts > div { min-width: 0; }
+.gha-credit-facts > div + div {
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+
+.gha-credit-facts dt {
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+.gha-credit-facts dd {
+  margin: 5px 0 0;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.gha-credit-facts small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.gha-credit-table-card {
+  padding: 20px 20px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg);
+}
+
+.gha-credit-table-heading { align-items: flex-end; }
+
+.gha-credit-sort {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.gha-credit-sort span {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.gha-credit-sort select {
+  min-width: 172px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.gha-credit-table-wrap { overflow-x: auto; }
+
+.gha-credit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.gha-credit-table th,
+.gha-credit-table td {
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.gha-credit-table th {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.gha-credit-table th:first-child,
+.gha-credit-table td:first-child {
+  padding-left: 2px;
+  text-align: left;
+}
+
+.gha-credit-table th:last-child,
+.gha-credit-table td:last-child {
+  width: 36%;
+  padding-right: 2px;
+}
+
+.gha-credit-table tbody tr:last-child td { border-bottom: 0; }
+.gha-credit-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent-blue) 4%, transparent);
+}
+
+.gha-issue-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gha-org-avatar {
+  position: relative;
+  display: grid;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  place-items: center;
+  flex: 0 0 var(--avatar-size);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, var(--border));
+  border-radius: 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent-blue) 14%, var(--surface-2));
+  color: var(--accent-blue);
+  font-size: calc(var(--avatar-size) * 0.44);
+  font-weight: 700;
+}
+
+.gha-org-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gha-issue-rank {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  flex: 0 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.gha-issue-rank-1 {
+  border-color: color-mix(in srgb, var(--accent-purple) 65%, var(--border));
+  background: color-mix(in srgb, var(--accent-purple) 15%, transparent);
+  color: var(--accent-purple);
+}
+
+.gha-issue-rank-2 {
+  border-color: color-mix(in srgb, var(--accent-blue) 55%, var(--border));
+  color: var(--accent-blue);
+}
+
+.gha-issue-rank-3 {
+  border-color: color-mix(in srgb, var(--accent-green) 55%, var(--border));
+  color: var(--accent-green);
+}
+
+.gha-issue-repository {
+  display: block;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.gha-issue-number {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.gha-session-coverage { width: 22%; }
+
+.gha-session-coverage > div,
+.gha-credit-value > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gha-session-coverage span,
+.gha-credit-value span {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.gha-session-meter,
+.gha-credit-bar {
+  display: block;
+  height: 3px;
+  margin-top: 7px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.gha-session-meter i,
+.gha-credit-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-green);
+}
+
+.gha-credit-value strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.gha-credit-bar {
+  height: 5px;
+  background: color-mix(in srgb, var(--accent-purple) 9%, transparent);
+}
+
+.gha-credit-bar i { background: var(--accent-purple); }
+
+.gha-credit-partial {
+  display: block;
+  margin-top: 4px;
+  color: var(--accent-orange);
+  font-size: 9px;
+}
+
+.gha-credit-method {
+  max-width: 90ch;
+  margin: 10px 2px 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.gha-credit-method code { color: var(--text); }
+
+@media (max-width: 800px) {
+  .gha-credit-overview { grid-template-columns: 1fr 1fr; }
+  .gha-credit-facts {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .gha-credit-table-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 560px) {
+  .gha-credit-overview { grid-template-columns: 1fr; }
+  .gha-credit-leader {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+  .gha-credit-facts { grid-column: auto; }
+  .gha-credit-table { min-width: 620px; }
+}

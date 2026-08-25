@@ -5,7 +5,13 @@
 
 /* Webview entry -- runs in the browser context inside the VS Code webview */
 
-import { AntiPatternData, DateFilter, GitHubAppSnapshot, StatsResult } from '../core/types';
+import {
+  AntiPatternData,
+  DateFilter,
+  GitHubAppIssueCreditsSnapshot,
+  GitHubAppSnapshot,
+  StatsResult,
+} from '../core/types';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { $, $$, rpc, destroyCharts, initMessageListener, withErrorBoundary, type WorkerTelemetry } from './shared';
 import { updateTelemetry } from './telemetry-strip';
@@ -28,11 +34,18 @@ import { renderDataExplorer } from './page-data-explorer';
 import { renderRulePlayground } from './page-rule-playground';
 import { renderImageGallery } from './page-image-gallery';
 import { renderGitHubApp } from './page-github-app';
+import { renderGitHubAppIssueCredits } from './page-github-app-issue-credits';
 
 let githubAppSnapshot: GitHubAppSnapshot = { status: 'absent' };
+let githubAppIssueCreditsSnapshot: GitHubAppIssueCreditsSnapshot = { status: 'absent' };
+
+function isGitHubAppPage(page: string): boolean {
+  return page === 'github-app' || page === 'github-app-issue-credits';
+}
+
 function normalizePageForFeatureFlags(page: string): string {
   if (!FF_TOKEN_REPORTING_ENABLED && page === 'burndown') return 'dashboard';
-  if (githubAppSnapshot.status === 'absent' && page === 'github-app') return 'dashboard';
+  if (githubAppSnapshot.status === 'absent' && isGitHubAppPage(page)) return 'dashboard';
   return page;
 }
 
@@ -102,15 +115,29 @@ function applyGitHubAppSnapshot(snapshot: GitHubAppSnapshot): void {
   for (const item of $$<HTMLElement>('.github-app-nav-item')) item.hidden = !visible;
   if (snapshot.status === 'ready') setBadge('badge-github-app', snapshot.metrics.totalProjectSessions);
   else clearBadge('badge-github-app');
-  if (!visible && currentPage === 'github-app') navigateTo('dashboard');
+  if (
+    !visible
+    && isGitHubAppPage(currentPage)
+  ) navigateTo('dashboard');
+}
+
+function applyGitHubAppIssueCreditsSnapshot(snapshot: GitHubAppIssueCreditsSnapshot): void {
+  githubAppIssueCreditsSnapshot = snapshot;
+  if (snapshot.status === 'ready') {
+    setBadge('badge-github-app-issue-credits', snapshot.metrics.issues.length);
+  } else {
+    clearBadge('badge-github-app-issue-credits');
+  }
 }
 
 async function refreshGitHubAppSnapshot(): Promise<void> {
-  try {
-    applyGitHubAppSnapshot(await rpc<GitHubAppSnapshot>('getGitHubAppMetrics'));
-  } catch {
-    applyGitHubAppSnapshot({ status: 'unavailable' });
-  }
+  const [productivity, issueCredits] = await Promise.all([
+    rpc<GitHubAppSnapshot>('getGitHubAppMetrics').catch((): GitHubAppSnapshot => ({ status: 'unavailable' })),
+    rpc<GitHubAppIssueCreditsSnapshot>('getGitHubAppIssueCredits')
+      .catch((): GitHubAppIssueCreditsSnapshot => ({ status: 'unavailable' })),
+  ]);
+  applyGitHubAppSnapshot(productivity);
+  applyGitHubAppIssueCreditsSnapshot(issueCredits);
 }
 
 /* ---- Progress + Data Ready ---- */
@@ -385,7 +412,7 @@ export function navigateTo(page: string): void {
   page = normalizePageForFeatureFlags(page);
   if (!llmAvailable() && (page === 'skills' || page === 'level-up')) page = 'dashboard';
   currentPage = page;
-  document.body.classList.toggle('github-app-view', page === 'github-app');
+  document.body.classList.toggle('github-app-view', isGitHubAppPage(page));
   for (const a of $$<HTMLAnchorElement>('.nav-links a')) a.classList.toggle('active', a.dataset.page === page);
   void renderPage(page);
 }
@@ -573,6 +600,11 @@ function renderPage(page: string): void {
     case 'rule-playground': withErrorBoundary('Rule Playground', content, () => renderRulePlayground(content, currentFilter)); break;
     case 'image-gallery': withErrorBoundary('Image Gallery', content, () => renderImageGallery(content, currentFilter)); break;
     case 'github-app': withErrorBoundary('GitHub App', content, () => renderGitHubApp(content, githubAppSnapshot)); break;
+    case 'github-app-issue-credits':
+      withErrorBoundary('Issue credits', content, () => {
+        renderGitHubAppIssueCredits(content, githubAppIssueCreditsSnapshot);
+      });
+      break;
     default: render(html`<p>Unknown page</p>`, content);
   }
 }

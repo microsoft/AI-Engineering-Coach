@@ -3,20 +3,18 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { execFile } from 'child_process';
 import type {
   GitHubAppMergeDay,
   GitHubAppMetrics,
   GitHubAppSnapshot,
 } from './types';
+import {
+  resolveGitHubAppDatabaseAccess,
+  type GitHubAppDatabaseDependencies,
+} from './github-app-database';
 import { warnCore } from './log';
 import { assertTrustedPath } from './parser-shared';
 
-const QUERY_TIMEOUT_MS = 10_000;
-const QUERY_MAX_BUFFER = 2 * 1024 * 1024;
 const ISSUE_SESSION_REFERENCES_QUERY = `
 SELECT DISTINCT session_id AS sessionId
 FROM session_refs
@@ -165,12 +163,7 @@ interface GitHubAppWorkspaceIssueLink {
   sessionId: string | null;
 }
 
-export interface GitHubAppAnalyticsDependencies {
-  databasePath?: string;
-  sessionStorePath?: string;
-  exists?: (filePath: string) => boolean;
-  query?: (databasePath: string, sql: string) => Promise<string>;
-}
+export type GitHubAppAnalyticsDependencies = GitHubAppDatabaseDependencies;
 
 function isMetricsRow(value: unknown): value is GitHubAppMetricsRow {
   if (typeof value !== 'object' || value === null) return false;
@@ -265,31 +258,6 @@ function countIssueLinkedWorkspaces(
   return issueWorkspaces.size;
 }
 
-function defaultDatabasePath(): string {
-  const configuredHome = process.env.COPILOT_HOME?.trim();
-  const copilotHome = configuredHome ? path.resolve(configuredHome) : path.join(os.homedir(), '.copilot');
-  return path.join(copilotHome, 'data.db');
-}
-
-function queryWithSqlite(databasePath: string, sql: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'sqlite3',
-      ['-readonly', '-json', databasePath, sql],
-      {
-        encoding: 'utf-8',
-        timeout: QUERY_TIMEOUT_MS,
-        maxBuffer: QUERY_MAX_BUFFER,
-        cwd: os.tmpdir(),
-      },
-      (error, stdout) => {
-        if (error) reject(new Error(error.message, { cause: error }));
-        else resolve(stdout);
-      },
-    );
-  });
-}
-
 async function loadIssueLinkedWorkspaceCount(
   databasePath: string,
   sessionStorePath: string,
@@ -316,10 +284,8 @@ async function loadIssueLinkedWorkspaceCount(
 export async function loadGitHubAppMetrics(
   dependencies: GitHubAppAnalyticsDependencies = {},
 ): Promise<GitHubAppSnapshot> {
-  const databasePath = dependencies.databasePath ?? defaultDatabasePath();
-  const sessionStorePath = dependencies.sessionStorePath ?? path.join(path.dirname(databasePath), 'session-store.db');
-  const exists = dependencies.exists ?? fs.existsSync;
-  const query = dependencies.query ?? queryWithSqlite;
+  const { databasePath, sessionStorePath, exists, query } =
+    resolveGitHubAppDatabaseAccess(dependencies);
 
   try {
     assertTrustedPath(databasePath);

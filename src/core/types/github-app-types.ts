@@ -18,7 +18,26 @@ export interface GitHubAppMetrics {
   mergeHistory: GitHubAppMergeDay[];
 }
 
-export type GitHubAppSnapshot =
+export type GitHubAppDataSnapshot<T> =
   | { status: 'absent' }
   | { status: 'unavailable' }
-  | { status: 'ready'; metrics: GitHubAppMetrics };
+  | { status: 'ready'; metrics: T };
+
+export type GitHubAppSnapshot = GitHubAppDataSnapshot<GitHubAppMetrics>;
+
+export interface GitHubAppIssueCreditEstimate {
+  repository: string;
+  issueNumber: number;
+  linkedSessionCount: number;
+  pricedSessionCount: number;
+  estimatedCredits: number;
+}
+
+export interface GitHubAppIssueCreditsMetrics {
+  issues: GitHubAppIssueCreditEstimate[];
+  linkedSessionCount: number;
+  pricedSessionCount: number;
+  estimatedCredits: number;
+}
+
+export type GitHubAppIssueCreditsSnapshot = GitHubAppDataSnapshot<GitHubAppIssueCreditsMetrics>;

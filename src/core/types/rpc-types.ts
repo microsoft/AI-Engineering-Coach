@@ -51,7 +51,7 @@ import type {
 import type { ConfigHealthData } from './config-types';
 import type { InsightsData } from './insights-types';
 import type { ContextManagementData, FlowStateData, WorkspaceContextSessionsData } from './context-types';
-import type { GitHubAppSnapshot } from './github-app-types';
+import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
 
 /* RPC method map: method name -> { params, result } */
@@ -80,6 +80,7 @@ export interface RpcMethodMap {
   getWorkflowOptimization: { params: DateFilter | undefined; result: WorkflowOptimizationData };
   getStats: { params: DateFilter | undefined; result: StatsResult };
   getGitHubAppMetrics: { params: undefined; result: GitHubAppSnapshot };
+  getGitHubAppIssueCredits: { params: undefined; result: GitHubAppIssueCreditsSnapshot };
   getConfigHealth: { params: DateFilter | undefined; result: ConfigHealthData };
   getInsights: { params: DateFilter | undefined; result: InsightsData };
   getFlowState: { params: DateFilter | undefined; result: FlowStateData };

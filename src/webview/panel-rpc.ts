@@ -10,6 +10,7 @@ import { ParseResult } from '../core/parser';
 import { loadSessionFromDisk } from '../core/cache';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
+import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
 import { extractSessionImages } from '../core/parser-vscode-files';
 import { DateFilter, RpcMethodName, BurndownConfig } from '../core/types';
 import type { RpcMethodMap, RpcResult } from '../core/types/rpc-types';
@@ -725,6 +726,7 @@ const rpcHandlers: TypedRpcHandlers = {
   getWorkflowOptimization: (a, _p, params) => a.getWorkflowOptimization(validateDateFilter(params)),
   getStats: (a, _p, params) => a.getStats(validateDateFilter(params)),
   getGitHubAppMetrics: () => loadGitHubAppMetrics(),
+  getGitHubAppIssueCredits: () => loadGitHubAppIssueCredits(),
   getConfigHealth: (a, _p, params) => a.getConfigHealth(validateDateFilter(params)),
   getInsights: (a, _p, params) => a.getInsights(validateDateFilter(params)),
   getFlowState: (a, _p, params) => a.getFlowState(validateDateFilter(params)),

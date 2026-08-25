@@ -53,6 +53,7 @@ body { background: var(--vscode-editor-background); color: var(--vscode-editor-f
       <li><a href="#" data-page="rule-playground"><span class="nav-icon">&#9881;</span> Rule Playground</a></li>
       <li class="nav-group-header github-app-nav-item" hidden>GitHub App</li>
       <li class="github-app-nav-item" hidden><a href="#" data-page="github-app"><span class="nav-icon">&#9670;</span> Productivity<span class="nav-badge" id="badge-github-app"></span></a></li>
+      <li class="github-app-nav-item" hidden><a href="#" data-page="github-app-issue-credits"><span class="nav-icon">$</span> Issue credits<span class="nav-badge" id="badge-github-app-issue-credits"></span></a></li>
     </ul>
     <div class="sidebar-filters">
       <div class="sidebar-filter">
@@ -168,6 +169,21 @@ function getMockData(method, params) {
         }
       };
     },
+
+    getGitHubAppIssueCredits: () => ({
+      status: 'ready',
+      metrics: {
+        issues: [
+          { repository: 'microsoft/AI-Engineering-Coach', issueNumber: 314, linkedSessionCount: 6, pricedSessionCount: 6, estimatedCredits: 184.72 },
+          { repository: 'microsoft/AI-Engineering-Coach', issueNumber: 287, linkedSessionCount: 4, pricedSessionCount: 3, estimatedCredits: 96.4 },
+          { repository: 'octo-org/service-api', issueNumber: 91, linkedSessionCount: 3, pricedSessionCount: 3, estimatedCredits: 58.11 },
+          { repository: 'octo-org/web-client', issueNumber: 204, linkedSessionCount: 2, pricedSessionCount: 2, estimatedCredits: 21.08 }
+        ],
+        linkedSessionCount: 15,
+        pricedSessionCount: 14,
+        estimatedCredits: 360.31
+      }
+    }),
 
     getCodeProduction: () => ({
       summary: {

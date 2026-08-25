@@ -17,7 +17,7 @@ export function getDashboardHtml(webview: vscode.Webview, extensionUri: vscode.U
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; style-src-elem ${webview.cspSource}; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; require-trusted-types-for 'script'; trusted-types coach-html default;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; style-src-elem ${webview.cspSource}; style-src-attr 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data: https://github.com https://avatars.githubusercontent.com; font-src ${webview.cspSource}; require-trusted-types-for 'script'; trusted-types coach-html default;">
 <link href="${String(styleUri)}" rel="stylesheet">
 <title>AI Engineer Coach</title>
 </head>
