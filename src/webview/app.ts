@@ -113,7 +113,7 @@ function applyGitHubAppSnapshot(snapshot: GitHubAppSnapshot): void {
   githubAppSnapshot = snapshot;
   const visible = snapshot.status !== 'absent';
   for (const item of $$<HTMLElement>('.github-app-nav-item')) item.hidden = !visible;
-  if (snapshot.status === 'ready') setBadge('badge-github-app', snapshot.metrics.totalProjectSessions);
+  if (snapshot.status === 'ready') setBadge('badge-github-app', snapshot.metrics.delivery.totalProjectSessions);
   else clearBadge('badge-github-app');
   if (
     !visible

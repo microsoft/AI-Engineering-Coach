@@ -5,6 +5,7 @@
 
 import type { GitHubAppIssueCreditsSnapshot } from './types';
 import {
+  parseSqliteJsonRows,
   resolveGitHubAppDatabaseAccess,
   type GitHubAppDatabaseDependencies,
 } from './github-app-database';
@@ -12,6 +13,7 @@ import {
   aggregateGitHubAppIssueCredits,
   type GitHubAppIssueCreditRows,
 } from './github-app-issue-credit-model';
+import { SESSION_ISSUES_QUERY } from './github-app-issue-references';
 import { warnCore } from './log';
 import { assertTrustedPath } from './parser-shared';
 
@@ -60,28 +62,6 @@ UNION
 SELECT workspace_id AS workspaceId, session_id AS sessionId
 FROM workspace_session_aliases`;
 
-const SESSION_ISSUES_QUERY = `
-SELECT
-  refs.session_id AS sessionId,
-  sessions.repository AS repository,
-  refs.ref_value AS refValue,
-  'reference' AS source
-FROM session_refs AS refs
-LEFT JOIN sessions ON sessions.id = refs.session_id
-WHERE refs.ref_type = 'issue'
-
-UNION ALL
-
-SELECT
-  turns.session_id AS sessionId,
-  sessions.repository AS repository,
-  turns.user_message AS refValue,
-  'pasted-link' AS source
-FROM turns
-LEFT JOIN sessions ON sessions.id = turns.session_id
-WHERE turns.turn_index IN (0, 1)
-  AND turns.user_message LIKE '%github.com/%/issues/%'`;
-
 const SESSION_USAGE_QUERY = `
 SELECT
   session_id AS sessionId,
@@ -92,15 +72,6 @@ WHERE total_nano_aiu IS NOT NULL
 GROUP BY session_id`;
 
 export type GitHubAppIssueCreditsDependencies = GitHubAppDatabaseDependencies;
-
-function parseRows(raw: string, description: string): unknown[] {
-  if (raw.trim().length === 0) return [];
-  const parsed: unknown = JSON.parse(raw);
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${description} query returned an unexpected result.`);
-  }
-  return parsed;
-}
 
 export async function loadGitHubAppIssueCredits(
   dependencies: GitHubAppIssueCreditsDependencies = {},
@@ -128,10 +99,10 @@ export async function loadGitHubAppIssueCredits(
         query(sessionStorePath, SESSION_USAGE_QUERY),
       ]);
     const rows: GitHubAppIssueCreditRows = {
-      workspaceIssues: parseRows(workspaceIssues, 'Workspace issue'),
-      workspaceSessions: parseRows(workspaceSessions, 'Workspace session'),
-      sessionIssues: parseRows(sessionIssues, 'Session issue'),
-      sessionUsage: parseRows(sessionUsage, 'Session usage'),
+        workspaceIssues: parseSqliteJsonRows(workspaceIssues, 'Workspace issue'),
+        workspaceSessions: parseSqliteJsonRows(workspaceSessions, 'Workspace session'),
+        sessionIssues: parseSqliteJsonRows(sessionIssues, 'Session issue'),
+        sessionUsage: parseSqliteJsonRows(sessionUsage, 'Session usage'),
     };
     return { status: 'ready', metrics: aggregateGitHubAppIssueCredits(rows) };
   } catch (error) {

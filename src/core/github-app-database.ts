@@ -25,6 +25,15 @@ export interface GitHubAppDatabaseAccess {
   query: (databasePath: string, sql: string) => Promise<string>;
 }
 
+export function parseSqliteJsonRows(raw: string, description: string): unknown[] {
+  if (raw.trim().length === 0) return [];
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${description} query returned an unexpected result.`);
+  }
+  return parsed;
+}
+
 function defaultDatabasePath(): string {
   const configuredHome = process.env.COPILOT_HOME?.trim();
   const copilotHome = configuredHome ? path.resolve(configuredHome) : path.join(os.homedir(), '.copilot');

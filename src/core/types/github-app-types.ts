@@ -3,19 +3,23 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-export interface GitHubAppMergeDay {
+export interface GitHubAppWorkspacePrCohortDay {
   date: string;
   pullRequestsRaised: number;
   pullRequestsMerged: number;
 }
 
-export interface GitHubAppMetrics {
+export interface GitHubAppDeliveryFunnel {
   totalProjectSessions: number;
   sessionsWithIssue: number;
   sessionsWithPullRequest: number;
   sessionsWithMergedPullRequest: number;
   lastActivityAt: string | null;
-  mergeHistory: GitHubAppMergeDay[];
+}
+
+export interface GitHubAppMetrics {
+  delivery: GitHubAppDeliveryFunnel;
+  workspacePrCohorts: GitHubAppWorkspacePrCohortDay[];
 }
 
 export type GitHubAppDataSnapshot<T> =

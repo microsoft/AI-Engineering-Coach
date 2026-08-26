@@ -3,7 +3,12 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { GitHubAppMetrics, GitHubAppSnapshot } from '../core/types';
+import type {
+  GitHubAppDeliveryFunnel,
+  GitHubAppMetrics,
+  GitHubAppSnapshot,
+  GitHubAppWorkspacePrCohortDay,
+} from '../core/types';
 import { createChart, COLORS, formatNum } from './shared';
 import { CanvasEl, html, render, type ComponentChildren } from './render';
 
@@ -29,26 +34,26 @@ function funnelStage(stage: FunnelStage): ComponentChildren {
     </li>`;
 }
 
-function projectSessionsStage(metrics: GitHubAppMetrics): ComponentChildren {
-  const sessionsWithoutIssue = metrics.totalProjectSessions - metrics.sessionsWithIssue;
+function projectSessionsStage(delivery: GitHubAppDeliveryFunnel): ComponentChildren {
+  const sessionsWithoutIssue = delivery.totalProjectSessions - delivery.sessionsWithIssue;
   return html`
     <li
       class="gha-funnel-stage gha-funnel-stage-start"
       style="--funnel-width:100%"
-      aria-label=${`${formatNum(metrics.totalProjectSessions)} project sessions: ${formatNum(metrics.sessionsWithIssue)} with an issue and ${formatNum(sessionsWithoutIssue)} without an issue`}
+      aria-label=${`${formatNum(delivery.totalProjectSessions)} project sessions: ${formatNum(delivery.sessionsWithIssue)} with an issue reference and ${formatNum(sessionsWithoutIssue)} without an issue reference`}
     >
       <div class="gha-funnel-stage-body gha-funnel-stage-body-start">
         <div class="gha-funnel-stage-total">
-          <span class="gha-stage-number">${formatNum(metrics.totalProjectSessions)}</span>
+          <span class="gha-stage-number">${formatNum(delivery.totalProjectSessions)}</span>
           <span class="gha-funnel-stage-copy"><strong>Project sessions</strong><small>100% started</small></span>
         </div>
         <dl class="gha-funnel-origin-breakdown">
           <div>
-            <dt><i class="gha-dot gha-dot-issue"></i>With issue</dt>
-            <dd>${formatNum(metrics.sessionsWithIssue)}</dd>
+            <dt><i class="gha-dot gha-dot-issue"></i>With issue reference</dt>
+            <dd>${formatNum(delivery.sessionsWithIssue)}</dd>
           </div>
           <div>
-            <dt><i class="gha-dot gha-dot-direct"></i>Without issue</dt>
+            <dt><i class="gha-dot gha-dot-direct"></i>Without issue reference</dt>
             <dd>${formatNum(sessionsWithoutIssue)}</dd>
           </div>
         </dl>
@@ -56,25 +61,25 @@ function projectSessionsStage(metrics: GitHubAppMetrics): ComponentChildren {
     </li>`;
 }
 
-function deliveryFunnel(metrics: GitHubAppMetrics): ComponentChildren {
-  const pullRequestRate = percentage(metrics.sessionsWithPullRequest, metrics.totalProjectSessions);
-  const mergeRate = percentage(metrics.sessionsWithMergedPullRequest, metrics.totalProjectSessions);
-  const pullRequestMergeRate = percentage(metrics.sessionsWithMergedPullRequest, metrics.sessionsWithPullRequest);
+function deliveryFunnel(delivery: GitHubAppDeliveryFunnel): ComponentChildren {
+  const pullRequestRate = percentage(delivery.sessionsWithPullRequest, delivery.totalProjectSessions);
+  const mergeRate = percentage(delivery.sessionsWithMergedPullRequest, delivery.totalProjectSessions);
+  const pullRequestMergeRate = percentage(delivery.sessionsWithMergedPullRequest, delivery.sessionsWithPullRequest);
   return html`
     <ol class="gha-funnel" aria-label="Project session delivery funnel">
-      ${projectSessionsStage(metrics)}
+      ${projectSessionsStage(delivery)}
       ${funnelStage({
         className: 'gha-funnel-stage-pr',
         width: Math.max(46, pullRequestRate),
-        count: metrics.sessionsWithPullRequest,
-        label: 'Sessions with a PR',
+        count: delivery.sessionsWithPullRequest,
+        label: 'Sessions linked to a PR',
         detail: `${pullRequestRate}% of sessions`,
       })}
       ${funnelStage({
         className: 'gha-funnel-stage-merged',
         width: Math.max(34, mergeRate),
-        count: metrics.sessionsWithMergedPullRequest,
-        label: 'Sessions with a merged PR',
+        count: delivery.sessionsWithMergedPullRequest,
+        label: 'Sessions with a confirmed merge',
         detail: `${pullRequestMergeRate}% of PR sessions`,
       })}
     </ol>`;
@@ -106,25 +111,25 @@ function renderUnavailable(container: HTMLElement): void {
     </div>`, container);
 }
 
-function funnelSection(metrics: GitHubAppMetrics): ComponentChildren {
-  const mergeRate = percentage(metrics.sessionsWithMergedPullRequest, metrics.totalProjectSessions);
+function funnelSection(delivery: GitHubAppDeliveryFunnel): ComponentChildren {
+  const mergeRate = percentage(delivery.sessionsWithMergedPullRequest, delivery.totalProjectSessions);
   return html`
     <section class="gha-funnel-card" aria-labelledby="gha-delivery-title">
       <div class="gha-section-heading">
         <div>
           <h2 id="gha-delivery-title">Delivery funnel</h2>
-          <p>Follow project sessions through raised and merged pull requests.</p>
+          <p>Follow project sessions through issue links, PR links, and locally confirmed merges.</p>
         </div>
         <span>${mergeRate}% reach merge</span>
       </div>
-      ${metrics.totalProjectSessions === 0
+      ${delivery.totalProjectSessions === 0
         ? html`<div class="gha-inline-empty">Create a project session in the GitHub Copilot app to start this delivery path.</div>`
-        : deliveryFunnel(metrics)}
+        : deliveryFunnel(delivery)}
     </section>`;
 }
 
-function mergeRatioSection(metrics: GitHubAppMetrics): ComponentChildren {
-  const { recentRaised, recentMerged } = metrics.mergeHistory.reduce(
+function mergeRatioSection(cohorts: readonly GitHubAppWorkspacePrCohortDay[]): ComponentChildren {
+  const { recentRaised, recentMerged } = cohorts.reduce(
     (totals, day) => ({
       recentRaised: totals.recentRaised + day.pullRequestsRaised,
       recentMerged: totals.recentMerged + day.pullRequestsMerged,
@@ -137,7 +142,7 @@ function mergeRatioSection(metrics: GitHubAppMetrics): ComponentChildren {
       <div class="gha-section-heading">
         <div>
           <h2 id="gha-merge-ratio-title">PR merge ratio · last 7 days</h2>
-          <p>Current merged share of PRs from project sessions created on each completed day.</p>
+          <p>Current merged share of PRs from project workspaces created on each completed day.</p>
         </div>
       </div>
       <div class="gha-merge-ratio-layout">
@@ -150,13 +155,13 @@ function mergeRatioSection(metrics: GitHubAppMetrics): ComponentChildren {
           <div><dt>PRs merged</dt><dd>${formatNum(recentMerged)}</dd><small>From these daily cohorts</small></div>
         </dl>
       </div>
-      <p class="gha-cohort-note">Days are grouped by project-session creation date. Ratios update when those PRs merge.</p>
+      <p class="gha-cohort-note">Days are grouped by project-workspace creation date. Ratios update when those PRs merge.</p>
     </section>`;
 }
 
-function renderMergeRatioChart(metrics: GitHubAppMetrics): void {
-  if (!metrics.mergeHistory.some(day => day.pullRequestsRaised > 0)) return;
-  const labels = metrics.mergeHistory.map(item => {
+function renderMergeRatioChart(cohorts: readonly GitHubAppWorkspacePrCohortDay[]): void {
+  if (!cohorts.some(day => day.pullRequestsRaised > 0)) return;
+  const labels = cohorts.map(item => {
     const [, month, day] = item.date.split('-');
     return `${month}/${day}`;
   });
@@ -166,7 +171,7 @@ function renderMergeRatioChart(metrics: GitHubAppMetrics): void {
       {
         type: 'bar',
         label: 'PRs raised',
-        data: metrics.mergeHistory.map(day => day.pullRequestsRaised),
+        data: cohorts.map(day => day.pullRequestsRaised),
         yAxisID: 'count',
         backgroundColor: COLORS.blue + '3D',
         borderColor: COLORS.blue,
@@ -176,7 +181,7 @@ function renderMergeRatioChart(metrics: GitHubAppMetrics): void {
       },
       {
         label: 'Merge ratio',
-        data: metrics.mergeHistory.map(day => day.pullRequestsRaised > 0
+        data: cohorts.map(day => day.pullRequestsRaised > 0
           ? percentage(day.pullRequestsMerged, day.pullRequestsRaised)
           : null),
         yAxisID: 'ratio',
@@ -212,14 +217,14 @@ function renderMetrics(container: HTMLElement, metrics: GitHubAppMetrics): void 
         </div>
         <div class="gha-last-activity">
           <span>Last activity</span>
-          <strong>${formatLastActivity(metrics.lastActivityAt)}</strong>
+          <strong>${formatLastActivity(metrics.delivery.lastActivityAt)}</strong>
         </div>
       </header>
-      ${funnelSection(metrics)}
-      ${mergeRatioSection(metrics)}
+      ${funnelSection(metrics.delivery)}
+      ${mergeRatioSection(metrics.workspacePrCohorts)}
     </div>`, container);
 
-  renderMergeRatioChart(metrics);
+  renderMergeRatioChart(metrics.workspacePrCohorts);
 }
 
 export function renderGitHubApp(container: HTMLElement, snapshot: GitHubAppSnapshot): void {
