@@ -665,6 +665,86 @@ describe('scanVsCodeDirs — Copilot session state', () => {
   });
 });
 
+describe('processWorkspaceEntry — GitHub.copilot-chat/transcripts', () => {
+  const makeContext = (): ParseContext => ({
+    workspaces: new Map(),
+    sessions: [],
+    editLocIndex: new Map(),
+    sessionSourceIndex: new Map(),
+    aiLoc: 0,
+  });
+
+  function writeTranscriptWorkspace(logsDir: string, wsId: string): void {
+    const dir = path.join(logsDir, wsId, 'GitHub.copilot-chat', 'transcripts');
+    fs.mkdirSync(dir, { recursive: true });
+    const events = [
+      { type: 'session.start', timestamp: '2026-01-01T00:00:00Z', data: { sessionId: 'sess-t1', startTime: '2026-01-01T00:00:00Z' } },
+      { type: 'user.message', timestamp: '2026-01-01T00:00:01Z', data: { content: 'hello' } },
+      { type: 'tool.execution_start', timestamp: '2026-01-01T00:00:02Z', data: { toolCallId: 'c1', toolName: 'create_file', arguments: { filePath: '/home/user/proj/myrepo/src/index.ts', content: 'x' } } },
+      { type: 'tool.execution_complete', timestamp: '2026-01-01T00:00:03Z', data: { toolCallId: 'c1', success: true } },
+      { type: 'tool.execution_start', timestamp: '2026-01-01T00:00:04Z', data: { toolCallId: 'c2', toolName: 'create_file', arguments: { filePath: '/home/user/proj/myrepo/test/index.test.ts', content: 'y' } } },
+      { type: 'tool.execution_complete', timestamp: '2026-01-01T00:00:05Z', data: { toolCallId: 'c2', success: true } },
+      { type: 'assistant.message', id: 'a1', timestamp: '2026-01-01T00:00:06Z', data: { content: 'done' } },
+    ];
+    fs.writeFileSync(path.join(dir, 'sess-t1.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n', 'utf-8');
+  }
+
+  it('parses transcripts when there is no chatSessions dir or workspace.json (sync)', () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-transcripts-'));
+    try {
+      writeTranscriptWorkspace(logsDir, 'ws-hash-1');
+      const ctx = makeContext();
+
+      const wsName = processWorkspaceEntry(logsDir, 'ws-hash-1', 'Local Agent', ctx);
+
+      expect(wsName).toBe('ws-hash-1');
+      expect(ctx.sessions).toHaveLength(1);
+      expect(ctx.sessions[0].sessionId).toBe('sess-t1');
+      expect(ctx.sessionSourceIndex.get('sess-t1')?.kind).toBe('vscode-transcript');
+      // The derived workspace root upgrades the placeholder hash-based name/path.
+      expect(ctx.workspaces.get('ws-hash-1')).toEqual({ id: 'ws-hash-1', name: 'myrepo', path: '/home/user/proj/myrepo' });
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses transcripts when there is no chatSessions dir or workspace.json (async)', async () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-transcripts-async-'));
+    try {
+      writeTranscriptWorkspace(logsDir, 'ws-hash-2');
+      const ctx = makeContext();
+
+      const wsName = await processWorkspaceEntryAsync(logsDir, 'ws-hash-2', 'Local Agent', ctx);
+
+      expect(wsName).toBe('ws-hash-2');
+      expect(ctx.sessions).toHaveLength(1);
+      expect(ctx.sessionSourceIndex.get('sess-t1')?.kind).toBe('vscode-transcript');
+      expect(ctx.workspaces.get('ws-hash-2')).toEqual({ id: 'ws-hash-2', name: 'myrepo', path: '/home/user/proj/myrepo' });
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the workspace.json-derived name when one is present', () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-transcripts-wsjson-'));
+    try {
+      writeTranscriptWorkspace(logsDir, 'ws-hash-3');
+      fs.writeFileSync(
+        path.join(logsDir, 'ws-hash-3', 'workspace.json'),
+        JSON.stringify({ folder: 'file:///home/user/proj/named-workspace' }),
+      );
+      const ctx = makeContext();
+
+      const wsName = processWorkspaceEntry(logsDir, 'ws-hash-3', 'Local Agent', ctx);
+
+      expect(wsName).toBe('named-workspace');
+      expect(ctx.workspaces.get('ws-hash-3')?.name).toBe('named-workspace');
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('parseSessionFile — skill detection', () => {
   it('detects skills from promptFile variables pointing to SKILL.md', () => {
     const data = {

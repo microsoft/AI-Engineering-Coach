@@ -196,6 +196,8 @@ export interface ParseTiming {
   editMs: number;
   /** Cumulative ms spent parsing CLI events.jsonl files. */
   cliMs: number;
+  /** Cumulative ms spent parsing GitHub.copilot-chat/transcripts files. */
+  transcriptMs: number;
   /** Number of chat session files parsed. */
   chatFiles: number;
   /** Number of edit-state files parsed. */
@@ -204,12 +206,13 @@ export interface ParseTiming {
   forcedGc: number;
 }
 
-const parseTiming: ParseTiming = { chatMs: 0, editMs: 0, cliMs: 0, chatFiles: 0, editFiles: 0, forcedGc: 0 };
+const parseTiming: ParseTiming = { chatMs: 0, editMs: 0, cliMs: 0, transcriptMs: 0, chatFiles: 0, editFiles: 0, forcedGc: 0 };
 
 /** Accumulate elapsed time (ms) for a cold-parse sub-step. */
-export function addParseTiming(kind: 'chat' | 'edit' | 'cli', ms: number): void {
+export function addParseTiming(kind: 'chat' | 'edit' | 'cli' | 'transcript', ms: number): void {
   if (kind === 'chat') { parseTiming.chatMs += ms; parseTiming.chatFiles++; }
   else if (kind === 'edit') { parseTiming.editMs += ms; parseTiming.editFiles++; }
+  else if (kind === 'transcript') { parseTiming.transcriptMs += ms; }
   else parseTiming.cliMs += ms;
 }
 
@@ -218,6 +221,7 @@ export function resetParseTiming(): void {
   parseTiming.chatMs = 0;
   parseTiming.editMs = 0;
   parseTiming.cliMs = 0;
+  parseTiming.transcriptMs = 0;
   parseTiming.chatFiles = 0;
   parseTiming.editFiles = 0;
   parseTiming.forcedGc = 0;

@@ -14,9 +14,11 @@ The primary harness. AI Engineer Coach parses the chat panel logs that GitHub Co
 
 When VS Code connects through Remote-WSL, Remote-SSH, or a Dev Container, the logs live on the remote host under `~/.vscode-server/data/User/workspaceStorage/` (or `~/.vscode-server-insiders/data/User/workspaceStorage/` for Insiders) and appear in the dashboard as `Local Agent (Server)` or `Local Agent (Server Insiders)`.
 
+Newer VS Code / Copilot Chat builds write sessions as `GitHub.copilot-chat/transcripts/*.jsonl` instead of `chatSessions/*.json`; both formats are read automatically. The transcript format has no `workspace.json` sidecar, so the workspace folder shown in the dashboard is inferred from the files those sessions edited — sessions that only read files (e.g. via a subagent) may show up under the raw workspace-storage id instead of the repo name.
+
 **What is tracked:**
 - Requests and responses with timestamps
-- Model selection (e.g., `claude-opus-4.6`, `gpt-5.4`, `auto`)
+- Model selection (e.g., `claude-opus-4.6`, `gpt-5.4`, `auto`) — not available for `transcripts/*.jsonl` sessions, which don't record model or token usage
 - Tool calls and slash commands used
 - File context references (`#file`, open editor tabs)
 - Terminal command execution

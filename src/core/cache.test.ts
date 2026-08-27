@@ -167,6 +167,21 @@ describe('computeDirMetas', () => {
     expect(metas[wsDir].editCount).toBe(2);
   });
 
+  it('fingerprints GitHub.copilot-chat/transcripts (sync and async agree)', async () => {
+    const logsDir = makeTempDir();
+    const wsDir = path.join(logsDir, 'workspace1');
+    const transcriptsDir = path.join(wsDir, 'GitHub.copilot-chat', 'transcripts');
+    fs.mkdirSync(transcriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(transcriptsDir, 'sess1.jsonl'), '{}');
+    fs.writeFileSync(path.join(transcriptsDir, 'sess2.jsonl'), '{}');
+
+    const syncMetas = computeDirMetas([logsDir]);
+    const asyncMetas = await computeDirMetasAsync([logsDir]);
+
+    expect(syncMetas[wsDir].transcriptCount).toBe(2);
+    expect(asyncMetas[wsDir].transcriptCount).toBe(2);
+  });
+
   it('invalidates edit fingerprints when an existing state.json is rewritten', async () => {
     const logsDir = makeTempDir();
     const wsDir = path.join(logsDir, 'workspace1');
@@ -241,6 +256,18 @@ describe('findStaleDirs', () => {
     const { stale, removed } = findStaleDirs(current, cached);
     expect(stale.size).toBe(0);
     expect(removed.has('/ws2')).toBe(true);
+  });
+
+  it('detects stale dirs when only the transcripts fingerprint differs', () => {
+    const current: DirMetas = {
+      '/ws1': { chatCount: 0, chatMaxMtime: 0, editCount: 0, editMaxMtime: 0, transcriptCount: 2, transcriptMaxMtime: 500 },
+    };
+    const cached: DirMetas = {
+      '/ws1': { chatCount: 0, chatMaxMtime: 0, editCount: 0, editMaxMtime: 0, transcriptCount: 1, transcriptMaxMtime: 400 },
+    };
+
+    const { stale } = findStaleDirs(current, cached);
+    expect(stale.has('/ws1')).toBe(true);
   });
 
   it('marks new dirs as stale', () => {

@@ -206,19 +206,25 @@ async function collectWorkspaceSessionTiles(
   fallbackMtime: number,
 ): Promise<Array<{ mtime: number; size: number; date?: string }>> {
   const tiles: Array<{ mtime: number; size: number; date?: string }> = [];
-  const chatDir = path.join(logsDir, wsId, 'chatSessions');
 
-  try {
-    const entries = await fs.promises.readdir(chatDir, { withFileTypes: true });
-    const files = entries.filter(entry => entry.isFile() && (entry.name.endsWith('.json') || entry.name.endsWith('.jsonl')));
-    const stats = await Promise.allSettled(files.map(async entry => {
-      const stat = await fs.promises.stat(path.join(chatDir, entry.name));
-      return { mtime: stat.mtimeMs, size: stat.size, date: stat.mtimeMs > 0 ? toDateStr(stat.mtimeMs) : undefined };
-    }));
-    for (const result of stats) {
-      if (result.status === 'fulfilled') tiles.push(result.value);
-    }
-  } catch { /* no chat sessions dir */ }
+  async function collectFrom(dir: string): Promise<void> {
+    try {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      const files = entries.filter(entry => entry.isFile() && (entry.name.endsWith('.json') || entry.name.endsWith('.jsonl')));
+      const stats = await Promise.allSettled(files.map(async entry => {
+        const stat = await fs.promises.stat(path.join(dir, entry.name));
+        return { mtime: stat.mtimeMs, size: stat.size, date: stat.mtimeMs > 0 ? toDateStr(stat.mtimeMs) : undefined };
+      }));
+      for (const result of stats) {
+        if (result.status === 'fulfilled') tiles.push(result.value);
+      }
+    } catch { /* dir does not exist */ }
+  }
+
+  await collectFrom(path.join(logsDir, wsId, 'chatSessions'));
+  // GitHub.copilot-chat/transcripts is the session format that replaced chatSessions in newer
+  // VS Code / Copilot Chat builds.
+  await collectFrom(path.join(logsDir, wsId, 'GitHub.copilot-chat', 'transcripts'));
 
   if (tiles.length === 0) {
     tiles.push({ mtime: fallbackMtime, size: 0, date: fallbackMtime > 0 ? toDateStr(fallbackMtime) : undefined });
@@ -644,7 +650,7 @@ export async function parseAllLogsAsyncDetailed(
   const logParseBreakdown = (mode: string): void => {
     const t = getParseTiming();
     runtimeDebug('parser', 'cold-parse-breakdown',
-      `mode=${mode} chatMs=${t.chatMs} editMs=${t.editMs} cliMs=${t.cliMs} ` +
+      `mode=${mode} chatMs=${t.chatMs} editMs=${t.editMs} cliMs=${t.cliMs} transcriptMs=${t.transcriptMs} ` +
       `chatFiles=${t.chatFiles} editFiles=${t.editFiles} forcedGc=${t.forcedGc}`);
   };
 

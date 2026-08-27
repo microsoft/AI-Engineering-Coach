@@ -14,6 +14,7 @@ import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort } from './helpers';
 import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
+import { parseTranscriptFile } from './parser-vscode-transcripts';
 import { parseCLIWorkspaceName, parseWorkspaceName, parseWorkspaceFolderPath, parseCLIWorkspaceFolderPath, readFile, reconstructFromJsonl, stripImageData } from './parser-vscode-files';
 
 export function harnessFromPath(logsDir: string): string {
@@ -156,6 +157,34 @@ function listEditStateFiles(esDir: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** `GitHub.copilot-chat/transcripts/*.jsonl` — the session format that replaced `chatSessions`
+ *  in newer VS Code / Copilot Chat builds (no `workspace.json` sidecar is written for it). */
+function listTranscriptFiles(entryPath: string): string[] {
+  return listChatSessionFiles(path.join(entryPath, 'GitHub.copilot-chat', 'transcripts'));
+}
+
+/** Picks the most common `workspaceRootPath` among newly parsed sessions and, if the workspace
+ *  name is still just the raw storage-folder id (no `workspace.json` found), upgrades the
+ *  workspace's display name/path to the derived root so it shows up as a real folder name. */
+function upgradeWorkspaceFromSessionRoots(
+  workspaces: ParseContext['workspaces'],
+  wsId: string,
+  wsName: string,
+  newSessions: Session[],
+): void {
+  if (wsName !== wsId) return;
+  const counts = new Map<string, number>();
+  for (const session of newSessions) {
+    const root = session.workspaceRootPath;
+    if (root) counts.set(root, (counts.get(root) ?? 0) + 1);
+  }
+  if (counts.size === 0) return;
+  const [bestRoot] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const name = bestRoot.replaceAll('\\', '/').split('/').pop();
+  if (!name) return;
+  workspaces.set(wsId, { id: wsId, name, path: bestRoot });
 }
 
 function sessionFileExists(filePath: string): boolean {
@@ -322,6 +351,22 @@ export function processWorkspaceEntry(
     parseEditStateFile(stateFile, editLocIndex);
   }
 
+  const transcriptStartIdx = sessions.length;
+  for (const transcriptFile of listTranscriptFiles(entryPath)) {
+    const session = parseTranscriptFile(transcriptFile, wsId, wsName, harness, customInstructionsBytes, editLocIndex);
+    if (session) {
+      sessions.push(session);
+      sessionSourceIndex.set(session.sessionId, {
+        kind: 'vscode-transcript',
+        filePath: transcriptFile,
+        workspaceId: wsId,
+        workspaceName: wsName,
+        harness,
+      });
+    }
+  }
+  upgradeWorkspaceFromSessionRoots(workspaces, wsId, wsName, sessions.slice(transcriptStartIdx));
+
   // Strip the heavy text from sessions added by this workspace immediately, so full-text
   // does not accumulate across every workspace during a cold parse (issue #106).
   stripSessionsFrom(sessions, startIdx);
@@ -375,9 +420,11 @@ export async function processWorkspaceEntryAsync(
 
   const chatFiles = listChatSessionFiles(path.join(entryPath, 'chatSessions'));
   const editStateFiles = listEditStateFiles(path.join(entryPath, 'chatEditingSessions'));
-  const totalUnits = Math.max(1, chatFiles.length + editStateFiles.length);
+  const transcriptFiles = listTranscriptFiles(entryPath);
+  const totalUnits = Math.max(1, chatFiles.length + editStateFiles.length + transcriptFiles.length);
   const chatEvery = chunkInterval(chatFiles.length);
   const editEvery = chunkInterval(editStateFiles.length);
+  const transcriptEvery = chunkInterval(transcriptFiles.length);
   let completed = 0;
 
   for (let i = 0; i < chatFiles.length; i++) {
@@ -447,6 +494,35 @@ export async function processWorkspaceEntryAsync(
     }
     await yieldToLoop();
   }
+
+  const transcriptStartIdx = sessions.length;
+  for (let i = 0; i < transcriptFiles.length; i++) {
+    const tTranscript = Date.now();
+    const session = parseTranscriptFile(transcriptFiles[i], wsId, wsName, harness, customInstructionsBytes, editLocIndex);
+    addParseTiming('transcript', Date.now() - tTranscript);
+    if (session) {
+      stripSingleSession(session);
+      sessions.push(session);
+      sessionSourceIndex.set(session.sessionId, {
+        kind: 'vscode-transcript',
+        filePath: transcriptFiles[i],
+        workspaceId: wsId,
+        workspaceName: wsName,
+        harness,
+      });
+    }
+    completed++;
+    if (shouldReportChunk(i, transcriptFiles.length, transcriptEvery)) {
+      onProgress?.({
+        wsName,
+        detail: `transcripts ${i + 1}/${transcriptFiles.length}`,
+        completed,
+        total: totalUnits,
+      });
+    }
+    await yieldToLoop();
+  }
+  upgradeWorkspaceFromSessionRoots(workspaces, wsId, wsName, sessions.slice(transcriptStartIdx));
 
   // Strip the heavy text from sessions added by this workspace immediately, so full-text
   // does not accumulate across every workspace during a cold parse (issue #106).

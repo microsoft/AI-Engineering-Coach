@@ -18,6 +18,7 @@ import { EditLoc, EditLocIndex } from './edit-loc-diff';
 import { warnCore } from './log';
 import { parseSessionFile } from './parser-vscode';
 import { parseCLIEventsFile } from './parser-vscode-cli';
+import { parseTranscriptFile } from './parser-vscode-transcripts';
 import { stripSingleSession } from './parser-shared';
 
 export interface ParseResult {
@@ -31,7 +32,7 @@ export interface ParseResult {
 }
 
 export interface SessionSource {
-  kind: 'vscode-session-file' | 'cli-events';
+  kind: 'vscode-session-file' | 'cli-events' | 'vscode-transcript';
   filePath: string;
   workspaceId: string;
   workspaceName: string;
@@ -45,6 +46,10 @@ export interface DirMeta {
   chatMaxMtime: number;
   editCount: number;
   editMaxMtime: number;
+  /** Fingerprint of `GitHub.copilot-chat/transcripts` — the format that replaced `chatSessions`
+   *  in newer VS Code builds. Optional so existing cache entries/tests need no migration. */
+  transcriptCount?: number;
+  transcriptMaxMtime?: number;
 }
 
 export type DirMetas = Record<string, DirMeta>;
@@ -203,12 +208,15 @@ export function computeDirMetas(logsDirs: string[]): DirMetas {
         // A dir's mtime changes when files are added/removed/renamed inside it.
         const chat = dirFingerprint(path.join(wsPath, 'chatSessions'));
         const edit = dirFingerprint(path.join(wsPath, 'chatEditingSessions'), true);
+        const transcript = dirFingerprint(path.join(wsPath, 'GitHub.copilot-chat', 'transcripts'));
 
         metas[wsPath] = {
           chatCount: chat.count,
           chatMaxMtime: chat.mtime,
           editCount: edit.count,
           editMaxMtime: edit.mtime,
+          transcriptCount: transcript.count,
+          transcriptMaxMtime: transcript.mtime,
         };
       }
     } catch { /* cannot read logsDir */ }
@@ -244,11 +252,12 @@ export async function computeDirMetasAsync(logsDirs: string[]): Promise<DirMetas
     const batch = wsPaths.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(
       batch.map(async wsPath => {
-        const [chat, edit] = await Promise.all([
+        const [chat, edit, transcript] = await Promise.all([
           dirFingerprintAsync(path.join(wsPath, 'chatSessions')),
           dirFingerprintAsync(path.join(wsPath, 'chatEditingSessions'), true),
+          dirFingerprintAsync(path.join(wsPath, 'GitHub.copilot-chat', 'transcripts')),
         ]);
-        return { wsPath, chat, edit };
+        return { wsPath, chat, edit, transcript };
       })
     );
     for (const r of results) {
@@ -258,6 +267,8 @@ export async function computeDirMetasAsync(logsDirs: string[]): Promise<DirMetas
           chatMaxMtime: r.value.chat.mtime,
           editCount: r.value.edit.count,
           editMaxMtime: r.value.edit.mtime,
+          transcriptCount: r.value.transcript.count,
+          transcriptMaxMtime: r.value.transcript.mtime,
         };
       }
     }
@@ -271,7 +282,9 @@ function dirMetaMatches(a: DirMeta, b: DirMeta): boolean {
   return a.chatCount === b.chatCount &&
     a.chatMaxMtime === b.chatMaxMtime &&
     a.editCount === b.editCount &&
-    a.editMaxMtime === b.editMaxMtime;
+    a.editMaxMtime === b.editMaxMtime &&
+    (a.transcriptCount ?? 0) === (b.transcriptCount ?? 0) &&
+    (a.transcriptMaxMtime ?? 0) === (b.transcriptMaxMtime ?? 0);
 }
 
 export function findStaleDirs(
@@ -461,6 +474,9 @@ export async function loadSessionFromDisk(sessionId: string): Promise<Session | 
 
     if (source.kind === 'cli-events') {
       return parseCLIEventsFile(source.filePath, source.workspaceId, source.workspaceName);
+    }
+    if (source.kind === 'vscode-transcript') {
+      return parseTranscriptFile(source.filePath, source.workspaceId, source.workspaceName, source.harness);
     }
     return parseSessionFile(source.filePath, source.workspaceId, source.workspaceName, source.harness);
   } catch {
