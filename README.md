@@ -123,9 +123,23 @@ After install:
 
 The same dashboard also runs as a canvas inside the GitHub Copilot app, so you do not need VS Code to use it.
 
-A canvas is an interactive side panel in the GitHub Copilot app. Rather than replying only in chat, the agent can open a canvas to show rich, task-specific UI that you view and interact with directly while you keep working. Extensions register their own canvases, and this repo ships one named **AI Engineer Coach** under [`.github/extensions/ai-engineer-coach/`](.github/extensions/ai-engineer-coach/). It reuses the exact webview bundle from the VS Code extension and parses your local session logs in process, so nothing leaves your machine.
+A canvas is an interactive side panel in the GitHub Copilot app. Rather than replying only in chat, the agent can open a canvas to show rich, task-specific UI that you view and interact with directly while you keep working. This repo ships one named **AI Engineer Coach**, packaged as an [`apm`](https://github.com/microsoft/apm) package under [`.apm/extensions/ai-engineer-coach/`](.apm/extensions/ai-engineer-coach/). It reuses the exact webview bundle from the VS Code extension and parses your local session logs in process, so nothing leaves your machine.
 
-To open it:
+### Install into another project (apm)
+
+From any other project you have open in the GitHub Copilot app:
+
+```bash
+# one-time: turn on apm's experimental canvas support
+apm experimental enable canvas
+
+# install this repo's canvas into the current project
+apm install microsoft/AI-Engineering-Coach --target copilot --trust-canvas-extensions
+```
+
+Relaunch the GitHub Copilot app, then open the **AI Engineer Coach** canvas. `--trust-canvas-extensions` is required because the canvas is executable Node.js code.
+
+### Run it from this repo directly
 
 1. Clone this repo and open it as a project in the GitHub Copilot app.
 2. Build the project once:
