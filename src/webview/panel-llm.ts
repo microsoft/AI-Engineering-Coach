@@ -334,11 +334,23 @@ const LLM_FAMILY = 'gpt-5.4-mini';
 const LLM_REQUEST_TIMEOUT_MS = 90_000;
 
 /**
- * Pick a Copilot chat model. Tries the preferred family first, then a short
- * fallback list, then any available model. Throws a descriptive error when
- * nothing is available so callers can surface a useful message.
+ * Pick a Copilot chat model. Prefers Copilot's own "Auto" router (the same
+ * `{ id: 'auto', vendor: 'copilot' }` selector VS Code's built-in Copilot Chat
+ * uses for its Auto mode), which picks whichever model is actually enabled for
+ * the caller's plan/org. A hardcoded family can be *selectable* yet disabled
+ * for the user (e.g. by org policy) — such models don't fail selection, they
+ * silently return empty responses, which previously surfaced as a confusing
+ * "invalid JSON" error (see #91). Falls back to a short family allowlist and
+ * then any available model for older Copilot versions that don't recognize
+ * the `id: 'auto'` selector. Throws a descriptive error when nothing is
+ * available so callers can surface a useful message.
  */
 async function selectModel(): Promise<vscode.LanguageModelChat> {
+  try {
+    const auto = await vscode.lm.selectChatModels({ id: 'auto', vendor: 'copilot' });
+    if (auto.length > 0) return auto[0];
+  } catch { /* older Copilot versions may not support the id: 'auto' selector */ }
+
   const families = [LLM_FAMILY, 'gpt-5-mini', 'gpt-4.1-mini', 'gpt-4.1'];
   for (const family of families) {
     const models = await vscode.lm.selectChatModels({ family });
@@ -402,6 +414,38 @@ export async function callLlm(messages: vscode.LanguageModelChatMessage[]): Prom
   throw lastError;
 }
 
+/** How a single failed `callLlmJson` attempt should be recorded and reacted to. */
+interface LlmFailureClassification {
+  /** The model streamed back nothing at all (e.g. it's disabled for the caller's plan/org). */
+  isEmptyResponse: boolean;
+  /** The response was non-empty but couldn't be parsed as JSON. */
+  isParseFailure: boolean;
+  /** Structured output should be dropped so the next attempt can recover in plain mode. */
+  dropStructuredOutput: boolean;
+}
+
+function classifyLlmFailure(err: unknown, text: string, structuredOutputActive: boolean): LlmFailureClassification {
+  const isEmptyResponse = text.trim().length === 0;
+  const message = err instanceof Error ? err.message : String(err);
+  const looksJsonRelated = /response_format|modelOptions|not supported|JSON|parse/i.test(message);
+  return {
+    isEmptyResponse,
+    isParseFailure: !isEmptyResponse && /JSON|parse/i.test(message),
+    dropStructuredOutput: structuredOutputActive && looksJsonRelated,
+  };
+}
+
+/** Build the final error message once all retries are exhausted. */
+function buildLlmJsonFailureMessage(modelId: string, emptyResponses: number, parseFailures: number, lastError: unknown): string {
+  if (emptyResponses > 0 && parseFailures === 0) {
+    return `The "${modelId}" AI model returned an empty response after ${LLM_MAX_RETRIES + 1} attempts. ` +
+      'This can happen when the model is disabled for your Copilot plan or organization. ' +
+      'Try again, or pick a different chat model as your default in VS Code and retry.';
+  }
+  if (parseFailures > 0) return `LLM returned invalid JSON after ${LLM_MAX_RETRIES + 1} attempts. Please try again.`;
+  return lastError instanceof Error ? lastError.message : 'LLM request failed after retries';
+}
+
 export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[], jsonSchema?: JsonSchemaSpec): Promise<T> {
   const model = await selectModel();
 
@@ -411,6 +455,7 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
 
   let lastError: unknown;
   let parseFailures = 0;
+  let emptyResponses = 0;
   const retryMessages = [...redactMessages(messages)];
 
   for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
@@ -419,6 +464,11 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     try {
       const response = await model.sendRequest(retryMessages, options, cts.token);
       for await (const chunk of response.text) text += chunk;
+      // A model can be *selectable* yet disabled for the caller's plan/org —
+      // rather than failing selection it silently streams back nothing. Treat
+      // that as its own failure mode instead of letting it masquerade as an
+      // "invalid JSON" parse error (see #91).
+      if (text.trim().length === 0) throw new Error('LLM returned an empty response');
       try {
         return JSON.parse(text.trim()) as T;
       } catch {
@@ -431,13 +481,13 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
         `schema=${schemaName} attempt=${attempt + 1} structured=${options.modelOptions !== undefined} ` +
         `model=${model.id} textLen=${text.length} error=${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof vscode.CancellationError) { cts.dispose(); throw err; }
-      // Drop structured output so later attempts can recover in plain mode.
-      if (jsonSchema && options.modelOptions && lastError instanceof Error &&
-          /response_format|modelOptions|not supported|JSON|parse/i.test(lastError.message)) {
-        options.modelOptions = undefined;
-      }
-      // On parse failures, nudge the model to return valid JSON on the next attempt
-      if (lastError instanceof Error && /JSON|parse/i.test(lastError.message)) {
+
+      const failure = classifyLlmFailure(err, text, options.modelOptions !== undefined);
+      if (failure.dropStructuredOutput) options.modelOptions = undefined;
+      if (failure.isEmptyResponse) {
+        emptyResponses++;
+      } else if (failure.isParseFailure) {
+        // On parse failures, nudge the model to return valid JSON on the next attempt
         parseFailures++;
         if (retryMessages.length === messages.length) {
           retryMessages.push(vscode.LanguageModelChatMessage.User(
@@ -450,8 +500,5 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     }
   }
 
-  const label = parseFailures > 0
-    ? `LLM returned invalid JSON after ${LLM_MAX_RETRIES + 1} attempts. Please try again.`
-    : (lastError instanceof Error ? lastError.message : 'LLM request failed after retries');
-  throw new Error(label);
+  throw new Error(buildLlmJsonFailureMessage(model.id, emptyResponses, parseFailures, lastError));
 }
