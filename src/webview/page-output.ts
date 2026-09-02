@@ -117,6 +117,13 @@ type OutputTab = 'production' | 'token-usage';
 let activeRangeDays = 0;
 let activeTab: OutputTab = 'production';
 
+// Bumped on every render attempt (page mount, tab switch, or range change).
+// A render in flight compares its captured generation against this value
+// after its async gap (the `await rpc(...)` call) and bails out if a newer
+// render started in the meantime — otherwise a slow, superseded response
+// could still build charts against stale/detached/mismatched DOM (see #101).
+let renderGeneration = 0;
+
 export async function renderOutput(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   if (!FF_TOKEN_REPORTING_ENABLED && activeTab === 'token-usage') {
     activeTab = 'production';
@@ -248,11 +255,12 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
   // owner of #outputRange's children (avoids duplicate buttons).
   refreshRangeBar();
 
-  async function renderProductionTab(): Promise<void> {
+  async function renderProductionTab(gen: number): Promise<void> {
     const target = document.getElementById('output-tab-content')!;
     render(html`<div class="loading-spinner"></div>`, target);
 
     const prod = await rpc<ProdData>('getCodeProduction', buildRangeFilter());
+    if (gen !== renderGeneration) return; // superseded by a newer render (tab/range/nav change)
     const s = prod.summary;
     const level = aggregationLevel(activeRangeDays);
     const chartTitle = level === 'weekly' ? 'Weekly AI Code Output' : level === 'monthly' ? 'Monthly AI Code Output' : 'Daily AI Code Output';
@@ -733,11 +741,12 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
     `, target);
   }
 
-  async function renderTokenUsageTab(): Promise<void> {
+  async function renderTokenUsageTab(gen: number): Promise<void> {
     const target = document.getElementById('output-tab-content')!;
     render(html`<div class="loading-spinner"></div>`, target);
 
     const data = await rpc<AiCreditRpcData>('getAiCredits', buildRangeFilter());
+    if (gen !== renderGeneration) return; // superseded by a newer render (tab/range/nav change)
 
     const { missingLabel, partialLabel, pendingLabel, noDataLabel } = buildCreditCoverageSummary(data);
     if (renderAiCreditsEmptyState(target, data)) return;
@@ -787,12 +796,13 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
 
 
   async function renderActiveTab(): Promise<void> {
+    const gen = ++renderGeneration;
     if (!FF_TOKEN_REPORTING_ENABLED && activeTab === 'token-usage') {
       activeTab = 'production';
     }
-    if (activeTab === 'production') await renderProductionTab();
+    if (activeTab === 'production') await renderProductionTab(gen);
     else if (!FF_TOKEN_REPORTING_ENABLED) renderTokenUsageGated();
-    else await renderTokenUsageTab();
+    else await renderTokenUsageTab(gen);
   }
 
   /** Shown when token-usage is gated behind the feature flag. */
