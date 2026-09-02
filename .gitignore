@@ -22,3 +22,6 @@ marketing/
 
 # Playwright test results
 test-results/
+
+# apm — installed dependency tree (created by `apm install` when apm.yml declares dependencies)
+apm_modules/
