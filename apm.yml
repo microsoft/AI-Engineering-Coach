@@ -1,0 +1,12 @@
+name: ai-engineer-coach
+version: 0.1.0
+description: Local AI coding analytics dashboard — sessions, output, anti-patterns, and context health derived from your on-disk agent logs. Read-only, zero telemetry.
+author: microsoft
+# Copilot-only: the canvas under .apm/extensions/ is a GitHub Copilot CLI/app extension.
+targets:
+  - copilot
+dependencies:
+  apm: []
+  mcp: []
+includes: auto
+scripts: {}
