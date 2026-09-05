@@ -754,7 +754,11 @@ const rpcHandlers: TypedRpcHandlers = {
     const sessionId = isString(params?.sessionId) ? params.sessionId : '';
     const requestId = isString(params?.requestId) ? params.requestId : '';
     if (!sessionId || !requestId) return { images: [] };
-    const source = p.sessionSourceIndex.get(sessionId);
+    // Subagent image requests are merged into their parent session but their
+    // bytes live in a different file, indexed under `<sessionId>::<requestId>`.
+    // Ordinary requests fall back to the session's own source file.
+    const source = p.sessionSourceIndex.get(`${sessionId}::${requestId}`)
+      ?? p.sessionSourceIndex.get(sessionId);
     if (!source) return { images: [] };
     return { images: extractSessionImages(source.filePath, requestId) };
   },

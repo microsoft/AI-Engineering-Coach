@@ -170,6 +170,16 @@ describe('parseClaudeSessions', () => {
     });
   });
 
+  it('records the on-disk source file path on each parsed session', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('hello', '2025-06-15T10:00:00Z'),
+      makeAssistant('hi', '2025-06-15T10:00:01Z', { input_tokens: 10, output_tokens: 5 }),
+    ], (projectsDir) => {
+      const session = parseClaudeSessions(projectsDir)[0].sessions[0];
+      expect(session.sourceFilePath).toBe(path.join(projectsDir, '-Users-me-proj', 's.jsonl'));
+    });
+  });
+
   it('skips tool_result-only user records and merges following assistant into prior real user request', () => {
     withProjectsDir('s.jsonl', [
       makeUser('write a file please'),
@@ -344,6 +354,56 @@ describe('parseClaudeSessions', () => {
       expect(sessions[0].requestCount).toBe(2);
       // lastMessageDate extends to the subagent's last assistant timestamp
       expect(sessions[0].lastMessageDate).toBe(new Date('2025-06-15T10:00:31Z').getTime());
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('stamps a subagent image request with the subagent file path so its images stay loadable', () => {
+    const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-subagent-img-'));
+    const projectsDir = path.join(root, 'projects');
+    const projDir = path.join(projectsDir, '-Users-me-proj');
+    const subDir = path.join(projDir, 'parent-sess', 'subagents');
+    fs.mkdirSync(subDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(projDir, 'parent-sess.jsonl'),
+      [
+        makeUser('parent prompt', '2025-06-15T10:00:00Z', { sessionId: 'parent-sess', uuid: 'p-1' }),
+        makeAssistant('parent reply', '2025-06-15T10:00:01Z', { input_tokens: 100, output_tokens: 20 }),
+      ].map(l => JSON.stringify(l)).join('\n'),
+      'utf-8',
+    );
+
+    const subFile = path.join(subDir, 'agent-1.jsonl');
+    fs.writeFileSync(
+      subFile,
+      [
+        makeUser('here is a screenshot', '2025-06-15T10:00:30Z', {
+          sessionId: 'agent-1', uuid: 'sub-img-req',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'here is a screenshot' },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAAAAAA' } },
+            ],
+          },
+        }),
+        makeAssistant('looked at it', '2025-06-15T10:00:31Z', { input_tokens: 50, output_tokens: 10 }),
+      ].map(l => JSON.stringify(l)).join('\n'),
+      'utf-8',
+    );
+
+    try {
+      const sessions = parseClaudeSessions(projectsDir)[0].sessions;
+      expect(sessions).toHaveLength(1);
+      const imgReq = sessions[0].requests.find(r => r.requestId === 'sub-img-req');
+      expect(imgReq?.variableKinds.image).toBe(1);
+      // Image bytes live in the subagent file, so the request points there...
+      expect(imgReq?.sourceFilePath).toBe(subFile);
+      // ...while the parent's own request falls back to the session source file.
+      const parentReq = sessions[0].requests.find(r => r.requestId === 'p-1');
+      expect(parentReq?.sourceFilePath).toBeUndefined();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

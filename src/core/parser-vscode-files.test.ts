@@ -13,6 +13,7 @@ import {
   readFile,
   forEachJsonlLine,
   forEachJsonlLineAsync,
+  extractSessionImages,
   parseWorkspaceName,
   parseWorkspaceFolderPath,
   parseCLIWorkspaceName,
@@ -230,6 +231,78 @@ describe('reconstructFromJsonl', () => {
     withTempFile('proto-append.jsonl', lines, (filePath) => {
       reconstructFromJsonl(filePath);
       expect(({} as Record<string, unknown>).tainted).toBeUndefined();
+    });
+  });
+});
+
+describe('extractSessionImages (Claude content blocks)', () => {
+  it('extracts a base64 image from a Claude `source` block', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 'req-claude-1',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'see this screenshot' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAAAAAA' } },
+        ],
+      },
+    });
+    withTempFile('claude-source.jsonl', line + '\n', (filePath) => {
+      expect(extractSessionImages(filePath, 'req-claude-1')).toEqual([
+        'data:image/png;base64,AAAAAAAA',
+      ]);
+    });
+  });
+
+  it('extracts a base64 image from a Claude `file` block, sniffing the mime type', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 'req-claude-2',
+      message: { role: 'user', content: [{ type: 'image', file: { base64: '/9j/4AAQ' } }] },
+    });
+    withTempFile('claude-file.jsonl', line + '\n', (filePath) => {
+      expect(extractSessionImages(filePath, 'req-claude-2')).toEqual([
+        'data:image/jpeg;base64,/9j/4AAQ',
+      ]);
+    });
+  });
+
+  it('returns images only for the line whose uuid matches the requestId', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', uuid: 'other', message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'BBBBBBBB' } }] } }),
+      JSON.stringify({ type: 'user', uuid: 'wanted', message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/gif', data: 'CCCCCCCC' } }] } }),
+    ].join('\n');
+    withTempFile('claude-multi.jsonl', lines + '\n', (filePath) => {
+      expect(extractSessionImages(filePath, 'wanted')).toEqual([
+        'data:image/gif;base64,CCCCCCCC',
+      ]);
+    });
+  });
+
+  it('caps Claude image extraction at 4 images', () => {
+    const content = Array.from({ length: 6 }, (_, i) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: `IMG${i}IMG${i}` },
+    }));
+    const line = JSON.stringify({ type: 'user', uuid: 'req-many', message: { content } });
+    withTempFile('claude-many.jsonl', line + '\n', (filePath) => {
+      expect(extractSessionImages(filePath, 'req-many')).toHaveLength(4);
+    });
+  });
+
+  it('matches a numeric line uuid against the stringified requestId', () => {
+    // parseClaudeLine stringifies numeric uuids, so the request's requestId is
+    // "12345"; the raw extractor JSON.parse leaves entry.uuid as the number 12345.
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 12345,
+      message: { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAAAAAA' } }] },
+    });
+    withTempFile('claude-numeric-uuid.jsonl', line + '\n', (filePath) => {
+      expect(extractSessionImages(filePath, '12345')).toEqual([
+        'data:image/png;base64,AAAAAAAA',
+      ]);
     });
   });
 });
