@@ -348,7 +348,7 @@ export const HARNESS_COLORS: Record<string, string> = {
   'GitHub Copilot CLI': '#6e40c9',
   'GitHub Copilot App': '#8957e5',
   'Claude': '#d97706',
-
+  'Cursor': '#06b6d4',
   'Codex': '#10b981',
   'OpenCode': '#8b5cf6',
 };

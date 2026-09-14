@@ -1,7 +1,7 @@
 <h1 align="center">AI Engineer Coach</h1>
 
 <p align="center">
-Analyze your AI coding assistant usage across VS Code, GitHub Copilot for Xcode, Claude, Codex, OpenCode, and GitHub Copilot CLI.
+Analyze your AI coding assistant usage across VS Code, Cursor, GitHub Copilot for Xcode, Claude, Codex, OpenCode, and GitHub Copilot CLI.
 </p>
 
 <p align="center">
@@ -57,6 +57,7 @@ The extension is organized into three sections: **Observe**, **Measure**, and **
 | **Local Agent (Insiders)** | macOS: `~/Library/Application Support/Code - Insiders/User/workspaceStorage/`<br>Linux: `~/.config/Code - Insiders/User/workspaceStorage/`<br>Windows: `%APPDATA%\Code - Insiders\User\workspaceStorage\` |
 | **Local Agent (Server)** | Linux/macOS remote host: `~/.vscode-server/data/User/workspaceStorage/` |
 | **Local Agent (Server Insiders)** | Linux/macOS remote host: `~/.vscode-server-insiders/data/User/workspaceStorage/` |
+| **Cursor** | macOS/Linux: `~/.cursor/projects/<encoded-workspace>/agent-transcripts/`<br>Windows: `%USERPROFILE%\.cursor\projects\<encoded-workspace>\agent-transcripts\` |
 | **Xcode Copilot Chat** | `~/.config/github-copilot/xcode/` (requires `sqlite3`) |
 | **Claude** | macOS/Linux: `~/.claude/projects/`<br>Windows: `%USERPROFILE%\.claude\projects\` |
 | **Codex** | macOS/Linux: `~/.codex/sessions/`<br>Windows: `%USERPROFILE%\.codex\sessions\` |

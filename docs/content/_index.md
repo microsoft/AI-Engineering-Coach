@@ -19,6 +19,7 @@ AI Engineer Coach reads logs from multiple AI coding tools:
 | **Codex** | Session history from OpenAI's terminal agent |
 | **OpenCode** | Session logs from the open-source terminal coding tool |
 | **GitHub Copilot CLI** | Session state and history from the Copilot CLI terminal agent |
+| **Cursor** | Agent and Composer transcripts under `~/.cursor/projects/<encoded-workspace>/agent-transcripts/` |
 
 ## How It Works
 
