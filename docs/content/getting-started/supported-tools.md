@@ -22,6 +22,30 @@ When VS Code connects through Remote-WSL, Remote-SSH, or a Dev Container, the lo
 - Terminal command execution
 - Turn-by-turn conversation structure
 
+## Cursor
+
+Parses Agent and Composer session transcripts from the Cursor IDE. Each session is stored as a JSONL file under the Cursor projects directory. Subagent runs are stored in a `subagents/` subfolder under the same session directory.
+
+**Log location:**
+
+- macOS/Linux: `~/.cursor/projects/<encoded-workspace>/agent-transcripts/<session-uuid>/<session-uuid>.jsonl`
+- Windows: `%USERPROFILE%\.cursor\projects\<encoded-workspace>\agent-transcripts\<session-uuid>\<session-uuid>.jsonl`
+
+Sessions appear in the dashboard under the harness name **Cursor**.
+
+**What is tracked:**
+
+- Agent and Composer session turns (user prompts and assistant responses)
+- Tool calls (Shell, Read, Write, StrReplace, CallMcpTool, and others)
+- File edits and references
+- Timestamps parsed from transcript content
+
+**Known gaps:**
+
+- Token counts are not available in Cursor Agent JSONL. Requests are classified as no-data, not missing.
+- Model ID is not recorded in transcripts. Model mix, credits, and burndown features do not apply to Cursor sessions.
+- Copilot Chat inside Cursor (`workspaceStorage` `chatSessions`) is not covered by this harness. It is separate from Agent transcripts.
+
 ## Claude
 
 Parses session files from Anthropic's Claude CLI tool. Each session is read as a structured conversation with tool use, file edits, and terminal commands.

@@ -76,7 +76,7 @@ export function resolveWorkspaceRoot(id: string, ws: Workspace): string | null {
   if (id.startsWith('claude-')) {
     return resolveClaudeRoot(ws.path);
   }
-  if (id.startsWith('codex-') || id.startsWith('opencode-')) {
+  if (id.startsWith('codex-') || id.startsWith('opencode-') || id.startsWith('cursor-')) {
     return fs.existsSync(ws.path) ? ws.path : null;
   }
   return resolveVsCodeRoot(ws.path) ?? resolveCLIRoot(ws.path);

@@ -224,7 +224,7 @@ export class DashboardPanel {
       if (dirs.length === 0 && !hasExternal) {
         runtimeDebug('panel', 'loadData-no-dirs');
         if (!this.disposed) {
-          try { this.panel.webview.html = getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, and OpenCode sessions.'); } catch { /* disposed */ }
+          try { this.panel.webview.html = getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, OpenCode, and Cursor sessions.'); } catch { /* disposed */ }
         }
         return;
       }
