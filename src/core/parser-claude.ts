@@ -230,6 +230,17 @@ function countClaudeImages(line: ClaudeLine): number {
     .filter(block => block.type === 'image').length;
 }
 
+/** Record `sourceFilePath` on image-bearing requests so the source index can
+ *  re-read their images from the right file after they are merged into another
+ *  session (Claude subagent files rolled up into their parent). Only requests
+ *  that carry images need it; the rest fall back to the session source file. */
+function stampSubagentImageSource(requests: SessionRequest[], sourceFilePath: string | undefined): void {
+  if (!sourceFilePath) return;
+  for (const r of requests) {
+    if ((r.variableKinds.image ?? 0) > 0) r.sourceFilePath = sourceFilePath;
+  }
+}
+
 function applyClaudeToolBlock(
   block: ClaudeContentBlock,
   data: Pick<ClaudeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'skillsUsed' | 'editLocs'>,
@@ -523,6 +534,11 @@ function parseClaudeProjectSessions(
         path.join(subagentDir, subEntry.name), workspaceId, workspaceName, editLocIndex,
       );
       if (!subSession) continue;
+      // Subagent requests are merged into the parent (or orphan) session, but
+      // their image bytes stay in this subagent file. Record that path on
+      // image-bearing requests so the source index can point lazy image
+      // re-reads (the Coding Moments gallery) at the right file.
+      stampSubagentImageSource(subSession.requests, subSession.sourceFilePath);
 
       if (parent) {
         // Merge subagent requests into parent. Sorting happens after all
@@ -695,7 +711,7 @@ function buildClaudeRequest(
   return request;
 }
 
-function parseClaudeSessionFile(
+export function parseClaudeSessionFile(
   filePath: string,
   wsId: string,
   wsName: string,
@@ -758,5 +774,6 @@ function parseClaudeSessionFile(
     workspaceRootPath: cwd || undefined,
     launcherKind,
     entrypoint,
+    sourceFilePath: filePath,
   });
 }

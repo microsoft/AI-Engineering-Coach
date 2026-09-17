@@ -447,6 +447,60 @@ interface RawImageRequest {
   variableData?: { variables?: RawImageVariable[] };
 }
 
+interface ClaudeImageBlock {
+  type?: string;
+  source?: { type?: string; media_type?: string; data?: string };
+  file?: { base64?: string };
+}
+
+interface ClaudeMessageLine {
+  uuid?: string | number;
+  message?: { content?: unknown };
+}
+
+/** Sniff an image mime type from the first bytes of a base64 string, falling
+ *  back to PNG. Used for Claude `file` blocks, which omit an explicit media type. */
+function mimeFromBase64(b64: string): string {
+  try {
+    const bytes = Buffer.from(b64.slice(0, 12), 'base64');
+    return detectMimeType([bytes[0], bytes[1]]);
+  } catch {
+    return 'image/png';
+  }
+}
+
+/**
+ * Extract image data URIs from a Claude Code session line. Claude stores image
+ * bytes as base64 strings inside `message.content[]` blocks, in one of two shapes:
+ *   { type:'image', source:{ type:'base64', media_type, data } }  (Anthropic API)
+ *   { type:'image', file:{ base64 } }                             (Claude Code file attach)
+ * This is a different schema from VS Code's variable byte-dicts/byte-arrays.
+ * Returns [] for any non-Claude line (e.g. VS Code state-replay records) so the
+ * caller can try this alongside the VS Code path without disturbing it.
+ */
+function extractClaudeImages(entry: ClaudeMessageLine, requestId: string): string[] {
+  // The parser stringifies numeric uuids (parseClaudeLine), so requestId is a
+  // string; the raw JSON.parse above can leave entry.uuid as a number. Coerce
+  // before comparing so a numeric uuid still resolves its images.
+  if (entry.uuid === undefined || String(entry.uuid) !== requestId) return [];
+  const content = entry.message?.content;
+  if (!Array.isArray(content)) return [];
+  const images: string[] = [];
+  for (const block of content as ClaudeImageBlock[]) {
+    if (!block || block.type !== 'image') continue;
+    const src = block.source;
+    if (src && src.type === 'base64' && typeof src.data === 'string') {
+      const mime = typeof src.media_type === 'string' ? src.media_type : mimeFromBase64(src.data);
+      images.push(`data:${mime};base64,${src.data}`);
+      continue;
+    }
+    if (block.file && typeof block.file.base64 === 'string') {
+      images.push(`data:${mimeFromBase64(block.file.base64)};base64,${block.file.base64}`);
+    }
+  }
+  return images;
+}
+
 /**
  * Extract image data URIs from a list of variables for a given request.
  */
@@ -509,7 +563,12 @@ function extractImagesFromJsonl(raw: string, requestId: string): string[] {
     // Quick check: skip lines that don't contain our requestId
     if (!trimmed.includes(requestId)) continue;
 
-    const entry = JSON.parse(trimmed) as { kind: number; k?: PathKey[]; v?: unknown };
+    const entry = JSON.parse(trimmed) as { kind?: number; k?: PathKey[]; v?: unknown } & ClaudeMessageLine;
+
+    // Claude Code session line (message.content[] base64 blocks). Returns [] for
+    // VS Code state-replay records, so the VS Code path below still runs for them.
+    const claudeImages = extractClaudeImages(entry, requestId);
+    if (claudeImages.length > 0) return claudeImages.slice(0, 4);
 
     if (entry.kind === 0) {
       // Initial state — look in requests array
