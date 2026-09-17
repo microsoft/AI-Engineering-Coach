@@ -2,6 +2,15 @@
 
 Runs the AI Engineer Coach dashboard as a canvas inside the GitHub Copilot app, reusing the exact webview bundle that ships in the VS Code extension.
 
+This directory is the [`apm`](https://github.com/microsoft/apm) package source of truth for the
+canvas (see the repo root [`apm.yml`](../../../apm.yml)). This repo loads it directly through a
+one-line forwarding stub at [`.github/extensions/ai-engineer-coach/extension.mjs`](../../../.github/extensions/ai-engineer-coach/extension.mjs)
+(the GitHub Copilot app only discovers canvases under `.github/extensions/`), so cloning and
+building this repo works with no extra steps. Other projects can install the same canvas with
+`apm install <repo> --target copilot --trust-canvas-extensions`, which deploys a copy of this
+folder into their own `.github/extensions/ai-engineer-coach/`. Edit the canvas logic here, not
+in the forwarding stub.
+
 ## What it does
 
 - Opens a side-panel canvas titled **AI Engineer Coach**.
@@ -30,7 +39,10 @@ Everything driven purely by your on-disk logs — Dashboard, Timeline, Coding Mo
 
 ## How it is wired
 
-- `extension.mjs` owns build detection and a single `127.0.0.1` HTTP server, and declares the canvas via `createCanvas` / `joinSession`.
+- `.github/extensions/ai-engineer-coach/extension.mjs` is a one-line forwarding stub (`import
+  "../../../.apm/extensions/ai-engineer-coach/extension.mjs";`) so the GitHub Copilot app's
+  project-canvas discovery — which only scans `.github/extensions/` — finds this package.
+- `extension.mjs` (this directory) owns build detection and a single `127.0.0.1` HTTP server, and declares the canvas via `createCanvas` / `joinSession`.
 - `dist/canvas-host.cjs` (built from `src/canvas/host.ts`) provides the request handler: the dashboard shell, the asset routes, an SSE channel for parse progress, and the `/rpc` endpoint.
 - The dashboard talks to the host through an injected `acquireVsCodeApi` shim, so the webview code is unchanged between VS Code and canvas.
 
