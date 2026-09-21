@@ -235,6 +235,7 @@ describe('parseAllLogs', () => {
       result.workspaces,
       result.sessions,
       result.editLocIndex,
+      result.sessionSourceIndex,
     );
   });
 
@@ -293,6 +294,7 @@ describe('parseAllLogsAsyncDetailed', () => {
       cachedResult.sessions,
       cachedResult.editLocIndex,
       expect.any(Object),
+      cachedResult.sessionSourceIndex,
     );
   });
 
@@ -435,6 +437,7 @@ describe('parseAllLogsAsyncDetailed', () => {
       parsed.result.sessions,
       parsed.result.editLocIndex,
       expect.any(Object),
+      parsed.result.sessionSourceIndex,
     );
   });
 
