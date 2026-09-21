@@ -125,3 +125,35 @@ describe('redactSecrets', () => {
     expect(reparsed.sessions[0].note).toBe('ok');
   });
 });
+
+describe('compound secret key names', () => {
+  it('redacts underscore-prefixed key names that a word boundary would skip', () => {
+    for (const name of ['client_secret', 'refresh_token', 'app_token', 'db_password']) {
+      const out = redactSecrets(`"${name}":"abcdefgh12345678"`);
+      expect(out).toContain('[REDACTED]');
+      expect(out).not.toContain('abcdefgh12345678');
+    }
+  });
+
+  it('redacts JSON escaped by doubling its quotes inside a shell command', () => {
+    const rule = 'Bash(curl -d \'{""client_secret"":""8bavjPwL9uoXDp""}\')';
+    const out = redactSecrets(rule);
+    expect(out).not.toContain('8bavjPwL9uoXDp');
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('redacts a Context7 api key', () => {
+    const out = redactSecrets('"CONTEXT7_API_KEY": "ctx7sk-1234abcd-5678-efgh-9012-ijklmnop"');
+    expect(out).not.toContain('ctx7sk-1234abcd');
+  });
+
+  it('leaves ordinary prose mentioning those words intact', () => {
+    for (const text of [
+      'The token bucket algorithm smooths bursty traffic.',
+      'Set a secret in your CI provider, then reference it.',
+      'const tokenizer = new Tokenizer();',
+    ]) {
+      expect(redactSecrets(text)).toBe(text);
+    }
+  });
+});
