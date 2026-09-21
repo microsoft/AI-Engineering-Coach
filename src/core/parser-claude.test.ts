@@ -384,6 +384,39 @@ describe('parseClaudeSessions', () => {
     }
   });
 
+  // ---- workspace name resolution with underscores ----
+
+  it('resolves workspace name when path contains a folder with underscores', { timeout: 30_000 }, () => {
+    // Claude Code encodes underscores as hyphens, so the encoded name cannot be
+    // matched against readdirSync output unless underscores are normalized too.
+    const tmpBase = fs.mkdtempSync(path.join(longTmpDir(), 'claude-us-'));
+    const underscoreParent = path.join(tmpBase, 'my_home_dir');
+    const targetDir = path.join(underscoreParent, 'proj');
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const encodedDirName = targetDir
+      .replace(/^([a-zA-Z])(?=:)/, d => d.toLowerCase())
+      .replace(/[:\\/\s_]/g, '-');
+
+    const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-proj-'));
+    const projectsDir = path.join(root, 'projects');
+    const projDir = path.join(projectsDir, encodedDirName);
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projDir, 's.jsonl'),
+      [makeUser('hello'), makeAssistant('hi')].map(l => JSON.stringify(l)).join('\n'),
+    );
+
+    try {
+      const result = parseClaudeSessions(projectsDir);
+      expect(result).toHaveLength(1);
+      expect(result[0].workspaceName).toBe('proj');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(tmpBase, { recursive: true, force: true });
+    }
+  });
+
   // ---- workspace name resolution with spaces ----
 
   it('resolves workspace name when path contains a folder with spaces', { timeout: 30_000 }, () => {
