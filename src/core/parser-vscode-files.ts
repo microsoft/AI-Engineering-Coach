@@ -10,6 +10,7 @@ import { StringDecoder } from 'string_decoder';
 import { assertTrustedPath, prefetchCache, readFileSafe, recordFailedFile, recordSkippedLines } from './parser-shared';
 import { fileUriToPath } from './helpers';
 import { debugCore, warnCore } from './log';
+import { extractClaudeImagesFromJsonl } from './parser-claude';
 
 export function readFile(fpath: string): string {
   assertTrustedPath(fpath);
@@ -480,7 +481,10 @@ export function extractSessionImages(filePath: string, requestId: string): strin
     if (raw === null) return [];
 
     if (filePath.endsWith('.jsonl')) {
-      return extractImagesFromJsonl(raw, requestId);
+      const images = extractImagesFromJsonl(raw, requestId);
+      // Claude Code also uses .jsonl but stores images as base64 in the user
+      // turn rather than in VS Code's variableData shape.
+      return images.length > 0 ? images : extractClaudeImagesFromJsonl(raw, requestId);
     }
     return extractImagesFromJson(raw, requestId);
   } catch (e) {

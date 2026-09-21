@@ -13,7 +13,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
-import { parseClaudeSessions } from './parser-claude';
+import { parseClaudeSessions, extractClaudeImagesFromJsonl } from './parser-claude';
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -382,6 +382,50 @@ describe('parseClaudeSessions', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+
+  // ---- inline image extraction ----
+
+  it('extracts base64 images from a Claude user turn by request id', () => {
+    const png = 'iVBORw0KGgoAAAANSUhEUg==';
+    const line = JSON.stringify({
+      type: 'user',
+      timestamp: '2025-06-15T10:00:00Z',
+      sessionId: 'sess-1',
+      uuid: 'req-with-image',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'what is wrong here?' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } },
+        ],
+      },
+    });
+    const other = JSON.stringify({ type: 'user', uuid: 'other-req', message: { role: 'user', content: [] } });
+
+    const images = extractClaudeImagesFromJsonl([other, line].join('\n'), 'req-with-image');
+    expect(images).toEqual([`data:image/png;base64,${png}`]);
+  });
+
+  it('returns no images for a request id that has none', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 'text-only',
+      message: { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+    });
+    expect(extractClaudeImagesFromJsonl(line, 'text-only')).toEqual([]);
+    expect(extractClaudeImagesFromJsonl(line, 'missing-id')).toEqual([]);
+  });
+
+  it('caps extracted images at four per request', () => {
+    const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } };
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 'many-images',
+      message: { role: 'user', content: [img, img, img, img, img, img] },
+    });
+    expect(extractClaudeImagesFromJsonl(line, 'many-images')).toHaveLength(4);
   });
 
   // ---- workspace name resolution with spaces ----

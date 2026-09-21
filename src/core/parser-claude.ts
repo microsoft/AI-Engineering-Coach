@@ -230,6 +230,39 @@ function countClaudeImages(line: ClaudeLine): number {
     .filter(block => block.type === 'image').length;
 }
 
+/**
+ * Extract inline screenshots for one Claude request. Claude Code stores images
+ * as base64 inside the user turn, and the request id is the entry uuid, so the
+ * matching line can be found directly. Capped at 4 images to bound memory, the
+ * same limit the VS Code extractor uses.
+ */
+export function extractClaudeImagesFromJsonl(raw: string, requestId: string): string[] {
+  const images: string[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    // Quick reject before the parse: most lines are not the one we want.
+    if (!trimmed || !trimmed.includes(requestId)) continue;
+
+    let entry: ClaudeLine;
+    try {
+      entry = JSON.parse(trimmed) as ClaudeLine;
+    } catch {
+      continue;
+    }
+    if (entry.uuid !== requestId) continue;
+
+    for (const block of toContentArray(entry.message?.content)) {
+      if (block.type !== 'image') continue;
+      const source = (block as { source?: { type?: string; media_type?: string; data?: string } }).source;
+      if (source?.type !== 'base64' || !source.data) continue;
+      images.push(`data:${source.media_type || 'image/png'};base64,${source.data}`);
+      if (images.length >= 4) return images;
+    }
+    return images;
+  }
+  return images;
+}
+
 function applyClaudeToolBlock(
   block: ClaudeContentBlock,
   data: Pick<ClaudeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'skillsUsed' | 'editLocs'>,
