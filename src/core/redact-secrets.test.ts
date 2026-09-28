@@ -143,13 +143,13 @@ describe('compound secret key names', () => {
   });
 
   it('redacts a Context7 api key', () => {
-    const out = redactSecrets('"CONTEXT7_API_KEY": "ctx7sk-1234abcd-5678-efgh-9012-ijklmnop"');
+    const out = redactSecrets('"CONTEXT7_API_KEY": "ctx7sk-1234abcd-5678-efgh-9012-a1b2c3d4"');
     expect(out).not.toContain('ctx7sk-1234abcd');
   });
 
   it('leaves ordinary prose mentioning those words intact', () => {
     for (const text of [
-      'The token bucket algorithm smooths bursty traffic.',
+      'The token bucket algorithm smooths out traffic spikes.',
       'Set a secret in your CI provider, then reference it.',
       'const tokenizer = new Tokenizer();',
     ]) {
