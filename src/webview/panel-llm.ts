@@ -345,6 +345,8 @@ async function selectModel(): Promise<vscode.LanguageModelChat> {
     if (models.length > 0) return models[0];
   }
   const any = await vscode.lm.selectChatModels({});
+  runtimeDebug('panel-llm', 'model-catalog',
+    any.map(m => `${m.vendor}/${m.family}/${m.id} maxIn=${m.maxInputTokens}`).join(' ; ') || '(empty)');
   if (any.length > 0) return any[0];
   throw new Error('No language model available. Make sure GitHub Copilot is installed and signed in.');
 }
@@ -411,6 +413,7 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
 
   let lastError: unknown;
   let parseFailures = 0;
+  let emptyResponses = 0;
   const retryMessages = [...redactMessages(messages)];
 
   for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
@@ -419,6 +422,7 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     try {
       const response = await model.sendRequest(retryMessages, options, cts.token);
       for await (const chunk of response.text) text += chunk;
+      if (text.trim().length === 0) throw new Error('Model returned an empty response');
       try {
         return JSON.parse(text.trim()) as T;
       } catch {
@@ -437,7 +441,9 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
         options.modelOptions = undefined;
       }
       // On parse failures, nudge the model to return valid JSON on the next attempt
-      if (lastError instanceof Error && /JSON|parse/i.test(lastError.message)) {
+      if (lastError instanceof Error && /empty response/i.test(lastError.message)) {
+        emptyResponses++;
+      } else if (lastError instanceof Error && /JSON|parse/i.test(lastError.message)) {
         parseFailures++;
         if (retryMessages.length === messages.length) {
           retryMessages.push(vscode.LanguageModelChatMessage.User(
@@ -450,8 +456,11 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     }
   }
 
-  const label = parseFailures > 0
-    ? `LLM returned invalid JSON after ${LLM_MAX_RETRIES + 1} attempts. Please try again.`
-    : (lastError instanceof Error ? lastError.message : 'LLM request failed after retries');
+  const label = emptyResponses > 0
+    ? `The language model (${model.id}) returned an empty response ${emptyResponses} time(s). ` +
+      'This usually means the request quota is exhausted or the model declined the request.'
+    : parseFailures > 0
+      ? `LLM returned invalid JSON after ${LLM_MAX_RETRIES + 1} attempts. Please try again.`
+      : (lastError instanceof Error ? lastError.message : 'LLM request failed after retries');
   throw new Error(label);
 }
