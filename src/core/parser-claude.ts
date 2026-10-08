@@ -240,6 +240,39 @@ function countClaudeImages(line: ClaudeLine): number {
     .filter(block => block.type === 'image').length;
 }
 
+/**
+ * Extract inline screenshots for one Claude request. Claude Code stores images
+ * as base64 inside the user turn, and the request id is the entry uuid, so the
+ * matching line can be found directly. Capped at 4 images to bound memory, the
+ * same limit the VS Code extractor uses.
+ */
+export function extractClaudeImagesFromJsonl(raw: string, requestId: string): string[] {
+  const images: string[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    // Quick reject before the parse: most lines are not the one we want.
+    if (!trimmed || !trimmed.includes(requestId)) continue;
+
+    let entry: ClaudeLine;
+    try {
+      entry = JSON.parse(trimmed) as ClaudeLine;
+    } catch {
+      continue;
+    }
+    if (entry.uuid !== requestId) continue;
+
+    for (const block of toContentArray(entry.message?.content)) {
+      if (block.type !== 'image') continue;
+      const source = (block as { source?: { type?: string; media_type?: string; data?: string } }).source;
+      if (source?.type !== 'base64' || !source.data) continue;
+      images.push(`data:${source.media_type || 'image/png'};base64,${source.data}`);
+      if (images.length >= 4) return images;
+    }
+    return images;
+  }
+  return images;
+}
+
 function applyClaudeToolBlock(
   block: ClaudeContentBlock,
   data: Pick<ClaudeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'skillsUsed' | 'editLocs' | 'investigationDelegations' | 'webDomains'>,
@@ -487,11 +520,20 @@ function projectNameFromEncoded(encoded: string, _projectsDir: string): string {
   return path.basename(resolved);
 }
 
+/** One Claude project directory's sessions, plus the file each came from. */
+export interface ClaudeProjectResult {
+  sessions: Session[];
+  workspaceId: string;
+  workspaceName: string;
+  /** sessionId -> absolute path of the .jsonl the session was parsed from. */
+  sessionFiles: Map<string, string>;
+}
+
 function parseClaudeProjectSessions(
   projectsDir: string,
   dirName: string,
   editLocIndex?: EditLocIndex,
-): { sessions: Session[]; workspaceId: string; workspaceName: string } | null {
+): ClaudeProjectResult | null {
   const projPath = path.join(projectsDir, dirName);
   const workspaceId = `claude-${dirName}`;
   const workspaceName = projectNameFromEncoded(dirName, projectsDir);
@@ -508,12 +550,17 @@ function parseClaudeProjectSessions(
   // can be merged into the right parent in pass 2.
   const sessionsById = new Map<string, Session>();
   const sessions: Session[] = [];
+  // sessionId -> originating file, so the image gallery can read screenshots
+  // back out of the raw log.
+  const sessionFiles = new Map<string, string>();
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-    const session = parseClaudeSessionFile(path.join(projPath, entry.name), workspaceId, workspaceName, editLocIndex);
+    const filePath = path.join(projPath, entry.name);
+    const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, editLocIndex);
     if (!session) continue;
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
+    sessionFiles.set(session.sessionId, filePath);
   }
 
   // Pass 2: walk `<sessionId>/subagents/agent-*.jsonl` directories. Each
@@ -600,14 +647,14 @@ function parseClaudeProjectSessions(
     session.requestCount = session.requests.length;
   }
 
-  return sessions.length > 0 ? { sessions, workspaceId, workspaceName } : null;
+  return sessions.length > 0 ? { sessions, workspaceId, workspaceName, sessionFiles } : null;
 }
 
 export function parseClaudeSessions(
   projectsDir: string,
   editLocIndex?: EditLocIndex,
-): { sessions: Session[]; workspaceId: string; workspaceName: string }[] {
-  const results: { sessions: Session[]; workspaceId: string; workspaceName: string }[] = [];
+): ClaudeProjectResult[] {
+  const results: ClaudeProjectResult[] = [];
 
   let projectDirs: fs.Dirent[];
   try {
@@ -628,8 +675,8 @@ export async function parseClaudeSessionsAsync(
   projectsDir: string,
   onProject?: (idx: number, total: number, name: string) => void,
   editLocIndex?: EditLocIndex,
-): Promise<{ sessions: Session[]; workspaceId: string; workspaceName: string }[]> {
-  const results: { sessions: Session[]; workspaceId: string; workspaceName: string }[] = [];
+): Promise<ClaudeProjectResult[]> {
+  const results: ClaudeProjectResult[] = [];
 
   let projectDirs: string[];
   try {

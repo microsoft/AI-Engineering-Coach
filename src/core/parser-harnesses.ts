@@ -11,6 +11,7 @@ import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from '.
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
 import { EditLocIndex } from './edit-loc-diff';
+import { SessionSource } from './cache';
 
 type WorkspaceMap = Map<string, Workspace>;
 
@@ -18,6 +19,28 @@ interface HarnessCollectionContext {
   workspaces: WorkspaceMap;
   sessions: Session[];
   editLocIndex: EditLocIndex;
+  /** Lets the image gallery read raw screenshots back out of a session file. */
+  sessionSourceIndex?: Map<string, SessionSource>;
+}
+
+/** Register where each session was parsed from, when the caller tracks it. */
+function recordSources(
+  ctx: HarnessCollectionContext,
+  result: { sessions: Session[]; workspaceId: string; workspaceName: string; sessionFiles: Map<string, string> },
+  harness: string,
+): void {
+  if (!ctx.sessionSourceIndex) return;
+  for (const session of result.sessions) {
+    const filePath = result.sessionFiles.get(session.sessionId);
+    if (!filePath) continue;
+    ctx.sessionSourceIndex.set(session.sessionId, {
+      kind: 'cli-events',
+      filePath,
+      workspaceId: result.workspaceId,
+      workspaceName: result.workspaceName,
+      harness,
+    });
+  }
 }
 
 interface ExternalHarnessCollector {
@@ -39,8 +62,9 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
     name: 'Claude Code',
     collectSync(ctx) {
       for (const claudeDir of findClaudeDirs()) {
-        for (const { sessions } of parseClaudeSessions(claudeDir, ctx.editLocIndex)) {
-          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+        for (const result of parseClaudeSessions(claudeDir, ctx.editLocIndex)) {
+          for (const session of result.sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+          recordSources(ctx, result, 'Claude');
         }
       }
     },
@@ -49,8 +73,9 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
         const results = await parseClaudeSessionsAsync(claudeDir, (idx, total, name) => {
           reportDetail?.(`${idx}/${total}: ${name}`);
         }, ctx.editLocIndex);
-        for (const { sessions } of results) {
-          for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+        for (const result of results) {
+          for (const session of result.sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);
+          recordSources(ctx, result, 'Claude');
         }
       }
     },
@@ -97,8 +122,9 @@ export function collectExternalHarnessesSync(
   workspaces: WorkspaceMap,
   sessions: Session[],
   editLocIndex: EditLocIndex,
+  sessionSourceIndex?: Map<string, SessionSource>,
 ): void {
-  const ctx: HarnessCollectionContext = { workspaces, sessions, editLocIndex };
+  const ctx: HarnessCollectionContext = { workspaces, sessions, editLocIndex, sessionSourceIndex };
   for (const harness of EXTERNAL_HARNESSES) {
     harness.collectSync(ctx);
   }
@@ -119,8 +145,9 @@ export async function collectExternalHarnessesAsync(
   sessions: Session[],
   editLocIndex: EditLocIndex,
   handlers: ExternalHarnessProgressHandlers = {},
+  sessionSourceIndex?: Map<string, SessionSource>,
 ): Promise<void> {
-  const ctx: HarnessCollectionContext = { workspaces, sessions, editLocIndex };
+  const ctx: HarnessCollectionContext = { workspaces, sessions, editLocIndex, sessionSourceIndex };
   const total = EXTERNAL_HARNESSES.length;
 
   for (let index = 0; index < EXTERNAL_HARNESSES.length; index++) {

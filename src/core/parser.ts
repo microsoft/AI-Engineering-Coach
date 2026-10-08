@@ -348,7 +348,7 @@ async function tryMemoryCache(
   removeRefreshableExternalEditLocs(mem.result.sessions, mem.result.editLocIndex);
   mem.result.sessions = mem.result.sessions.filter(s => !EXTERNAL_HARNESS_SET.has(s.harness));
   await collectVolatileHarnesses(logsDirs, mem.result, onProgress);
-  await collectExternalHarnesses(mem.result.workspaces, mem.result.sessions, mem.result.editLocIndex, onProgress);
+  await collectExternalHarnesses(mem.result.workspaces, mem.result.sessions, mem.result.editLocIndex, onProgress, mem.result.sessionSourceIndex);
   report({
     phase: 1, detail: 'Loaded from memory', pct: pct(1, 1),
     sessions: mem.result.sessions.length,
@@ -373,7 +373,7 @@ async function tryDiskCache(
   removeRefreshableExternalEditLocs(cached.result.sessions, cached.result.editLocIndex);
   cached.result.sessions = cached.result.sessions.filter(s => !EXTERNAL_HARNESS_SET.has(s.harness));
   await collectVolatileHarnesses(logsDirs, cached.result, onProgress);
-  await collectExternalHarnesses(cached.result.workspaces, cached.result.sessions, cached.result.editLocIndex, onProgress);
+  await collectExternalHarnesses(cached.result.workspaces, cached.result.sessions, cached.result.editLocIndex, onProgress, cached.result.sessionSourceIndex);
   setMemoryCache(cached.result, currentMetas);
   report({
     phase: 1, detail: 'Loaded from cache', pct: pct(1, 1),
@@ -580,6 +580,7 @@ async function collectExternalHarnesses(
   sessions: import('./types').Session[],
   editLocIndex: EditLocIndex,
   onProgress?: ProgressCallback,
+  sessionSourceIndex?: Map<string, SessionSource>,
 ): Promise<void> {
   await collectExternalHarnessesAsync(workspaces, sessions, editLocIndex, {
     onHarnessStart: (name, index, total, sessionCount) => {
@@ -592,7 +593,7 @@ async function collectExternalHarnesses(
       warnCore('parser', `${name} scan failed`, error);
     },
     yieldToLoop,
-  });
+  }, sessionSourceIndex);
 }
 
 export function parseAllLogs(logsDirs: string[]): ParseResult {
@@ -619,7 +620,7 @@ export function parseAllLogs(logsDirs: string[]): ParseResult {
     }
   }
 
-  collectExternalHarnessesSync(workspaces, sessions, editLocIndex);
+  collectExternalHarnessesSync(workspaces, sessions, editLocIndex, sessionSourceIndex);
 
   stripSessionsForMemory(sessions);
   return { workspaces, sessions, editLocIndex, sessionSourceIndex };
@@ -737,7 +738,7 @@ export async function parseAllLogsAsyncDetailed(
       editLocIndex,
       sessionSourceIndex: freshSessionSourceIndex,
     }, onProgress);
-    await collectExternalHarnesses(workspaces, freshSessions, editLocIndex, onProgress);
+    await collectExternalHarnesses(workspaces, freshSessions, editLocIndex, onProgress, freshSessionSourceIndex);
 
     const result: ParseResult = { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex };
     stripSessionsForMemory(result.sessions);
@@ -760,7 +761,7 @@ export async function parseAllLogsAsyncDetailed(
   await processWorkspaces(entries, totalDirs, ctx, onProgress);
 
   await collectXcode(xcodeDirs, workspaces, sessions, editLocIndex, onProgress);
-  await collectExternalHarnesses(workspaces, sessions, editLocIndex, onProgress);
+  await collectExternalHarnesses(workspaces, sessions, editLocIndex, onProgress, sessionSourceIndex);
 
   const result: ParseResult = { workspaces, sessions, editLocIndex, sessionSourceIndex };
   stripSessionsForMemory(result.sessions);
