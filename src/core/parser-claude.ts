@@ -404,11 +404,11 @@ export function findClaudeDirs(): string[] {
 }
 
 /** Encode a single filesystem component the way Claude Code does:
- *  replace whitespace with hyphens. Path separators never appear in a single
+ *  replace whitespace and underscores with hyphens. Path separators never appear in a single
  *  component name, and colons are not handled here because Windows component
  *  names cannot contain them. */
 function encodeComponentForMatch(name: string): string {
-  return name.replace(/\s/g, '-');
+  return name.replace(/[\s_]/g, '-');
 }
 
 /**
