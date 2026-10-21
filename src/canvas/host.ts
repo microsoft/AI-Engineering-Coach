@@ -6,17 +6,20 @@
 /* Canvas host: serves the dashboard webview assets and bridges the webview RPC
  * contract over HTTP so the same bundle that runs inside VS Code also runs as a
  * Copilot app canvas. Runs in a plain Node process (no `vscode` module), parses
- * sessions in-process, and answers pure RPC handlers directly. Agent-dependent
+ * sessions in the parse worker, and answers pure RPC handlers directly. Agent-dependent
  * methods (LLM generation, skill triage) return a graceful error because there
  * is no local language model in canvas mode. */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { fork } from 'child_process';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { Analyzer } from '../core/analyzer';
-import { findLogsDirs, parseAllLogsAsyncDetailed, type LoadProgress, type ParseResult } from '../core/parser';
+import { findLogsDirs, parseAllLogsViaWorker, type LoadProgress, type ParseResult } from '../core/parser';
 import { getRpcHandler } from '../webview/panel-rpc';
 import { getDashboardShellHtml } from '../webview/dashboard-shell';
+import { warnCore } from '../core/log';
+import type { ForkFn } from '../core/parser-worker-host';
 
 export interface CanvasHostOptions {
   /** Absolute path to the built `dist` directory (contains `webview/app.js` + `webview/styles.css`). */
@@ -79,14 +82,22 @@ export function createCanvasHost(options: CanvasHostOptions): CanvasHost {
   let parseResult: ParseResult | undefined;
   let lastProgress: LoadProgress | undefined;
   let ready = false;
+  let loadError: string | undefined;
   let started = false;
   const currentWorkspace = options.repoName ?? '';
+  // The packaged canvas provider is not necessarily a Node executable.
+  const forkNode: ForkFn = (file, args, opts) => fork(file, args, { ...opts, execPath: 'node', stdio: ['ignore', 2, 2, 'ipc'] });
 
   function broadcast(payload: unknown): void {
     const line = `data: ${JSON.stringify(payload)}\n\n`;
     for (const client of sseClients) {
       try { client.write(line); } catch { /* client gone */ }
     }
+  }
+
+  function sendProgress(progress: LoadProgress): void {
+    lastProgress = progress;
+    broadcast({ type: 'progress', ...progress });
   }
 
   function sendJson(res: ServerResponse, body: unknown): void {
@@ -130,7 +141,7 @@ export function createCanvasHost(options: CanvasHostOptions): CanvasHost {
     if (method in HOST_STUBS) return HOST_STUBS[method]();
     if (AGENT_ONLY.has(method)) return { error: 'This feature requires the local agent in VS Code.' };
 
-    if (!ready || !analyzer || !parseResult) return { error: 'Data is still loading.' };
+    if (!ready || !analyzer || !parseResult) return { error: loadError ?? 'Data is still loading.' };
 
     const handler = getRpcHandler(method);
     if (!handler) return { error: `Unknown method: ${method}` };
@@ -221,19 +232,22 @@ export function createCanvasHost(options: CanvasHostOptions): CanvasHost {
     void (async () => {
       try {
         const dirs = findLogsDirs();
-        const { result } = await parseAllLogsAsyncDetailed(dirs, (p) => {
-          lastProgress = p;
-          broadcast({ type: 'progress', ...p });
+        const result = await parseAllLogsViaWorker(dirs, sendProgress, {
+          fork: forkNode,
         });
         parseResult = result;
         analyzer = new Analyzer(result.sessions, result.editLocIndex, result.workspaces);
+        sendProgress({ phase: 4, pct: 90, detail: 'Computing analytics' });
+        await analyzer.warmUp((_phase, detail, pct) => {
+          sendProgress({ phase: 4, pct: 90 + pct / 10, detail });
+        }, forkNode);
+        sendProgress({ phase: 5, pct: 100, detail: 'Ready' });
         ready = true;
         broadcast({ type: 'dataReady', currentWorkspace });
-        try {
-          await analyzer.warmUp();
-        } catch { /* warm-up is best effort */ }
       } catch (error: unknown) {
-        broadcast({ type: 'progress', phase: -1, pct: 0, detail: error instanceof Error ? error.message : 'Failed to load sessions' });
+        warnCore('canvas', 'Loading failed', error);
+        loadError = error instanceof Error ? error.message : 'Failed to load sessions';
+        sendProgress({ phase: -1, pct: 0, detail: `${loadError}. Reload the canvas to retry.` });
       }
     })();
   }
@@ -325,6 +339,8 @@ getState:function(){try{return JSON.parse(localStorage.getItem(STATE_KEY)||'null
 setState:function(s){try{localStorage.setItem(STATE_KEY,JSON.stringify(s));}catch(e){}return s;}
 };
 window.acquireVsCodeApi=function(){return api;};
+document.addEventListener('DOMContentLoaded',function(){
 var es=new EventSource('/events');
 es.onmessage=function(e){try{dispatch(JSON.parse(e.data));}catch(err){}};
+},{once:true});
 })();`;

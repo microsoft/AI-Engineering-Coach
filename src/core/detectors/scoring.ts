@@ -3,8 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { SessionRequest, PracticeGroup } from '../types';
+import type { SessionRequest, PracticeGroup, AntiPattern, WeeklyPatternObservation } from '../types';
 import { isoWeek } from '../helpers';
+
+export const SEVERITY_PENALTIES: Readonly<Record<AntiPattern['severity'], number>> = { high: 12, medium: 7, low: 3 };
 
 function promptQualityPenalty(request: SessionRequest): number {
   let penalty = 0;
@@ -49,7 +51,7 @@ function weekScore(weekRequests: SessionRequest[], group: PracticeGroup): number
   return Math.max(0, Math.round(100 - rate * 100));
 }
 
-export function computeWeeklyTrend(reqs: SessionRequest[]): { labels: string[]; counts: number[] } {
+export function computeWeeklyTrend(reqs: SessionRequest[], observations: WeeklyPatternObservation[] = []): { labels: string[]; counts: number[] } {
   const weekCounts = new Map<string, number>();
   for (const r of reqs) {
     if (!r.timestamp) continue;
@@ -64,6 +66,9 @@ export function computeWeeklyTrend(reqs: SessionRequest[]): { labels: string[]; 
     if (dow === 0 || dow === 6) count++;
     if (count > 0) weekCounts.set(week, (weekCounts.get(week) || 0) + count);
   }
+  for (const row of observations) {
+    if (row.occurrences > 0) weekCounts.set(row.week, (weekCounts.get(row.week) ?? 0) + row.occurrences);
+  }
   const sortedWeeks = Array.from(weekCounts.keys()).sort();
   return {
     labels: sortedWeeks,
@@ -71,7 +76,11 @@ export function computeWeeklyTrend(reqs: SessionRequest[]): { labels: string[]; 
   };
 }
 
-export function computeWeeklyScores(reqs: SessionRequest[]): { labels: string[]; series: { group: PracticeGroup; scores: number[] }[] } {
+export function computeWeeklyScores(
+  reqs: SessionRequest[],
+  observations: WeeklyPatternObservation[] = [],
+  detectorCounts: Partial<Record<PracticeGroup, number>> = {},
+): { labels: string[]; series: { group: PracticeGroup; scores: number[] }[] } {
   const allGroups: PracticeGroup[] = ['prompt-quality', 'session-hygiene', 'code-review', 'tool-mastery'];
   const weekReqs = new Map<string, SessionRequest[]>();
 
@@ -83,12 +92,22 @@ export function computeWeeklyScores(reqs: SessionRequest[]): { labels: string[];
   }
 
   const sortedWeeks = Array.from(weekReqs.keys()).sort();
+  const penalties = new Map<PracticeGroup, Map<string, number>>();
+  for (const row of observations) {
+    const weeks = penalties.get(row.group) ?? new Map<string, number>();
+    weeks.set(row.week, (weeks.get(row.week) ?? 0) + SEVERITY_PENALTIES[row.severity]);
+    penalties.set(row.group, weeks);
+  }
 
   return {
     labels: sortedWeeks,
     series: allGroups.map(group => ({
       group,
-      scores: sortedWeeks.map(w => weekScore(weekReqs.get(w)!, group)),
+      scores: sortedWeeks.map(w => {
+        const penalty = penalties.get(group)?.get(w) ?? 0;
+        const budget = (detectorCounts[group] || 8) * 12;
+        return Math.max(0, Math.round(weekScore(weekReqs.get(w)!, group) - penalty * 100 / budget));
+      }),
     })),
   };
 }

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 export * from './types/session-types';
+export * from './types/curiosity-types';
 export * from './types/analytics-types';
 export * from './types/catalog-types';
 export * from './types/insights-types';

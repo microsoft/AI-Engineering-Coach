@@ -104,6 +104,11 @@ Heavy lifting happens off the extension host thread:
 - [`src/core/warm-up-worker.ts`](src/core/warm-up-worker.ts) — `sessions` → `antiPatterns` + `configHealth`.
 - [`src/core/cache-write-worker.ts`](src/core/cache-write-worker.ts) — persists the cache payload.
 
+The warm-up host manages thread and fork lifecycles in
+[`src/core/warm-up-worker-host.ts`](src/core/warm-up-worker-host.ts), using the shared
+[`warm-up protocol`](src/core/warm-up-worker-protocol.ts). It retains one loading screen
+until parsing and analytics finish.
+
 ## Local rule trust flow
 
 Rules move pending → review → approve → reload; edits revoke trust. See
@@ -127,6 +132,7 @@ point at the source markdown so they resolve on GitHub too.
   - [Output](docs/content/measure/output.md)
   - [Burndown](docs/content/measure/burndown.md)
   - [Activity Patterns](docs/content/measure/patterns.md)
+  - [Curiosity](docs/content/measure/curiosity.md)
 - Improve
   - [Anti-Patterns](docs/content/improve/anti-patterns.md)
   - [Rule Editor](docs/content/improve/rule-editor.md)

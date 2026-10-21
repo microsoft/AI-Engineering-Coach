@@ -5,7 +5,7 @@
 
 /* Recommendations + anti-pattern detection analytics */
 
-import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem } from './types';
+import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPattern, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation } from './types';
 import { toDateStr, normalizeModel, modelMultiplier, extToLang } from './helpers';
 import { LONG_SESSION_REQS } from './constants';
 import { AnalyzerBase } from './analyzer-base';
@@ -13,6 +13,7 @@ import {
   computeWeeklyTrend, computeWeeklyScores,
 } from './detectors';
 import { getDetectorGroupCounts, runDetectors } from './detector-registry';
+import { SEVERITY_PENALTIES } from './detectors/scoring';
 
 function scoreToStatus(score: number): 'good' | 'needs-improvement' | 'critical' {
   return score >= 70 ? 'good' : score >= 40 ? 'needs-improvement' : 'critical';
@@ -224,7 +225,7 @@ export class PatternsAnalyzer extends AnalyzerBase {
   /** Public access to filtered sessions (for rule editor). */
   getFilteredSessions(f?: DateFilter): Session[] { return this.filteredSessions(f); }
 
-  getAntiPatterns(f?: DateFilter): AntiPatternData {
+  getAntiPatterns(f?: DateFilter, contribution: PatternContribution = { patterns: [], weekly: [] }): AntiPatternData {
     const reqs = this.filter(f);
     const sessions = this.filteredSessions(f);
 
@@ -246,25 +247,22 @@ export class PatternsAnalyzer extends AnalyzerBase {
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
     const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors);
-    return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors);
+    patterns.push(...contribution.patterns);
+    return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors, contribution.weekly);
   }
 
-  private buildAntiPatternResult(patterns: import('./types').AntiPattern[], reqs: SessionRequest[], skipIdeDetectors: boolean): AntiPatternData {
+  private buildAntiPatternResult(patterns: AntiPattern[], reqs: SessionRequest[], skipIdeDetectors: boolean, weekly: WeeklyPatternObservation[]): AntiPatternData {
     const groupOrder: Record<string, number> = { 'prompt-quality': 0, 'session-hygiene': 1, 'code-review': 2, 'tool-mastery': 3 };
     patterns.sort((a, b) => (groupOrder[a.group] ?? 9) - (groupOrder[b.group] ?? 9) || b.occurrences - a.occurrences);
 
-    const weeklyTrend = computeWeeklyTrend(reqs);
-    const weeklyScores = computeWeeklyScores(reqs);
+    const groupDetectorCount = getDetectorGroupCounts(skipIdeDetectors);
+    const weeklyTrend = computeWeeklyTrend(reqs, weekly);
+    const weeklyScores = computeWeeklyScores(reqs, weekly, groupDetectorCount);
     const totalOccurrences = patterns.reduce((s, p) => s + p.occurrences, 0);
 
     // Compute per-group health scores (0-100)
     // Score = 100 minus a penalty per detected pattern, scaled by severity and capped per-pattern
     const allGroups: PracticeGroup[] = ['prompt-quality', 'session-hygiene', 'code-review', 'tool-mastery'];
-    const sevPenalty: Record<string, number> = { high: 12, medium: 7, low: 3 };
-
-    // Count how many possible detectors exist per group (for baseline)
-    const groupDetectorCount = getDetectorGroupCounts(skipIdeDetectors);
-
     const groupScores: GroupScore[] = allGroups.map(group => {
       const gPatterns = patterns.filter(p => p.group === group);
       const maxDetectors = groupDetectorCount[group] || 8;
@@ -272,7 +270,7 @@ export class PatternsAnalyzer extends AnalyzerBase {
       // Penalty: each detected pattern costs points based on severity
       let penalty = 0;
       for (const p of gPatterns) {
-        penalty += sevPenalty[p.severity] || 5;
+        penalty += SEVERITY_PENALTIES[p.severity];
       }
       const maxPenalty = maxDetectors * 12;
       const score = Math.max(0, Math.round(100 * (1 - penalty / maxPenalty)));

@@ -10,6 +10,10 @@ The Dashboard is the landing page of AI Engineer Coach. It brings together the m
 
 ![AI Engineer Coach Dashboard](/screenshots/screen-dashboard.png)
 
+During **Sync Sessions**, one animated progress screen stays visible until parsing and initial
+analysis finish. The dashboard then shows activity data and practice scores together.
+Sync also starts a fresh scan when the dashboard was closed.
+
 ## Practice Scores
 
 Five score cards are displayed at the top of the dashboard, each computed from the anti-pattern detection system:
