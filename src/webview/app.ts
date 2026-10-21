@@ -22,6 +22,7 @@ import { loadCapabilities, llmAvailable } from './capabilities';
 import { html, render, unmount, ComponentChildren } from './render';
 import { renderDashboard } from './page-dashboard';
 import { renderPatterns } from './page-patterns';
+import { renderCuriosity } from './page-curiosity';
 import { renderOutput } from './page-output';
 import { renderBurndown } from './page-burndown';
 import { renderTimeline } from './page-timeline';
@@ -56,7 +57,7 @@ if (!FF_TOKEN_REPORTING_ENABLED) {
 }
 
 /* ---- Global state ---- */
-let currentPage = 'dashboard';
+let currentPage = new URLSearchParams(window.location.search).get('page') === 'curiosity' ? 'curiosity' : 'dashboard';
 const currentFilter: DateFilter = {};
 let _dataIsReady = false;
 let matchedWorkspaceId: string | undefined;
@@ -269,6 +270,9 @@ interface ProgressMessage {
   telemetry?: WorkerTelemetry;
 }
 
+let progressFrame = 0;
+let pendingProgress: ProgressMessage | undefined;
+
 /* Static markup for the loading "fun stats" ticker. Injected once (guarded by dataset.init);
  * the per-message counts are then updated in-place by renderStatsTicker. */
 const STATS_TICKER_TEMPLATE = [
@@ -307,17 +311,29 @@ function renderStatsTicker(msg: ProgressMessage): void {
 }
 
 function handleProgress(msg: ProgressMessage): void {
+  if (_dataIsReady) return;
   ensureLoadingUI();
-  const phase = PHASE_LABELS[msg.phase] ?? `Phase ${msg.phase}`;
-  const detail = msg.detail ?? '';
-
-  if (msg.telemetry) updateTelemetry(msg.telemetry);
   if (msg.telemetry) {
     lastSkippedFiles = msg.telemetry.skippedFiles ?? lastSkippedFiles;
     lastSkippedLines = msg.telemetry.skippedLines ?? lastSkippedLines;
   }
   if (msg.workspacePlan) renderWorkspaceGrid(msg.workspacePlan);
   if (msg.workspaceDone) updateWorkspaceCell(msg.workspaceDone, msg.detail);
+
+  pendingProgress = { ...msg, telemetry: msg.telemetry ?? pendingProgress?.telemetry };
+  if (progressFrame) return;
+  progressFrame = requestAnimationFrame(() => {
+    progressFrame = 0;
+    const progress = pendingProgress;
+    pendingProgress = undefined;
+    if (progress && !_dataIsReady) renderProgress(progress);
+  });
+}
+
+function renderProgress(msg: ProgressMessage): void {
+  const phase = PHASE_LABELS[msg.phase] ?? `Phase ${msg.phase}`;
+  const detail = msg.detail ?? '';
+  if (msg.telemetry) updateTelemetry(msg.telemetry);
 
   const phaseTitleEl = document.getElementById('loading-phase-title');
   if (phaseTitleEl) phaseTitleEl.textContent = phase;
@@ -346,7 +362,11 @@ function handleProgress(msg: ProgressMessage): void {
 }
 
 function onDataReady(currentWorkspace: string, skipped?: { skippedFiles: number; skippedLines: number }): void {
+  if (_dataIsReady) return;
   _dataIsReady = true;
+  cancelAnimationFrame(progressFrame);
+  progressFrame = 0;
+  pendingProgress = undefined;
   // Prefer the authoritative counts sent with `dataReady` (present even on a cache hit, where no
   // progress telemetry tick ever fires); fall back to whatever a telemetry tick captured.
   if (skipped) {
@@ -577,6 +597,10 @@ if (harnessFilter) {
 function renderPage(page: string): void {
   page = normalizePageForFeatureFlags(page);
   currentPage = page;
+  if (!_dataIsReady) {
+    ensureLoadingUI();
+    return;
+  }
   const content = $('#content')!;
   // Unmount the previous Preact tree and clear imperative children (e.g. the
   // loading-screen workspace grid with thousands of cells) so the diff doesn't
@@ -593,6 +617,7 @@ function renderPage(page: string): void {
   switch (page) {
     case 'dashboard': withErrorBoundary('Dashboard', content, () => renderDashboard(content, currentFilter)); break;
     case 'patterns': withErrorBoundary('Patterns', content, () => renderPatterns(content, currentFilter)); break;
+    case 'curiosity': withErrorBoundary('Curiosity', content, () => renderCuriosity(content, currentFilter)); break;
     case 'output': withErrorBoundary('Output', content, () => renderOutput(content, currentFilter)); break;
     case 'burndown':
       withErrorBoundary('Burndown', content, () => renderBurndown(content, currentFilter)); break;
@@ -616,3 +641,4 @@ function renderPage(page: string): void {
 }
 
 /* ---- Init ---- */
+ensureLoadingUI();

@@ -11,7 +11,7 @@ import { loadSessionFromDisk } from '../core/cache';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
 import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
-import { extractSessionImages } from '../core/parser-vscode-files';
+import { loadSessionImages } from '../core/session-image-loader';
 import { DateFilter, RpcMethodName, BurndownConfig } from '../core/types';
 import type { RpcMethodMap, RpcResult } from '../core/types/rpc-types';
 import {
@@ -731,6 +731,10 @@ const rpcHandlers: TypedRpcHandlers = {
   getGitHubAppIssueCredits: () => loadGitHubAppIssueCredits(),
   getConfigHealth: (a, _p, params) => a.getConfigHealth(validateDateFilter(params)),
   getInsights: (a, _p, params) => a.getInsights(validateDateFilter(params)),
+  getCuriosity: (a, _p, params) => {
+    if (params.language !== undefined && !isString(params.language)) return errorResult('Invalid session language filter');
+    return a.getCuriosity({ ...validateDateFilter(params), ...(isString(params.language) ? { language: params.language } : {}) });
+  },
   getFlowState: (a, _p, params) => a.getFlowState(validateDateFilter(params)),
   getContextManagement: (a, _p, params) => a.getContextManagement(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
   getWorkspaceContextSessions: (a, _p, params) => {
@@ -750,13 +754,18 @@ const rpcHandlers: TypedRpcHandlers = {
   getCalendarActivity: (a, _p, params) => a.getCalendarActivity(validateDateFilter(params)),
   getProjectOverview: (a, _p, params) => a.getProjectOverview(validateDateFilter(params)),
   getImageGallery: (a, _p, params) => a.getImageGallery(validateDateFilter(params)),
-  getSessionImages: (_a, p, params) => {
+  getSessionImages: async (_a, p, params) => {
     const sessionId = isString(params?.sessionId) ? params.sessionId : '';
     const requestId = isString(params?.requestId) ? params.requestId : '';
     if (!sessionId || !requestId) return { images: [] };
     const source = p.sessionSourceIndex.get(sessionId);
-    if (!source) return { images: [] };
-    return { images: extractSessionImages(source.filePath, requestId) };
+    const session = p.sessions.find(value => value.sessionId === sessionId);
+    const index = session?.requests.findIndex(request => request.requestId === requestId) ?? -1;
+    if (!source || !session || index < 0) return { images: [] };
+    return { images: await loadSessionImages(source, sessionId, requestId, {
+      userEventId: session.requests[index].userEventId,
+      requestIndex: index,
+    }) };
   },
 
   /* ---- Rule Editor methods ---- */

@@ -12,7 +12,9 @@ import * as path from 'path';
 import { afterEach, describe, it, expect, beforeEach } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
-import { getParseWarningCounts, resetParseWarnings } from './parser-shared';
+import { getParseWarningCounts, resetParseWarnings, setCuriosityDetector } from './parser-shared';
+import { detectCuriosity } from './curiosity';
+import { CuriosityAnalyzer } from './analyzer-curiosity';
 
 const tempDirs: string[] = [];
 
@@ -41,6 +43,7 @@ const SAMPLE_EVENTS: Array<Record<string, unknown>> = [
 beforeEach(() => resetParseWarnings());
 
 afterEach(() => {
+  setCuriosityDetector(undefined);
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -48,6 +51,125 @@ afterEach(() => {
 });
 
 describe('parseCLIEventsFileAsync', () => {
+  it('classifies PowerShell-only commands and parallel calls through both parser paths', async () => {
+    setCuriosityDetector(detectCuriosity);
+    const file = writeEvents([
+      SAMPLE_EVENTS[0],
+      { type: 'user.message', id: 'p1', timestamp: '2026-09-30T12:00:00Z', data: { content: 'Run the tests.' } },
+      { type: 'tool.execution_start', data: { toolName: 'powershell', arguments: { command: 'npm test' } } },
+      { type: 'user.message', id: 'p2', timestamp: '2026-09-30T12:01:00Z', data: { content: 'Run the build.' } },
+      { type: 'tool.execution_start', data: { toolName: 'multi_tool_use.parallel', arguments: { tool_uses: [
+        { recipient_name: 'functions.powershell', parameters: { command: 'npm run build' } },
+      ] } } },
+    ]);
+    for (const parsed of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {
+      expect(parsed?.requests.map(request => request.toolsUsed)).toEqual([['powershell'], ['functions.powershell']]);
+      const data = new CuriosityAnalyzer(parsed ? [parsed] : [], new Map()).getCuriosity();
+      expect(data.counts).toEqual({ direct: 0, web: 0, repository: 0, action: 2 });
+      expect(data.coverage.reasons.unknownTool).toBe(0);
+    }
+  });
+
+  it('captures web domains from explicit calls and parallel wrappers without leaking them into later turns', async () => {
+    const file = writeEvents([
+      SAMPLE_EVENTS[0],
+      { type: 'user.message', timestamp: '2026-09-30T12:00:00Z', data: { content: 'Why?' } },
+      { type: 'tool.execution_start', data: { toolName: 'multi_tool_use.parallel', arguments: { tool_uses: [
+        { recipient_name: 'functions.web_fetch', parameters: { url: 'https://docs.python.org/3/?private=1' } },
+        { recipient_name: 'functions.web_search', parameters: { query: 'https://not-a-source.example' } },
+      ] } } },
+      { type: 'assistant.message', data: { phase: 'final', content: 'The answer.', toolRequests: [
+        { toolName: 'web_fetch', arguments: { url: 'https://docs.python.org/3/reference' } },
+      ] } },
+      { type: 'user.message', timestamp: '2026-09-30T12:01:00Z', data: { content: 'How?' } },
+      { type: 'assistant.message', data: { phase: 'final', content: 'Another answer.' } },
+    ]);
+    for (const parsed of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {
+      expect(parsed?.requests.map(request => request.webDomains)).toEqual([['docs.python.org'], []]);
+    }
+  });
+
+  it('recognizes final_answer and successful task-completion summaries, but not failed completions', async () => {
+    const parsed = await parseCLIEventsFileAsync(writeEvents([
+      { type: 'user.message', timestamp: '2026-09-30T12:00:00Z', data: { content: 'Why?' } },
+      { type: 'assistant.message', data: { phase: 'final_answer', content: 'The reason.' } },
+      { type: 'user.message', timestamp: '2026-09-30T12:01:00Z', data: { content: 'How?' } },
+      { type: 'tool.execution_start', data: { toolName: 'task_complete', arguments: { summary: 'A final answer.' } } },
+      { type: 'session.task_complete', data: { success: true, summary: 'A final answer.' } },
+      { type: 'user.message', timestamp: '2026-09-30T12:02:00Z', data: { content: 'What?' } },
+      { type: 'session.task_complete', data: { success: false, summary: 'Not delivered.' } },
+    ]), 'ws', 'Workspace');
+    expect(parsed?.requests).toMatchObject([
+      { answerEvidence: 'final', responseText: 'The reason.' },
+      { answerEvidence: 'final', responseText: 'A final answer.' },
+      { answerEvidence: 'missing', responseText: '' },
+    ]);
+  });
+
+  it('captures explicit investigation roles without guessing generic subagent work', async () => {
+    const parsed = await parseCLIEventsFileAsync(writeEvents([
+      { type: 'user.message', timestamp: '2026-09-30T12:00:00Z', data: { content: 'Investigate the alternatives.' } },
+      { type: 'tool.execution_start', data: { toolName: 'multi_tool_use.parallel', arguments: { tool_uses: [
+        { recipient_name: 'functions.task', parameters: { agent_type: 'research' } },
+        { recipient_name: 'functions.task', parameters: { agent_type: 'explore' } },
+        { recipient_name: 'functions.task', parameters: { agent_type: 'general-purpose', prompt: 'Research this.' } },
+      ] } } },
+    ]), 'ws', 'Workspace');
+    expect(parsed?.requests[0].investigationDelegations).toEqual(['research', 'explore']);
+    expect(parsed?.requests[0].toolsUsed).toEqual(['functions.task']);
+  });
+
+  it('retains native event IDs, project root, final answers and namespaced tool file evidence', async () => {
+    const parsed = await parseCLIEventsFileAsync(writeEvents([
+      { type: 'session.start', data: { sessionId: 's', context: { cwd: '/repo' } } },
+      { type: 'user.message', id: 'human-1', timestamp: '2026-09-30T12:00:00Z', data: { content: 'Why?' } },
+      { type: 'assistant.message', data: { phase: 'commentary', content: 'I will inspect it.' } },
+      { type: 'tool.execution_start', data: { toolName: 'multi_tool_use.parallel', arguments: { tool_uses: [
+        { recipient_name: 'functions.view', parameters: { path: '/repo/src/[id].tsx' } },
+        { recipient_name: 'functions.rg', parameters: { paths: ['/repo/a.py', '/repo/b.py'] } },
+      ] } } },
+      { type: 'assistant.message', id: 'answer-1', data: { phase: 'final', content: 'A final answer.' } },
+      { type: 'user.message', id: 'human-2', timestamp: '2026-09-30T12:01:00Z', data: { content: 'How?' } },
+      { type: 'assistant.message', data: { phase: 'commentary', content: 'I will inspect it.' } },
+      { type: 'tool.execution_start', data: { toolName: 'view', arguments: { path: '/repo/a.ts' } } },
+    ]), 'ws', 'Workspace');
+    expect(parsed?.workspaceRootPath).toBe('/repo');
+    expect(parsed?.requests).toMatchObject([
+      { requestId: 'answer-1', userEventId: 'human-1', answerEvidence: 'final',
+        toolsUsed: ['functions.view', 'functions.rg'], referencedFiles: ['/repo/src/[id].tsx', '/repo/a.py', '/repo/b.py'] },
+      { userEventId: 'human-2', answerEvidence: 'missing' },
+    ]);
+  });
+
+  it('does not treat generated patch code or pre-tool legacy commentary as an answer', async () => {
+    const parsed = await parseCLIEventsFileAsync(writeEvents([
+      SAMPLE_EVENTS[0],
+      { type: 'user.message', timestamp: '2026-09-30T12:00:00Z', data: { content: 'Why?' } },
+      { type: 'assistant.message', data: { content: 'I will inspect the code.' } },
+      { type: 'tool.execution_start', data: { toolName: 'apply_patch',
+        arguments: '*** Update File: src/a.ts\n+const x = 1;\n' } },
+    ]), 'ws', 'Workspace');
+    expect(parsed?.requests[0]).toMatchObject({ answerEvidence: 'missing', editedFiles: ['src/a.ts'], toolsUsed: ['apply_patch'] });
+  });
+
+  it('keeps user messages but excludes agent traffic from curiosity', async () => {
+    setCuriosityDetector(detectCuriosity);
+    const events: Record<string, unknown>[] = [SAMPLE_EVENTS[0]];
+    for (const data of [
+      { content: 'Why?', parentAgentTaskId: 'parent' },
+      { content: 'Why?', source: 'agent-42' },
+      { content: 'Why?', source: 'system' },
+      { content: 'Why?', transformedContent: '<relayed_message>\nfrom_session_id: abc\n</relayed_message>\nWhy?' },
+      { content: 'from_date: today\nWhy?', transformedContent: '<now>today</now>\nfrom_date: today\nWhy?' },
+    ]) {
+      events.push({ type: 'user.message', timestamp: '2026-09-30T12:00:00Z', data });
+      events.push({ type: 'assistant.message', timestamp: '2026-09-30T12:00:01Z', data: { content: 'A reason.' } });
+    }
+    const parsed = await parseCLIEventsFileAsync(writeEvents(events), 'ws', 'Workspace');
+    expect(parsed?.requests.map(request => request.curiosity?.kind))
+      .toEqual(['analyzed', 'excluded', 'excluded', 'excluded', 'analyzed']);
+  });
+
   it('parses a well-formed events file into a CLI session', async () => {
     const fp = writeEvents(SAMPLE_EVENTS);
     const session = await parseCLIEventsFileAsync(fp, 'ws-1', 'My Workspace');

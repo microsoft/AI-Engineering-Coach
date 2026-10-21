@@ -972,6 +972,10 @@ h2 {
   white-space: nowrap;
 }
 
+.occ-session-link {
+  color: var(--accent-blue);
+}
+
 .occ-msg-preview {
   margin-top: 3px;
   display: flex;

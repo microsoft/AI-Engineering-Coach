@@ -5,7 +5,6 @@
 
 /* Analyzer facade and warm-up helpers. */
 
-import * as path from 'path';
 import {
   Session, SessionRequest, DateFilter, DailyActivity, HourlyDistribution, HeatmapData,
   CodeProductionData, ConsumptionData, BurndownConfig, BurndownData, AiCreditData, AiCreditBurndownData, TokenCoverageData,
@@ -26,9 +25,14 @@ import { FlowAnalyzer } from './analyzer-flow';
 import { ContextAnalyzer } from './analyzer-context';
 import { InsightsAnalyzer } from './analyzer-insights';
 import { ImageAnalyzer, ImageGalleryData } from './analyzer-images';
+import { CuriosityAnalyzer } from './analyzer-curiosity';
+import type { CuriosityData, CuriosityFilter } from './types/curiosity-types';
+import { curiosityPatternContribution } from './curiosity-patterns';
 import { AnalyzerBase } from './analyzer-base';
 import { EditLoc, EditLocIndex } from './edit-loc-diff';
 import { errorCore, infoCore, warnCore } from './log';
+import type { ForkFn } from './parser-worker-host';
+import { runWarmUpWorker } from './warm-up-worker-host';
 
 export class Analyzer {
   private readonly dashboard: DashboardAnalyzer;
@@ -42,6 +46,7 @@ export class Analyzer {
   private readonly flow: FlowAnalyzer;
   private readonly context: ContextAnalyzer;
   private readonly images: ImageAnalyzer;
+  private readonly curiosity: CuriosityAnalyzer;
   private readonly sessions: Session[];
   private readonly editLocIndex: EditLocIndex;
   private readonly workspaces: Map<string, Workspace>;
@@ -64,6 +69,7 @@ export class Analyzer {
     this.flow = new FlowAnalyzer(sessions, elIdx, sharedMap);
     this.context = new ContextAnalyzer(sessions, elIdx, sharedMap);
     this.images = new ImageAnalyzer(sessions, elIdx, sharedMap);
+    this.curiosity = new CuriosityAnalyzer(sessions, elIdx, sharedMap);
   }
 
   private getCached<T>(key: string, filter: DateFilter | undefined, compute: () => T): T {
@@ -98,6 +104,7 @@ export class Analyzer {
 
   async warmUp(
     onProgress?: (phase: number, detail: string, pct: number) => void,
+    forkWorker?: ForkFn,
   ): Promise<void> {
     const t0 = Date.now();
     const report = onProgress ?? (() => {});
@@ -105,7 +112,10 @@ export class Analyzer {
     infoCore('warmUp', `start (${this.sessions.length} sessions)`);
     report(4, 'Computing analytics', 10);
 
-    const result = await this.warmUpViaWorker().catch((error) => {
+    const result = await runWarmUpWorker({
+      sessions: this.sessions, editLocIndex: this.editLocIndex, workspaces: this.workspaces,
+    }, forkWorker).catch((error) => {
+      if (forkWorker) throw error;
       warnCore('warmUp', 'worker unavailable, using sync fallback', error);
       return null;
     });
@@ -120,64 +130,6 @@ export class Analyzer {
     const ms = Date.now() - t0;
     infoCore('warmUp', `done in ${ms}ms`);
     report(5, `Cache ready (${ms}ms)`, 100);
-  }
-
-  private async warmUpViaWorker(): Promise<{ antiPatterns: AntiPatternData | null; configHealth: ConfigHealthData | null }> {
-    let WorkerClass: typeof import('worker_threads').Worker;
-    try {
-      ({ Worker: WorkerClass } = await import('worker_threads'));
-    } catch {
-      throw new Error('worker_threads not available');
-    }
-
-    return new Promise((resolve, reject) => {
-      const TIMEOUT_MS = 30_000;
-
-      const workerPath = path.join(__dirname, 'warm-up-worker.js');
-      let worker: InstanceType<typeof WorkerClass>;
-      try {
-        worker = new WorkerClass(workerPath);
-      } catch (error) {
-        return reject(error instanceof Error ? error : new Error(String(error)));
-      }
-
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        void worker.terminate();
-        reject(new Error('worker timeout (30s)'));
-      }, TIMEOUT_MS);
-
-      worker.on('message', (msg: { type: string; antiPatterns?: AntiPatternData; configHealth?: ConfigHealthData; message?: string }) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        void worker.terminate();
-        if (msg.type === 'result') {
-          resolve({ antiPatterns: msg.antiPatterns ?? null, configHealth: msg.configHealth ?? null });
-        } else {
-          reject(new Error(String(msg.message)));
-        }
-      });
-
-      worker.on('error', (err: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        void worker.terminate();
-        reject(err);
-      });
-
-      // Large structured clones can block the current tick.
-      setTimeout(() => {
-        worker.postMessage({
-          sessions: this.sessions,
-          editLocIndex: this.editLocIndex,
-          workspaces: this.workspaces,
-        });
-      }, 0);
-    });
   }
 
   getWorkspaces(): { id: string; name: string; recent?: boolean; harnesses?: string[] }[] { return this.dashboard.getWorkspaces(); }
@@ -217,7 +169,9 @@ export class Analyzer {
   getProjectOverview(f?: DateFilter): ProjectOverviewData { return this.patterns.getProjectOverview(f); }
   getAntiPatterns(f?: DateFilter): AntiPatternData {
     if (!f && this.cache.has('getAntiPatterns')) return this.cache.get('getAntiPatterns') as AntiPatternData;
-    const data = this.patterns.getAntiPatterns(f);
+    const curiosity = this.curiosity.getCuriosity(f);
+    const data = this.patterns.getAntiPatterns(f, curiosityPatternContribution(curiosity));
+    data.curiosityTier = curiosity.balance.tier;
     this.addPatternsSafely(data, () => this.getConfigHealth(f).contextAntiPatterns);
     this.addPatternsSafely(data, () => this.getContextManagement(f).antiPatterns);
     return data;
@@ -230,6 +184,7 @@ export class Analyzer {
   }
   getContextReviewPayload(wsIds: string[]): ReturnType<ConfigAnalyzer['getContextReviewPayload']> { return this.config.getContextReviewPayload(wsIds); }
   getInsights(f?: DateFilter): InsightsData { return this.insights.getInsights(f); }
+  getCuriosity(f?: CuriosityFilter): CuriosityData { return this.curiosity.getCuriosity(f); }
 
   getFlowState(f?: DateFilter): FlowStateData { return this.flow.getFlowState(f); }
 

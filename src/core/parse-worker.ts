@@ -13,9 +13,11 @@ import { stripSessionsForMemory } from './cache';
 import { emitResultChunks, DEFAULT_SESSION_CHUNK_SIZE } from './parse-chunking';
 import { createAckWindow, shouldSendProgressImmediately } from './parse-worker-stream';
 import { parseAllLogsAsyncDetailed, type LoadProgress } from './parser';
-import { getParseWarningCounts, getParseWarnings } from './parser-shared';
+import { getParseWarningCounts, getParseWarnings, setCuriosityDetector } from './parser-shared';
+import { detectCuriosity } from './curiosity';
 import { installRuntimeDebugHooks, runtimeDebug } from './runtime-debug';
 import { createTelemetrySampler } from './worker-telemetry';
+import { extractSourceImages, loadSourceSession, type SessionSourceRequest } from './session-images';
 
 interface ParseWorkerRequest {
   logsDirs?: string[];
@@ -39,6 +41,7 @@ const port = parentPort;
 const canUseProcessChannel = typeof process.send === 'function';
 
 if (!port && !canUseProcessChannel) throw new Error('parse-worker: no parent channel');
+setCuriosityDetector(detectCuriosity);
 
 installRuntimeDebugHooks('parse-worker');
 runtimeDebug('parse-worker', port ? 'thread-started' : 'process-started');
@@ -72,10 +75,39 @@ function isAckMessage(msg: unknown): msg is AckMessage {
 /** Set by the streaming step to receive chunk acks from the parent. */
 let onAck: ((seq: number) => void) | null = null;
 
+function isSessionSourceRequest(value: object): value is SessionSourceRequest {
+  const candidate = value as Partial<SessionSourceRequest>;
+  const source = candidate.source;
+  return (candidate.type === 'session-detail' || (candidate.type === 'session-images' && typeof candidate.requestId === 'string'
+    && (candidate.userEventId === undefined || typeof candidate.userEventId === 'string')
+    && (candidate.requestIndex === undefined || (Number.isSafeInteger(candidate.requestIndex) && candidate.requestIndex >= 0))))
+    && typeof candidate.sessionId === 'string'
+    && typeof source === 'object' && source !== null
+    && typeof source.filePath === 'string' && typeof source.workspaceId === 'string'
+    && typeof source.workspaceName === 'string' && typeof source.harness === 'string'
+    && (source.workspaceRootPath === undefined || typeof source.workspaceRootPath === 'string')
+    && ['vscode-session-file', 'cli-events', 'claude-jsonl', 'codex-jsonl', 'opencode-storage', 'opencode-db', 'xcode-db'].includes(source.kind)
+    && (source.additionalFilePaths === undefined || (Array.isArray(source.additionalFilePaths)
+      && source.additionalFilePaths.every(file => typeof file === 'string')));
+}
+
 function onMessage(handler: (msg: ParseWorkerRequest) => void | Promise<void>): void {
   const dispatch = (raw: unknown): void => {
     if (isAckMessage(raw)) {
       onAck?.(raw.seq);
+      return;
+    }
+    if (typeof raw === 'object' && raw !== null && 'type' in raw && (raw.type === 'session-images' || raw.type === 'session-detail')) {
+      try {
+        if (!isSessionSourceRequest(raw)) throw new Error('Invalid session source request');
+        if (raw.type === 'session-images') {
+          send({ type: 'session-images', images: extractSourceImages(raw.source, raw.sessionId, raw.requestId, raw) });
+        } else {
+          send({ type: 'session-detail', session: loadSourceSession(raw.source, raw.sessionId) });
+        }
+      } catch (error) {
+        send({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
     void handler(parseWorkerRequest(raw));

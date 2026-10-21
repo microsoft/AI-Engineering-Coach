@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { CodeBlock, Session, SessionRequest, Workspace } from './types';
+import { CodeBlock, Session, SessionRequest, Workspace, type CuriositySignal } from './types';
 import { SessionSource } from './cache';
 import { EditLocIndex } from './edit-loc-diff';
 import { classifyWorkType, LANG_ALIASES } from './helpers';
@@ -21,7 +21,7 @@ import { SessionSchema } from './schemas';
  * Validates that a file path is within trusted directories and does not
  * contain path traversal sequences. Throws if the path is unsafe.
  */
-export function assertTrustedPath(filePath: string): void {
+export function assertTrustedPath(filePath: string, additionalRoots: readonly string[] = []): void {
   const normalized = path.resolve(filePath);
 
   // Reject path traversal
@@ -30,14 +30,17 @@ export function assertTrustedPath(filePath: string): void {
     throw new Error(`Path traversal detected: ${filePath}`);
   }
 
-  const trustedRoots = getTrustedRoots();
-  const isTrusted = trustedRoots.some(root => normalized.startsWith(root + path.sep) || normalized === root);
+  const trustedRoots = [...getTrustedRoots(), ...additionalRoots.filter(root => path.isAbsolute(root)).map(root => path.resolve(root))];
+  const isTrusted = trustedRoots.some(root => {
+    const relative = path.relative(root, normalized);
+    return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  });
   if (!isTrusted) {
     throw new Error(`Path is outside trusted directories: ${filePath}`);
   }
 }
 
-function getTrustedRoots(): string[] {
+export function getTrustedRoots(): string[] {
   const roots: string[] = [];
   const home = process.env.HOME || process.env.USERPROFILE || '';
   if (home) roots.push(path.resolve(home));
@@ -316,6 +319,10 @@ function textForCodeScan(text: string): string {
 
 /* ---- Factories ---- */
 
+let curiosityDetector: ((text: string) => CuriositySignal) | undefined;
+/** Only the parse worker loads NLP. Host-side detail reads do not run detection. */
+export function setCuriosityDetector(detector: typeof curiosityDetector): void { curiosityDetector = detector; }
+
 /** Context object passed through all directory-level parsing operations. */
 export interface ParseContext {
   workspaces: Map<string, Workspace>;
@@ -366,6 +373,11 @@ export function createRequest(overrides: Partial<SessionRequest> & Pick<SessionR
     userCode: overrides.userCode ?? extractCodeBlocks(textForCodeScan(rawMsg)),
     aiCode: overrides.aiCode ?? extractCodeBlocks(textForCodeScan(rawResp)),
     workType: overrides.workType || classifyWorkType(msg),
+    curiosity: overrides.curiosity ?? curiosityDetector?.(rawMsg),
+    answerEvidence: overrides.answerEvidence ?? (
+      rawResp.trim() && !overrides.isCanceled && overrides.endState !== 'pending' && overrides.endState !== 'errored'
+        ? 'legacy' : 'missing'
+    ),
   };
 }
 

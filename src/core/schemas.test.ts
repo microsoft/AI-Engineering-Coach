@@ -62,6 +62,13 @@ describe('SessionRequestSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('preserves optional recorded source hosts and rejects non-string domains', () => {
+    const result = SessionRequestSchema.safeParse(makeRequest({ webDomains: ['docs.python.org'] }));
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.webDomains).toEqual(['docs.python.org']);
+    expect(SessionRequestSchema.safeParse(makeRequest({ webDomains: [42] })).success).toBe(false);
+  });
+
   it('rejects request missing required field', () => {
     const { messageText: _, ...incomplete } = makeRequest();
     const result = SessionRequestSchema.safeParse(incomplete);
