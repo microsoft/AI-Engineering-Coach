@@ -358,7 +358,7 @@
     "compromise": "14.18.0",
     "htm": "3.1.1",
     "leo-profanity": "1.9.0",
-    "preact": "10.29.8",
+    "preact": "11.0.1",
     "zod": "4.6.6"
   },
   "overrides": {
