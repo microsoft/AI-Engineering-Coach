@@ -24,6 +24,24 @@ beforeAll(() => {
 });
 
 describe('webview DOM smoke (jsdom)', () => {
+  it.each([
+    { pct: 50, text: '+50% WoW', state: 'trend-improving' },
+    { pct: -50, text: '-50% WoW', state: 'trend-worsening' },
+    { pct: 0, text: 'WoW 0%', state: 'trend-stable' },
+  ])('renders $state badges with titles directly on the badge', async ({ pct, text, state }) => {
+    const { PctBadge, render } = await import('./render');
+    const host = document.createElement('div');
+    render(PctBadge({ pct, label: 'WoW', title: 'Recorded count comparison' }), host);
+    const badge = host.firstElementChild!;
+    expect(host.children).toHaveLength(1);
+    expect(badge.className).toBe(`trend-badge ${state}`);
+    expect(badge.textContent).toBe(text);
+    expect(badge.getAttribute('title')).toBe('Recorded count comparison');
+    expect(badge.children).toHaveLength(0);
+    render(PctBadge({ pct, label: 'WoW' }), host);
+    expect(host.firstElementChild!.getAttribute('title') ?? '').toBe('');
+  });
+
   it('el() creates a DOM node with class and innerHTML', async () => {
     const { el } = await import('./shared');
     const node = el('div', 'my-class', '<span>hi</span>');

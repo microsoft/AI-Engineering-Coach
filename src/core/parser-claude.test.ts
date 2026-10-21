@@ -170,6 +170,53 @@ describe('parseClaudeSessions', () => {
     });
   });
 
+  it('captures explicit WebFetch hosts and resets them for each human turn', () => {
+    withProjectsDir('sources.jsonl', [
+      makeUser('Why?'),
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'WebFetch', input: { url: 'https://docs.python.org/3/?private=1' } },
+        { type: 'tool_use', name: 'WebSearch', input: { query: 'https://not-a-source.example' } },
+      ] } },
+      makeAssistant('An answer.'),
+      makeUser('How?', '2025-06-15T10:01:00Z'),
+      makeAssistant('Another answer.', '2025-06-15T10:01:01Z'),
+    ], projectsDir => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(request => request.webDomains))
+        .toEqual([['docs.python.org'], []]);
+    });
+  });
+
+  it('keeps human IDs and final-answer evidence, without counting tool commentary as an answer', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('Why?', undefined, { uuid: 'human-1' }),
+      { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'An answer.' }] } },
+      makeUser('How?', '2025-06-15T10:01:00Z', { uuid: 'human-2' }),
+      makeAssistant('I will inspect it.'),
+      { type: 'assistant', message: { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: '/repo/a.ts' } },
+        { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Explore' } },
+      ] } },
+    ], projectsDir => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests).toMatchObject([
+        { userEventId: 'human-1', answerEvidence: 'final' },
+        { userEventId: 'human-2', answerEvidence: 'missing', toolsUsed: ['Read', 'Agent'], referencedFiles: ['/repo/a.ts'],
+          investigationDelegations: ['explore'] },
+      ]);
+    });
+  });
+
+  it.each([{ isSidechain: true }, { isMeta: true }, { isCompactSummary: true }])('excludes %j messages from Curiosity without dropping their session data', extra => {
+    withProjectsDir('s.jsonl', [
+      makeUser('Why does this fail?', undefined, extra),
+      makeAssistant('Because the input is missing.'),
+    ], projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(workspace => workspace.sessions);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].requests).toHaveLength(1);
+      expect(sessions[0].requests[0].curiosity).toEqual({ kind: 'excluded', excerpts: [] });
+    });
+  });
+
   it('skips tool_result-only user records and merges following assistant into prior real user request', () => {
     withProjectsDir('s.jsonl', [
       makeUser('write a file please'),

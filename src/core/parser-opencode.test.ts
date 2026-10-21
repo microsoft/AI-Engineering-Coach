@@ -19,7 +19,7 @@ function withStorage(
   rawSession: object,
   messages: object[],
   run: (storageDir: string) => void,
-  parts: object[] = [],
+  parts: (Record<string, unknown> & { id: string; messageID: string })[] = [],
 ): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-parser-test-'));
   const storageDir = path.join(root, 'storage');
@@ -40,10 +40,9 @@ function withStorage(
     );
   }
   for (const part of parts) {
-    const value = part as { id: string; messageID: string };
-    const partDir = path.join(storageDir, 'part', value.messageID);
+    const partDir = path.join(storageDir, 'part', part.messageID);
     fs.mkdirSync(partDir, { recursive: true });
-    fs.writeFileSync(path.join(partDir, `${value.id}.json`), JSON.stringify(part), 'utf-8');
+    fs.writeFileSync(path.join(partDir, `${part.id}.json`), JSON.stringify(part), 'utf-8');
   }
   try { run(storageDir); } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
@@ -254,6 +253,45 @@ describe('parseOpenCodeSessions', () => {
         },
       }],
     );
+  });
+
+  it('keeps explicit web-tool hosts separate from search queries and later turns', () => {
+    withStorage({ id: 'sources', directory: '/repo' }, [
+      { id: 'u1', role: 'user', time: { created: 1700000000000 }, summary: { title: 'Why?' } },
+      { id: 'a1', role: 'assistant', time: { created: 1700000001000 }, finish: 'stop' },
+      { id: 'u2', role: 'user', time: { created: 1700000002000 }, summary: { title: 'How?' } },
+      { id: 'a2', role: 'assistant', time: { created: 1700000003000 }, finish: 'stop' },
+    ], storageDir => {
+      expect(parseOpenCodeSessions(storageDir)[0].requests.map(request => request.webDomains))
+        .toEqual([['docs.python.org'], []]);
+    }, [
+      { id: 'fetch', messageID: 'a1', type: 'tool', tool: 'webfetch', state: { input: { url: 'https://docs.python.org/3/' } } },
+      { id: 'search', messageID: 'a1', type: 'tool', tool: 'websearch', state: { input: { query: 'https://not-a-source.example' } } },
+      { id: 'answer', messageID: 'a2', type: 'text', text: 'An answer.' },
+    ]);
+  });
+
+  it('collects late assistant tools and distinguishes final text from tool-only continuation', () => {
+    withStorage({ id: 's', directory: '/repo' }, [
+      { id: 'u1', role: 'user', time: { created: 1700000000000 }, summary: { title: 'Why?' } },
+      { id: 'a1', role: 'assistant', time: { created: 1700000001000 }, tokens: { input: 5, output: 2 } },
+      { id: 'a2', role: 'assistant', time: { created: 1700000002000 } },
+      { id: 'a3', role: 'assistant', time: { created: 1700000003000 }, finish: 'stop' },
+      { id: 'u2', role: 'user', time: { created: 1700000004000 }, summary: { title: 'How?' } },
+      { id: 'a4', role: 'assistant', time: { created: 1700000005000 } },
+    ], storageDir => {
+      expect(parseOpenCodeSessions(storageDir)[0].requests).toMatchObject([
+        { userEventId: 'u1', answerEvidence: 'final', toolsUsed: ['edit', 'task'], editedFiles: ['/repo/a.ts'], promptTokens: 5,
+          investigationDelegations: ['research'] },
+        { userEventId: 'u2', answerEvidence: 'missing', toolsUsed: ['read'], investigationDelegations: [] },
+      ]);
+    }, [
+      { id: 'p1', messageID: 'a1', type: 'text', text: 'I will inspect it.' },
+      { id: 'p2', messageID: 'a2', type: 'tool', tool: 'edit', state: { input: { filePath: '/repo/a.ts' } } },
+      { id: 'p2b', messageID: 'a2', type: 'tool', tool: 'task', state: { input: { subagent_type: 'research' } } },
+      { id: 'p3', messageID: 'a3', type: 'text', text: 'An answer.' },
+      { id: 'p4', messageID: 'a4', type: 'tool', tool: 'read', state: { input: { filePath: '/repo/a.ts' } } },
+    ]);
   });
 
   it('records {input:0,output:0} assistants as zero-token data, not missing', () => {

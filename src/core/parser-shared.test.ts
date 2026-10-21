@@ -47,6 +47,27 @@ function makeReq(overrides: Partial<SessionRequest> = {}): SessionRequest {
 }
 
 describe('trusted parser paths', () => {
+  it('allows attachments beneath a filesystem-root workspace', () => {
+    const workspace = path.parse(process.cwd()).root;
+    const attachment = path.join(workspace, 'coach-root-workspace', 'screenshot.png');
+    expect(() => assertTrustedPath(attachment)).toThrow('outside trusted directories');
+    expect(() => assertTrustedPath(attachment, [workspace])).not.toThrow();
+    expect(() => assertTrustedPath(workspace, [workspace])).not.toThrow();
+  });
+
+  it.skipIf(process.platform !== 'win32')('allows a differently cased Windows drive-root workspace', () => {
+    expect(() => assertTrustedPath('D:\\Screenshots\\screenshot.png', ['d:\\'])).not.toThrow();
+    expect(() => assertTrustedPath('E:\\Screenshots\\screenshot.png', ['d:\\'])).toThrow('outside trusted directories');
+  });
+
+  it('keeps sibling paths and traversal outside a trusted workspace', () => {
+    const workspace = path.join(path.parse(process.cwd()).root, 'coach-trusted-workspace');
+    expect(() => assertTrustedPath(path.join(`${workspace}-sibling`, 'screenshot.png'), [workspace]))
+      .toThrow('outside trusted directories');
+    expect(() => assertTrustedPath(`${workspace}${path.sep}..${path.sep}screenshot.png`, [workspace]))
+      .toThrow('Path traversal detected');
+  });
+
   it('allows configured OpenCode data roots outside the home directory', () => {
     const previous = process.env.XDG_DATA_HOME;
     const configuredRoot = path.join(path.parse(process.cwd()).root, 'configured-opencode-data');

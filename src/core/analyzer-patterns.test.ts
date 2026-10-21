@@ -6,6 +6,9 @@
 import { describe, it, expect } from 'vitest';
 import { PatternsAnalyzer } from './analyzer-patterns';
 import { Session, SessionRequest } from './types/session-types';
+import type { PatternContribution } from './types/analytics-types';
+import { getDetectorGroupCounts } from './detector-registry';
+import { isoWeek } from './helpers';
 
 function makeRequest(overrides: Partial<SessionRequest> = {}): SessionRequest {
   return {
@@ -68,6 +71,46 @@ function createAnalyzer(
 }
 
 describe('PatternsAnalyzer', () => {
+  it.each([undefined, { harness: 'Claude' }])('scores native contributions without changing unrelated scores or detector budgets (%j)', filter => {
+    const timestamp = Date.parse('2026-09-30T12:00:00Z');
+    const analyzer = createAnalyzer([makeSession({
+      requests: [makeRequest({ timestamp })], creationDate: timestamp, lastMessageDate: timestamp, harness: 'Claude',
+    })]);
+    const baseline = analyzer.getAntiPatterns(filter);
+    const week = isoWeek(new Date(timestamp));
+    const contribution: PatternContribution = {
+      patterns: [{
+        id: 'native-code-review', name: 'Native code review', severity: 'high', group: 'code-review',
+        description: 'Recorded code review check.', occurrences: 4,
+        suggestion: 'Review the recorded changes.', examples: [], details: [],
+        weeklyHist: { labels: [week], counts: [4] },
+      }],
+      weekly: [{ week, group: 'code-review', severity: 'high', occurrences: 4 }],
+    };
+    const result = analyzer.getAntiPatterns(filter, contribution);
+    const counts = getDetectorGroupCounts(!!filter?.harness);
+    const previous = baseline.groupScores.find(row => row.group === 'code-review')!;
+    const patterns = result.patterns.filter(row => row.group === 'code-review');
+    const penalty = patterns.reduce((sum, row) => sum + ({ high: 12, medium: 7, low: 3 })[row.severity], 0);
+    expect(result.groupScores.find(row => row.group === 'code-review')).toMatchObject({
+      score: Math.max(0, Math.round(100 * (1 - penalty / ((counts['code-review'] || 8) * 12)))),
+      patternCount: previous.patternCount + 1,
+    });
+    const weekly = baseline.weeklyScores.series.find(row => row.group === 'code-review')!;
+    expect(result.weeklyScores.series.find(row => row.group === 'code-review')!.scores).toEqual(
+      weekly.scores.map(score => Math.max(0, Math.round(score - 100 / (counts['code-review'] || 8)))),
+    );
+    expect(result.weeklyTrend.counts[0]).toBe((baseline.weeklyTrend.counts[0] ?? 0) + 4);
+    expect(result.totalOccurrences).toBe(baseline.totalOccurrences + 4);
+    expect(result.groupScores.filter(row => row.group !== 'code-review')).toEqual(
+      baseline.groupScores.filter(row => row.group !== 'code-review'),
+    );
+    expect(result.weeklyScores.series.filter(row => row.group !== 'code-review')).toEqual(
+      baseline.weeklyScores.series.filter(row => row.group !== 'code-review'),
+    );
+    expect(result).not.toHaveProperty('curiosityTier');
+  });
+
   describe('getRecommendations', () => {
     it('returns empty for no sessions', () => {
       const analyzer = createAnalyzer([]);

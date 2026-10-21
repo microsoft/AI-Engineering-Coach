@@ -17,7 +17,7 @@
     "src/webview/vibe-roles.ts"
   ],
   "ignoreDependencies": ["lint-staged", "serve"],
-  "ignoreBinaries": ["tsx", "sqlite3"],
+  "ignoreBinaries": ["tsx", "sqlite3", "mkfifo"],
   "rules": {
     "exports": "off",
     "types": "off",

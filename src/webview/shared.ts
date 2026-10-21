@@ -101,6 +101,7 @@ export function initMessageListener(
       });
     }
   });
+  queueMicrotask(() => vscode.postMessage({ type: 'ready' }));
 }
 
 /* ---- Chart.js import (bundled via esbuild) ---- */

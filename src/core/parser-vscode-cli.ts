@@ -24,6 +24,8 @@ import {
   recordContentReplacement,
   recordCreatedContent,
 } from './edit-tool-diff';
+import { recordedTools, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
+import { imageReferencesFromAttachments, imageReferencesFromVariables, imageRequestIndex, type ImageReference, type ImageRequestMatch } from './image-data';
 
 interface CLIEvent {
   type: string;
@@ -42,10 +44,15 @@ function harnessName(state: CLIParseState): string {
 /** Accumulated state for a single user turn (user.message → next user.message). */
 interface TurnState {
   userMsg: string;
+  userEventId?: string;
+  answerEvidence: 'final' | 'legacy' | 'missing';
+  nonUser?: boolean;
   userTs: string | null;
   agentMode: string;
   responseChunks: string[];
   toolNames: Set<string>;
+  investigationDelegations: Set<'research' | 'explore'>;
+  webDomains: Set<string>;
   editedFiles: Set<string>;
   referencedFiles: Set<string>;
   skillsUsed: Set<string>;
@@ -70,6 +77,7 @@ interface PendingToolEdit {
 
 interface CLIParseState {
   sessionId: string;
+  workspaceRootPath?: string;
   isApp: boolean;
   startTime: string | null;
   currentModelId: string;
@@ -84,10 +92,13 @@ interface CLIParseState {
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
   return {
     userMsg,
+    answerEvidence: 'missing',
     userTs,
     agentMode,
     responseChunks: [],
     toolNames: new Set(),
+    investigationDelegations: new Set(),
+    webDomains: new Set(),
     editedFiles: new Set(),
     referencedFiles: new Set(),
     skillsUsed: new Set(),
@@ -143,11 +154,11 @@ function parseCLIEventLine(line: string): CLIEvent | null {
   }
 }
 
-function getTurnEndState(turn: TurnState): 'errored' | undefined {
+function getTurnEndState(turn: TurnState): 'errored' | 'pending' | undefined {
   const noResponseRecorded = turn.responseChunks.length === 0
     && turn.toolNames.size === 0
     && turn.totalOutputTokens === 0;
-  return turn.isCanceled && noResponseRecorded ? 'errored' : undefined;
+  return noResponseRecorded ? turn.isCanceled ? 'errored' : 'pending' : undefined;
 }
 
 function commitToolEdit(turn: TurnState, edit: PendingToolEdit): void {
@@ -158,7 +169,7 @@ function commitToolEdit(turn: TurnState, edit: PendingToolEdit): void {
 
 function flushTurn(state: CLIParseState): void {
   const turn = state.turn;
-  if (!turn || (turn.responseChunks.length === 0 && turn.toolNames.size === 0 && !turn.isCanceled)) return;
+  if (!turn) return;
   turn.pendingToolEdits.clear();
 
   const msgTs = turn.userTs ? new Date(turn.userTs).getTime() : null;
@@ -169,6 +180,8 @@ function flushTurn(state: CLIParseState): void {
   const requestId = turn.lastAssistantId || `${state.sessionId}:cli:${state.requests.length}`;
   state.requests.push(createRequest({
     requestId,
+    userEventId: turn.userEventId,
+    answerEvidence: turn.answerEvidence,
     timestamp: msgTs,
     messageText: turn.userMsg,
     responseText,
@@ -176,6 +189,8 @@ function flushTurn(state: CLIParseState): void {
     agentMode: turn.agentMode || 'agent',
     modelId: turn.modelId || state.currentModelId,
     toolsUsed: [...turn.toolNames],
+    investigationDelegations: [...turn.investigationDelegations],
+    webDomains: [...turn.webDomains],
     editedFiles: [...turn.editedFiles],
     referencedFiles: [...turn.referencedFiles],
     skillsUsed: [...turn.skillsUsed],
@@ -192,6 +207,7 @@ function flushTurn(state: CLIParseState): void {
     reasoningEffort: turn.reasoningEffort
       ?? extractReasoningEffortFromModelId(turn.modelId || state.currentModelId),
     endState: getTurnEndState(turn),
+    curiosity: turn.nonUser ? { kind: 'excluded', excerpts: [] } : undefined,
   }));
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
@@ -200,18 +216,6 @@ function addAttachmentReferences(turn: TurnState, attachments: unknown): void {
   for (const attachment of recordArrayValue(attachments)) {
     const filePath = attachment.path;
     if (typeof filePath === 'string') turn.referencedFiles.add(filePath);
-    // Count image attachments
-    const mimeType = typeof attachment.mimeType === 'string' ? attachment.mimeType : '';
-    const type = typeof attachment.type === 'string' ? attachment.type : '';
-    if (type === 'image' || mimeType.startsWith('image/')) {
-      turn.imageCount++;
-    }
-  }
-}
-
-function countImageVariables(turn: TurnState, variables: unknown): void {
-  for (const v of recordArrayValue(variables)) {
-    if (v.kind === 'image') turn.imageCount++;
   }
 }
 
@@ -221,6 +225,7 @@ function handleSessionStart(ev: CLIEvent, state: CLIParseState, wsId: string): v
   state.isApp = 'remoteSteerable' in data;
   state.startTime = str(data.startTime) || ev.timestamp || null;
   state.currentModelId = str(data.selectedModel);
+  state.workspaceRootPath = str(recordValue(data.context)?.cwd) || str(data.cwd) || undefined;
   state.currentReasoningEffort = canonicalizeReasoningEffort(str(data.reasoningEffort))
     ?? extractReasoningEffortFromModelId(state.currentModelId);
 }
@@ -239,9 +244,17 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
     str(ev.data?.agentMode) || 'agent',
     state.currentReasoningEffort,
   );
+  // Relayed turns name their sender in harness-added text, for example `from_session_id:`.
+  const injected = str(ev.data?.transformedContent).replace(str(ev.data?.content), '');
+  state.turn.nonUser = /^(?:agent(?:-|$)|skill(?:-|$)|system$|autopilot$)/i.test(str(ev.data?.source))
+    || /^[ \t]*(?:from|sender)(?:_[a-z]+)+[ \t]*[:=]/im.test(injected);
+  state.turn.userEventId = ev.id;
   addAttachmentReferences(state.turn, ev.data?.attachments);
-  // Also count images from variables array (same format as VS Code sessions)
-  countImageVariables(state.turn, ev.data?.variables);
+  const images = [
+    ...imageReferencesFromAttachments(ev.data?.attachments),
+    ...imageReferencesFromVariables(ev.data?.variables),
+  ];
+  state.turn.imageCount = images.length;
 }
 
 function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
@@ -255,10 +268,10 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   const ts = ev.timestamp ? new Date(ev.timestamp).getTime() : null;
 
   if (ts && turn.firstToolTs === null) turn.firstToolTs = ts;
-  if (toolName && !META_TOOLS.has(toolName)) turn.toolNames.add(toolName);
+  addRecordedTools(turn, toolName, data.arguments);
   const pending: PendingToolEdit = {
     editLocs: new Map(),
-    editedFiles: new Set(),
+    editedFiles: new Set(recordedToolFiles(toolName, rawArgs).edited),
     codeBlock: null,
   };
   if (toolName === 'apply_patch') {
@@ -313,10 +326,23 @@ function handleToolExecutionComplete(data: Record<string, unknown>, state: CLIPa
   if (model && !turn.modelId) turn.modelId = model;
 }
 
+function addRecordedTools(turn: TurnState, name: string, args: unknown): void {
+  if (!name || META_TOOLS.has(name)) return;
+  turn.answerEvidence = 'missing';
+  for (const call of recordedTools(name, args)) {
+    turn.toolNames.add(call.name);
+    const role = recordedInvestigation(call.name, call.args);
+    if (role) turn.investigationDelegations.add(role);
+    for (const domain of recordedWebDomains(call.name, call.args)) turn.webDomains.add(domain);
+    const files = recordedToolFiles(call.name, call.args);
+    for (const file of files.referenced) turn.referencedFiles.add(file);
+  }
+}
+
 function addAssistantToolRequests(turn: TurnState, toolRequests: unknown): void {
   for (const request of recordArrayValue(toolRequests)) {
     const toolName = str(request.toolName) || str(request.name);
-    if (toolName && !META_TOOLS.has(toolName)) turn.toolNames.add(toolName);
+    addRecordedTools(turn, toolName, request.arguments);
   }
 }
 
@@ -326,6 +352,13 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
 
   const data = ev.data || {};
   const content = str(data.content);
+  if (content.trim()) {
+    if (data.phase === 'final' || data.phase === 'final_answer') turn.answerEvidence = 'final';
+    else if (data.phase == null && !recordArrayValue(data.toolRequests).length && turn.answerEvidence !== 'final') {
+      turn.answerEvidence = 'legacy';
+    }
+    else if (turn.answerEvidence === 'legacy') turn.answerEvidence = 'missing';
+  }
   if (content) turn.responseChunks.push(content);
   turn.lastAssistantTs = ev.timestamp || turn.lastAssistantTs;
   turn.lastAssistantId = str(ev.id) || turn.lastAssistantId;
@@ -404,6 +437,13 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
     case 'assistant.message':
       handleAssistantMessage(ev, state);
       return;
+    case 'session.task_complete':
+      if (state.turn && ev.data?.success === true && typeof ev.data.summary === 'string' && ev.data.summary.trim()) {
+        state.turn.answerEvidence = 'final';
+        if (!state.turn.responseChunks.includes(ev.data.summary)) state.turn.responseChunks.push(ev.data.summary);
+        state.turn.lastAssistantTs = ev.timestamp || state.turn.lastAssistantTs;
+      }
+      return;
     case 'abort':
       if (state.turn) state.turn.isCanceled = true;
       return;
@@ -448,12 +488,13 @@ function finalizeCliSession(
     workspaceName: wsName,
     location: 'cli',
     harness: harnessName(state),
-    creationDate: creationDate ?? undefined,
+    ...(creationDate === null ? {} : { creationDate }),
     requests: state.requests,
     modelUsage: state.modelUsage,
     endReason: state.sawShutdown ? 'shutdown' : 'active',
     customInstructionsBytes,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests),
+    workspaceRootPath: state.workspaceRootPath,
   });
 }
 
@@ -487,6 +528,45 @@ export function parseCLIEventsFile(
   if (!sawAnyEvent) return null;
 
   return finalizeCliSession(state, wsId, wsName, customInstructionsBytes);
+}
+
+export function extractCLIImageReferences(
+  eventsPath: string,
+  sessionId: string,
+  requestId: string,
+  match?: ImageRequestMatch,
+): ImageReference[] {
+  const userEventId = match?.userEventId;
+  const requestIndex = imageRequestIndex(sessionId, requestId, 'cli', match);
+  let currentIndex = -1;
+  let current: ImageReference[] = [];
+  let images: ImageReference[] = [];
+  let done = false;
+  forEachJsonlLine(eventsPath, line => {
+    if (!line.includes('"user.message"') && !line.includes('"session.start"')
+      && (userEventId || requestIndex !== null || !line.includes('"assistant.message"'))) return;
+    const event = parseCLIEventLine(line);
+    if (!event) return;
+    if (event.type === 'session.start' && typeof event.data?.sessionId === 'string' && event.data.sessionId !== sessionId) {
+      done = true;
+      return;
+    }
+    if (event.type === 'user.message') {
+      currentIndex++;
+      current = [
+        ...imageReferencesFromAttachments(event.data?.attachments),
+        ...imageReferencesFromVariables(event.data?.variables),
+      ];
+      if (userEventId ? event.id === userEventId : currentIndex === requestIndex) {
+        images = current;
+        done = true;
+      }
+    } else if (!userEventId && requestIndex === null && event.type === 'assistant.message' && event.id === requestId) {
+      images = current;
+      done = true;
+    }
+  }, () => done);
+  return images;
 }
 
 /**

@@ -157,6 +157,7 @@ A few features depend on the local VS Code language model and are hidden in canv
 | **Output**   | Generated code volume by language, model usage table _(token breakdown temporarily hidden)_ |
 | **Burndown** | Monthly AI token budget progress with projections _(temporarily disabled)_                  |
 | **Patterns** | 7×24 activity heatmap and work-life balance signals                                         |
+| **[Curiosity](docs/content/measure/curiosity.md)** | Sessions with inquiry, inquiry over time, investigation sources, and programming-language context |
 
 ### GitHub App
 

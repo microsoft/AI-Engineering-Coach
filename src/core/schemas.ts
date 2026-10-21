@@ -78,6 +78,23 @@ export const SessionRequestSchema = z.object({
   compaction: CompactionEventSchema.nullable(),
   todoSnapshot: z.array(TodoItemSchema).nullable(),
   workType: z.string(),
+  userEventId: z.string().optional(),
+  answerEvidence: z.enum(['final', 'legacy', 'missing']).optional(),
+  investigationDelegations: z.array(z.enum(['research', 'explore'])).max(2).optional(),
+  webDomains: z.array(z.string()).optional(),
+  curiosity: z.union([
+    z.object({ kind: z.enum(['excluded', 'unscanned']), excerpts: z.array(z.string()).max(0) }),
+    z.object({
+      kind: z.literal('analyzed'),
+      features: z.object({
+        question: z.object({
+          count: z.number().int().min(0).max(256),
+          excerpts: z.array(z.string().max(240)).max(3),
+        }),
+      }).strict(),
+      repeatedQuestions: z.array(z.string().max(239)).max(3),
+    }),
+  ]).optional(),
   reasoningEffort: z.enum(['max', 'high', 'medium', 'low']).nullable().optional(),
   endState: z.enum(['pending', 'errored', 'no-data']).optional(),
 }).passthrough();

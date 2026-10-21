@@ -6,7 +6,9 @@
 /* Anti-Patterns page -- merged view with health scores, findings, and rule configuration. */
 
 import { DateFilter, PracticeGroup, PRACTICE_GROUPS } from '../core/types';
+import { toDateStr } from '../core/helpers';
 import type { RuleSource } from '../core/types/rule-types';
+import { CURIOSITY_TIER_LABELS, type CuriosityTier } from '../core/types/curiosity-types';
 import { rpc, el, COLORS, scoreColor, scoreLabel } from './shared';
 import { html, render, type ComponentChildren, ScoreRing, PctBadge } from './render';
 import { consumeNavHint } from './app';
@@ -38,6 +40,7 @@ interface ApPattern {
   examples: string[];
   details: ApOccurrence[];
   weeklyHist: { labels: string[]; counts: number[] };
+  aggregate?: boolean;
 }
 
 interface GroupScore {
@@ -55,6 +58,7 @@ interface ApData {
   totalOccurrences: number;
   groupScores: GroupScore[];
   weeklyScores: { labels: string[]; series: { group: PracticeGroup; scores: number[] }[] };
+  curiosityTier?: CuriosityTier;
 }
 
 interface RulePreview {
@@ -243,7 +247,7 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
   render(html`<div>
     <div class="ap-page-header">
       <h1>Anti-Patterns</h1>
-      <p class="ap-page-intro">Review health scores across practice groups, drill into individual findings, and manage the rules that detect them. Switch to the <strong>Rules</strong> tab to browse, create, or edit detection rules using the built-in DSL.</p>
+      <p class="ap-page-intro">Review health scores across practice groups and drill into individual findings. Curiosity balance and repeated inquiry wording appear under <strong>Prompt Quality</strong>. Use <strong>Rules</strong> to browse, create, or edit DSL detection rules.</p>
     </div>
 
     <div class="ap-tab-bar">
@@ -272,6 +276,8 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
                 </div>
               </div>
               ${spark ? html`<div class="ap-sparkline-row">${spark}</div>` : null}
+              ${g.group === 'prompt-quality' && apData.curiosityTier
+                ? html`<div class="ap-score-tip" title="Activity balance has three levels: Balanced, Needs review, Strongly skewed. This does not measure question quality or learning.">Curiosity: <strong>${CURIOSITY_TIER_LABELS[apData.curiosityTier]}</strong></div>` : null}
               ${g.improvements.length > 0
                 ? html`<div class="ap-score-tip ap-improvements">${g.improvements.map(i => html`<span>${i}</span>`)}</div>`
                 : g.topIssue
@@ -884,7 +890,8 @@ function renderSessionOccurrences(
           <span class="occ-session-ws">${truncWs}</span>
           <span class="occ-session-date">${dateStr} ${timeStr}</span>
           <span class="occ-session-count">${info.count}x</span>
-          ${llmAvailable() ? html`<button class="occ-explain-btn" data-rule-id=${p.id} data-session-id=${sid} title="Ask AI why this session triggered the rule">Why?</button>` : null}
+          ${p.aggregate ? html`<a href="#" class="occ-session-link" data-page="timeline" data-nav-hint=${toDateStr(info.lastTs)}>View example</a>`
+            : llmAvailable() ? html`<button class="occ-explain-btn" data-rule-id=${p.id} data-session-id=${sid} title="Ask AI why this session triggered the rule">Why?</button>` : null}
         </div>
         ${info.messages.length > 0 ? html`<div class="occ-msg-preview">${info.messages.map(m => html`<span>${m.length > 80 ? m.substring(0, 78) + '...' : m}</span>`)}</div>` : null}
         <div class="occ-explain-result" data-session-id=${sid} style="display:none;"></div>
@@ -894,7 +901,8 @@ function renderSessionOccurrences(
   return html`
     <details class="ap-occurrences">
       <summary class="ap-occ-summary">
-        <span>${p.occurrences} occurrence${p.occurrences !== 1 ? 's' : ''} across ${totalSessions} session${totalSessions !== 1 ? 's' : ''}</span>
+        <span>${p.aggregate ? `Recorded examples from ${totalSessions} session${totalSessions !== 1 ? 's' : ''}`
+          : `${p.occurrences} occurrence${p.occurrences !== 1 ? 's' : ''} across ${totalSessions} session${totalSessions !== 1 ? 's' : ''}`}</span>
         ${histVNode}
       </summary>
       <div class="ap-occ-body">
@@ -1231,4 +1239,3 @@ function renderLayerStatus(layers: RuleLayerInfo[], layerName: string): Componen
   if (!info.exists) return html`<span class="rule-help-status rule-help-missing">Directory not found</span>`;
   return html`<span class="rule-help-status rule-help-ok">${info.ruleCount} rule${info.ruleCount !== 1 ? 's' : ''} loaded</span>`;
 }
-

@@ -53,6 +53,7 @@ import type { InsightsData } from './insights-types';
 import type { ContextManagementData, FlowStateData, WorkspaceContextSessionsData } from './context-types';
 import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
+import type { CuriosityData, CuriosityFilter } from './curiosity-types';
 
 /* RPC method map: method name -> { params, result } */
 export interface RpcMethodMap {
@@ -83,6 +84,7 @@ export interface RpcMethodMap {
   getGitHubAppIssueCredits: { params: undefined; result: GitHubAppIssueCreditsSnapshot };
   getConfigHealth: { params: DateFilter | undefined; result: ConfigHealthData };
   getInsights: { params: DateFilter | undefined; result: InsightsData };
+  getCuriosity: { params: CuriosityFilter | undefined; result: CuriosityData };
   getFlowState: { params: DateFilter | undefined; result: FlowStateData };
   getContextManagement: { params: { filter?: DateFilter } | undefined; result: ContextManagementData };
   getWorkspaceContextSessions: { params: { workspaceId: string; filter?: DateFilter }; result: WorkspaceContextSessionsData };
@@ -153,4 +155,4 @@ export type WebviewRequestMessage<M extends ExtensionMethodName = ExtensionMetho
 export type WebviewResponseMessage = { type: 'response'; id: string; data: unknown };
 
 /* Message types for webview <-> extension communication */
-export type WebviewMessage = WebviewRequestMessage | WebviewResponseMessage;
+export type WebviewMessage = WebviewRequestMessage | WebviewResponseMessage | { type: 'ready' };

@@ -12,6 +12,7 @@ export interface SkillCacheData {
   clusters: WorkflowCluster[];
   triaged: TriagedCluster[];
   catalogMatches: CatalogItem[];
+  catalogTotalScanned?: number;
   timestamp: number;
 }
 

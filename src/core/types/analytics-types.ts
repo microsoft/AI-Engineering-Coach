@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { CuriosityTier } from './curiosity-types';
+
 export interface DailyHarnessData {
   harness: string;
   requests: number[];
@@ -573,6 +575,20 @@ export interface AntiPattern {
   details: OccurrenceDetail[];
   /** Weekly histogram: labels (ISO weeks) and counts per week */
   weeklyHist: { labels: string[]; counts: number[] };
+  /** Aggregate checks use supporting examples, not per-request violations. */
+  aggregate?: boolean;
+}
+
+export interface WeeklyPatternObservation {
+  week: string;
+  group: PracticeGroup;
+  severity: AntiPattern['severity'];
+  occurrences: number;
+}
+
+export interface PatternContribution {
+  patterns: AntiPattern[];
+  weekly: WeeklyPatternObservation[];
 }
 
 export interface GroupScore {
@@ -591,6 +607,7 @@ export interface AntiPatternData {
   weeklyTrend: { labels: string[]; counts: number[] };
   groupScores: GroupScore[];
   weeklyScores: { labels: string[]; series: { group: PracticeGroup; scores: number[] }[] };
+  curiosityTier?: CuriosityTier;
 }
 
 export interface WorkLifeBalanceResult {

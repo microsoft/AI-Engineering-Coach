@@ -43,6 +43,8 @@ AI Engineer Coach: Open Dashboard
 
 You can also click the AI Engineer Coach icon in the Activity Bar (sidebar) if it appears there.
 
+Session parsing and analytics run in separate background processes. One progress screen stays until both finish, and then all pages open. If analytics fail, the dashboard shows the error. Empty session folders without an events file do not count as skipped files.
+
 ## Configuration
 
 AI Engineer Coach works out of the box with sensible defaults. Optional settings are available under `aiEngineerCoach.*` in VS Code settings to control cache behavior, date ranges, and workspace filtering.

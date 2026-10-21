@@ -31,6 +31,9 @@ import {
   recordContentReplacement,
   recordCreatedContent,
 } from './edit-tool-diff';
+import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
+import { imageReferencesFromContent, type ImageReference } from './image-data';
+import type { SessionSource } from './cache';
 
 interface OcSession {
   id: string;
@@ -74,6 +77,8 @@ interface OcPart {
   messageID: string;
   type: string;
   text?: string;
+  mime?: string;
+  url?: string;
   tool?: string;
   callID?: string;
   state?: { status?: string; input?: Record<string, unknown>; output?: string };
@@ -92,6 +97,9 @@ interface OpenCodeAssistantData {
   lastTs: number | null;
   tokenSource: OcMessage['tokens'] | null;
   editLocs: FileEditLocMap;
+  answerEvidence: SessionRequest['answerEvidence'];
+  investigationDelegations: ('research' | 'explore')[];
+  webDomains: string[];
 }
 
 const WRITE_TOOLS = new Set(['write', 'edit', 'create', 'patch', 'apply_patch']);
@@ -99,7 +107,7 @@ const READ_TOOLS = new Set(['read', 'glob', 'grep', 'ls', 'find']);
 
 /** The subset of `node:sqlite` this parser uses, so the module stays optional at build time. */
 interface SqliteDatabase {
-  prepare(sql: string): { all(): unknown[] };
+  prepare(sql: string): { all(...parameters: string[]): unknown[] };
   close(): void;
 }
 
@@ -198,19 +206,19 @@ function getOpenCodeUserText(msg: OcMessage, partsByMsg: Map<string, OcPart[]>):
   return userTextFromParts || msg.summary?.title || '';
 }
 
-function findAssistantMessage(messages: OcMessage[], startIndex: number, parentId: string): OcMessage | null {
+function findAssistantMessages(messages: OcMessage[], startIndex: number): OcMessage[] {
+  const result: OcMessage[] = [];
   for (let i = startIndex; i < messages.length; i++) {
     const candidate = messages[i];
-    if (candidate.role === 'assistant' && candidate.parentID === parentId) return candidate;
+    if (candidate.role === 'user') break;
+    if (candidate.role === 'assistant') result.push(candidate);
   }
-
-  const next = messages[startIndex];
-  return next?.role === 'assistant' ? next : null;
+  return result;
 }
 
 function applyOpenCodePart(
   part: OcPart,
-  data: Pick<OpenCodeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'editLocs'>,
+  data: Pick<OpenCodeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'editLocs' | 'investigationDelegations' | 'webDomains'>,
   textParts: string[],
 ): void {
   if (part.type === 'text' && part.text) {
@@ -222,6 +230,9 @@ function applyOpenCodePart(
 
   data.toolsUsed.push(part.tool);
   const input = part.state?.input || {};
+  data.webDomains.push(...recordedWebDomains(part.tool, input));
+  const role = recordedInvestigation(part.tool, input);
+  if (role && !data.investigationDelegations.includes(role)) data.investigationDelegations.push(role);
   const toolLower = part.tool.toLowerCase();
   const toolSucceeded = part.state?.status === undefined || part.state.status === 'completed';
   if (!toolSucceeded && WRITE_TOOLS.has(toolLower)) return;
@@ -277,7 +288,7 @@ function applyOpenCodePart(
 }
 
 function collectAssistantData(
-  assistantMsg: OcMessage | null,
+  assistantMessages: OcMessage[],
   partsByMsg: Map<string, OcPart[]>,
   userTs: number | null,
   lastTs: number | null,
@@ -292,7 +303,11 @@ function collectAssistantData(
     lastTs,
     tokenSource: null,
     editLocs: new Map(),
+    answerEvidence: 'missing',
+    investigationDelegations: [],
+    webDomains: [],
   };
+  const assistantMsg = assistantMessages[0];
   if (!assistantMsg) return data;
 
   const assistantTs = assistantMsg.time?.completed || assistantMsg.time?.created || null;
@@ -303,9 +318,12 @@ function collectAssistantData(
   data.tokenSource = assistantMsg.tokens ?? null;
 
   const textParts: string[] = [];
-  const parts = partsByMsg.get(assistantMsg.id) || [];
-  for (const part of parts) {
-    applyOpenCodePart(part, data, textParts);
+  for (const message of assistantMessages) {
+    const parts = partsByMsg.get(message.id) || [];
+    const hasText = parts.some(part => part.type === 'text' && part.text?.trim());
+    data.answerEvidence = hasText && (message.finish === 'stop' || message.finish === 'end_turn') ? 'final'
+      : hasText && !message.finish && !parts.some(part => part.type === 'tool') ? 'legacy' : 'missing';
+    for (const part of parts) applyOpenCodePart(part, data, textParts);
   }
   data.responseText = textParts.join('\n');
 
@@ -352,17 +370,23 @@ function buildOpenCodeRequest(
     }
   }
   const exactLocs = hasSummaryDiffs ? summaryLocs : assistantData.editLocs;
+  const imageCount = imageReferencesFromContent(partsByMsg.get(msg.id)).length;
   mergeRequestEditLoc(editLocIndex, msg.id, exactLocs, hasSummaryDiffs);
 
   return createRequest({
     requestId: msg.id,
+    userEventId: msg.id,
+    answerEvidence: assistantData.answerEvidence,
     timestamp: userTs,
     messageText: getOpenCodeUserText(msg, partsByMsg),
+    variableKinds: imageCount > 0 ? { image: imageCount } : {},
     responseText: assistantData.responseText,
     agentName: msg.agent || 'OpenCode',
     agentMode: msg.agent || 'build',
     modelId: assistantData.modelId,
     toolsUsed: assistantData.toolsUsed,
+    investigationDelegations: assistantData.investigationDelegations,
+    webDomains: [...new Set(assistantData.webDomains)],
     editedFiles: hasSummaryDiffs
       ? [...exactLocs.keys()]
       : [...new Set([...assistantData.editedFiles, ...exactLocs.keys()])],
@@ -404,8 +428,8 @@ function buildOpenCodeSession(
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
 
-    const assistantMsg = findAssistantMessage(rawMessages, i + 1, msg.id);
-    const assistantData = collectAssistantData(assistantMsg, partsByMsg, userTs, lastTs);
+    const assistantMessages = findAssistantMessages(rawMessages, i + 1);
+    const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
     requests.push(buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex));
   }
@@ -426,10 +450,12 @@ function buildOpenCodeSession(
   });
 }
 
-function parseLegacyOpenCodeSessions(storageDir: string, editLocIndex?: EditLocIndex): Session[] {
+function parseLegacyOpenCodeSessions(storageDir: string, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
   const sessions: Session[] = [];
   const sessionDir = path.join(storageDir, 'session', 'global');
-  const rawSessions = readAllJsonInDir<OcSession>(sessionDir);
+  const selected = sessionId === undefined ? null : readJsonSafe<OcSession>(path.join(sessionDir, `${sessionId}.json`));
+  const rawSessions = sessionId === undefined ? readAllJsonInDir<OcSession>(sessionDir)
+    : selected?.id === sessionId ? [selected] : [];
 
   for (const rawSession of rawSessions) {
     const rawMessages = readAllJsonInDir<OcMessage>(path.join(storageDir, 'message', rawSession.id));
@@ -441,10 +467,11 @@ function parseLegacyOpenCodeSessions(storageDir: string, editLocIndex?: EditLocI
   return sessions;
 }
 
-function queryOpenCodeDatabase<T>(database: SqliteDatabase, sql: string): T[] {
+function queryOpenCodeDatabase<T>(database: SqliteDatabase, sql: string, ...parameters: string[]): T[] {
   try {
-    return database.prepare(sql).all() as T[];
-  } catch {
+    return database.prepare(sql).all(...parameters) as T[];
+  } catch (error) {
+    warnCore('parser-opencode', 'Could not query OpenCode database', error);
     return [];
   }
 }
@@ -504,27 +531,31 @@ function decodeOpenCodePart(row: OcDbDataRow): OcPart | null {
   }
 }
 
-function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex): Session[] {
+function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
   assertTrustedPath(dbPath);
   const sqlite = loadSqlite();
   if (!sqlite) return [];
   let database: SqliteDatabase;
   try {
     database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-  } catch {
+  } catch (error) {
+    warnCore('parser-opencode', 'Could not open OpenCode database', error);
     return [];
   }
 
+  const parameters = sessionId === undefined ? [] : [sessionId];
+  const sessionFilter = sessionId === undefined ? '' : ' WHERE id = ?';
+  const dataFilter = sessionId === undefined ? '' : ' WHERE session_id = ?';
   const rawSessions = queryOpenCodeDatabase<OcDbSessionRow>(database,
     'SELECT id, project_id AS projectID, directory, title, slug, '
-      + 'time_created AS created, time_updated AS updated FROM session ORDER BY time_created');
+      + `time_created AS created, time_updated AS updated FROM session${sessionFilter} ORDER BY time_created`, ...parameters);
   const messageRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, time_created AS created, '
-      + 'time_updated AS completed, data FROM message ORDER BY session_id, time_created, id');
+      + `time_updated AS completed, data FROM message${dataFilter} ORDER BY session_id, time_created, id`, ...parameters);
   const partRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, message_id AS messageID, '
-      + 'time_created AS created, time_updated AS completed, data FROM part '
-      + 'ORDER BY session_id, time_created, id');
+      + `time_created AS created, time_updated AS completed, data FROM part${dataFilter} `
+      + 'ORDER BY session_id, time_created, id', ...parameters);
   database.close();
   const messagesBySession = new Map<string, OcMessage[]>();
   for (const message of messageRows.map(decodeOpenCodeMessage)) {
@@ -568,8 +599,69 @@ function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex): Ses
   return sessions;
 }
 
-export function parseOpenCodeSessions(source: string, editLocIndex?: EditLocIndex): Session[] {
-  return source.endsWith('.db')
+export function loadOpenCodeSession(source: string, sessionId: string): Session | null {
+  if (!/^[\w-]+$/.test(sessionId)) {
+    warnCore('parser-opencode', 'Invalid OpenCode session ID');
+    return null;
+  }
+  const sessions = source.endsWith('.db')
+    ? parseOpenCodeDatabase(source, undefined, sessionId)
+    : parseLegacyOpenCodeSessions(source, undefined, sessionId);
+  return sessions[0] ?? null;
+}
+
+export function parseOpenCodeSessions(source: string, editLocIndex?: EditLocIndex, sessionSourceIndex?: Map<string, SessionSource>): Session[] {
+  const sessions = source.endsWith('.db')
     ? parseOpenCodeDatabase(source, editLocIndex)
     : parseLegacyOpenCodeSessions(source, editLocIndex);
+  for (const session of sessions) {
+    sessionSourceIndex?.set(session.sessionId, {
+      kind: source.endsWith('.db') ? 'opencode-db' : 'opencode-storage',
+      filePath: source,
+      workspaceId: session.workspaceId,
+      workspaceName: session.workspaceName,
+      workspaceRootPath: session.workspaceRootPath,
+      harness: session.harness,
+    });
+  }
+  return sessions;
+}
+
+export function readOpenCodeImageReferences(source: string, sessionId: string, requestId: string): ImageReference[] {
+  assertTrustedPath(source);
+  if (!source.endsWith('.db')) {
+    if (![sessionId, requestId].every(id => /^[\w-]+$/.test(id))) {
+      warnCore('image-extract', 'Invalid OpenCode session or message ID');
+      return [];
+    }
+    const message = readJsonSafe<OcMessage>(path.join(source, 'message', sessionId, `${requestId}.json`));
+    if (message?.role !== 'user' || (message.sessionID !== undefined && message.sessionID !== sessionId)) return [];
+    return imageReferencesFromContent(readAllJsonInDir<OcPart>(path.join(source, 'part', requestId)));
+  }
+  const sqlite = loadSqlite();
+  if (!sqlite) return [];
+  let database: SqliteDatabase | undefined;
+  try {
+    database = new sqlite.DatabaseSync(source, { readOnly: true });
+    const rows = database.prepare(
+      'SELECT part.data FROM part JOIN message ON message.id = part.message_id AND message.session_id = part.session_id '
+      + "WHERE part.session_id = ? AND part.message_id = ? AND json_extract(message.data, '$.role') = 'user' "
+      + 'ORDER BY part.time_created, part.id',
+    ).all(sessionId, requestId);
+    const parts: unknown[] = [];
+    for (const row of rows) {
+      if (!isRecord(row) || typeof row.data !== 'string') continue;
+      try {
+        parts.push(JSON.parse(row.data));
+      } catch (error) {
+        warnCore('image-extract', 'Could not decode an OpenCode image part', error);
+      }
+    }
+    return imageReferencesFromContent(parts);
+  } catch (error) {
+    warnCore('image-extract', 'Could not read OpenCode image parts', error);
+    return [];
+  } finally {
+    database?.close();
+  }
 }

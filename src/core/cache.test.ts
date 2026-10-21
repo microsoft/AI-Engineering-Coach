@@ -74,12 +74,14 @@ describe('stripSessionsForMemory', () => {
     const originalMessageLength = request.messageLength;
     const originalResponseLength = request.responseLength;
     const originalWorkType = request.workType;
+    request.webDomains = ['docs.python.org'];
 
     stripSessionsForMemory(sessions);
 
     expect(request.messageLength).toBe(originalMessageLength);
     expect(request.responseLength).toBe(originalResponseLength);
     expect(request.workType).toBe(originalWorkType);
+    expect(request.webDomains).toEqual(['docs.python.org']);
     expect(request.aiCode).toEqual([]);
     expect(request.userCode).toEqual([]);
   });
