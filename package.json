@@ -350,7 +350,7 @@
     "serve": "14.2.6",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
-    "vitest": "4.1.11"
+    "vitest": "5.0.0"
   },
   "dependencies": {
     "chart.js": "4.5.1",
