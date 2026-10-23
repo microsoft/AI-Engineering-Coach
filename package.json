@@ -333,7 +333,7 @@
     "@playwright/test": "1.62.1",
     "@types/node": "26.4.0",
     "@types/vscode": "1.125.0",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "5.0.0",
     "@vscode/vsce": "3.9.2",
     "cspell": "10.1.1",
     "esbuild": "0.28.2",
