@@ -10,6 +10,7 @@ eslint.config.mjs
 
 # Dev state
 .vscode/**
+.vscode-test/**
 .github/**
 .git/**
 .gitignore
@@ -21,6 +22,7 @@ eslint.config.mjs
 **/*.map
 *.vsix
 dist/**/*.map
+test-results/**
 
 # Docs scaffolding (only publish README + LICENSE + dist)
 README.github.md

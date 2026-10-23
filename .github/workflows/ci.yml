@@ -12,6 +12,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -32,14 +33,23 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Check bundle size
-        run: npm run check-size
-
       - name: Package VSIX
         run: npm run package
+
+      - name: Check bundle and VSIX size
+        run: npm run check-size
+
+      - name: Capture VSIX path
+        id: vsix
+        run: echo "path=$(node -p 'const p = require("./package.json"); `${p.name}-${p.version}.vsix`')" >> "$GITHUB_OUTPUT"
+
+      - name: End-to-end tests
+        uses: ./.github/actions/e2e
+        with:
+          vsix: ${{ steps.vsix.outputs.path }}
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vsix
-          path: '*.vsix'
+          path: ${{ steps.vsix.outputs.path }}
