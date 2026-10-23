@@ -51,6 +51,14 @@ describe('hasExternalHarnessSources', () => {
     });
   });
 
+  it('returns true when only a Cursor projects directory exists', () => {
+    withHome(home => {
+      fs.mkdirSync(path.join(home, '.cursor', 'projects'), { recursive: true });
+    }, () => {
+      expect(hasExternalHarnessSources()).toBe(true);
+    });
+  });
+
   it('returns false when no home directory is set (avoids relative-path probing)', () => {
     const prevHome = process.env.HOME;
     const prevUserProfile = process.env.USERPROFILE;

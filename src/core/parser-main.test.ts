@@ -24,7 +24,7 @@ vi.mock('./parser-xcode', () => ({
 vi.mock('./parser-harnesses', () => ({
   collectExternalHarnessesSync: vi.fn(),
   collectExternalHarnessesAsync: vi.fn(() => Promise.resolve()),
-  EXTERNAL_HARNESS_SET: new Set(['Claude', 'Codex', 'OpenCode']),
+  EXTERNAL_HARNESS_SET: new Set(['Claude', 'Codex', 'OpenCode', 'Cursor']),
 }));
 
 vi.mock('./cache', () => ({
