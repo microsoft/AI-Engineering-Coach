@@ -329,3 +329,35 @@ describe('readSnippet', () => {
     expect(snippet.length).toBe(50);
   });
 });
+
+describe('resolveWorkspaceRoot', () => {
+  it('uses a Claude workspace path that is already the project root', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-claude-root-'));
+    try {
+      const resolved = resolveWorkspaceRoot('claude--home-me-proj', { id: 'claude--home-me-proj', name: 'proj', path: root });
+      expect(resolved).toBe(root);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('still reads cwd from a session file when the path is a .claude/projects store', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-claude-store-'));
+    const projectRoot = path.join(base, 'real-project');
+    const store = path.join(base, '.claude', 'projects', '-tmp-real-project');
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 's.jsonl'), JSON.stringify({ cwd: projectRoot }) + '\n');
+    try {
+      expect(resolveWorkspaceRoot('claude-x', { id: 'claude-x', name: 'x', path: store })).toBe(projectRoot);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null for a Claude workspace whose path no longer exists', () => {
+    const gone = path.join(os.tmpdir(), 'cfg-claude-missing-' + Date.now());
+    expect(resolveWorkspaceRoot('claude-gone', { id: 'claude-gone', name: 'gone', path: gone })).toBeNull();
+  });
+});
+

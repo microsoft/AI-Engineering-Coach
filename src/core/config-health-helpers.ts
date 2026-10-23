@@ -74,12 +74,27 @@ function firstStringProperty(value: Record<string, unknown>, ...keys: string[]):
 
 export function resolveWorkspaceRoot(id: string, ws: Workspace): string | null {
   if (id.startsWith('claude-')) {
+    // `ws.path` is normally the project root already, as it is for the other
+    // CLI harnesses. Fall back to reading `cwd` out of a session file for
+    // workspaces whose path still points at ~/.claude/projects/<encoded>.
+    if (isProjectRoot(ws.path)) return ws.path;
     return resolveClaudeRoot(ws.path);
   }
   if (id.startsWith('codex-') || id.startsWith('opencode-')) {
-    return fs.existsSync(ws.path) ? ws.path : null;
+    return isProjectRoot(ws.path) ? ws.path : null;
   }
   return resolveVsCodeRoot(ws.path) ?? resolveCLIRoot(ws.path);
+}
+
+/** True when the path is an existing directory that is not a Claude session
+ *  store (those hold .jsonl transcripts, not the user's project files). */
+function isProjectRoot(p: string): boolean {
+  try {
+    if (!fs.statSync(p).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return path.basename(path.dirname(p)) !== 'projects' || !path.dirname(p).includes('.claude');
 }
 
 function resolveVsCodeRoot(storagePath: string): string | null {
