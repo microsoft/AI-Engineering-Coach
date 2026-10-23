@@ -105,7 +105,7 @@ it('retains startup errors for RPC calls and clients that connect later', async 
   host.dispose();
 });
 
-it.each(['script', 'SCRIPT', 'Script'])('waits for app.js to load before subscribing to replayed dataReady events (%s tags)', (scriptTag) => {
+it.each(['script', 'SCRIPT', 'Script'])('subscribes to replayed dataReady events only after the webview announces it is listening (%s tags)', (scriptTag) => {
   const host = createCanvasHost({ distDir: '/fixture/dist' });
   const html = String(request(host, '/').end.mock.calls[0][0])
     .replaceAll('<script>', `<${scriptTag}>`)
@@ -113,19 +113,26 @@ it.each(['script', 'SCRIPT', 'Script'])('waits for app.js to load before subscri
   const script = /<script>([\s\S]*?)<\/script>/i.exec(html)![1];
   const listeners = new Map<string, () => void>();
   const dispatchEvent = vi.fn();
-  const streams: { onmessage?: (event: { data: string }) => void }[] = [];
+  const streams: { url: string; onmessage?: (event: { data: string }) => void }[] = [];
+  const sandboxWindow: { dispatchEvent: typeof dispatchEvent; acquireVsCodeApi?: () => { postMessage(msg: unknown): void } } = { dispatchEvent };
   runInNewContext(script, {
-    window: { dispatchEvent },
+    window: sandboxWindow,
     document: { addEventListener: (name: string, callback: () => void) => listeners.set(name, callback) },
     MessageEvent,
     EventSource: class {
       onmessage?: (event: { data: string }) => void;
-      constructor() { streams.push(this); }
+      constructor(readonly url: string) { streams.push(this); }
     },
   });
+  // Page lifecycle events are no readiness signal: the bundle may not be listening yet (#269).
+  for (const callback of listeners.values()) callback();
+  const api = sandboxWindow.acquireVsCodeApi!();
+  api.postMessage({ type: 'progress' });
   expect(streams).toHaveLength(0);
-  listeners.get('DOMContentLoaded')!();
+  api.postMessage({ type: 'ready' });
+  api.postMessage({ type: 'ready' });
   expect(streams).toHaveLength(1);
+  expect(streams[0].url).toBe('/events');
   streams[0].onmessage!({ data: '{"type":"dataReady"}' });
   expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ data: { type: 'dataReady' } }));
   host.dispose();

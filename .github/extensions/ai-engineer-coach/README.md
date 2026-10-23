@@ -37,6 +37,6 @@ Open with `{ "page": "curiosity" }` to start on the Curiosity page. Omit input t
 
 - `extension.mjs` owns build detection and a single `127.0.0.1` HTTP server, and declares the canvas via `createCanvas` / `joinSession`.
 - `dist/canvas-host.cjs` (built from `src/canvas/host.ts`) provides the request handler: the dashboard shell, the asset routes, an SSE channel for parse progress, and the `/rpc` endpoint.
-- The dashboard talks to the host through an injected `acquireVsCodeApi` shim, so the webview code is unchanged between VS Code and canvas.
+- The dashboard talks to the host through an injected `acquireVsCodeApi` shim, so the webview code is unchanged between VS Code and canvas. The shim opens the SSE stream only after the dashboard posts `ready` (the same handshake the VS Code panel uses), so the progress and `dataReady` events replayed on connect always reach a listener.
 
 The harness breakdown distinguishes **GitHub Copilot App** (desktop) from **GitHub Copilot CLI** (terminal) using the `remoteSteerable` marker present in app session logs.
