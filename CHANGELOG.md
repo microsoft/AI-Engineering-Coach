@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix the anti-pattern **Why?** explanation getting stuck on "Asking AI for an explanation…" (#278):
+  every explanation state now renders through Preact, empty or failed responses show an error,
+  and timeouts, denied access, and quota errors fail fast instead of retrying for minutes
+- Use GitHub Copilot's Auto model for all AI features instead of hard-coded model families, and
+  hide AI features in VS Code while GitHub Copilot isn't available, showing them again on sign-in
+  without reopening the dashboard
 - Fix Coding Moments image counting and loading across VS Code, Copilot CLI/App,
   Claude (including subagents), Codex, OpenCode JSON/SQLite, and Xcode (#292);
   extract images off-thread with bounded local reads and session-scoped caching

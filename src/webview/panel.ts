@@ -12,16 +12,20 @@ import { saveSidebarStats } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult, type LoadProgress } from '../core/parser';
 import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
-import { WebviewMessage } from '../core/types';
+import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
+import { isCopilotModelAvailable } from './panel-llm-model';
 import { getRpcHandler } from './panel-rpc';
 import { PanelRequestService } from './panel-request-service';
 import { DashboardSidebarProvider } from './panel-sidebar';
 import { isRequestMessage, isSafeExternalHttpsUrl, postResponse, errorResult } from './panel-shared';
 
 export { DashboardSidebarProvider } from './panel-sidebar';
+
+/** Upper bound for the Copilot availability probe; the webview's first page render waits for it. */
+const CAPABILITY_PROBE_TIMEOUT_MS = 3_000;
 
 export class DashboardPanel {
   private static instance: DashboardPanel | undefined;
@@ -41,6 +45,10 @@ export class DashboardPanel {
   private loading = false;
   private loadCompletedAt = 0;
   private lastProgress: LoadProgress | undefined;
+  /** `llm` capability last delivered to the webview; undefined until it asks. */
+  private sentLlm: boolean | undefined;
+  /** Serializes availability probes so a later answer always reflects newer model state. */
+  private probeChain: Promise<unknown> = Promise.resolve();
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, context: vscode.ExtensionContext, forceReload = false) {
     this.panel = panel;
@@ -62,6 +70,7 @@ export class DashboardPanel {
       this.dispose();
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg: unknown) => this.handleMessage(msg), null, this.disposables);
+    vscode.lm.onDidChangeChatModels(() => this.refreshCapabilities(), null, this.disposables);
 
     void this.loadData(forceReload);
   }
@@ -114,6 +123,7 @@ export class DashboardPanel {
     this.pendingMessages = [];
     this.dataReady = false;
     this.lastProgress = undefined;
+    this.sentLlm = undefined;
     this.disposed = false;
     this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
     void this.loadData(true);
@@ -336,10 +346,14 @@ export class DashboardPanel {
       return;
     }
 
-    // Host capability probe — answered immediately so the webview can gate
-    // agent-dependent features. The VS Code host always has the local agent.
+    // Host capability probe — answered before data readiness so the webview can
+    // gate AI features on whether GitHub Copilot's Auto model is usable.
     if (msg.method === 'getCapabilities') {
-      try { postResponse(this.panel.webview, msg.id, { host: 'vscode', llm: true }); } catch { /* disposed */ }
+      void this.probeLlm().then((llm) => {
+        if (this.disposed) return;
+        this.sentLlm = llm;
+        try { postResponse(this.panel.webview, msg.id, { host: 'vscode', llm }); } catch { /* disposed */ }
+      });
       return;
     }
 
@@ -388,6 +402,23 @@ export class DashboardPanel {
         try { postResponse(this.panel.webview, msg.id, data); } catch { /* disposed */ }
       }
     }
+  }
+
+  private probeLlm(): Promise<boolean> {
+    const probe = this.probeChain.then(() => isCopilotModelAvailable(CAPABILITY_PROBE_TIMEOUT_MS));
+    this.probeChain = probe.catch(() => undefined);
+    return probe;
+  }
+
+  /** Re-probe after a model change (e.g. Copilot sign-in/out) and push only real flips. */
+  private refreshCapabilities(): void {
+    void this.probeLlm().then((llm) => {
+      if (this.disposed || this.sentLlm === undefined || llm === this.sentLlm) return;
+      this.sentLlm = llm;
+      runtimeDebug('panel', 'capabilities-changed', `llm=${llm}`);
+      const message: HostCapabilitiesMessage = { type: 'capabilities', host: 'vscode', llm };
+      try { void this.panel.webview.postMessage(message); } catch { /* disposed */ }
+    });
   }
 
   private handleOpenExternal(msg: Extract<WebviewMessage, { type: 'request' }>): void {
