@@ -12,7 +12,12 @@ export const vscode = acquireVsCodeApi();
 let rpcId = 0;
 const RPC_TIMEOUT_MS = 120_000;
 const RPC_LLM_TIMEOUT_MS = 300_000;
-const LLM_METHODS = new Set(['generateRule', 'explainOccurrence']);
+/** Requests whose host handlers call GitHub Copilot through `callLlm`. Their
+ *  timeout must outlast the host's request budget (`COPILOT_REQUEST_BUDGET_MS`)
+ *  so the reply, or its error, always arrives before the webview gives up. */
+const LLM_METHODS = new Set<string>(
+  ['generateRule', 'explainOccurrence', 'generateSkillContent'] satisfies ExtensionMethodName[],
+);
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
 /**
@@ -101,6 +106,7 @@ export function initMessageListener(
       });
     }
   });
+  queueMicrotask(() => vscode.postMessage({ type: 'ready' }));
 }
 
 /* ---- Chart.js import (bundled via esbuild) ---- */
@@ -111,6 +117,7 @@ import {
   Filler,
 } from 'chart.js';
 import { TreemapController, TreemapElement } from 'chartjs-chart-treemap';
+import type { ExtensionMethodName } from '../core/types/rpc-types';
 
 Chart.register(
   CategoryScale, LinearScale, PointElement, LineElement,

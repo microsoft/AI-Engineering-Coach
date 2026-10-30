@@ -1721,3 +1721,168 @@
 .img-quality-ex-prompt { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .img-quality-more { font-size: 11px; color: var(--text-muted); padding: 4px 8px; }
 .rule-help-howto code { background: var(--card-bg); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+#content:has(.curiosity-page) { display: flex; flex-direction: column; padding: 16px 24px; }
+.curiosity-page {
+  flex: 1; min-height: 0; min-width: 0; display: flex; container-type: inline-size;
+  --curiosity-secondary: color-mix(in srgb, var(--text) 80%, var(--canvas));
+  --curiosity-direct: var(--accent-blue);
+  --curiosity-web: var(--accent-green);
+  --curiosity-repository: var(--accent-purple);
+  --curiosity-action: var(--text-muted);
+  --curiosity-share: var(--accent-orange);
+}
+.curiosity-frame { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 10px; }
+.curiosity-toolbar, .curiosity-title, .curiosity-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0;
+}
+.curiosity-toolbar { flex-wrap: wrap; }
+.curiosity-title { justify-content: start; }
+.curiosity-title-group { flex: 1; min-width: 0; }
+.curiosity-toolbar h1 { margin: 0; }
+.curiosity-about-panel { max-width: 70ch; max-height: min(160px, 30vh); overflow-y: auto; font-size: 12px; line-height: 1.6; padding-top: 8px; }
+.curiosity-about-panel p + p { margin-top: 8px; color: var(--curiosity-secondary); }
+.curiosity-caption { color: var(--curiosity-secondary); font-size: 12px; }
+.curiosity-range { margin: 0; max-width: 100%; flex-wrap: wrap; }
+.curiosity-range .cons-range-btn.active { color: var(--list-active-fg); }
+.curiosity-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; padding-block: 4px 8px; border-bottom: 1px solid var(--border); }
+.curiosity-summary dt { font-size: 12px; color: var(--curiosity-secondary); }
+.curiosity-summary dd:not(.curiosity-summary-trends) { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.curiosity-summary strong { font-size: 24px; font-weight: 600; line-height: 1.2; }
+.curiosity-summary strong[tabindex] { cursor: pointer; }
+.curiosity-summary dd:not(.curiosity-summary-trends) span { font-size: 12px; color: var(--curiosity-secondary); }
+.curiosity-summary dd b { font-weight: 500; margin-left: 4px; }
+.curiosity-summary > div:first-child strong { color: var(--accent-blue); }
+.curiosity-overview { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(220px, 1fr); grid-template-rows: minmax(0, 1fr) 156px; gap: 16px; min-height: 0; }
+.curiosity-trend, .curiosity-languages, .curiosity-investigation { min-width: 0; min-height: 0; }
+.curiosity-trend { display: flex; flex-direction: column; gap: 8px; }
+.curiosity-languages { grid-column: 2; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 8px; border-left: 1px solid var(--border); padding-left: 20px; }
+.curiosity-investigation { grid-column: 1; grid-row: 2; border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.curiosity-heading { flex-wrap: wrap; gap: 8px; }
+.curiosity-heading h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.curiosity-page h2 { font-size: 15px; line-height: 1.3; margin: 0; }
+.curiosity-page h3 { font-size: 14px; margin: 0; }
+.curiosity-switch { display: flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); }
+.curiosity-switch button { padding: 4px 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.curiosity-switch button[aria-pressed="true"] { background: var(--list-active); color: var(--list-active-fg); }
+.curiosity-switch button:hover { background: var(--list-hover); color: var(--text); }
+.curiosity-chart { flex: 1; position: relative; min-height: 0; }
+.curiosity-chart canvas { max-width: 100%; cursor: default; }
+.curiosity-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 11px; }
+.curiosity-legend > span { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.curiosity-activity-mark { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.curiosity-share-mark { display: inline-block; width: 16px; border-top: 2px solid var(--curiosity-share); flex-shrink: 0; }
+.curiosity-legend b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.curiosity-research { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; flex: 1; min-height: 0; }
+.curiosity-research button { display: flex; flex-direction: column; align-items: start; gap: 4px; padding: 4px 8px; min-width: 0; background: transparent; border: 0; border-radius: 4px; color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: background 160ms ease-out; }
+.curiosity-research button:hover { background: var(--list-hover); }
+.curiosity-source-icon { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; }
+.curiosity-source-icon svg { width: 22px; height: 22px; }
+.curiosity-icon-web { color: var(--curiosity-web); }
+.curiosity-icon-repository { color: var(--curiosity-repository); }
+.curiosity-icon-delegated { color: var(--accent-orange); }
+.curiosity-research-label { font-size: 12px; font-weight: 600; }
+.curiosity-research strong { font-size: 22px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.curiosity-research small, .curiosity-research-detail { font-size: 11px; font-weight: 400; color: var(--curiosity-secondary); }
+.curiosity-research-track { width: 100%; height: 3px; background: var(--border); margin-top: auto; }
+.curiosity-research-track i { display: block; height: 100%; }
+.curiosity-language-list { list-style: none; display: grid; align-content: start; flex: 1; min-height: 0; }
+.curiosity-language-list button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; width: 100%; padding: 3px 4px; background: transparent; color: var(--text); border: 0; border-bottom: 1px solid var(--border); border-radius: 3px; font: inherit; text-align: left; cursor: pointer; }
+.curiosity-language-list button:hover { background: var(--list-hover); }
+.curiosity-language-list button[aria-pressed="true"] { outline: 1px solid var(--focus-border); outline-offset: -1px; background: var(--list-hover); }
+.curiosity-language-name { font-weight: 600; }
+.curiosity-language-list b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.curiosity-language-bar { grid-column: 1 / -1; display: flex; height: 4px; background: var(--border); }
+.curiosity-language-list small { grid-column: 1 / -1; color: var(--curiosity-secondary); font-size: 11px; }
+.curiosity-pagination { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; margin-top: auto; padding-top: 8px; }
+.curiosity-pagination button { background: transparent; border: 1px solid var(--border); border-radius: 3px; padding: 4px 8px; color: var(--text); font: inherit; cursor: pointer; }
+.curiosity-pagination button:hover { background: var(--list-hover); }
+.curiosity-pagination button:disabled { opacity: 0.55; cursor: default; }
+.curiosity-pagination span { white-space: nowrap; color: var(--curiosity-secondary); }
+.curiosity-text-button { padding: 3px 0; border: 0; background: transparent; color: var(--accent-blue); cursor: pointer; font-family: inherit; font-size: 11px; }
+.curiosity-text-button:hover { text-decoration: underline; }
+.curiosity-session-list { list-style: none; min-width: 0; min-height: 0; flex: 1; overflow-y: auto; }
+.curiosity-session-list li { padding: 10px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.curiosity-session-list a { color: var(--accent-blue); display: block; overflow-wrap: anywhere; font-weight: 500; }
+.curiosity-session-list small { display: block; color: var(--curiosity-secondary); font-size: 11px; margin-top: 4px; overflow-wrap: anywhere; }
+.curiosity-hover {
+  position: fixed; z-index: 80; width: min(384px, calc(100vw - 24px)); border-radius: var(--radius); font-size: 12px;
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--border)); color: var(--text);
+  background: var(--vscode-editorHoverWidget-background, color-mix(in srgb, var(--surface) 94%, var(--text)));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24); cursor: default;
+}
+.curiosity-hover[hidden] { display: none; }
+.curiosity-hover:has(.curiosity-prompt-reader) { max-height: calc(100vh - 24px); overflow-y: auto; }
+.curiosity-hover-heading { display: flex; gap: 12px; align-items: center; padding: 14px 18px; }
+.curiosity-hover-heading h3 { font-size: 13px; font-weight: 600; }
+.curiosity-hover-heading p { font-size: 11px; margin-top: 2px; color: var(--curiosity-secondary); }
+.curiosity-hover-icon { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; flex-shrink: 0; }
+.curiosity-hover-icon .curiosity-source-icon { width: 24px; height: 24px; }
+.curiosity-hover ul { list-style: none; }
+.curiosity-hover li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; padding: 11px 18px; border-top: 1px solid var(--border); }
+.curiosity-hover-session-icon { color: var(--curiosity-secondary); padding-top: 2px; }
+.curiosity-hover small { display: block; color: var(--curiosity-secondary); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.curiosity-hover .curiosity-hover-duration { grid-column: 2; margin-top: 0; }
+.curiosity-hover-empty { padding: 0 18px 16px; color: var(--curiosity-secondary); }
+.curiosity-prompt-preview { display: block; color: var(--text); font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+.curiosity-prompt-toggle { width: 100%; padding: 0; border: 0; border-radius: 3px; background: transparent; font-family: inherit; font-size: inherit; text-align: left; cursor: pointer; }
+.curiosity-prompt-toggle:hover { text-decoration: underline; }
+.curiosity-prompt-reader { margin-top: 6px; min-width: 0; }
+.curiosity-prompt-reader [role="alert"] { overflow-wrap: anywhere; }
+.curiosity-prompt-text { max-height: min(180px, 35vh); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); line-height: 1.6; }
+.curiosity-context { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; min-width: 0; }
+.curiosity-context-tag { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; line-height: 1.4; }
+.curiosity-context-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 170px; }
+.curiosity-context-icon { display: inline-flex; flex-shrink: 0; }
+.curiosity-context-icon svg, .curiosity-context-icon .curiosity-source-icon { width: 12px; height: 12px; }
+.curiosity-context-tag b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.curiosity-nav-toggle { display: none; background: transparent; border: 0; color: var(--text); width: 28px; height: 28px; cursor: pointer; }
+.curiosity-nav-toggle svg { width: 20px; height: 20px; }
+.curiosity-nav-shade { display: none; }
+.curiosity-empty { flex: 1; padding: 16px 0; color: var(--curiosity-secondary); font-size: 12px; }
+.curiosity-empty h3 { color: var(--text); margin-bottom: 8px; }
+.curiosity-page :is(button, a, select, [tabindex]):focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
+@container (max-width: 760px) {
+  .curiosity-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr) 218px; gap: 12px; }
+  .curiosity-trend { grid-column: 1 / -1; grid-row: 1; }
+  .curiosity-investigation { grid-column: 1; grid-row: 2; }
+  .curiosity-languages { grid-column: 2; grid-row: 2; padding-left: 12px; }
+  .curiosity-language-list button { padding: 6px 4px; }
+  .curiosity-languages > .curiosity-caption { display: none; }
+  .curiosity-research { grid-template-columns: 1fr; gap: 0; }
+  .curiosity-research button { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 2px 8px; padding: 6px 4px; }
+  .curiosity-research strong { font-size: 18px; }
+  .curiosity-research strong small, .curiosity-research-detail { display: none; }
+  .curiosity-research-track { grid-column: 2 / -1; }
+  .curiosity-summary { gap: 12px; }
+}
+@container (max-width: 480px) {
+  .curiosity-frame { gap: 8px; }
+  .curiosity-title { gap: 6px; }
+  .curiosity-toolbar h1 { font-size: 18px; }
+  .curiosity-toolbar { gap: 8px; }
+  .curiosity-summary dt { font-size: 11px; }
+  .curiosity-summary strong { font-size: 20px; }
+  .curiosity-summary dd:not(.curiosity-summary-trends) span { font-size: 10px; }
+  .curiosity-overview { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(130px, 1fr) 116px 180px; gap: 8px; }
+  .curiosity-investigation { grid-column: 1; grid-row: 2; padding-top: 8px; }
+  .curiosity-languages { grid-column: 1; grid-row: 3; border-left: 0; border-top: 1px solid var(--border); padding: 8px 0 0; gap: 4px; }
+  .curiosity-heading h2 { font-size: 14px; }
+  .curiosity-heading .curiosity-caption { display: none; }
+  .curiosity-research { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .curiosity-research button { display: flex; gap: 4px; padding: 0 4px; }
+  .curiosity-research-label { font-size: 0; }
+  .curiosity-research-label::after { content: attr(data-short); font-size: 11px; }
+  .curiosity-research strong small { display: inline; font-size: 10px; }
+  .curiosity-language-list button { gap: 3px 8px; padding: 4px; }
+  .curiosity-language-list small { font-size: 10px; }
+  .curiosity-language-list { align-content: start; }
+  .curiosity-legend { gap: 4px 12px; font-size: 10px; }
+}
+@media (max-width: 700px) {
+  #content:has(.curiosity-page) { padding: 12px 16px; }
+  #app:has(.curiosity-page) #sidebar { position: absolute; z-index: 60; left: 0; top: 0; visibility: hidden; transform: translateX(-100%); }
+  #app:has(.curiosity-nav-open) #sidebar { visibility: visible; transform: translateX(0); }
+  .curiosity-nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+  .curiosity-nav-shade { display: block; position: fixed; inset: 0 0 0 220px; z-index: 50; border: 0; background: rgba(0, 0, 0, 0.32); }
+}
+@media (prefers-reduced-motion: reduce) { .curiosity-research button, .curiosity-range .cons-range-btn { transition: none; } }

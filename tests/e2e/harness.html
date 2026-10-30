@@ -39,15 +39,17 @@ body { background: var(--vscode-editor-background); color: var(--vscode-editor-f
       <li class="nav-group-header">Observe</li>
       <li><a href="#" data-page="dashboard" class="active"><span class="nav-icon">&#9632;</span> Dashboard</a></li>
       <li><a href="#" data-page="timeline"><span class="nav-icon">&#9472;</span> Timeline<span class="nav-badge" id="badge-sessions"></span></a></li>
+      <li><a href="#" data-page="image-gallery"><span class="nav-icon">&#9632;</span> Coding Moments</a></li>
       <li class="nav-group-header">Measure</li>
       <li><a href="#" data-page="output"><span class="nav-icon">&#9650;</span> Output<span class="nav-badge" id="badge-output"></span></a></li>
       <li><a href="#" data-page="burndown"><span class="nav-icon">&#9660;</span> Burndown<span class="nav-badge" id="badge-burndown"></span></a></li>
       <li><a href="#" data-page="patterns"><span class="nav-icon">&#9632;</span> Patterns</a></li>
+      <li><a href="#" data-page="curiosity"><span class="nav-icon">?</span> Curiosity</a></li>
       <li class="nav-group-header">Improve</li>
       <li><a href="#" data-page="anti-patterns"><span class="nav-icon">&#9888;</span> Anti-Patterns<span class="nav-badge" id="badge-antipatterns"></span></a></li>
-      <li><a href="#" data-page="skills"><span class="nav-icon">&#9733;</span> Skill Finder<span class="nav-badge" id="badge-skills"></span></a></li>
+      <li class="llm-only"><a href="#" data-page="skills"><span class="nav-icon">&#9733;</span> Skill Finder<span class="nav-badge" id="badge-skills"></span></a></li>
       <li><a href="#" data-page="config-health"><span class="nav-icon">&#9670;</span> Context Health</a></li>
-      <li><a href="#" data-page="level-up"><span class="nav-icon">&#9733;</span> Level Up</a></li>
+      <li class="llm-only"><a href="#" data-page="level-up"><span class="nav-icon">&#9733;</span> Level Up</a></li>
       <li class="nav-group-header">Explore</li>
       <li><a href="#" data-page="data-explorer"><span class="nav-icon">&#9776;</span> Data Explorer</a></li>
       <li><a href="#" data-page="rule-playground"><span class="nav-icon">&#9881;</span> Rule Playground</a></li>
@@ -107,10 +109,176 @@ function genLabels(n) {
   return r;
 }
 
+function mockCuriositySessions() {
+  const sessions = [
+    { id: 's1', workspaceId: 'ws-1', workspace: 'my-api', date: '2026-09-28', files: ['src/a.ts'],
+      context: [{ kind: 'web', label: 'learn.microsoft.com', turns: 2 }, { kind: 'repository', label: 'src/', turns: 3 }], turns: [
+      ['direct', 'How does recursion use the stack?'], ['web', 'What do recent compiler studies show?'],
+      ['repository', 'Why does the parser fail?'], ['repository', 'How does this cache expire?'],
+      ['repository', 'Why is this value shared?'], ['action', 'Implement the cache.', false, 'web_fetch', 'research'], ['action', 'Can you add the tests?', true],
+      ['unclassified', 'Yes'], ['unclassified', 'Why?', false, 'ask_user'], ['unscanned', 'Unavailable preview'],
+      ['excluded', 'Transport context'], ['excluded', 'Generated context'],
+    ] },
+    { id: 's2', workspaceId: 'ws-2', workspace: 'frontend-app', date: '2026-09-30',
+      files: ['src/b.py', 'src/b.ts'],
+      context: [{ kind: 'web', label: 'docs.python.org', turns: 1 }, { kind: 'repository', label: 'src/', turns: 1 }], turns: [
+        ['web', 'What does the Python reference say?'], ['repository', 'How does the Python parser recover?'],
+        ['action', 'Can you change this parser?', true],
+      ] },
+    { id: 's3', workspaceId: 'ws-1', workspace: 'my-api', date: '2026-09-30', files: [], turns: [
+      ['direct', 'Why does the parser fail?'], ['action', 'Run the command.'],
+    ] },
+  ];
+  if (typeof window.mockCuriosityPrompt === 'string') {
+    for (const session of sessions) for (const turn of session.turns) turn[1] = window.mockCuriosityPrompt;
+  }
+  return sessions;
+}
+
+function mockCuriositySessionDetail(sessionId) {
+  const session = mockCuriositySessions().find(session => session.id === sessionId);
+  if (!session) return null;
+  return {
+    sessionId, workspaceId: session.workspaceId, workspaceName: session.workspace, harness: 'Local Agent',
+    requests: session.turns.map(([, text], index) => ({
+      requestId: `${sessionId}-${index}`, timestamp: Date.parse(`${session.date}T12:00:00Z`) + index * 60000,
+      messageText: text, messageLength: text.length, responseText: 'A recorded answer.', responseLength: 18,
+      toolsUsed: [], editedFiles: [], referencedFiles: [], skillsUsed: [], modelId: '', agentName: '',
+      agentMode: '', isCanceled: false, userCode: [], aiCode: [],
+    })),
+  };
+}
+
+function getMockCuriosity(params = {}) {
+  const activities = ['direct', 'web', 'repository', 'action'];
+  const empty = () => ({ direct: 0, web: 0, repository: 0, action: 0 });
+  const sessions = mockCuriositySessions().filter(session => (!params.workspaceId || session.workspaceId === params.workspaceId)
+    && (!params.harness || params.harness === 'Local Agent')
+    && (!params.fromDate || session.date >= params.fromDate) && (!params.toDate || session.date <= params.toDate));
+  const rows = new Map();
+  const data = {
+    counts: empty(), coverage: { human: 0, classified: 0, excluded: 0, unscanned: 0, unclassified: 0,
+      duplicates: 0, withoutLanguage: 0, legacyAnswers: 0,
+      reasons: { noQuestion: 0, noAnswer: 0, unknownTool: 0, clarification: 0, canceled: 0 } },
+    sessions: 0, questionLedActions: 0, daily: [], languages: [],
+    balance: { status: 'insufficient', tier: 'insufficient', workStatus: 'insufficient', investigationStatus: 'insufficient', activeDays: 0,
+      thresholds: { minTurns: 50, minDays: 7, minCoverage: 0.7, lowInquiry: 0.05, highInquiry: 0.95,
+        suggestedLowInquiry: 0.1, suggestedHighInquiry: 0.5, minInquiries: 20, maxInvestigationShare: 0.8, strongInvestigationShare: 0.95 }, warnings: [] },
+    weeklyChecks: [],
+    sessionCounts: { human: 0, inquiry: 0, action: 0, mixed: 0 },
+    research: Object.fromEntries(['web', 'repository', 'delegated'].map(source => [source, { turns: 0, sessions: 0, withinAction: 0, sessionSamples: [] }])),
+    chains: { total: 0, sustained: 0, exchanges: 0, examples: [] }, evidence: { direct: [], web: [], repository: [], action: [] }, repeated: [],
+  };
+  const daily = new Map();
+  const dailySessions = new Map();
+  const repeated = new Map();
+  for (const session of sessions) {
+    const languages = new Set(session.files.flatMap(file => file.endsWith('.ts') ? ['TypeScript'] : file.endsWith('.py') ? ['Python'] : []));
+    const firstPrompt = session.turns[0][1].replaceAll(/\s+/g, ' ').trim();
+    const reference = { sessionId: session.id, requestId: `${session.id}-0`, workspaceId: session.workspaceId,
+      name: firstPrompt.slice(0, 80), promptPreview: firstPrompt.slice(0, 80), promptTruncated: firstPrompt.length > 80, date: session.date,
+      timestamp: Date.parse(`${session.date}T12:00:00Z`), workspace: session.workspace, harness: 'Local Agent', context: session.context };
+    const counts = empty();
+    for (const [activity] of session.turns) if (activities.includes(activity)) counts[activity]++;
+    for (const language of languages) {
+      const row = rows.get(language) || { language, sessions: 0, inquirySessions: 0, files: 0, counts: empty(), sessionSamples: [] };
+      row.sessions++;
+      row.sessionSamples.push(reference);
+      if (counts.direct + counts.web + counts.repository) row.inquirySessions++;
+      row.files += session.files.filter(file => language === 'Python' ? file.endsWith('.py') : file.endsWith('.ts')).length;
+      for (const activity of activities) row.counts[activity] += counts[activity];
+      rows.set(language, row);
+    }
+    if (params.language && !(params.language === 'unrecorded' ? !languages.size : languages.has(params.language))) continue;
+    data.sessions++;
+    data.sessionCounts.human++;
+    const hasInquiry = !!(counts.direct + counts.web + counts.repository);
+    if (hasInquiry) data.sessionCounts.inquiry++;
+    if (counts.action) data.sessionCounts.action++;
+    if (hasInquiry && counts.action) data.sessionCounts.mixed++;
+    const sources = new Set();
+    const sourceSamples = new Map();
+    let run = [];
+    const finish = () => {
+      if (run.length >= 2) {
+        data.chains.total++; data.chains.exchanges += run.length;
+        if (run.length >= 3) data.chains.sustained++;
+        data.chains.examples.push({ exchanges: run.length, session: run[0],
+          elapsedMs: run.at(-1).timestamp - run[0].timestamp + 30000 });
+      }
+      run = [];
+    };
+    session.turns.forEach(([activity, text, questionLed, specialTool, role], index) => {
+      if (activity === 'excluded') { data.coverage.excluded++; return; }
+      data.coverage.human++;
+      if (!languages.size) data.coverage.withoutLanguage++;
+      if (!activities.includes(activity)) {
+        data.coverage[activity]++;
+        if (activity === 'unclassified') data.coverage.reasons[specialTool ? 'clarification' : 'noQuestion']++;
+        finish(); return;
+      }
+      data.counts[activity]++; data.coverage.classified++;
+      const prompt = text.replaceAll(/\s+/g, ' ').trim();
+      const sample = { ...reference, requestId: `${session.id}-${index}`, timestamp: reference.timestamp + index * 60000,
+        promptPreview: prompt.slice(0, 80), promptTruncated: prompt.length > 80 };
+      const day = daily.get(session.date) || empty(); day[activity]++; daily.set(session.date, day);
+      const names = dailySessions.get(session.date) || { direct: [], web: [], repository: [], action: [] };
+      const existing = names[activity].findIndex(item => item.sessionId === reference.sessionId);
+      if (existing < 0) names[activity].push(sample); else names[activity][existing] = sample;
+      dailySessions.set(session.date, names);
+      if (questionLed) data.questionLedActions++;
+      const tools = [...(activity === 'web' ? ['web_search'] : activity === 'repository' ? ['view', 'web_fetch'] : activity === 'action' ? ['bash'] : []),
+        ...(specialTool ? [specialTool] : []), ...(role ? ['task'] : [])];
+      if (session.id === 's1' && index === 0) data.coverage.legacyAnswers++;
+      for (const source of ['web', 'repository', 'delegated']) {
+        if (source === 'web' ? !tools.some(tool => tool === 'web_search' || tool === 'web_fetch')
+          : source === 'repository' ? !tools.includes('view') : !role) continue;
+        const row = data.research[source];
+        row.turns++;
+        if (activity === 'action') row.withinAction++;
+        sources.add(source);
+        sourceSamples.set(source, sample);
+      }
+      data.evidence[activity].push(sample);
+      if (activity === 'action') finish(); else {
+        run.push(sample);
+        if (text === 'Why does the parser fail?') {
+          const example = { ...sample, text };
+          const group = repeated.get(text) || { text, count: 0, sessions: 0, example };
+          group.count++; group.sessions++; repeated.set(text, group);
+        }
+      }
+    });
+    finish();
+    for (const source of sources) {
+      data.research[source].sessions++;
+      data.research[source].sessionSamples.push(sourceSamples.get(source));
+    }
+  }
+  data.languages = [...rows.values()];
+  data.balance.activeDays = daily.size;
+  data.chains.examples.sort((a, b) => b.session.timestamp - a.session.timestamp);
+  data.repeated = [...repeated.values()].filter(group => group.sessions > 1);
+  for (const activity of activities) data.evidence[activity].sort((a, b) => b.timestamp - a.timestamp);
+  if (daily.size) {
+    const dates = [...daily.keys()].sort();
+    const end = dates.at(-1);
+    for (let date = dates[0]; date <= end;) {
+      data.daily.push({ date, counts: daily.get(date) || empty(),
+        sessions: dailySessions.get(date) || { direct: [], web: [], repository: [], action: [] } });
+      date = new Date(Date.parse(`${date}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    }
+  }
+  return data;
+}
+
 function getMockData(method, params) {
   const labels30 = genLabels(30);
 
   const mocks = {
+    getImageGallery: () => ({ moments: [], stories: [], journeys: [], qualityFlags: [], summary: { totalImages: 0, totalMoments: 0, totalSessions: 0, avgImagesPerMoment: 0, topWorkspace: '', topModel: '', dateRange: '', dailyImages: [] } }),
+    getSessionImages: () => ({ images: [] }),
+    getCuriosity: () => getMockCuriosity(params),
     getStats: () => ({ totalSessions: 127, totalWorkspaces: 12, totalRequests: 2841 }),
 
     getWorkspaces: () => [
@@ -231,6 +399,7 @@ function getMockData(method, params) {
     }),
 
     getAntiPatterns: () => ({
+      curiosityTier: 'insufficient',
       patterns: [
         { id: 'ap-1', name: 'Giant Prompt Detected', severity: 'high', group: 'prompt-quality', occurrences: 8, description: 'Prompts exceeding 4000 tokens reduce response quality', suggestion: 'Break prompts into smaller focused requests', examples: ['Session s1: 5200 tokens'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [3,2,2,1] } },
         { id: 'ap-2', name: 'Abandoned Session', severity: 'medium', group: 'session-hygiene', occurrences: 5, description: 'Sessions ended without completing the task', suggestion: 'Use explicit completion signals', examples: ['Session s2: no final commit'], details: [], weeklyHist: { labels: ['W17','W18','W19','W20'], counts: [2,1,1,1] } },
@@ -434,7 +603,7 @@ function getMockData(method, params) {
     getDataExplorerFields: () => ([]),
     getRuleEditor: () => ({ rules: [], previews: [], layers: [], pending: [] }),
     getSessions: () => ({ sessions: [], totalCount: 0 }),
-    getSessionDetail: () => null,
+    getSessionDetail: () => mockCuriositySessionDetail(params.sessionId),
     getMetricList: () => ([]),
     getRuleCoverage: () => ({ rules: [], workspaces: [], matrix: {} }),
     getRulePreview: () => ({ matches: [] }),
@@ -498,7 +667,7 @@ if (__mode === 'loading') {
   setInterval(() => {
     window.dispatchEvent(new MessageEvent('message', { data: __progress }));
   }, 100);
-} else {
+} else if (__mode !== 'manual-loading') {
   setTimeout(() => {
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'dataReady' }

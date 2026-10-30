@@ -12,13 +12,14 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: 22
           cache: npm
@@ -39,8 +40,8 @@ jobs:
       - name: Run build
         run: npm run build
 
-      - name: Run tests
-        run: npm test
+      - name: Run checks
+        run: npm run check
 
       - name: Package VSIX
         run: npm run package
@@ -48,24 +49,28 @@ jobs:
       - name: Capture VSIX path
         id: vsix
         run: |
-          VSIX_PATH="$(find . -maxdepth 1 -name '*.vsix' -print -quit)"
-          if [ -z "$VSIX_PATH" ]; then
-            echo "No VSIX package was produced"
-            exit 1
-          fi
+          VSIX_PATH="$(node -p 'const p = require("./package.json"); `${p.name}-${p.version}.vsix`')"
+          test -f "$VSIX_PATH"
           echo "path=$VSIX_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Check bundle and VSIX size
+        run: npm run check-size
+
+      - name: End-to-end release gate
+        uses: ./.github/actions/e2e
+        with:
+          vsix: ${{ steps.vsix.outputs.path }}
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: ${{ steps.vsix.outputs.path }}
           generate_release_notes: true
 
       - name: Upload VSIX artifact
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vsix
           path: ${{ steps.vsix.outputs.path }}
-

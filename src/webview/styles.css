@@ -118,6 +118,13 @@ body {
 
 .nav-links li { margin: 0; }
 
+/* AI controls follow GitHub Copilot availability in place: capabilities.ts toggles
+   `llm-unavailable` on the root element, so pages are never rebuilt and open
+   editors, drafts, and results survive a sign-in or sign-out. !important keeps
+   this working for controls that also carry an inline display style. */
+.llm-unavailable .llm-only { display: none !important; }
+:root:not(.llm-unavailable) .llm-fallback { display: none !important; }
+
 /* ---- Nav Group Headers ---- */
 .nav-group-header {
   display: flex;
@@ -970,6 +977,10 @@ h2 {
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.occ-session-link {
+  color: var(--accent-blue);
 }
 
 .occ-msg-preview {

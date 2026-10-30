@@ -44,6 +44,15 @@ export interface TodoItem {
   status: 'not-started' | 'in-progress' | 'completed';
 }
 
+export type CuriositySignal =
+  | { kind: 'excluded'; excerpts: string[] }
+  | { kind: 'unscanned'; excerpts: string[] }
+  | {
+    kind: 'analyzed';
+    features: { question: { count: number; excerpts: string[] } };
+    repeatedQuestions: string[];
+  };
+
 export interface SessionRequest {
   requestId: string;
   timestamp: number | null;
@@ -83,6 +92,16 @@ export interface SessionRequest {
   todoSnapshot: TodoItem[] | null;
   /** Precomputed work-type classification (feature, bug fix, refactor, etc.) */
   workType: string;
+  /** Computed from raw user text before message previews are truncated. */
+  curiosity?: CuriositySignal;
+  /** Native human-event identity, not a generated request index or an assistant ID. */
+  userEventId?: string;
+  /** Captured before response previews are cleared. Legacy text is weaker than explicit finalization. */
+  answerEvidence?: 'final' | 'legacy' | 'missing';
+  /** Investigation roles declared in structured tool arguments, not inferred from prompts. */
+  investigationDelegations?: ('research' | 'explore')[];
+  /** Hostnames from explicit URL arguments of recorded web tools. No URL paths or credentials. */
+  webDomains?: string[];
   /** Reasoning / thinking effort for reasoning-capable models, when known.
    *  Sources:
    *    - Copilot CLI: `session.start.data.reasoningEffort` and `session.model_change.data.reasoningEffort`

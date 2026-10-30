@@ -10,6 +10,7 @@ import { SessionRequest, ToolConfirmation } from './types';
 import { createRequest, extractSkillNameFromPath } from './parser-shared';
 import { debugCore } from './log';
 import { extractReasoningEffortFromModelId } from './helpers';
+import { hasRecordedToolEvidence, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -376,19 +377,41 @@ function extractRequestVariables(req: RawRequest, resp: RawRequest['response'], 
   customInstructions: string[];
   skillsUsed: string[];
   toolsUsed: string[];
+  investigationDelegations: ('research' | 'explore')[];
+  webDomains: string[];
   editedFiles: string[];
   referencedFiles: string[];
   toolConfirmations: ToolConfirmation[];
 } {
   const vd = req.variableData || {};
   const vdVars = (typeof vd === 'object' ? vd.variables : []) || [];
+  const toolFiles = { edited: [] as string[], referenced: [] as string[] };
+  const investigationDelegations = new Set<'research' | 'explore'>();
+  const webDomains = new Set<string>();
+  forEachToolCall(result, value => {
+    if (!isObj(value) || typeof value.name !== 'string') return;
+    if (!hasRecordedToolEvidence(value.name)) return;
+    let args: unknown = value.arguments;
+    if (typeof args === 'string' && value.name !== 'apply_patch') {
+      try { args = JSON.parse(args); }
+      catch (error) { debugCore('parser-vscode', 'Cannot read tool file evidence', error); return; }
+    }
+    const files = recordedToolFiles(value.name, args);
+    const role = recordedInvestigation(value.name, args);
+    if (role) investigationDelegations.add(role);
+    for (const domain of recordedWebDomains(value.name, args)) webDomains.add(domain);
+    toolFiles.edited.push(...files.edited);
+    toolFiles.referenced.push(...files.referenced);
+  });
   return {
     variableKinds: extractVariableKinds(vdVars),
     customInstructions: extractCustomInstructions(req.contentReferences),
     skillsUsed: extractSkillsUsed(vdVars, result),
     toolsUsed: extractToolsUsed(result),
-    editedFiles: extractEditedFiles(req.editedFileEvents),
-    referencedFiles: extractReferencedFiles(vdVars),
+    investigationDelegations: [...investigationDelegations],
+    webDomains: [...webDomains],
+    editedFiles: [...new Set([...extractEditedFiles(req.editedFileEvents), ...toolFiles.edited])],
+    referencedFiles: [...new Set([...extractReferencedFiles(vdVars), ...toolFiles.referenced])],
     toolConfirmations: extractToolConfirmations(resp),
   };
 }
@@ -470,6 +493,8 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
     customInstructions,
     skillsUsed,
     toolsUsed,
+    investigationDelegations,
+    webDomains,
     editedFiles,
     referencedFiles,
     toolConfirmations,
@@ -513,6 +538,9 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
 
   return createRequest({
     requestId: req.requestId || '',
+    userEventId: req.requestId,
+    answerEvidence: respText.trim() && !req.isCanceled && endState !== 'pending' && endState !== 'errored'
+      ? resultIsFinalized ? 'final' : 'legacy' : 'missing',
     timestamp: req.timestamp ?? null,
     messageText: msgText,
     responseText: respText,
@@ -520,6 +548,8 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
     agentName, agentMode,
     modelId: req.modelId || '',
     toolsUsed, editedFiles, referencedFiles,
+    investigationDelegations,
+    webDomains,
     slashCommand, variableKinds, customInstructions, skillsUsed,
     firstProgress,
     totalElapsed,

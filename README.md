@@ -157,6 +157,7 @@ A few features depend on the local VS Code language model and are hidden in canv
 | **Output**   | Generated code volume by language, model usage table _(token breakdown temporarily hidden)_ |
 | **Burndown** | Monthly AI token budget progress with projections _(temporarily disabled)_                  |
 | **Patterns** | 7×24 activity heatmap and work-life balance signals                                         |
+| **[Curiosity](docs/content/measure/curiosity.md)** | Sessions with inquiry, inquiry over time, investigation sources, and programming-language context |
 
 ### GitHub App
 
@@ -204,7 +205,7 @@ image requests.
 - **Read-only** — the extension never modifies your session files
 - **Local analysis** — all parsing and analytics run entirely on your machine
 - **No proprietary telemetry** — the extension does not phone home or collect usage data
-- **Optional AI features** — some features (rule compiler, skill finder, context review) use the VS Code built-in Copilot language model API when explicitly invoked by the user
+- **Optional AI features** — some features (rule compiler, skill finder, Level Up learning content, context review, anti-pattern **Why?** explanations) use GitHub Copilot's Auto model through the VS Code language model API when explicitly invoked by the user. In VS Code, the Why? buttons, Skill Finder, and Level Up are hidden and the context review is disabled while GitHub Copilot isn't available (for example, when you're signed out); they come back as soon as you sign in. Rule generation falls back to a starter template
 
 ---
 

@@ -16,8 +16,7 @@ import * as path from 'path';
 import { Session, Workspace } from './types';
 import { EditLoc, EditLocIndex } from './edit-loc-diff';
 import { warnCore } from './log';
-import { parseSessionFile } from './parser-vscode';
-import { parseCLIEventsFile } from './parser-vscode-cli';
+import { loadSessionDetails } from './session-image-loader';
 import { stripSingleSession } from './parser-shared';
 
 export interface ParseResult {
@@ -31,10 +30,12 @@ export interface ParseResult {
 }
 
 export interface SessionSource {
-  kind: 'vscode-session-file' | 'cli-events';
+  kind: 'vscode-session-file' | 'cli-events' | 'claude-jsonl' | 'codex-jsonl' | 'opencode-storage' | 'opencode-db' | 'xcode-db';
   filePath: string;
+  additionalFilePaths?: string[];
   workspaceId: string;
   workspaceName: string;
+  workspaceRootPath?: string;
   harness: string;
 }
 
@@ -126,7 +127,7 @@ const CACHE_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '
 const CACHE_FILE = path.join(CACHE_DIR, 'parsed.json');
 const CACHE_META = path.join(CACHE_DIR, 'meta.json');
 
-const CACHE_VERSION = 12;
+const CACHE_VERSION = 22;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */
@@ -459,11 +460,9 @@ export async function loadSessionFromDisk(sessionId: string): Promise<Session | 
     }
     if (!source) return null;
 
-    if (source.kind === 'cli-events') {
-      return parseCLIEventsFile(source.filePath, source.workspaceId, source.workspaceName);
-    }
-    return parseSessionFile(source.filePath, source.workspaceId, source.workspaceName, source.harness);
-  } catch {
+    return await loadSessionDetails(source, sessionId);
+  } catch (error) {
+    warnCore('cache', `Could not reload session ${sessionId}`, error);
     return null;
   }
 }

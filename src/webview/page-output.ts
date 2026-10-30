@@ -803,7 +803,6 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
     }
     try {
       if (activeTab === 'production') await renderProductionTab(gen);
-      else if (!FF_TOKEN_REPORTING_ENABLED) renderTokenUsageGated();
       else await renderTokenUsageTab(gen);
     } catch (error) {
       if (isCurrentRender(gen)) throw error;
@@ -811,21 +810,6 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
       return;
     }
     return gen;
-  }
-
-  /** Shown when token-usage is gated behind the feature flag. */
-  function renderTokenUsageGated(): void {
-    render(html`
-      <div class="feature-gated-notice">
-        <h2>Token Usage is temporarily disabled</h2>
-        <p>
-          This feature has been disabled temporarily until we are able to verify
-          that the reporting is aligned with what is reported by GitHub.
-          It will be re-enabled once the billing system is active and numbers
-          can be validated.
-        </p>
-      </div>
-    `, target);
   }
 
   // Initial render — honour the persisted active tab

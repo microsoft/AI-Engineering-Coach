@@ -5,22 +5,27 @@
 
 /* Webview panel manager -- creates and manages the dashboard webview shell */
 
+import { fork } from 'child_process';
 import * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
 import { saveSidebarStats } from '../core/cache';
-import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult } from '../core/parser';
+import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult, type LoadProgress } from '../core/parser';
 import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
-import { WebviewMessage } from '../core/types';
+import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
+import { isCopilotModelAvailable } from './panel-llm-model';
 import { getRpcHandler } from './panel-rpc';
 import { PanelRequestService } from './panel-request-service';
 import { DashboardSidebarProvider } from './panel-sidebar';
 import { isRequestMessage, isSafeExternalHttpsUrl, postResponse, errorResult } from './panel-shared';
 
 export { DashboardSidebarProvider } from './panel-sidebar';
+
+/** Upper bound for the Copilot availability probe; the webview's first page render waits for it. */
+const CAPABILITY_PROBE_TIMEOUT_MS = 3_000;
 
 export class DashboardPanel {
   private static instance: DashboardPanel | undefined;
@@ -39,8 +44,13 @@ export class DashboardPanel {
   private disposed = false;
   private loading = false;
   private loadCompletedAt = 0;
+  private lastProgress: LoadProgress | undefined;
+  /** `llm` capability last delivered to the webview; undefined until it asks. */
+  private sentLlm: boolean | undefined;
+  /** Serializes availability probes so a later answer always reflects newer model state. */
+  private probeChain: Promise<unknown> = Promise.resolve();
 
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, context: vscode.ExtensionContext, forceReload = false) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.globalState = context.globalState;
@@ -60,16 +70,18 @@ export class DashboardPanel {
       this.dispose();
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg: unknown) => this.handleMessage(msg), null, this.disposables);
+    vscode.lm.onDidChangeChatModels(() => this.refreshCapabilities(), null, this.disposables);
 
-    void this.loadData();
+    void this.loadData(forceReload);
   }
 
-  public static createOrShow(extensionUri: vscode.Uri, context: vscode.ExtensionContext): void {
+  public static createOrShow(extensionUri: vscode.Uri, context: vscode.ExtensionContext, forceReload = false): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
     if (DashboardPanel.instance) {
       runtimeDebug('panel', 'reveal-existing');
       DashboardPanel.instance.panel.reveal(column);
+      if (forceReload) DashboardPanel.instance.reload(true);
       return;
     }
 
@@ -88,7 +100,7 @@ export class DashboardPanel {
       },
     );
 
-    DashboardPanel.instance = new DashboardPanel(panel, extensionUri, context);
+    DashboardPanel.instance = new DashboardPanel(panel, extensionUri, context, forceReload);
   }
 
   public static get current(): DashboardPanel | undefined {
@@ -106,16 +118,15 @@ export class DashboardPanel {
       return;
     }
     runtimeDebug('panel', 'reload');
-    clearCache();
-    clearCatalogCache();
-    panelCache.clear();
     this.analyzer = undefined;
     this.parseResult = undefined;
     this.pendingMessages = [];
     this.dataReady = false;
+    this.lastProgress = undefined;
+    this.sentLlm = undefined;
     this.disposed = false;
     this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
-    void this.loadData();
+    void this.loadData(true);
   }
 
   private updateSidebarStats(): void {
@@ -138,7 +149,7 @@ export class DashboardPanel {
     return { skippedFiles: w?.skippedFiles ?? 0, skippedLines: w?.skippedLines ?? 0 };
   }
 
-  private async loadData(): Promise<void> {
+  private async loadData(forceReload = false): Promise<void> {
     this.loading = true;
     const t0 = Date.now();
     runtimeDebug('panel', 'loadData-start');
@@ -150,6 +161,7 @@ export class DashboardPanel {
     let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
     const sendRaw = (progress: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string }) => {
       if (this.disposed) return;
+      this.lastProgress = progress;
       try {
         this.panel.webview.postMessage({ type: 'progress', ...progress });
       } catch {
@@ -165,6 +177,7 @@ export class DashboardPanel {
       // Always send immediately for phase changes, workspace grid updates, and the final "Ready".
       if (progress.phase !== pendingProgress?.phase || progress.workspacePlan || progress.workspaceDone || progress.pct >= 100) {
         clearTimeout(progressFlushTimer);
+        progressFlushTimer = undefined;
         sendRaw(progress);
         lastProgressTime = now;
         pendingProgress = progress;
@@ -173,6 +186,7 @@ export class DashboardPanel {
       pendingProgress = progress;
       if (now - lastProgressTime >= 250) {
         clearTimeout(progressFlushTimer);
+        progressFlushTimer = undefined;
         sendRaw(progress);
         lastProgressTime = now;
       } else if (!progressFlushTimer) {
@@ -195,14 +209,30 @@ export class DashboardPanel {
       }
     };
 
+    const publishReady = () => {
+      this.updateSidebarStats();
+      this.dataReady = true;
+      safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
+      const pendingMessages = this.pendingMessages;
+      this.pendingMessages = [];
+      for (const message of pendingMessages) this.handleMessage(message);
+    };
+
     try {
+      if (forceReload) {
+        clearCache();
+        clearCatalogCache();
+        panelCache.clear();
+      }
       if (panelCache.analyzerInstance && panelCache.result) {
         runtimeDebug('panel', 'loadData-cache-hit');
         this.parseResult = panelCache.result;
         this.analyzer = panelCache.analyzerInstance;
-        this.updateSidebarStats();
-        this.dataReady = true;
-        safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
+        sendProgress({ phase: 4, detail: 'Computing analytics', pct: 90, sessions: this.parseResult.sessions.length });
+        await panelCache.analyticsReady;
+        if (this.disposed) return;
+        sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: this.parseResult.sessions.length });
+        publishReady();
         runtimeDebug('panel', 'sync-timing',
           `result=warm-cache totalMs=${Date.now() - t0} sessions=${this.parseResult.sessions.length}`);
         return;
@@ -245,29 +275,22 @@ export class DashboardPanel {
       const analyzerMs = Date.now() - tAnalyzer;
       runtimeDebug('panel', 'analyzer-built', `elapsedMs=${Date.now() - t0}`);
 
-      sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: sessionCount });
-      await flush();
-      if (this.disposed) return;
-
-      panelCache.store(this.parseResult, this.analyzer);
-      this.updateSidebarStats();
-
-      // Mark data ready BEFORE notifying webview, so incoming RPC calls
-      // are handled immediately instead of being queued behind warmUp().
-      this.dataReady = true;
-
-      const dataReadyMs = Date.now() - t0;
-      safePost({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
-      runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${dataReadyMs}`);
-
       const tWarmUp = Date.now();
-      try {
-        await this.analyzer.warmUp();
-      } catch (error) {
-        runtimeDebug('panel', 'warmUp-failed', error);
-      }
+      const analyticsReady = this.analyzer.warmUp((_phase, detail, pct) => {
+        sendProgress({
+          phase: 4, detail, pct: 90 + pct / 10, sessions: sessionCount,
+        });
+      }, fork);
+      panelCache.store(this.parseResult, this.analyzer, analyticsReady);
+      await analyticsReady;
       const warmUpMs = Date.now() - tWarmUp;
       runtimeDebug('panel', 'warmUp-done', `elapsedMs=${Date.now() - t0}`);
+      if (this.disposed) return;
+
+      sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: sessionCount });
+      publishReady();
+      const dataReadyMs = Date.now() - t0;
+      runtimeDebug('panel', 'data-ready-sent', `elapsedMs=${dataReadyMs}`);
 
       // Local-only sync timing summary (issue #106 follow-up). Surfaces a single, parseable
       // breakdown of where a cold Sync spends wall-clock time in the "AI Engineer Coach"
@@ -278,16 +301,14 @@ export class DashboardPanel {
         `sessions=${sessionCount} dirs=${dirs.length}`);
       if (this.disposed) return;
 
-      for (const message of this.pendingMessages) {
-        this.handleMessage(message);
-      }
-      this.pendingMessages = [];
     } catch (error: unknown) {
       runtimeDebug('panel', 'loadData-error', error);
+      if (this.analyzer && panelCache.analyzerInstance === this.analyzer) panelCache.clear();
       if (!this.disposed) {
         try { this.panel.webview.html = getErrorHtml(error instanceof Error ? error.message : 'Failed to load data'); } catch { /* disposed */ }
       }
     } finally {
+      clearTimeout(progressFlushTimer);
       this.loading = false;
       this.loadCompletedAt = Date.now();
     }
@@ -295,6 +316,15 @@ export class DashboardPanel {
 
   private handleMessage(msg: unknown): void {
     if (this.disposed) return;
+    if (typeof msg === 'object' && msg !== null && 'type' in msg && msg.type === 'ready') {
+      runtimeDebug('panel', 'webview-ready', `dataReady=${this.dataReady}`);
+      if (this.dataReady) {
+        this.panel.webview.postMessage({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
+      } else if (this.lastProgress) {
+        this.panel.webview.postMessage({ type: 'progress', ...this.lastProgress });
+      }
+      return;
+    }
     if (!isRequestMessage(msg)) return;
 
     // Open external URLs from webview
@@ -316,10 +346,14 @@ export class DashboardPanel {
       return;
     }
 
-    // Host capability probe — answered immediately so the webview can gate
-    // agent-dependent features. The VS Code host always has the local agent.
+    // Host capability probe — answered before data readiness so the webview can
+    // gate AI features on whether GitHub Copilot's Auto model is usable.
     if (msg.method === 'getCapabilities') {
-      try { postResponse(this.panel.webview, msg.id, { host: 'vscode', llm: true }); } catch { /* disposed */ }
+      void this.probeLlm().then((llm) => {
+        if (this.disposed) return;
+        this.sentLlm = llm;
+        try { postResponse(this.panel.webview, msg.id, { host: 'vscode', llm }); } catch { /* disposed */ }
+      });
       return;
     }
 
@@ -339,7 +373,10 @@ export class DashboardPanel {
     }
 
     try {
-      const result = handler(this.analyzer, this.parseResult, (msg.params ?? {}) as Record<string, unknown>);
+      const analyzer = this.analyzer;
+      const parseResult = this.parseResult;
+      const params = (msg.params ?? {}) as Record<string, unknown>;
+      const result = handler(analyzer, parseResult, params);
       // Support async RPC handlers (e.g. getSessionDetail loads from disk)
       if (result && typeof (result as Promise<unknown>).then === 'function') {
         (result as Promise<unknown>).then(
@@ -365,6 +402,23 @@ export class DashboardPanel {
         try { postResponse(this.panel.webview, msg.id, data); } catch { /* disposed */ }
       }
     }
+  }
+
+  private probeLlm(): Promise<boolean> {
+    const probe = this.probeChain.then(() => isCopilotModelAvailable(CAPABILITY_PROBE_TIMEOUT_MS));
+    this.probeChain = probe.catch(() => undefined);
+    return probe;
+  }
+
+  /** Re-probe after a model change (e.g. Copilot sign-in/out) and push only real flips. */
+  private refreshCapabilities(): void {
+    void this.probeLlm().then((llm) => {
+      if (this.disposed || this.sentLlm === undefined || llm === this.sentLlm) return;
+      this.sentLlm = llm;
+      runtimeDebug('panel', 'capabilities-changed', `llm=${llm}`);
+      const message: HostCapabilitiesMessage = { type: 'capabilities', host: 'vscode', llm };
+      try { void this.panel.webview.postMessage(message); } catch { /* disposed */ }
+    });
   }
 
   private handleOpenExternal(msg: Extract<WebviewMessage, { type: 'request' }>): void {

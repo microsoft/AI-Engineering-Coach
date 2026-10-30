@@ -20,6 +20,10 @@ import { assertTrustedPath, extractCodeBlocks, createRequest, createSession, det
 import { fileUriToPath } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
 import { FileEditLocMap, recordContentReplacement } from './edit-tool-diff';
+import { recordedWebDomains } from './curiosity-activity';
+import { imageReferencesFromXcode, type ImageReference } from './image-data';
+import type { SessionSource } from './cache';
+import { warnCore } from './log';
 
 /* ---- Directory discovery ---- */
 
@@ -76,7 +80,7 @@ const SQLITE_PROBE_OPTS = { timeout: 3000, cwd: os.tmpdir() } as const;
 function sqliteQuery(dbPath: string, sql: string): string {
   assertTrustedPath(dbPath);
   try {
-    return execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
+    return execFileSync('sqlite3', ['-readonly', '-json', dbPath, sql], { encoding: 'utf-8', ...SQLITE_QUERY_OPTS });
   } catch (e) {
     console.debug(`sqlite3 query failed on ${dbPath}:`, e instanceof Error ? e.message : e);
     return '';
@@ -100,7 +104,7 @@ function sqliteExecAsync(dbPath: string, args: string[]): Promise<string> {
 }
 
 function sqliteQueryAsync(dbPath: string, sql: string): Promise<string> {
-  return sqliteExecAsync(dbPath, ['-json', dbPath, sql]);
+  return sqliteExecAsync(dbPath, ['-readonly', '-json', dbPath, sql]);
 }
 
 /** Fast Turn query that avoids sqlite3's slow -json serialization.
@@ -117,7 +121,7 @@ function sqliteQueryTurnsAsync(
   const sql =
     `SELECT rowID, id, role, replace(data, x'0a', x'1e'), createdAt ` +
     `FROM Turn WHERE conversationID = ${sqlQuote(conversationId)} ORDER BY rowID`;
-  return sqliteExecAsync(dbPath, ['-separator', UNIT_SEP, dbPath, sql]).then(stdout => {
+  return sqliteExecAsync(dbPath, ['-readonly', '-separator', UNIT_SEP, dbPath, sql]).then(stdout => {
     const rows: { rowID: number; id: string; role: string; data: string; createdAt: number }[] = [];
     for (const line of stdout.split('\n')) {
       if (!line) continue;
@@ -154,6 +158,7 @@ interface XcodeTurnRow {
 
 interface XcodeTurnData {
   content?: string;
+  contentImageReferences?: unknown[];
   requestType?: string;
   references?: { uri?: string; path?: string; external?: string }[];
 }
@@ -279,21 +284,29 @@ function processTurn(
   const totalElapsed = computeElapsed(turns, i, turn);
   const editedFiles = extractEditedFiles(assistantData);
   const referencedFiles = extractReferencedFiles(turnData);
+  const imageCount = imageReferencesFromXcode(turnData.contentImageReferences).length;
 
   const toolsUsed = Array.isArray(assistantData?.editAgentRounds)
     ? extractToolsFromRounds(assistantData.editAgentRounds)
     : [];
   accumulateXcodeFileEdits(assistantData?.fileEdits, turn.id, editLocIndex);
+  const webDomains = [...new Set((assistantData?.editAgentRounds ?? [])
+    .flatMap(round => (round.toolCalls ?? []).flatMap(call => recordedWebDomains(call.name ?? '', call.input))))];
 
   return createRequest({
     requestId: turn.id,
+    userEventId: turn.id,
     timestamp: turn.createdAt * 1000,
     messageText: userContent,
+    variableKinds: imageCount > 0 ? { image: imageCount } : {},
     responseText: assistantContent,
+    answerEvidence: assistantData?.content?.trim() && assistantData.turnStatus === 'completed' ? 'final'
+      : assistantData?.content?.trim() && !assistantData.turnStatus ? 'legacy' : 'missing',
     isCanceled: assistantData?.turnStatus === 'canceled',
     agentName: 'Copilot (Xcode)',
     agentMode: requestType || 'conversation',
     toolsUsed,
+    webDomains,
     editedFiles,
     referencedFiles,
     totalElapsed,
@@ -341,7 +354,7 @@ function buildXcodeSession(
   });
 }
 
-export function parseXcodeDatabases(xcodeBase: string, editLocIndex?: EditLocIndex): Session[] {
+export function parseXcodeDatabases(xcodeBase: string, editLocIndex?: EditLocIndex, sessionSourceIndex?: Map<string, SessionSource>): Session[] {
   const sessions: Session[] = [];
   const dbFiles = findXcodeDbFiles(xcodeBase);
 
@@ -382,7 +395,10 @@ export function parseXcodeDatabases(xcodeBase: string, editLocIndex?: EditLocInd
       const session = buildXcodeSession(conv, turns, editLocIndex, (turnId, error) => {
         console.debug(`Failed to parse turn data for turn ${turnId}:`, error instanceof Error ? error.message : error);
       });
-      if (session) sessions.push(session);
+      if (session) {
+        sessions.push(session);
+        recordXcodeSource(session, dbPath, sessionSourceIndex);
+      }
     }
   }
 
@@ -393,6 +409,7 @@ export function parseXcodeDatabases(xcodeBase: string, editLocIndex?: EditLocInd
 export async function parseXcodeDatabasesAsync(
   xcodeBase: string,
   editLocIndex?: EditLocIndex,
+  sessionSourceIndex?: Map<string, SessionSource>,
 ): Promise<Session[]> {
   const sessions: Session[] = [];
   const dbFiles = findXcodeDbFiles(xcodeBase);
@@ -418,7 +435,10 @@ export async function parseXcodeDatabasesAsync(
       } catch { continue; }
 
       const session = buildXcodeSession(conv, turns, editLocIndex);
-      if (session) sessions.push(session);
+      if (session) {
+        sessions.push(session);
+        recordXcodeSource(session, dbPath, sessionSourceIndex);
+      }
 
       // Yield between conversations so the event loop stays responsive
       await new Promise<void>(r => setTimeout(r, 0));
@@ -426,4 +446,45 @@ export async function parseXcodeDatabasesAsync(
   }
 
   return sessions;
+}
+
+function recordXcodeSource(session: Session, dbPath: string, index?: Map<string, SessionSource>): void {
+  index?.set(session.sessionId, {
+    kind: 'xcode-db',
+    filePath: dbPath,
+    workspaceId: session.workspaceId,
+    workspaceName: session.workspaceName,
+    harness: session.harness,
+  });
+}
+
+export function readXcodeImageReferences(dbPath: string, sessionId: string, requestId: string): ImageReference[] {
+  try {
+    const raw = sqliteQuery(dbPath,
+      `SELECT data FROM Turn WHERE conversationID = ${sqlQuote(sessionId)} AND id = ${sqlQuote(requestId)} AND role = 'user'`);
+    const rows: unknown = JSON.parse(raw || '[]');
+    if (!Array.isArray(rows)) return [];
+    const images: ImageReference[] = [];
+    for (const value of rows) {
+      const row: unknown = value;
+      if (typeof row !== 'object' || row === null || !('data' in row) || typeof row.data !== 'string') continue;
+      const data: unknown = JSON.parse(row.data);
+      if (typeof data === 'object' && data !== null && 'contentImageReferences' in data) {
+        images.push(...imageReferencesFromXcode(data.contentImageReferences));
+      }
+    }
+    return images;
+  } catch (error) {
+    warnCore('image-extract', 'Could not read Xcode image references', error);
+    return [];
+  }
+}
+
+export function loadXcodeSession(dbPath: string, sessionId: string): Session | null {
+  const conversations = JSON.parse(sqliteQuery(dbPath,
+    `SELECT id, title, createdAt, updatedAt FROM Conversation WHERE id = ${sqlQuote(sessionId)}`) || '[]') as XcodeConversationRow[];
+  if (!conversations[0]) return null;
+  const turns = JSON.parse(sqliteQuery(dbPath,
+    `SELECT rowID, id, role, data, createdAt FROM Turn WHERE conversationID = ${sqlQuote(sessionId)} ORDER BY rowID`) || '[]') as XcodeTurnRow[];
+  return buildXcodeSession(conversations[0], turns);
 }

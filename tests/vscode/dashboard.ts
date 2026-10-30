@@ -1,0 +1,185 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { By, EditorView, error, until, VSBrowser, WebView, Workbench } from 'vscode-extension-tester';
+import { saveSnapshot } from './snapshots';
+
+const READY_TIMEOUT = 60_000;
+
+export class Dashboard {
+  private currentWebview: WebView | undefined;
+
+  private get webview(): WebView {
+    return this.currentWebview ??= new WebView();
+  }
+
+  async command(title: 'Open Dashboard' | 'Reload Data'): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    const previousDocumentId = title === 'Reload Data' && this.currentWebview
+      ? await driver.findElement(By.css('html')).getId()
+      : undefined;
+    await driver.switchTo().defaultContent();
+    await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
+    // Page-object constructors resolve immediately; wait until the editor exists first.
+    await driver.wait(until.elementLocated(By.css('.editor-instance')), READY_TIMEOUT);
+    await this.waitForWebview(previousDocumentId);
+  }
+
+  private async waitForWebview(previousDocumentId?: string): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    const deadline = Date.now() + READY_TIMEOUT;
+    await driver.wait(async () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      // Reload replaces the inner iframe; reacquire it from the workbench on each poll.
+      await driver.switchTo().defaultContent();
+      try {
+        const webview = new WebView();
+        await webview.switchToFrame(remaining);
+        const documentId = await driver.findElement(By.css('html')).getId();
+        if (documentId === previousDocumentId) return false;
+        this.currentWebview = webview;
+        return true;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchFrameError
+          || err instanceof error.NoSuchElementError
+          || (err instanceof Error && err.message.startsWith('WebviewMixin.switchToFrame: outer iframe became stale during frame switch.'))) {
+          return false;
+        }
+        throw err;
+      }
+    }, READY_TIMEOUT, previousDocumentId
+      ? 'Waiting for the replacement webview after reload'
+      : 'Waiting for the dashboard webview');
+  }
+
+  async open(): Promise<void> {
+    await this.command('Open Dashboard');
+  }
+
+  async snapshot(name: string, title: string): Promise<void> {
+    const artifacts = process.env.AIC_E2E_ARTIFACTS;
+    if (!artifacts) throw new Error('Missing isolated test artifact directory');
+    const driver = VSBrowser.instance.driver;
+    let previousCharts: string | undefined;
+    // Canvas animations continue after the metrics and DOM become visible.
+    await driver.wait(async () => {
+      const charts = await driver.executeScript<string>(() =>
+        JSON.stringify(Array.from(document.querySelectorAll('canvas'), canvas => canvas.toDataURL())));
+      const stable = charts === previousCharts;
+      previousCharts = charts;
+      return stable;
+    }, READY_TIMEOUT, 'Waiting for charts to finish rendering before the snapshot');
+    await saveSnapshot(artifacts, { name, title }, await driver.takeScreenshot());
+  }
+
+  async close(): Promise<void> {
+    await VSBrowser.instance.driver.switchTo().defaultContent();
+    const editors = new EditorView();
+    await editors.closeEditor('AI Engineer Coach');
+    await VSBrowser.instance.driver.wait(async () =>
+      !(await editors.getOpenEditorTitles()).includes('AI Engineer Coach'), READY_TIMEOUT);
+    this.currentWebview = undefined;
+  }
+
+  async waitForText(selector: string, expected: string, exact = false): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+      try {
+        const elements = await this.webview.findWebElements(By.css(selector));
+        for (const element of elements) {
+          const text = (await element.getText()).toLowerCase();
+          const target = expected.toLowerCase();
+          if (exact ? text === target : text.includes(target)) return true;
+        }
+        return false;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, `Expected ${selector} to ${exact ? 'equal' : 'contain'} ${JSON.stringify(expected)}`);
+  }
+
+  async expectCount(selector: string, expected: number): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () =>
+      (await this.webview.findWebElements(By.css(selector))).length === expected,
+    READY_TIMEOUT, `Expected ${expected} elements matching ${selector}`);
+  }
+
+  /** Waits until `selector` matches at least one element and none of them is displayed. */
+  async expectHidden(selector: string): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+      try {
+        const elements = await this.webview.findWebElements(By.css(selector));
+        if (elements.length === 0) return false;
+        for (const element of elements) {
+          if (await element.isDisplayed()) return false;
+        }
+        return true;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, `Expected ${selector} to be rendered but hidden`);
+  }
+
+  /** Waits until `selector` is a displayed, disabled control with the given tooltip. */
+  async expectDisabled(selector: string, title: string): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+      try {
+        const element = await this.webview.findWebElement(By.css(selector));
+        return await element.isDisplayed() && !(await element.isEnabled())
+          && await element.getAttribute('title') === title;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, `Expected ${selector} to be displayed and disabled with the tooltip ${JSON.stringify(title)}`);
+  }
+
+  async scrollTo(selector: string): Promise<void> {
+    const element = await this.webview.findWebElement(By.css(selector));
+    await VSBrowser.instance.driver.executeScript((target: HTMLElement) =>
+      target.scrollIntoView({ block: 'center', behavior: 'instant' }), element);
+  }
+
+  async click(selector: string): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+      const elements = await this.webview.findWebElements(By.css(selector));
+      return elements.length > 0 && await elements[0].isDisplayed();
+    }, READY_TIMEOUT, `Expected visible control: ${selector}`);
+    await (await this.webview.findWebElement(By.css(selector))).click();
+  }
+
+  async expectStats(expected: Record<string, string>): Promise<void> {
+    for (const [label, value] of Object.entries(expected)) {
+      await VSBrowser.instance.driver.wait(async () => {
+        try {
+          for (const stat of await this.webview.findWebElements(By.css('.dash-stat'))) {
+            if ((await stat.findElement(By.css('.dash-stat-lbl')).getText()).toLowerCase() === label.toLowerCase()) {
+              return await stat.findElement(By.css('.dash-stat-val')).getText() === value;
+            }
+          }
+          return false;
+        } catch (err: unknown) {
+          if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError) return false;
+          throw err;
+        }
+      }, READY_TIMEOUT, `Expected dashboard ${label}: ${value}`);
+    }
+    await this.expectHealthy();
+  }
+
+  async navigate(page: string, heading: string): Promise<void> {
+    await this.click(`[data-page="${page}"]`);
+    await this.waitForText('#content h1', heading, true);
+  }
+
+  async expectHealthy(): Promise<void> {
+    const problems = await this.webview.findWebElements(By.css('.error-boundary, .error, .loading-screen, .loading-spinner'));
+    for (const problem of problems) {
+      if (await problem.isDisplayed()) throw new Error(`Dashboard is not ready: ${await problem.getText()}`);
+    }
+  }
+}

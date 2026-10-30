@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { reconstructFromJsonl } from './parser-vscode-files';
 import { parseCLIEventsFile } from './parser-vscode-cli';
 import {
@@ -19,6 +19,7 @@ import {
   processWorkspaceEntryAsync,
 } from './parser-vscode';
 import { getParseWarningCounts, type ParseContext, resetParseWarnings } from './parser-shared';
+import { parseRawRequest } from './parser-vscode-request';
 
 function withTempFile(name: string, content: string, run: (filePath: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
@@ -131,14 +132,16 @@ describe('parseCLIEventsFile', () => {
     });
   });
 
-  it('returns null when no assistant responses are present', () => {
+  it('retains unanswered human turns as pending sequence boundaries', () => {
     const lines = [
       JSON.stringify({ type: 'session.start', timestamp: '2024-06-10T10:00:00.000Z', data: { sessionId: 'cli-session-2' } }),
       JSON.stringify({ type: 'user.message', timestamp: '2024-06-10T10:00:01.000Z', data: { content: 'Hello' } }),
     ].join('\n');
 
     withTempFile('events-empty.jsonl', lines, (filePath) => {
-      expect(parseCLIEventsFile(filePath, 'ws-2', 'demo-workspace')).toBeNull();
+      expect(parseCLIEventsFile(filePath, 'ws-2', 'demo-workspace')?.requests).toMatchObject([
+        { messageText: 'Hello', endState: 'pending', answerEvidence: 'missing' },
+      ]);
     });
   });
 
@@ -600,6 +603,46 @@ describe('parseSessionFile — basic VS Code session', () => {
 });
 
 describe('scanVsCodeDirs', () => {
+  it.each(['GitHub Copilot CLI', 'Local Agent'])('does not count absent events files as parse failures for %s', async harness => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-empty-'));
+    try {
+      fs.mkdirSync(path.join(logsDir, 'draft'));
+      const ctx: ParseContext = {
+        workspaces: new Map(), sessions: [], editLocIndex: new Map(), sessionSourceIndex: new Map(), aiLoc: 0,
+      };
+      resetParseWarnings();
+      processWorkspaceEntry(logsDir, 'draft', harness, ctx);
+      await processWorkspaceEntryAsync(logsDir, 'draft', harness, ctx);
+      expect(getParseWarningCounts()).toEqual({ skippedFiles: 0, skippedLines: 0 });
+      expect(ctx.sessions).toHaveLength(0);
+      expect(ctx.workspaces.size).toBe(1);
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+      resetParseWarnings();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32').each(['GitHub Copilot CLI', 'Local Agent'])('reports events-file inspection failures for %s', async harness => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-events-'));
+    try {
+      const workspace = path.join(logsDir, 'broken');
+      fs.mkdirSync(workspace);
+      fs.symlinkSync('events.jsonl', path.join(workspace, 'events.jsonl'));
+      const ctx: ParseContext = {
+        workspaces: new Map(), sessions: [], editLocIndex: new Map(), sessionSourceIndex: new Map(), aiLoc: 0,
+      };
+      resetParseWarnings();
+      processWorkspaceEntry(logsDir, 'broken', harness, ctx);
+      await processWorkspaceEntryAsync(logsDir, 'broken', harness, ctx);
+      expect(getParseWarningCounts()).toEqual({ skippedFiles: 2, skippedLines: 0 });
+      expect(ctx.workspaces.size).toBe(1);
+      expect(ctx.sessions).toHaveLength(0);
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+      resetParseWarnings();
+    }
+  });
+
   it('scans directories and returns entries', () => {
     const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-vscode-'));
     try {
@@ -822,6 +865,31 @@ describe('parseSessionFile — skill detection', () => {
   });
 });
 describe('tool-call metadata extraction (characterization)', () => {
+  it('does not decode irrelevant tool arguments while retaining their tool identities', () => {
+    const commandArgs = '{"command":"npm test","path":"not-a-reference.ts"}';
+    const unknownArgs = '{"url":"https://not-a-source.example"}';
+    const sourceArgs = '{"url":"https://docs.python.org/3/"}';
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      const request = parseRawRequest({
+        message: { text: 'go' }, response: [{ value: 'done' }],
+        result: { metadata: { toolCallRounds: [{ toolCalls: [
+          { name: 'functions.bash', arguments: commandArgs },
+          { name: 'unknown_web_fetch', arguments: unknownArgs },
+          { name: 'functions.web_fetch', arguments: sourceArgs },
+        ] }] } },
+      });
+      expect(parse).not.toHaveBeenCalledWith(commandArgs);
+      expect(parse).not.toHaveBeenCalledWith(unknownArgs);
+      expect(parse).toHaveBeenCalledWith(sourceArgs);
+      expect(request.toolsUsed).toEqual(['functions.bash', 'unknown_web_fetch', 'functions.web_fetch']);
+      expect(request.webDomains).toEqual(['docs.python.org']);
+      expect(request.referencedFiles).toEqual([]);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   function parseRequest(metadata: Record<string, unknown>): ReturnType<typeof parseSessionFile> {
     const data = {
       sessionId: 'tc',
@@ -847,6 +915,26 @@ describe('tool-call metadata extraction (characterization)', () => {
     expect(session!.requests[0].toolsUsed).toEqual(['read_file', 'apply_patch']);
   });
 
+  it('captures only explicit source hosts from structured and serialized web-tool arguments', () => {
+    const source = parseRequest({ toolCallRounds: [{ toolCalls: [
+      { name: 'web_fetch', arguments: { url: 'https://docs.python.org/3/?private=1' } },
+      { name: 'web_fetch', arguments: '{"url":"https://learn.microsoft.com/typescript"}' },
+      { name: 'web_search', arguments: { query: 'https://not-a-source.example' } },
+    ] }] });
+    expect(source?.requests[0].webDomains).toEqual(['docs.python.org', 'learn.microsoft.com']);
+  });
+
+  it('retains explicit investigation roles from structured and serialized delegation arguments', () => {
+    const session = parseRequest({
+      toolCallRounds: [{ toolCalls: [
+        { name: 'task', arguments: { agent_type: 'research' } },
+        { name: 'Agent', arguments: '{"subagent_type":"Explore"}' },
+        { name: 'spawn_agent', arguments: '{"agent_type":"research"}' },
+        { name: 'task', arguments: { agent_type: 'general-purpose', prompt: 'Research the repository.' } },
+      ] }],
+    });
+    expect(session!.requests[0].investigationDelegations).toEqual(['research', 'explore']);
+  });
   it('collects toolsUsed from the toolCallResults branch too', () => {
     const session = parseRequest({
       toolCallResults: [{ toolCalls: [{ name: 'run_in_terminal' }] }],

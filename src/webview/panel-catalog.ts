@@ -7,7 +7,15 @@ import { readTextWithByteLimit } from './fetch-utils';
 
 export const CATALOG_BASE = 'https://awesome-copilot.github.com';
 
-const CATALOG_PAGE_MAX_BYTES = 5 * 1024 * 1024;
+const CATALOG_FEED_MAX_BYTES = 5 * 1024 * 1024;
+
+const CATALOG_FEEDS = [
+  { slug: 'skills', kind: 'skill' },
+  { slug: 'agents', kind: 'agent' },
+  { slug: 'instructions', kind: 'instruction' },
+] as const;
+
+type CatalogFeed = typeof CATALOG_FEEDS[number];
 
 export interface RawCatalogItem {
   kind: 'skill' | 'agent' | 'instruction' | 'hook';
@@ -22,68 +30,70 @@ export interface RawCatalogItem {
 let catalogCache: RawCatalogItem[] | undefined;
 let catalogPromise: Promise<RawCatalogItem[]> | undefined;
 
-/** Remove HTML tags iteratively until stable (avoids incomplete sanitization). */
-function stripHtml(text: string): string {
-  let prev = text;
-   
-  while (true) {
-    const next = prev.replaceAll(/<[^>]*>/g, '');
-    if (next === prev) return next;
-    prev = next;
-  }
+function isCatalogRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-async function fetchCatalogPage(slug: string, kind: RawCatalogItem['kind']): Promise<RawCatalogItem[]> {
-  const url = `${CATALOG_BASE}/${slug}/`;
-  const response = await fetch(url, { redirect: 'error' });
-  if (!response.ok) return [];
-  const html = await readTextWithByteLimit(response, CATALOG_PAGE_MAX_BYTES, 'Catalog page too large');
-
-  const items: RawCatalogItem[] = [];
-  const articleRegex = /<article\s+class="resource-item"[^>]*data-path="([^"]*)"[^>]*>([\s\S]*?)<\/article>/g;
-  let match: RegExpExecArray | null;
-  while ((match = articleRegex.exec(html)) !== null) {
-    const path = match[1];
-    const block = match[2];
-
-    const titleMatch = block.match(/<div class="resource-title">([^<]*)<\/div>/);
-    const descMatch = block.match(/<div class="resource-description">([\s\S]*?)<\/div>/);
-    const categoryMatch = block.match(/tag-category">([^<]*)</);
-
-    const title = titleMatch ? titleMatch[1].trim() : '';
-    const description = descMatch ? stripHtml(descMatch[1].trim()) : '';
-    const category = categoryMatch ? categoryMatch[1].trim() : '';
-
-    if (!title) continue;
-
-    items.push({
-      kind,
-      id: `${kind}:${path}`,
-      title,
-      description,
-      category,
-      path,
-      url: `${CATALOG_BASE}/${slug}/#${path.split('/').pop()?.replace(/\.[^.]+$/, '') || ''}`,
-    });
+function parseCatalogItem(item: unknown, feed: CatalogFeed, index: number): RawCatalogItem {
+  if (!isCatalogRecord(item)
+    || typeof item.title !== 'string' || !item.title.trim()
+    || typeof item.description !== 'string'
+    || (item.category !== undefined && typeof item.category !== 'string')) {
+    throw new Error(`Invalid ${feed.slug} catalog item ${index + 1}`);
   }
 
-  return items;
+  const catalogPath = feed.kind === 'skill' ? item.skillFile : item.path;
+  if (typeof catalogPath !== 'string'
+    || !catalogPath.startsWith(`${feed.slug}/`)
+    || !catalogPath.endsWith('.md')
+    || !catalogPath.split('/').every(segment => segment !== '.' && segment !== '..' && /^[A-Za-z0-9._-]+$/.test(segment))) {
+    throw new Error(`Invalid markdown path in ${feed.slug} catalog item ${index + 1}`);
+  }
+
+  return {
+    kind: feed.kind,
+    id: `${feed.kind}:${catalogPath}`,
+    title: item.title.trim(),
+    description: item.description.trim(),
+    category: typeof item.category === 'string' ? item.category.trim() : '',
+    path: catalogPath,
+    url: `https://github.com/github/awesome-copilot/blob/main/${catalogPath}`,
+  };
+}
+
+async function fetchCatalogFeed(feed: CatalogFeed): Promise<RawCatalogItem[]> {
+  const response = await fetch(`${CATALOG_BASE}/data/${feed.slug}.json`, { redirect: 'error' });
+  if (!response.ok) throw new Error(`Failed to fetch ${feed.slug} catalog: HTTP ${response.status}`);
+  const text = await readTextWithByteLimit(response, CATALOG_FEED_MAX_BYTES, 'Catalog feed too large');
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch (error: unknown) {
+    throw new Error(`Invalid ${feed.slug} catalog JSON`, { cause: error });
+  }
+  if (!isCatalogRecord(data) || !Array.isArray(data.items)) {
+    throw new Error(`Invalid ${feed.slug} catalog format: expected an items array`);
+  }
+  if (data.items.length === 0) {
+    throw new Error(`The ${feed.slug} catalog is empty. The catalog format may have changed.`);
+  }
+  return data.items.map((item: unknown, index: number) => parseCatalogItem(item, feed, index));
 }
 
 export async function getCatalogItems(): Promise<RawCatalogItem[]> {
   if (catalogCache) return catalogCache;
   if (!catalogPromise) {
-    catalogPromise = (async () => {
-      const [skills, agents, instructions, hooks] = await Promise.all([
-        fetchCatalogPage('skills', 'skill'),
-        fetchCatalogPage('agents', 'agent'),
-        fetchCatalogPage('instructions', 'instruction'),
-        fetchCatalogPage('hooks', 'hook'),
-      ]);
-      catalogCache = [...skills, ...agents, ...instructions, ...hooks];
-      catalogPromise = undefined;
-      return catalogCache;
-    })();
+    const request: Promise<RawCatalogItem[]> = Promise.all(CATALOG_FEEDS.map(fetchCatalogFeed))
+      .then(catalogs => {
+        const items = catalogs.flat();
+        // A reload must not let an older request repopulate the cleared cache.
+        if (catalogPromise === request) catalogCache = items;
+        return items;
+      })
+      .finally(() => {
+        if (catalogPromise === request) catalogPromise = undefined;
+      });
+    catalogPromise = request;
   }
   return catalogPromise;
 }

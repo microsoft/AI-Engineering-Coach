@@ -87,11 +87,11 @@ export function ScoreRing({ score, color, size }: { score: number; color: string
     </svg>`;
 }
 
-export function PctBadge({ pct, label }: { pct: number; label: string }) {
-  if (pct === 0) return html`<span class="trend-badge trend-stable">${label} 0%</span>`;
+export function PctBadge({ pct, label, title }: { pct: number; label: string; title?: string }) {
+  if (pct === 0) return html`<span class="trend-badge trend-stable" title=${title}>${label} 0%</span>`;
   const cls = pct > 0 ? 'trend-improving' : 'trend-worsening';
   const sign = pct > 0 ? '+' : '';
-  return html`<span class="trend-badge ${cls}">${sign}${pct}% ${label}</span>`;
+  return html`<span class="trend-badge ${cls}" title=${title}>${sign}${pct}% ${label}</span>`;
 }
 
 export function ErrorMsg({ message }: { message: string }) {

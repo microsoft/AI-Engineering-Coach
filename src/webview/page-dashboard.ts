@@ -9,8 +9,7 @@ import { DateFilter, DailyActivity, PRACTICE_GROUPS, AntiPatternData, WorkflowOp
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { rpc, rpcAllSettled, createChart, formatNum, COLORS, PALETTE, harnessColor, destroyChartById, scoreColor, scoreLabel } from './shared';
 import { html, render, CanvasEl, ScoreRing, PctBadge } from './render';
-import { setSkillCache, getSkillCache } from './skill-cache';
-import { llmAvailable } from './capabilities';
+import { clearSkillCache, setSkillCache, getSkillCache } from './skill-cache';
 
 // Module-level view state — survives filter/harness changes.
 let activeMetric = 'requests';
@@ -90,7 +89,7 @@ function renderDashboardMarkup(
   stats: { totalWorkspaces: number },
   daily: DailyActivity,
   harnessBreakdown: { labels: string[]; requests: number[] },
-  scores: import('../core/types').GroupScore[],
+  scores: GroupScore[],
   langs: { label: string; display: string; loc: number }[],
   totalReqs: number,
   totalSessions: number,
@@ -127,7 +126,7 @@ function renderDashboardMarkup(
     </div>
     ${!FF_TOKEN_REPORTING_ENABLED && html`<div class="dash-info-banner"><span class="dash-info-icon">\u2139</span><div><strong>Token Usage & Burndown temporarily hidden</strong><p>These features are disabled until we can verify that reported numbers align with GitHub's billing data. They will be re-enabled once validated.</p></div></div>`}
     ${scores.length > 0 && html`<section class="dash-section"><div class="dash-section-header"><h3>Anti-Patterns Summary</h3><a href="#" data-page="anti-patterns" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>View All Anti-Patterns \u2192</a></div><div class="ap-score-grid">${scores.map(g => html`<${PracticeCard} g=${g} />`)}</div></section>`}
-    ${llmAvailable() && html`<section class="dash-section"><div class="dash-section-header"><h3>Skill Finder</h3><a href="#" data-page="skills" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>Open Full View \u2192</a></div><p class="dash-section-desc">Scans your prompt history for repeated patterns that waste time re-explaining the same tasks.</p><div id="dashSkillContent" class="dash-card">${!skillCache && html`<div style="text-align:center;"><p style="color:var(--text-muted);margin:0 0 12px 0;font-size:13px;">Analyze your prompt history to discover skill opportunities.</p><button id="dashScanBtn" class="dash-scan-btn">Scan for Skills</button></div>`}</div></section>`}
+    <section class="dash-section llm-only"><div class="dash-section-header"><h3>Skill Finder</h3><a href="#" data-page="skills" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>Open Full View \u2192</a></div><p class="dash-section-desc">Scans your prompt history for repeated patterns that waste time re-explaining the same tasks.</p><div id="dashSkillContent" class="dash-card">${!skillCache && html`<div style="text-align:center;"><p style="color:var(--text-muted);margin:0 0 12px 0;font-size:13px;">Analyze your prompt history to discover skill opportunities.</p><button id="dashScanBtn" class="dash-scan-btn">Scan for Skills</button></div>`}</div></section>
     <section class="dash-section"><div style="display:flex;align-items:baseline;gap:16px;margin-bottom:8px;flex-wrap:wrap;"><h3 style="margin:0;">Daily Activity</h3><div id="activityTabs" class="dash-tabs"><button class=${'dash-tab' + (activeMetric === 'requests' ? ' dash-tab-active' : '')} data-metric="requests">Requests <strong>${formatNum(totalReqs)}</strong></button><button class=${'dash-tab' + (activeMetric === 'sessions' ? ' dash-tab-active' : '')} data-metric="sessions">Sessions <strong>${formatNum(totalSessions)}</strong></button><button class=${'dash-tab' + (activeMetric === 'loc' ? ' dash-tab-active' : '')} data-metric="loc">LoC <strong>${formatNum(totalLoc)}</strong></button><button class=${'dash-tab' + (activeMetric === 'workspaces' ? ' dash-tab-active' : '')} data-metric="workspaces">Workspaces <strong>${formatNum(stats.totalWorkspaces)}</strong></button></div></div><${CanvasEl} id="dailyChart" height=${160} /></section>
     <div class="two-col" style="margin-bottom:16px;"><${CanvasEl} id="wsChart" height=${140} title="Top Workspaces by Requests" /><${CanvasEl} id="harnessChart" height=${140} title="Requests by Harness" /></div>
     <div class="chart-modal-overlay" id="wsChartModal"><div class="chart-modal"><div class="chart-modal-header"><span class="chart-title" style="margin:0;">Top Workspaces by Requests</span><button class="chart-modal-close" id="wsChartModalClose" title="Close">\u00d7</button></div><div class="chart-modal-body"><div style="position:relative;height:360px;"><canvas id="wsChartFull"></canvas></div></div></div></div>
@@ -186,6 +185,7 @@ function renderDashboardSkillFinder(skillCache: ReturnType<typeof getSkillCache>
 
 export async function renderDashboard(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const emptyDaily: DailyActivity = { labels: [], values: [], sessions: [], loc: [], workspaces: [], byHarness: [] };
+  const emptyAntiPatterns: AntiPatternData = { patterns: [], totalOccurrences: 0, weeklyTrend: { labels: [], counts: [] }, groupScores: [], weeklyScores: { labels: [], series: [] } };
   const emptyCodeProd: CodeProductionData = { summary: { totalAiLoc: 0, totalUserLoc: 0, totalLoc: 0, totalRemovedAiLoc: 0, totalNetAiLoc: 0, aiBlocks: 0, userBlocks: 0, aiRatio: 0, locCost2010: 0, costPerLoc: 0 }, byLanguage: { labels: [], aiLoc: [], userLoc: [] }, dailyTimeline: { labels: [], aiLoc: [], removedLoc: [], userLoc: [] }, byWorkspace: { labels: [], aiLoc: [], userLoc: [] }, dailyByWorkspace: {}, dailyRemovedByWorkspace: {}, dailyByModel: {}, dailyRemovedByModel: {}, dailyByHarness: {}, dailyRemovedByHarness: {} };
   const [stats, daily, wsBreakdown, harnessBreakdown, antiPatterns, codeProd] = await rpcAllSettled([
     rpc<{ totalSessions: number; totalWorkspaces: number; totalRequests: number }>('getStats', currentFilter as Record<string, unknown>),
@@ -199,7 +199,7 @@ export async function renderDashboard(container: HTMLElement, currentFilter: Dat
     emptyDaily,
     { labels: [], values: [] },
     { labels: [], requests: [] },
-    { patterns: [], totalOccurrences: 0, groupScores: [], weeklyScores: { labels: [], series: [] } } as unknown as AntiPatternData,
+    emptyAntiPatterns,
     emptyCodeProd,
   ] as const);
 
@@ -307,7 +307,7 @@ export async function renderDashboard(container: HTMLElement, currentFilter: Dat
   });
 
   renderWorkspaceCharts(wsBreakdown, harnessBreakdown);
-  if (llmAvailable()) renderDashboardSkillFinder(skillCache, currentFilter);
+  renderDashboardSkillFinder(skillCache, currentFilter);
 }
 
 /* ── Skill results rendering ──────────────────────────────────────── */
@@ -316,6 +316,7 @@ function renderSkillResults(
   triaged: import('../core/types').TriagedCluster[],
   clusters: import('../core/types').WorkflowCluster[],
   catalogMatches: import('../core/types').CatalogItem[],
+  catalogError?: string,
 ): void {
   const contentEl = document.getElementById('dashSkillContent');
   if (!contentEl) return;
@@ -326,7 +327,7 @@ function renderSkillResults(
   const hasCustom = strong.length > 0;
   const hasCatalog = catTop.length > 0;
 
-  if (!hasCustom && !hasCatalog) {
+  if (!hasCustom && !hasCatalog && !catalogError) {
     render(html`<p style="color:var(--text-muted);margin:0;font-size:13px;">No skill opportunities found. Your prompts may already be well-served or too diverse.</p>
       <div style="text-align:center;margin-top:10px;"><a href="#" data-page="skills" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>Open Skill Finder for full analysis \u2192</a></div>`, contentEl);
     return;
@@ -354,7 +355,9 @@ function renderSkillResults(
               ${catTop.map(item => html`<${SkillCard} title=${item.title} subtitle=${item.description?.substring(0, 80) || item.kind} />`)}
               ${catalogMatches.length > 2 && html`<div style="font-size:11px;color:var(--text-muted);text-align:center;">+${catalogMatches.length - 2} more</div>`}
             </div>`
-          : html`<p style="color:var(--text-muted);margin:0;font-size:12px;">None matched</p>`}
+          : catalogError
+            ? html`<div><p class="sk-error">Catalog error: ${catalogError}</p><button id="dashScanBtn" class="dash-scan-btn">Retry Scan</button></div>`
+            : html`<p style="color:var(--text-muted);margin:0;font-size:12px;">None matched</p>`}
       </div>
     </div>
     <div style="text-align:center;margin-top:10px;">
@@ -365,8 +368,10 @@ function renderSkillResults(
 /* ── Skill scan ───────────────────────────────────────────────────── */
 
 async function loadDashSkills(currentFilter: DateFilter): Promise<void> {
+  const filter = { ...currentFilter };
   const contentEl = document.getElementById('dashSkillContent');
   if (!contentEl) return;
+  const current = () => document.getElementById('dashSkillContent') === contentEl;
 
   render(html`<div style="text-align:center;padding:8px;">
     <div class="loading-spinner" style="width:24px;height:24px;margin:0 auto 8px;"></div>
@@ -374,11 +379,14 @@ async function loadDashSkills(currentFilter: DateFilter): Promise<void> {
   </div>`, contentEl);
 
   try {
-    const data = await rpc<WorkflowOptimizationData>('getWorkflowOptimization', currentFilter as Record<string, unknown>);
+    const data = await rpc<WorkflowOptimizationData>('getWorkflowOptimization', filter);
+    if (!current()) return;
     const clusters = data.clusters || [];
 
     let triagedResults: import('../core/types').TriagedCluster[] = [];
     let catalogMatches: import('../core/types').CatalogItem[] = [];
+    let catalogTotalScanned = 0;
+    let catalogError: string | undefined;
 
     if (clusters.length > 0) {
       contentEl.querySelector('p')!.textContent = 'AI triage in progress...';
@@ -394,8 +402,12 @@ async function loadDashSkills(currentFilter: DateFilter): Promise<void> {
       // Run custom triage and catalog discovery in parallel
       const [triageResult, catResult] = await Promise.all([
         rpc<SkillTriageResult>('triageSkills', { clusters: topClusters } as Record<string, unknown>).catch(() => null),
-        rpc<CatalogDiscoverResult>('discoverCatalog', {} as Record<string, unknown>).catch(() => null),
+        rpc<CatalogDiscoverResult>('discoverCatalog', {} as Record<string, unknown>).catch((error: unknown) => {
+          catalogError = error instanceof Error ? error.message : 'Failed to load catalog';
+          return null;
+        }),
       ]);
+      if (!current()) return;
 
       if (triageResult) {
         triagedResults = (triageResult.triaged || []).filter(t => t.verdict === 'strong');
@@ -403,6 +415,7 @@ async function loadDashSkills(currentFilter: DateFilter): Promise<void> {
 
       // Triage catalog if available
       if (catResult?.items && catResult.items.length > 0) {
+        catalogTotalScanned = catResult.totalScanned;
         contentEl.querySelector('p')!.textContent = 'Matching community catalog...';
         try {
           const triaged = await rpc<CatalogTriageResult>('triageCatalog', {
@@ -413,13 +426,26 @@ async function loadDashSkills(currentFilter: DateFilter): Promise<void> {
             })),
           } as Record<string, unknown>);
           catalogMatches = triaged.items || [];
-        } catch { /* catalog triage failed */ }
+        } catch (error: unknown) {
+          catalogError = error instanceof Error ? error.message : 'AI catalog triage failed';
+        }
+      } else if (catResult) {
+        catalogError = 'Community catalog returned no items. Please try again.';
       }
     }
 
-    setSkillCache({ clusters, triaged: triagedResults, catalogMatches, timestamp: Date.now() }, currentFilter);
-    renderSkillResults(triagedResults, clusters, catalogMatches);
+    if (!current()) return;
+    if (catalogError) {
+      clearSkillCache(filter);
+    } else {
+      setSkillCache({ clusters, triaged: triagedResults, catalogMatches, catalogTotalScanned, timestamp: Date.now() }, filter);
+    }
+    renderSkillResults(triagedResults, clusters, catalogMatches, catalogError);
+    document.getElementById('dashScanBtn')?.addEventListener('click', () => {
+      void loadDashSkills(filter);
+    });
   } catch {
+    if (!current()) return;
     render(html`<p style="color:var(--text-muted);margin:0;font-size:13px;">Scan failed. Try again later.</p>`, contentEl);
   }
 }
