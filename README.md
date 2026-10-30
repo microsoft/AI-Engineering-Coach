@@ -205,7 +205,7 @@ image requests.
 - **Read-only** — the extension never modifies your session files
 - **Local analysis** — all parsing and analytics run entirely on your machine
 - **No proprietary telemetry** — the extension does not phone home or collect usage data
-- **Optional AI features** — some features (rule compiler, skill finder, context review, anti-pattern **Why?** explanations) use GitHub Copilot's Auto model through the VS Code language model API when explicitly invoked by the user. In VS Code they are hidden while GitHub Copilot isn't available (for example, when you're signed out) and reappear as soon as you sign in
+- **Optional AI features** — some features (rule compiler, skill finder, Level Up learning content, context review, anti-pattern **Why?** explanations) use GitHub Copilot's Auto model through the VS Code language model API when explicitly invoked by the user. In VS Code, the Why? buttons, Skill Finder, and Level Up are hidden and the context review is disabled while GitHub Copilot isn't available (for example, when you're signed out); they come back as soon as you sign in. Rule generation falls back to a starter template
 
 ---
 

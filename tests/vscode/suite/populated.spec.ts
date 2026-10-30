@@ -105,3 +105,27 @@ describe('Packaged VSIX with synthetic sessions', () => {
     await dashboard.snapshot('07-reopened', 'Reopened dashboard: the same 22 sessions, 66 requests and 330 AI LoC');
   });
 });
+
+describe('Packaged VSIX without GitHub Copilot', () => {
+  const dashboard = new Dashboard();
+
+  before(async () => {
+    await dashboard.open();
+  });
+
+  it('hides Copilot-only features while GitHub Copilot is unavailable', async () => {
+    // The harness sets chat.disableAIFeatures, so VS Code offers the extension no Copilot model.
+    await dashboard.click('#sidebar [data-page="dashboard"]');
+    await dashboard.expectHidden('.dash-section.llm-only');
+    await dashboard.expectHidden('#sidebar [data-page="skills"]');
+    await dashboard.expectHidden('#sidebar [data-page="level-up"]');
+    await dashboard.navigate('anti-patterns', 'Anti-Patterns');
+    await dashboard.expectHidden('.occ-explain-btn');
+    await dashboard.click('#sidebar [data-page="config-health"]');
+    await dashboard.expectHidden('#ctxReviewBtn');
+    await dashboard.expectDisabled('button.llm-fallback', 'Sign in to GitHub Copilot in VS Code to use this.');
+    await dashboard.expectHealthy();
+    await dashboard.snapshot('08-copilot-unavailable',
+      'Copilot unavailable: Why?, Skill Finder and Level Up hidden, Review Context Files disabled with a sign-in hint');
+  });
+});
