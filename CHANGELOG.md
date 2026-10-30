@@ -8,6 +8,10 @@
 - Use GitHub Copilot's Auto model for all AI features instead of hard-coded model families, and
   hide AI features in VS Code while GitHub Copilot isn't available, showing them again on sign-in
   without reopening the dashboard
+- Fix canvas mode intermittently loading with an empty content pane or a stuck
+  loading screen (#269): the canvas bridge now subscribes to host events only
+  after the dashboard signals it is listening, so the replayed `dataReady` is
+  never dropped
 - Fix Coding Moments image counting and loading across VS Code, Copilot CLI/App,
   Claude (including subagents), Codex, OpenCode JSON/SQLite, and Xcode (#292);
   extract images off-thread with bounded local reads and session-scoped caching

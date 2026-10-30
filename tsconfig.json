@@ -12,6 +12,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "tests/vscode/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

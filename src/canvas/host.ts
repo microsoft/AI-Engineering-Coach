@@ -310,12 +310,23 @@ html,body{height:100%;margin:0;background:var(--vscode-editor-background);color:
 /* Stands in for the VS Code webview bridge. `acquireVsCodeApi` must exist before
  * app.js runs. RPC requests become POSTs to /rpc; responses, progress, and
  * dataReady arrive via SSE and are re-dispatched as window message events so the
- * unchanged webview message listener handles them. */
+ * unchanged webview message listener handles them. /events replays the latest
+ * progress and dataReady on connect, so the stream opens only once the webview
+ * posts `ready` (sent after its message listener is attached), the same handshake
+ * the VS Code panel uses. Subscribing earlier can drop that replay before app.js
+ * listens, leaving the dashboard stuck on its loading screen (#269). */
 const BRIDGE_SHIM = `(function(){
 var STATE_KEY='ai-engineer-coach-canvas-state';
+var events=null;
 function dispatch(data){window.dispatchEvent(new MessageEvent('message',{data:data}));}
+function subscribe(){
+if(events)return;
+events=new EventSource('/events');
+events.onmessage=function(e){try{dispatch(JSON.parse(e.data));}catch(err){}};
+}
 var api={
 postMessage:function(msg){
+if(msg&&msg.type==='ready'){subscribe();return;}
 if(!msg||msg.type!=='request')return;
 if(msg.method==='openExternal'){
 var url=msg.params&&msg.params.url;
@@ -339,8 +350,4 @@ getState:function(){try{return JSON.parse(localStorage.getItem(STATE_KEY)||'null
 setState:function(s){try{localStorage.setItem(STATE_KEY,JSON.stringify(s));}catch(e){}return s;}
 };
 window.acquireVsCodeApi=function(){return api;};
-document.addEventListener('DOMContentLoaded',function(){
-var es=new EventSource('/events');
-es.onmessage=function(e){try{dispatch(JSON.parse(e.data));}catch(err){}};
-},{once:true});
 })();`;

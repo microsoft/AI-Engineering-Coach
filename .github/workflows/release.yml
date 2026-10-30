@@ -12,6 +12,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -39,8 +40,8 @@ jobs:
       - name: Run build
         run: npm run build
 
-      - name: Run tests
-        run: npm test
+      - name: Run checks
+        run: npm run check
 
       - name: Package VSIX
         run: npm run package
@@ -48,12 +49,17 @@ jobs:
       - name: Capture VSIX path
         id: vsix
         run: |
-          VSIX_PATH="$(find . -maxdepth 1 -name '*.vsix' -print -quit)"
-          if [ -z "$VSIX_PATH" ]; then
-            echo "No VSIX package was produced"
-            exit 1
-          fi
+          VSIX_PATH="$(node -p 'const p = require("./package.json"); `${p.name}-${p.version}.vsix`')"
+          test -f "$VSIX_PATH"
           echo "path=$VSIX_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Check bundle and VSIX size
+        run: npm run check-size
+
+      - name: End-to-end release gate
+        uses: ./.github/actions/e2e
+        with:
+          vsix: ${{ steps.vsix.outputs.path }}
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -68,4 +74,3 @@ jobs:
         with:
           name: vsix
           path: ${{ steps.vsix.outputs.path }}
-
