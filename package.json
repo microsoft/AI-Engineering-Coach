@@ -294,7 +294,7 @@
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "lint": "eslint src/",
+    "lint": "eslint src/ tests/vscode/",
     "bench": "vitest bench",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -315,6 +315,8 @@
     "check": "npm run typecheck && npm run lint && npm run spellcheck && npm run knip && npm run lockfile-lint && npm run test",
     "check-size": "node scripts/check-bundle-size.mjs",
     "test:e2e": "npx playwright test",
+    "compile:test:vscode": "tsc -p tests/vscode/tsconfig.build.json",
+    "test:vscode": "npm run compile:test:vscode && node .vscode-test/tests/run.js",
     "lockfile-lint": "lockfile-lint",
     "prepare": "husky"
   },
@@ -331,6 +333,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.1",
+    "@types/mocha": "10.0.10",
     "@types/node": "26.4.0",
     "@types/vscode": "1.125.0",
     "@vitest/coverage-v8": "4.1.11",
@@ -346,11 +349,13 @@
     "knip": "6.33.0",
     "lint-staged": "17.4.1",
     "lockfile-lint": "5.0.1",
+    "mocha": "12.0.3",
     "preact-render-to-string": "6.7.0",
     "serve": "14.2.6",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "vscode-extension-tester": "8.28.1"
   },
   "dependencies": {
     "chart.js": "4.5.1",
