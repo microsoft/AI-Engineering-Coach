@@ -82,12 +82,13 @@ function acquireVsCodeApi() {
   return {
     postMessage(msg) {
       if (msg.type === 'request') {
-        const data = getMockData(msg.method, msg.params);
-        setTimeout(() => {
-          window.dispatchEvent(new MessageEvent('message', {
-            data: { type: 'response', id: msg.id, data }
-          }));
-        }, 5);
+        Promise.resolve(getMockData(msg.method, msg.params)).then(data => {
+          setTimeout(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+              data: { type: 'response', id: msg.id, data }
+            }));
+          }, window.mockResponseDelay ? window.mockResponseDelay(msg.method, msg.params) : 5);
+        });
       }
     },
     getState() { return {}; },
