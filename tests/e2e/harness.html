@@ -282,6 +282,7 @@ function compositionBreakdown(pairs, samples, avgPromptTokens) {
 
 const VSCODE_MIX = [['systemInstructions', 11.2], ['toolDefinitions', 36.1], ['messages', 21.1], ['toolResults', 30.4], ['files', 1.2]];
 const INSIDERS_MIX = [['systemInstructions', 9.8], ['toolDefinitions', 41.5], ['messages', 18.2], ['toolResults', 29.9], ['files', 0.6]];
+const VSCODE_POOLED_MIX = [['systemInstructions', 10.8], ['toolDefinitions', 37.5], ['messages', 20.4], ['toolResults', 30.3], ['files', 1.0]];
 const CLI_MIX = [['systemInstructions', 5.4], ['toolDefinitions', 9.5], ['conversation', 85.0], ['other', 0.1]];
 const CLI_SEGMENTS = [
   { name: 'tool_instructions', tokens: 9570 }, { name: 'host_system_message_content', tokens: 2162 },
@@ -290,11 +291,12 @@ const CLI_SEGMENTS = [
 ];
 
 /* Synthetic composition data for the Context Management tab.
- * window.mockCompositionMode: undefined = full data, 'empty' = nothing recorded, false = field absent. */
+ * window.mockCompositionMode: undefined = full data, 'empty' = nothing recorded, false = field absent,
+ * 'boundary' = no session's last activity in range but composition recorded, 'boundary-empty' = neither. */
 function mockContextComposition(empty) {
   if (empty) {
     return {
-      overall: null,
+      sources: [],
       harnesses: [
         { harness: 'Local Agent', source: 'vscode', breakdown: null, totalRequests: 260, requestsWithData: 0, sessions: 30, sessionsWithData: 0, toolHeavyPct: null, avgToolDefinitionTokens: null, maxAvailableTools: null },
         { harness: 'Claude Code', source: null, breakdown: null, totalRequests: 300, requestsWithData: 0, sessions: 22, sessionsWithData: 0, toolHeavyPct: null, avgToolDefinitionTokens: null, maxAvailableTools: null },
@@ -308,7 +310,10 @@ function mockContextComposition(empty) {
     };
   }
   return {
-    overall: compositionBreakdown([['systemInstructions', 6.6], ['toolDefinitions', 15.9], ['messages', 4.1], ['toolResults', 5.9], ['files', 0.2], ['conversation', 67.2], ['other', 0.1]], 1303, 241000),
+    sources: [
+      { source: 'vscode', label: 'VS Code', harnesses: ['Local Agent', 'Local Agent (Insiders)'], breakdown: compositionBreakdown(VSCODE_POOLED_MIX, 663, 50600), requestsWithData: 663, toolHeavyPct: 25.9, avgToolDefinitionTokens: null, maxAvailableTools: null },
+      { source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown(CLI_MIX, 640, 312000), requestsWithData: 640, toolHeavyPct: 1.2, avgToolDefinitionTokens: 29500, maxAvailableTools: 271 },
+    ],
     harnesses: [
       { harness: 'GitHub Copilot CLI', source: 'copilot-cli', breakdown: compositionBreakdown(CLI_MIX, 640, 312000), totalRequests: 900, requestsWithData: 640, sessions: 40, sessionsWithData: 32, toolHeavyPct: 1.2, avgToolDefinitionTokens: 29500, maxAvailableTools: 271 },
       { harness: 'Local Agent', source: 'vscode', breakdown: compositionBreakdown(VSCODE_MIX, 483, 52000), totalRequests: 483, requestsWithData: 483, sessions: 45, sessionsWithData: 45, toolHeavyPct: 24, avgToolDefinitionTokens: null, maxAvailableTools: null },
@@ -316,10 +321,11 @@ function mockContextComposition(empty) {
       { harness: 'Claude Code', source: null, breakdown: null, totalRequests: 300, requestsWithData: 0, sessions: 22, sessionsWithData: 0, toolHeavyPct: null, avgToolDefinitionTokens: null, maxAvailableTools: null },
     ],
     workspaces: [
-      { workspaceId: 'my-api', workspaceName: 'my-api', harnesses: ['GitHub Copilot CLI', 'Local Agent'], breakdown: compositionBreakdown([['systemInstructions', 7.1], ['toolDefinitions', 18.4], ['messages', 6.0], ['toolResults', 8.2], ['files', 0.3], ['conversation', 60.0]], 520, 150000) },
-      { workspaceId: 'frontend-app', workspaceName: 'frontend-app', harnesses: ['Local Agent'], breakdown: compositionBreakdown([['systemInstructions', 12.0], ['toolDefinitions', 44.0], ['messages', 18.0], ['toolResults', 25.0], ['files', 1.0]], 310, 49000) },
-      { workspaceId: 'infra-tools', workspaceName: 'infra-tools', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown([['systemInstructions', 4.0], ['toolDefinitions', 7.0], ['conversation', 89.0]], 293, 340000) },
-      { workspaceId: 'mobile-sdk', workspaceName: 'mobile-sdk', harnesses: ['Local Agent (Insiders)'], breakdown: compositionBreakdown(INSIDERS_MIX, 180, 47000) },
+      { workspaceId: 'my-api', workspaceName: 'my-api', source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown([['systemInstructions', 5.0], ['toolDefinitions', 10.2], ['conversation', 84.8]], 347, 290000) },
+      { workspaceId: 'frontend-app', workspaceName: 'frontend-app', source: 'vscode', label: 'VS Code', harnesses: ['Local Agent'], breakdown: compositionBreakdown([['systemInstructions', 12.0], ['toolDefinitions', 44.0], ['messages', 18.0], ['toolResults', 25.0], ['files', 1.0]], 310, 49000) },
+      { workspaceId: 'infra-tools', workspaceName: 'infra-tools', source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown([['systemInstructions', 4.0], ['toolDefinitions', 7.0], ['conversation', 89.0]], 293, 340000) },
+      { workspaceId: 'mobile-sdk', workspaceName: 'mobile-sdk', source: 'vscode', label: 'VS Code', harnesses: ['Local Agent (Insiders)'], breakdown: compositionBreakdown(INSIDERS_MIX, 180, 47000) },
+      { workspaceId: 'my-api', workspaceName: 'my-api', source: 'vscode', label: 'VS Code', harnesses: ['Local Agent'], breakdown: compositionBreakdown([['systemInstructions', 12.5], ['toolDefinitions', 33.0], ['messages', 22.0], ['toolResults', 31.0], ['files', 1.5]], 173, 56000) },
     ],
     trend: {
       labels: ['2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04'],
@@ -537,33 +543,37 @@ function getMockData(method, params) {
       }
     }),
 
-    getContextManagement: () => ({
-      overallScore: 74,
-      estimatedContextWindow: 128000,
-      thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
-      workspaces: [
-        { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null },
-        { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null },
-        { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null }
-      ],
-      trend: [
-        { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
-      ],
-      workspaceTrend: [],
-      totalCompactions: 12,
-      fullCompactions: 4,
-      simpleCompactions: 8,
-      sessionsWithTokenData: 89,
-      totalSessions: 127,
-      antiPatterns: [],
-      tips: [
-        'Consider shorter sessions to reduce compaction events',
-        ...(window.mockCompositionMode === undefined
-          ? ['Tool definitions take 36% of your VS Code prompts and at least half of the prompt in 24% of requests. Turn off MCP servers and tools you don\u2019t need, or pick a smaller tool set, before you start a chat (changing them mid-session breaks the prompt cache).']
-          : []),
-      ],
-      ...(window.mockCompositionMode === false ? {} : { composition: mockContextComposition(window.mockCompositionMode === 'empty') }),
-    }),
+    getContextManagement: () => {
+      const mode = window.mockCompositionMode;
+      // 'boundary*': the only sessions in range continue past it, so utilization (keyed on last activity) is empty.
+      const noSessions = mode === 'boundary' || mode === 'boundary-empty';
+      const compositionTip = 'Tool definitions take 38% of your VS Code prompts and at least half of the prompt in 26% of requests. Turn off MCP servers and tools you don\u2019t need, or pick a smaller tool set, before you start a chat (changing them mid-session breaks the prompt cache).';
+      return {
+        overallScore: noSessions ? 0 : 74,
+        estimatedContextWindow: 128000,
+        thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
+        workspaces: noSessions ? [] : [
+          { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null },
+          { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null },
+          { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null }
+        ],
+        trend: noSessions ? [] : [
+          { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
+        ],
+        workspaceTrend: [],
+        totalCompactions: noSessions ? 0 : 12,
+        fullCompactions: noSessions ? 0 : 4,
+        simpleCompactions: noSessions ? 0 : 8,
+        sessionsWithTokenData: noSessions ? 0 : 89,
+        totalSessions: noSessions ? 0 : 127,
+        antiPatterns: [],
+        tips: [
+          ...(noSessions ? [] : ['Consider shorter sessions to reduce compaction events']),
+          ...(mode === undefined || mode === 'boundary' ? [compositionTip] : []),
+        ],
+        ...(mode === false ? {} : { composition: mockContextComposition(mode === 'empty' || mode === 'boundary-empty') }),
+      };
+    },
 
     getWorkspaceContextSessions: () => ({
       workspaceName: 'my-api',
@@ -749,6 +759,8 @@ function getMockData(method, params) {
     evaluateExpression: () => ({ result: null }),
   };
 
+  // Lets e2e assert which params the session drill-downs send.
+  if (method === 'getWorkspaceContextSessions') (window.workspaceSessionsRequests ||= []).push(params);
   const handler = mocks[method];
   if (handler) return handler();
   return {};

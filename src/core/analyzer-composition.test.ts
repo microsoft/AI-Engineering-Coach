@@ -83,14 +83,61 @@ describe('context composition aggregation', () => {
     expect(vscode.toolHeavyPct).toBe(50);
   });
 
+  it('weights Copilot CLI turns by their model calls and averages the prompt size per call', () => {
+    // One turn of ten 100K-token calls and one turn of a single 20K-token call.
+    const session = sess('GitHub Copilot CLI', 'cli', [
+      req(MONDAY, cliComposition(20, 5, 100_000, 10)),
+      req(MONDAY + 60_000, cliComposition(50, 5, 20_000, 1)),
+    ]);
+    const cli = composition([session]).harnesses[0];
+    // 1,020K tokens over 11 calls, not the 60K mean of the two turns.
+    expect(cli.breakdown?.avgPromptTokens).toBe(92_727);
+    // (20 × 1,000K + 50 × 20K) / 1,020K, not (20 × 100K + 50 × 20K) / 120K = 25%.
+    expect(pct(cli.breakdown, 'toolDefinitions')).toBe(20.6);
+    // The per-call estimate now agrees with the measured per-call tool tokens.
+    expect(cli.breakdown?.slices.find(slice => slice.category === 'toolDefinitions')?.tokens).toBe(19_091);
+    expect(cli.avgToolDefinitionTokens).toBe(19_091);
+    // Samples and coverage still count turns.
+    expect(cli.breakdown?.samples).toBe(2);
+    expect(cli.requestsWithData).toBe(2);
+    const detail = new Analyzer([session]).getWorkspaceContextSessions('cli').sessions[0].composition?.breakdown;
+    expect(detail?.avgPromptTokens).toBe(92_727);
+    expect(pct(detail, 'toolDefinitions')).toBe(20.6);
+  });
+
+  it('summarizes VS Code and Copilot CLI separately instead of pooling them', () => {
+    const data = composition([
+      sess('Local Agent', 'api', [req(MONDAY, vscodeComposition(40, 50_000)), req(MONDAY + 1, vscodeComposition(60, 50_000))]),
+      sess('Local Agent (Insiders)', 'web', [req(MONDAY, vscodeComposition(20, 50_000))]),
+      sess('GitHub Copilot App', 'app', [req(MONDAY, cliComposition(8, 4, 300_000, 40))]),
+      sess('GitHub Copilot CLI', 'cli', [req(MONDAY, cliComposition(12, 4, 200_000, 10))]),
+    ]);
+    expect(data.sources.map(s => [s.source, s.label, s.harnesses, s.requestsWithData])).toEqual([
+      ['vscode', 'VS Code', ['Local Agent', 'Local Agent (Insiders)'], 3],
+      ['copilot-cli', 'Copilot App and Copilot CLI', ['GitHub Copilot App', 'GitHub Copilot CLI'], 2],
+    ]);
+    const [vscode, cli] = data.sources;
+    // VS Code records one call per request, so equal prompt sizes weigh equally.
+    expect(pct(vscode.breakdown, 'toolDefinitions')).toBe(40);
+    expect(vscode.breakdown.avgPromptTokens).toBe(50_000);
+    expect(vscode.toolHeavyPct).toBe(33.3);
+    // Every Copilot CLI call counts: (8 × 12,000K + 12 × 2,000K) / 14,000K over 50 calls.
+    expect(pct(cli.breakdown, 'toolDefinitions')).toBe(8.6);
+    expect(cli.breakdown.avgPromptTokens).toBe(280_000);
+    expect(cli).toMatchObject({ avgToolDefinitionTokens: 24_000, maxAvailableTools: 271 });
+    // Pooled, the 50 Copilot CLI calls would pull VS Code's 40% down to about 9%.
+    expect(data).not.toHaveProperty('overall');
+  });
+
   it('falls back to request weighting when no prompt sizes are known', () => {
     const data = composition([
       sess('Local Agent', 'api', [req(MONDAY, vscodeComposition(60, null)), req(MONDAY + 1, vscodeComposition(20, null))]),
     ]);
-    expect(data.overall?.weighting).toBe('requests');
-    expect(pct(data.overall, 'toolDefinitions')).toBe(40);
-    expect(data.overall?.avgPromptTokens).toBeNull();
-    expect(data.overall?.slices[0].tokens).toBeNull();
+    const vscode = data.sources[0].breakdown;
+    expect(vscode.weighting).toBe('requests');
+    expect(pct(vscode, 'toolDefinitions')).toBe(40);
+    expect(vscode.avgPromptTokens).toBeNull();
+    expect(vscode.slices[0].tokens).toBeNull();
   });
 
   it('normalizes rounding noise and reports a large shortfall as other', () => {
@@ -133,7 +180,7 @@ describe('context composition aggregation', () => {
       ['GitHub Copilot App', 'copilot-cli', null],
       ['Local Agent', 'vscode', null],
     ]);
-    expect(data.overall).toBeNull();
+    expect(data.sources).toEqual([]);
   });
 
   it('honours the date filter', () => {
@@ -144,7 +191,7 @@ describe('context composition aggregation', () => {
       ]),
     ], { fromDate: new Date(MONDAY - DAY).toISOString().slice(0, 10) });
     expect(data.coverage.requestsWithData).toBe(1);
-    expect(pct(data.overall, 'toolDefinitions')).toBe(10);
+    expect(pct(data.sources[0].breakdown, 'toolDefinitions')).toBe(10);
   });
 
   it('builds a weekly trend per harness aligned to shared labels', () => {
@@ -161,16 +208,22 @@ describe('context composition aggregation', () => {
     expect(cli?.samples).toEqual([0, 1]);
   });
 
-  it('ranks workspaces by sampled requests and lists their harnesses', () => {
+  it('ranks workspace rows by sampled requests, one row per workspace and source', () => {
     const data = composition([
       sess('Local Agent', 'small', [req(MONDAY, vscodeComposition(40, 1000))]),
       sess('Local Agent', 'big', [req(MONDAY, vscodeComposition(40, 1000)), req(MONDAY + 1, vscodeComposition(40, 1000))]),
+      sess('Local Agent (Insiders)', 'big', [req(MONDAY + 2, vscodeComposition(20, 1000))]),
       sess('GitHub Copilot CLI', 'big', [req(MONDAY, cliComposition(10, 5, 100_000))]),
       sess('Claude', 'none', [req(MONDAY)]),
     ]);
-    expect(data.workspaces.map(w => w.workspaceName)).toEqual(['big', 'small']);
-    expect(data.workspaces[0].harnesses).toEqual(['GitHub Copilot CLI', 'Local Agent']);
-    expect(data.workspaces[0].breakdown.samples).toBe(3);
+    // A workspace used from VS Code and Copilot CLI gets a row per source instead of a pooled bar.
+    expect(data.workspaces.map(w => [w.workspaceName, w.source, w.label, w.harnesses, w.breakdown.samples])).toEqual([
+      ['big', 'vscode', 'VS Code', ['Local Agent', 'Local Agent (Insiders)'], 3],
+      ['big', 'copilot-cli', 'Copilot CLI', ['GitHub Copilot CLI'], 1],
+      ['small', 'vscode', 'VS Code', ['Local Agent'], 1],
+    ]);
+    expect(pct(data.workspaces[0].breakdown, 'toolDefinitions')).toBe(33.3);
+    expect(pct(data.workspaces[1].breakdown, 'toolDefinitions')).toBe(10);
   });
 
   it('averages Copilot CLI system-prompt segments over the sessions that have them, ranked by total contribution', () => {
@@ -298,5 +351,47 @@ describe('session composition detail', () => {
     expect(analyzer.getWorkspaceContextSessions('cli').sessions[0].composition?.compactions[0].slices.map(s => s.category))
       .toEqual(['systemInstructions', 'toolDefinitions', 'conversation']);
     expect(analyzer.getWorkspaceContextSessions('claude').sessions[0]).not.toHaveProperty('composition');
+  });
+});
+
+describe('composition across a date-range boundary', () => {
+  const SEP_30 = new Date(2026, 8, 30, 12, 0, 0).getTime();
+  const OCT_1 = new Date(2026, 9, 1, 12, 0, 0).getTime();
+  const september = { fromDate: '2026-09-01', toDate: '2026-09-30' };
+
+  function spanning(): Session {
+    return sess('Local Agent', 'api', [
+      req(SEP_30, vscodeComposition(30, 40_000), 40_000),
+      req(OCT_1, vscodeComposition(50, 60_000), 60_000),
+    ]);
+  }
+
+  it('keeps composition and its drill-down for a session that continues past the range, leaving utilization unchanged', () => {
+    const session = spanning();
+    const analyzer = new Analyzer([session]);
+    const data = analyzer.getContextManagement(september);
+    // Utilization keys on last activity (October 1), so September has no session, as before.
+    expect(data).toMatchObject({ totalSessions: 0, workspaces: [], sessionsWithTokenData: 0, totalCompactions: 0 });
+    expect(analyzer.getWorkspaceContextSessions('api', september).sessions).toEqual([]);
+    // Composition counts the request sent on September 30.
+    expect(data.composition?.coverage).toEqual({ requestsWithData: 1, totalRequests: 1, sessionsWithData: 1, totalSessions: 1 });
+    expect(pct(data.composition?.sources[0]?.breakdown, 'toolDefinitions')).toBe(30);
+    // No utilization advice for a range without sessions.
+    expect(data.tips).toEqual([]);
+    // The composition drill-down matches sessions by request overlap.
+    expect(analyzer.getWorkspaceContextSessions('api', september, 'requests').sessions.map(s => s.sessionId)).toEqual([session.sessionId]);
+  });
+
+  it('lists the session in both drill-downs once its last activity is in range', () => {
+    const october = { fromDate: '2026-10-01', toDate: '2026-10-31' };
+    const analyzer = new Analyzer([spanning()]);
+    expect(analyzer.getContextManagement(october).totalSessions).toBe(1);
+    expect(analyzer.getWorkspaceContextSessions('api', october).sessions).toHaveLength(1);
+    expect(analyzer.getWorkspaceContextSessions('api', october, 'requests').sessions).toHaveLength(1);
+  });
+
+  it('leaves sessions without a request in range out of the composition drill-down', () => {
+    const august = { fromDate: '2026-08-01', toDate: '2026-08-31' };
+    expect(new Analyzer([spanning()]).getWorkspaceContextSessions('api', august, 'requests').sessions).toEqual([]);
   });
 });

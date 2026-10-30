@@ -74,10 +74,10 @@ Context Composition shows what fills your prompts, by category, for each harness
 
 The section shows:
 
-- **Key figures** -- The share of prompt tokens spent on tool definitions, the share of requests whose prompt is at least half tool definitions, the average tool-definition tokens per Copilot CLI model call, and coverage (how many requests in the range carry composition data).
-- **A 100% stacked bar per harness** -- Hover a segment to see its share and estimated tokens. Shares are weighted by prompt size, so larger prompts count more. If prompt sizes weren't recorded, every request counts equally and the section says so.
+- **Key figures** -- Shown separately for VS Code and for Copilot CLI and the Copilot App: the share of prompt tokens spent on tool definitions, the share of VS Code requests whose prompt is at least half tool definitions, the average tool-definition tokens per Copilot CLI model call, and coverage (how many requests in the range carry composition data).
+- **A 100% stacked bar per harness** -- Hover a segment to see its share and estimated tokens. Shares are weighted by prompt tokens, so larger prompts count more. A Copilot CLI turn counts each of its model calls, and its averages are per call. If prompt sizes weren't recorded, every request counts equally and the section says so.
 - **Tool-definition share by week** -- One line per harness, so you can check whether trimming tools is working.
-- **By workspace** -- The workspaces with the most composition data. Select **Sessions** to see each session's composition, including Copilot CLI workspaces, which the per-workspace utilization table doesn't list because they lack per-request token counts.
+- **By workspace** -- The workspaces with the most composition data. A workspace you use from both VS Code and Copilot CLI gets one row for each. Select **Sessions** to see each session's composition, including Copilot CLI workspaces, which the per-workspace utilization table doesn't list because they lack per-request token counts. The list includes every session with a request in the range, even one that continues past it.
 - **Copilot CLI system prompt** -- Each system-prompt segment, such as `custom_instructions`, `memory`, and `tool_instructions`, with its size and how many sessions include it. Segments that add the most tokens overall come first.
 
 Click a session in the per-workspace table to see its composition. For VS Code sessions, a per-request chart lines up with the token curve. For Copilot CLI sessions, the panel also lists the system-prompt segments from the latest checkpoint and the context when each compaction started, including tokens the CLI didn't attribute.
@@ -103,6 +103,8 @@ GitHub's [Optimizing your AI usage](https://docs.github.com/en/copilot/tutorials
 
 #### Caveats
 
+- VS Code records composition only for the last model call of each request, while Copilot CLI records every main-agent call. Pooled together, Copilot CLI would dominate every figure, so the two are never combined: key figures and workspace rows are shown for each separately.
+- Composition counts the requests sent in the selected range, while context utilization counts sessions by their last activity. A session that continues past the end of the range adds composition but no utilization. If no session's last activity falls in the range, the tab shows only Context Composition.
 - VS Code rounds each category to a whole percent, so shares can add up to 98-101%. Small rounding differences are rescaled; a larger shortfall shows as Other / unattributed.
 - Copilot CLI's system-prompt size comes from the latest checkpoint and is applied to every call in a turn, so the split between system instructions and conversation is an estimate. Tool-definition tokens are counted per call.
 - The tool-definition total in Copilot CLI's `session.shutdown` event isn't used, because it disagrees with the per-call counts.

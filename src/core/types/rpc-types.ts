@@ -50,7 +50,7 @@ import type {
 } from './analytics-types';
 import type { ConfigHealthData } from './config-types';
 import type { InsightsData } from './insights-types';
-import type { ContextManagementData, FlowStateData, WorkspaceContextSessionsData } from './context-types';
+import type { ContextManagementData, FlowStateData, SessionRangeMatch, WorkspaceContextSessionsData } from './context-types';
 import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
 import type { CuriosityData, CuriosityFilter } from './curiosity-types';
@@ -87,7 +87,7 @@ export interface RpcMethodMap {
   getCuriosity: { params: CuriosityFilter | undefined; result: CuriosityData };
   getFlowState: { params: DateFilter | undefined; result: FlowStateData };
   getContextManagement: { params: { filter?: DateFilter } | undefined; result: ContextManagementData };
-  getWorkspaceContextSessions: { params: { workspaceId: string; filter?: DateFilter }; result: WorkspaceContextSessionsData };
+  getWorkspaceContextSessions: { params: { workspaceId: string; filter?: DateFilter; rangeMatch?: SessionRangeMatch }; result: WorkspaceContextSessionsData };
   getContextRangeAvailability: { params: { filter?: DateFilter } | undefined; result: { rangesWithTokens: number[]; matchingSessions: number; sessionsWithRequestTokens: number; harnessesWithoutRequestTokens: string[] } };
   getCalendarActivity: { params: DateFilter | undefined; result: CalendarActivityData };
   getProjectOverview: { params: DateFilter | undefined; result: ProjectOverviewData };

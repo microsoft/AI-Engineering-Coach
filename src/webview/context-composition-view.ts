@@ -12,14 +12,13 @@ import type {
   CompositionSource,
   ContextCategory,
   ContextCompositionData,
-  DateFilter,
   HarnessComposition,
   SessionCompositionDetail,
   SessionContextDetail,
-  WorkspaceContextSessionsData,
+  SourceComposition,
 } from '../core/types';
 import { COLORS, createChart, destroyChartById, formatNum, harnessColor, rpc } from './shared';
-import { html, render, unmount, ComponentChildren } from './render';
+import { html, ComponentChildren } from './render';
 
 const GUIDE_URL = 'https://docs.github.com/en/copilot/tutorials/optimize-ai-usage';
 export const COMPOSITION_TREND_CHART_ID = 'ctxCompTrendChart';
@@ -64,7 +63,7 @@ function pctText(pct: number): string {
   return pct >= 10 || pct === 0 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
 }
 
-function countText(n: number, noun: string): string {
+export function countText(n: number, noun: string): string {
   return `${formatNum(n)} ${noun}${n === 1 ? '' : 's'}`;
 }
 
@@ -121,23 +120,35 @@ function kpiChip(label: string, value: string, tip: string, sub?: string): Compo
   </div>`;
 }
 
+function unitFor(source: CompositionSource): string {
+  return source === 'copilot-cli' ? ' per call' : ' per request';
+}
+
+/** Tooltip for a source's tool-definition share, stating how it is weighted and why it isn't pooled with `other`. */
+function toolShareHelp(s: SourceComposition, other: SourceComposition | undefined): string {
+  if (s.breakdown.weighting === 'requests') {
+    return `Share of ${s.label} prompts spent on tool definitions. Each request counts equally because prompt sizes were not recorded.`;
+  }
+  return s.source === 'copilot-cli'
+    ? `Share of the prompt tokens sent on ${s.label} main-agent model calls that went to tool definitions. Every call counts${other ? `, so it is shown separately from ${other.label}, which records only the last model call of each request` : ''}.`
+    : `Share of ${s.label} prompt tokens spent on tool definitions, weighted by prompt size. VS Code records only the last model call of each request${other ? `, so it is shown separately from ${other.label}, which records every call` : ''}.`;
+}
+
 function kpis(data: ContextCompositionData): ComponentChildren {
   const chips: ComponentChildren[] = [];
-  const tools = shareOf(data.overall, 'toolDefinitions');
-  if (tools != null) {
-    chips.push(kpiChip('Tool definitions', pctText(tools), 'Share of prompt tokens spent on tool definitions, across every harness that reports composition (weighted by prompt size).'));
-  }
-  const heavyRows = data.harnesses.filter(h => h.toolHeavyPct != null && h.requestsWithData > 0);
-  const heavySamples = heavyRows.reduce((sum, h) => sum + h.requestsWithData, 0);
-  if (heavySamples > 0) {
-    const heavy = heavyRows.reduce((sum, h) => sum + (h.toolHeavyPct ?? 0) * h.requestsWithData, 0) / heavySamples;
-    chips.push(kpiChip(`Requests \u2265${data.toolHeavyThreshold}% tools`, pctText(heavy), `Share of requests whose prompt is at least ${data.toolHeavyThreshold}% tool definitions.`));
-  }
-  const cli = data.harnesses.find(h => h.avgToolDefinitionTokens != null);
-  if (cli?.avgToolDefinitionTokens != null) {
-    chips.push(kpiChip('Tool tokens per call', formatNum(cli.avgToolDefinitionTokens),
-      `Average tool-definition tokens sent with every ${cli.harness} model call.`,
-      cli.maxAvailableTools == null ? cli.harness : `up to ${cli.maxAvailableTools} tools \u00b7 ${cli.harness}`));
+  for (const s of data.sources) {
+    const tools = shareOf(s.breakdown, 'toolDefinitions');
+    const other = data.sources.find(o => o.source !== s.source);
+    if (tools != null) chips.push(kpiChip('Tool definitions', pctText(tools), toolShareHelp(s, other), s.label));
+    if (s.source === 'vscode' && s.toolHeavyPct != null) {
+      chips.push(kpiChip(`Requests \u2265${data.toolHeavyThreshold}% tools`, pctText(s.toolHeavyPct),
+        `Share of ${s.label} requests whose prompt is at least ${data.toolHeavyThreshold}% tool definitions.`, s.label));
+    }
+    if (s.source === 'copilot-cli' && s.avgToolDefinitionTokens != null) {
+      chips.push(kpiChip('Tool tokens per call', formatNum(s.avgToolDefinitionTokens),
+        `Average tool-definition tokens sent with every ${s.label} model call.`,
+        s.maxAvailableTools == null ? s.label : `up to ${s.maxAvailableTools} tools \u00b7 ${s.label}`));
+    }
   }
   const { requestsWithData, totalRequests } = data.coverage;
   const coverage = totalRequests > 0 ? (requestsWithData / totalRequests) * 100 : 0;
@@ -167,7 +178,7 @@ function harnessRow(h: HarnessComposition, index: number): ComponentChildren {
   }
   const coverage = h.totalRequests > 0 ? (h.requestsWithData / h.totalRequests) * 100 : 0;
   const partial = h.requestsWithData < h.totalRequests;
-  const unit = h.source === 'copilot-cli' ? ' per call' : ' per request';
+  const unit = unitFor(h.source);
   const noun = h.source === 'copilot-cli' ? 'turns' : 'requests';
   const partialTip = `${formatNum(h.totalRequests - h.requestsWithData)} ${noun} in range have no composition data. ${PARTIAL_HELP[h.source]}`;
   return html`<div class="ctx-comp-row" data-harness=${h.harness}>${name}
@@ -187,14 +198,14 @@ function workspaceList(data: ContextCompositionData): ComponentChildren {
     ${data.workspaces.map((w, i) => {
       const tools = shareOf(w.breakdown, 'toolDefinitions');
       const panelId = `ctxCompWsSessions${i}`;
-      return html`<div class="ctx-comp-ws" data-workspace=${w.workspaceName}>
+      return html`<div class="ctx-comp-ws" data-workspace=${w.workspaceName} data-source=${w.source}>
         <div class="ctx-comp-ws-head">
           <span class="ctx-comp-ws-name" title=${w.workspaceName}>${w.workspaceName}</span>
-          <span class="ctx-comp-ws-stat">${tools == null ? '' : `${pctText(tools)} tools \u00b7 `}${formatNum(w.breakdown.samples)} req</span>
+          <span class="ctx-comp-ws-stat">${tools == null ? '' : `${pctText(tools)} tools \u00b7 `}${formatNum(w.breakdown.samples)} req \u00b7 ${w.label}</span>
           <button type="button" class="ctx-comp-ws-toggle" aria-expanded="false" aria-controls=${panelId}
-            aria-label=${`Show sessions for ${w.workspaceName}`}>Sessions</button>
+            aria-label=${`Show ${w.label} sessions for ${w.workspaceName}`}>Sessions</button>
         </div>
-        ${compositionBar(w.breakdown.slices, `${w.workspaceName} prompt composition (${w.harnesses.join(', ')})`, { height: 10, labels: false })}
+        ${compositionBar(w.breakdown.slices, `${w.workspaceName} prompt composition (${w.harnesses.join(', ')})`, { height: 10, labels: false, unit: unitFor(w.source) })}
         <div class="ctx-comp-ws-sessions" id=${panelId} hidden></div>
       </div>`;
     })}
@@ -226,24 +237,37 @@ function openGuide(event: Event): void {
   void rpc('openExternal', { url: GUIDE_URL }).catch(() => undefined);
 }
 
+/** How the shares on the card are weighted, per source present. */
+function weightingNote(sources: SourceComposition[]): string {
+  const parts: string[] = [];
+  if (sources.some(s => s.breakdown.weighting === 'tokens')) parts.push('Shares are weighted by prompt tokens, so larger prompts count more.');
+  for (const s of sources) {
+    if (s.breakdown.weighting === 'requests') parts.push(`${s.label}: each request counts equally because prompt sizes were not recorded.`);
+    else if (s.source === 'copilot-cli') parts.push(`${s.label}: every main-agent model call counts.`);
+  }
+  const cli = sources.find(s => s.source === 'copilot-cli');
+  if (cli && sources.some(s => s.source === 'vscode')) {
+    parts.push(`VS Code records only the last model call of each request, so VS Code and ${cli.label} are shown separately rather than pooled.`);
+  }
+  return parts.join(' ');
+}
+
 /** The Context Composition section of the Context Management tab. */
 export function renderCompositionSection(data: ContextCompositionData): ComponentChildren {
   const reporting = data.harnesses.filter(h => h.breakdown != null);
-  const weighting = data.overall?.weighting === 'requests'
-    ? 'Each request counts equally because prompt sizes were not recorded.'
-    : 'Shares are weighted by prompt size, so larger prompts count more.';
+  const empty = data.sources.length === 0;
   return html`<section class="ctx-comp" id="ctxComposition" aria-labelledby="ctxCompositionTitle">
     <h3 id="ctxCompositionTitle" style="margin-top:24px;">Context Composition
       ${infoTip('What fills your prompts, by category, as each harness reports it. VS Code splits the conversation into messages, tool results and files; Copilot CLI reports it as one conversation bucket. Claude Code, Codex, OpenCode and Xcode don\u2019t report it. Only category names and token counts are read, never prompt text.', 'About context composition')}
     </h3>
-    <p class="ctx-comp-intro">What fills your prompts, by category. ${weighting}</p>
-    ${data.overall == null
+    <p class="ctx-comp-intro">What fills your prompts, by category. ${weightingNote(data.sources)}</p>
+    ${empty
       ? html`<div class="ctx-comp-note">No request in this range carries composition data. Recent VS Code Copilot Chat and Copilot CLI builds record it.</div>`
       : html`${kpis(data)}${legend(categoriesIn(reporting.map(h => h.breakdown)))}`}
     <div class="ctx-comp-rows" aria-label="Prompt composition by harness">
       ${data.harnesses.map((h, i) => harnessRow(h, i))}
     </div>
-    ${data.overall == null ? null : html`<div class="two-col ctx-comp-detail">
+    ${empty ? null : html`<div class="two-col ctx-comp-detail">
       <div class="chart-wrap">
         <div class="chart-title">Tool-definition share by week ${infoTip('Weekly share of prompt tokens spent on tool definitions, per harness. Watch it drop after you disable MCP servers or switch to smaller tool sets.', 'About the tool-definition trend')}</div>
         ${data.trend.labels.length > 1
@@ -304,7 +328,7 @@ export function compositionMiniBar(detail: SessionCompositionDetail | undefined,
     const tip = detail ? 'No per-turn composition recorded; expand for system prompt and compaction details.' : SESSION_NOT_REPORTED_HELP;
     return html`<span class="ctx-comp-dash" data-tip=${tip} tabindex=${focusable ? 0 : undefined} aria-label=${tip}>\u2014</span>`;
   }
-  return html`<div class="ctx-comp-mini">${compositionBar(detail.breakdown.slices, 'Session prompt composition', { height: 8, labels: false, focusable })}</div>`;
+  return html`<div class="ctx-comp-mini">${compositionBar(detail.breakdown.slices, 'Session prompt composition', { height: 8, labels: false, focusable, unit: unitFor(detail.source) })}</div>`;
 }
 
 function sessionLegend(slices: CompositionSlice[], unit: string): ComponentChildren {
@@ -321,7 +345,7 @@ function formatWhen(ts: number | null): string {
 export function renderSessionCompositionPanel(s: SessionContextDetail, chartId = SESSION_COMPOSITION_CHART_ID): ComponentChildren {
   const detail = s.composition;
   if (!detail) return null;
-  const unit = detail.source === 'copilot-cli' ? ' per call' : ' per request';
+  const unit = unitFor(detail.source);
   const hasPerRequest = detail.perRequest.some(entry => entry != null);
   return html`<div class="ctx-comp-session" data-session-composition=${s.sessionId}>
     <div class="ctx-comp-session-title">Prompt composition ${infoTip(SOURCE_HELP[detail.source], 'How this session\u2019s composition was measured')}</div>
@@ -382,70 +406,4 @@ export function renderSessionCompositionChart(s: SessionContextDetail, chartId =
       },
     },
   });
-}
-
-const WORKSPACE_SESSION_CHART_ID = 'ctxCompWsSessionChart';
-const MAX_DRILLDOWN_SESSIONS = 10;
-
-function hasSessionComposition(s: SessionContextDetail): boolean {
-  const detail = s.composition;
-  return detail != null && (detail.breakdown != null || detail.systemSegments.length > 0 || detail.compactions.length > 0);
-}
-
-function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDetail[], total: number, selected: string | null): void {
-  destroyChartById(WORKSPACE_SESSION_CHART_ID);
-  const select = (id: string) => renderWorkspaceSessions(panel, sessions, total, id === selected ? null : id);
-  render(sessions.length === 0
-    ? html`<div class="ctx-comp-note">No session in this workspace has composition data in this range.</div>`
-    : html`<ul class="ctx-comp-ws-session-list" aria-label="Sessions with composition data">
-      ${sessions.map(s => html`<li>
-        <button type="button" class="ctx-comp-ws-session" data-session-id=${s.sessionId} aria-expanded=${String(s.sessionId === selected)} onClick=${() => select(s.sessionId)}>
-          <span>${s.date}</span>
-          <span class="ctx-comp-ws-session-harness">${s.harness}</span>
-          <span>${countText(s.requestCount, 'request')}</span>
-          ${compositionMiniBar(s.composition, false)}
-        </button>
-        ${s.sessionId === selected ? renderSessionCompositionPanel(s, WORKSPACE_SESSION_CHART_ID) : null}
-      </li>`)}
-      ${total > sessions.length ? html`<li class="ctx-comp-note">Showing the ${sessions.length} most recent of ${total} sessions.</li>` : null}
-    </ul>`, panel);
-  const current = sessions.find(s => s.sessionId === selected);
-  if (current) renderSessionCompositionChart(current, WORKSPACE_SESSION_CHART_ID);
-}
-
-function closeWorkspacePanels(toggles: HTMLButtonElement[]): void {
-  destroyChartById(WORKSPACE_SESSION_CHART_ID);
-  for (const toggle of toggles) {
-    toggle.setAttribute('aria-expanded', 'false');
-    const panel = toggle.closest('.ctx-comp-ws')?.querySelector<HTMLElement>('.ctx-comp-ws-sessions');
-    if (!panel) continue;
-    unmount(panel);
-    panel.hidden = true;
-  }
-}
-
-/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches
- *  Copilot CLI workspaces, which the utilization table omits because they lack per-request tokens. */
-export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter): void {
-  const toggles = [...root.querySelectorAll<HTMLButtonElement>('.ctx-comp-ws-toggle')];
-  for (const toggle of toggles) {
-    toggle.addEventListener('click', () => {
-      const workspace = toggle.closest<HTMLElement>('.ctx-comp-ws');
-      const panel = workspace?.querySelector<HTMLElement>('.ctx-comp-ws-sessions');
-      if (!workspace || !panel) return;
-      const wasOpen = toggle.getAttribute('aria-expanded') === 'true';
-      closeWorkspacePanels(toggles);
-      if (wasOpen) return;
-      toggle.setAttribute('aria-expanded', 'true');
-      panel.hidden = false;
-      render(html`<div class="ctx-comp-note">Loading sessions\u2026</div>`, panel);
-      void rpc<WorkspaceContextSessionsData>('getWorkspaceContextSessions', { workspaceId: workspace.dataset.workspace, filter })
-        .then(data => {
-          if (toggle.getAttribute('aria-expanded') !== 'true') return;
-          const sessions = data.sessions.filter(hasSessionComposition);
-          renderWorkspaceSessions(panel, sessions.slice(0, MAX_DRILLDOWN_SESSIONS), sessions.length, null);
-        })
-        .catch(() => render(html`<div class="ctx-comp-note">Could not load sessions.</div>`, panel));
-    });
-  }
 }

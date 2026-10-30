@@ -6,19 +6,19 @@
 /* Context Management sub-page within Context Health — token utilization,
  * compaction tracking, per-workspace context scores, and anti-patterns. */
 
-import { DateFilter, ContextManagementData, ContextVerdictThresholds, WorkspaceContextScore, WorkspaceContextSessionsData, SessionContextDetail } from '../core/types';
+import { DateFilter, ContextCompositionData, ContextManagementData, ContextVerdictThresholds, WorkspaceContextScore, WorkspaceContextSessionsData, SessionContextDetail } from '../core/types';
 import { rpc, COLORS, createChart, destroyChartById, formatNum, PALETTE } from './shared';
 import { html, render, StatCard, CanvasEl, ComponentChildren } from './render';
 import {
   SESSION_COMPOSITION_CHART_ID,
   alignSessionChartAxis,
-  attachCompositionDrilldown,
   compositionMiniBar,
   renderCompositionSection,
   renderCompositionTrendChart,
   renderSessionCompositionChart,
   renderSessionCompositionPanel,
 } from './context-composition-view';
+import { attachCompositionDrilldown } from './context-composition-drilldown';
 
 const VERDICT_COLORS: Record<string, string> = {
   optimal: COLORS.green,
@@ -57,10 +57,32 @@ function sortWorkspacesBySessions(workspaces: WorkspaceContextScore[]): Workspac
   );
 }
 
+/** Composition without the utilization sections, for a range where no session's last activity falls. */
+function renderCompositionOnly(container: HTMLElement, data: ContextManagementData, composition: ContextCompositionData, filter: DateFilter): void {
+  render(html`
+    <div>
+      <div class="ctx-comp-note" id="ctxUtilizationEmpty" role="note">
+        Context utilization counts sessions by their last activity, and none falls in this range.
+        Composition below covers the requests sent in this range.
+      </div>
+      ${renderTips(data.tips)}
+      ${renderCompositionSection(composition)}
+    </div>`, container);
+  renderCompositionTrendChart(composition);
+  const section = document.getElementById('ctxComposition');
+  if (section) attachCompositionDrilldown(section, filter);
+}
+
 export async function renderContextManagement(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const data = await rpc<ContextManagementData>('getContextManagement', { filter: currentFilter } as Record<string, unknown>);
 
   if (data.totalSessions === 0) {
+    // Composition counts requests sent in the range, so a session that continues past the range still
+    // supplies composition even though utilization (keyed on last activity) has no session to show.
+    if (data.composition && data.composition.sources.length > 0) {
+      renderCompositionOnly(container, data, data.composition, currentFilter);
+      return;
+    }
     render(html`
       <div style="text-align:center;padding:60px 20px;color:var(--text-muted);">
         <div style="font-size:40px;margin-bottom:12px;">&#128202;</div>

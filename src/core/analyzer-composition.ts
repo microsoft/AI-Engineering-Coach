@@ -18,6 +18,7 @@ import type {
   Session,
   SessionCompositionDetail,
   SessionRequest,
+  SourceComposition,
   SystemSegmentSummary,
   WorkspaceComposition,
 } from './types';
@@ -32,8 +33,10 @@ interface Sample {
   source: CompositionSource;
   /** Normalized to sum to 100. */
   shares: Shares;
+  /** Average prompt size over the sample's model calls. */
   basis: number | null;
   week: string | null;
+  /** Model calls behind the sample: one for VS Code, every main-agent call of a Copilot CLI turn. */
   calls: number;
   toolDefinitionTokens: number | null;
   availableTools: number | null;
@@ -74,8 +77,8 @@ function weekLabel(ts: number): string {
   return toDateStr(monday.getTime());
 }
 
-function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
-  const groups = new Map<string, T[]>();
+function groupBy<T, K>(items: T[], key: (item: T) => K): Map<K, T[]> {
+  const groups = new Map<K, T[]>();
   for (const item of items) {
     const k = key(item);
     const group = groups.get(k);
@@ -96,13 +99,15 @@ function toSample(request: SessionRequest, session: Session): Sample | null {
     shares,
     basis: composition.promptTokens != null && composition.promptTokens > 0 ? composition.promptTokens : null,
     week: request.timestamp != null && request.timestamp > 0 ? weekLabel(request.timestamp) : null,
-    calls: composition.calls ?? 1,
+    calls: Math.max(1, composition.calls ?? 1),
     toolDefinitionTokens: composition.toolDefinitionTokens ?? null,
     availableTools: composition.availableTools ?? null,
   };
 }
 
-/** Token-weighted when prompt sizes are known (requests without one are left out), else request-weighted. */
+/** Token-weighted when prompt sizes are known (requests without one are left out), else request-weighted.
+ *  A sample's prompt size is its average per model call, so it weighs `basis × calls`: every Copilot CLI
+ *  call counts, and the average prompt is per call. VS Code records one call per request. */
 function breakdownOf(samples: Sample[]): CompositionBreakdown | null {
   if (samples.length === 0) return null;
   const withBasis = samples.filter(sample => sample.basis != null);
@@ -110,17 +115,17 @@ function breakdownOf(samples: Sample[]): CompositionBreakdown | null {
   const used = weighting === 'tokens' ? withBasis : samples;
   const totals = new Map<ContextCategory, number>();
   let weightSum = 0;
+  let calls = 0;
   for (const sample of used) {
-    const weight = sample.basis ?? 1;
+    const weight = sample.basis == null ? 1 : sample.basis * sample.calls;
     weightSum += weight;
+    calls += sample.calls;
     for (const category of CONTEXT_CATEGORIES) {
       const share = sample.shares[category];
       if (share != null) totals.set(category, (totals.get(category) ?? 0) + share * weight);
     }
   }
-  const avgPromptTokens = withBasis.length > 0
-    ? Math.round(withBasis.reduce((sum, sample) => sum + (sample.basis ?? 0), 0) / withBasis.length)
-    : null;
+  const avgPromptTokens = weighting === 'tokens' ? Math.round(weightSum / calls) : null;
   const slices = CONTEXT_CATEGORIES.filter(category => totals.has(category)).map(category => {
     const pct = (totals.get(category) ?? 0) / weightSum;
     return {
@@ -206,18 +211,19 @@ function formatTokens(n: number): string {
 }
 
 /** "VS Code", or the Copilot CLI/App harnesses actually present (they share one log format). */
-function tipLabel(source: CompositionSource, samples: Sample[]): string {
+function sourceLabel(source: CompositionSource, samples: Sample[]): string {
   if (source === 'vscode') return 'VS Code';
   const names = new Set(samples.map(sample => HARNESS_SHORT_NAMES.get(sample.session.harness) ?? sample.session.harness));
   return [...names].sort().join(' and ');
 }
 
-function toolTip(source: CompositionSource, samples: Sample[], tools: number, heavy: number): string | null {
-  const label = tipLabel(source, samples);
-  const stats = toolStats(samples);
-  if (source === 'copilot-cli' && stats.avg != null && (stats.avg >= TIP_TOOL_TOKENS_PER_CALL || tools >= TIP_TOOL_SHARE)) {
-    const offered = stats.max == null ? '' : ` (${stats.max} tools offered)`;
-    return `Tool definitions add about ${formatTokens(stats.avg)} tokens to every ${label} model call${offered}, ${Math.round(tools)}% of your prompts. Remove MCP servers you don't use before you start a session (changing them mid-session breaks the prompt cache). See ${OPTIMIZE_GUIDE}.`;
+function toolTip(row: SourceComposition, tools: number): string | null {
+  const { label } = row;
+  const heavy = row.toolHeavyPct ?? 0;
+  const avg = row.avgToolDefinitionTokens;
+  if (row.source === 'copilot-cli' && avg != null && (avg >= TIP_TOOL_TOKENS_PER_CALL || tools >= TIP_TOOL_SHARE)) {
+    const offered = row.maxAvailableTools == null ? '' : ` (${row.maxAvailableTools} tools offered)`;
+    return `Tool definitions add about ${formatTokens(avg)} tokens to every ${label} model call${offered}, ${Math.round(tools)}% of your prompts. Remove MCP servers you don't use before you start a session (changing them mid-session breaks the prompt cache). See ${OPTIMIZE_GUIDE}.`;
   }
   if (tools >= TIP_TOOL_SHARE || heavy >= TIP_TOOL_HEAVY_REQUESTS) {
     return `Tool definitions take ${Math.round(tools)}% of your ${label} prompts and at least half of the prompt in ${Math.round(heavy)}% of requests. Turn off MCP servers and tools you don't need, or pick a smaller tool set, before you start a chat (changing them mid-session breaks the prompt cache). See ${OPTIMIZE_GUIDE}.`;
@@ -226,13 +232,12 @@ function toolTip(source: CompositionSource, samples: Sample[], tools: number, he
 }
 
 /** Coaching tips per source (VS Code, Copilot CLI) so harness variants don't repeat the same advice. */
-function compositionTips(samples: Sample[]): string[] {
+function compositionTips(sources: SourceComposition[]): string[] {
   const tips: string[] = [];
-  for (const [source, sourceSamples] of groupBy(samples, sample => sample.source)) {
-    if (sourceSamples.length < COMPOSITION_TIP_MIN_SAMPLES) continue;
-    const breakdown = breakdownOf(sourceSamples);
-    const label = tipLabel(source as CompositionSource, sourceSamples);
-    const tools = toolTip(source as CompositionSource, sourceSamples, shareOf(breakdown, 'toolDefinitions') ?? 0, toolHeavyPct(sourceSamples) ?? 0);
+  for (const row of sources) {
+    if (row.requestsWithData < COMPOSITION_TIP_MIN_SAMPLES) continue;
+    const { breakdown, label } = row;
+    const tools = toolTip(row, shareOf(breakdown, 'toolDefinitions') ?? 0);
     if (tools) tips.push(tools);
     const system = shareOf(breakdown, 'systemInstructions') ?? 0;
     if (system >= TIP_SYSTEM_SHARE) {
@@ -299,18 +304,47 @@ function buildHarnessRows(collected: CollectedSamples): HarnessComposition[] {
     .sort((a, b) => b.requestsWithData - a.requestsWithData || b.totalRequests - a.totalRequests || a.harness.localeCompare(b.harness));
 }
 
+/** One row per source. VS Code and Copilot CLI are never pooled: VS Code records only the last model
+ *  call of each request while Copilot CLI records every call, so a pooled share would mostly be Copilot CLI's. */
+function buildSourceRows(samples: Sample[]): SourceComposition[] {
+  const rows: SourceComposition[] = [];
+  for (const [source, sourceSamples] of groupBy(samples, sample => sample.source)) {
+    const breakdown = breakdownOf(sourceSamples);
+    if (!breakdown) continue;
+    const stats = toolStats(sourceSamples);
+    rows.push({
+      source,
+      label: sourceLabel(source, sourceSamples),
+      harnesses: [...new Set(sourceSamples.map(sample => sample.session.harness))].sort(),
+      breakdown,
+      requestsWithData: sourceSamples.length,
+      toolHeavyPct: toolHeavyPct(sourceSamples),
+      avgToolDefinitionTokens: stats.avg,
+      maxAvailableTools: stats.max,
+    });
+  }
+  return rows.sort((a, b) => b.requestsWithData - a.requestsWithData || a.label.localeCompare(b.label));
+}
+
+/** One row per workspace and source, so a workspace used from VS Code and Copilot CLI isn't pooled. */
 function buildWorkspaceRows(samples: Sample[]): WorkspaceComposition[] {
   const rows: WorkspaceComposition[] = [];
-  const groups = [...groupBy(samples, sample => sample.session.workspaceName)]
-    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+  const groups = [...groupBy(samples, sample => sample.session.workspaceName).values()]
+    .flatMap(workspaceSamples => [...groupBy(workspaceSamples, sample => sample.source).values()])
+    .sort((a, b) => b.length - a.length
+      || a[0].session.workspaceName.localeCompare(b[0].session.workspaceName)
+      || a[0].source.localeCompare(b[0].source))
     .slice(0, MAX_WORKSPACES);
-  for (const [name, workspaceSamples] of groups) {
-    const breakdown = breakdownOf(workspaceSamples);
+  for (const group of groups) {
+    const breakdown = breakdownOf(group);
     if (!breakdown) continue;
+    const { session, source } = group[0];
     rows.push({
-      workspaceId: name,
-      workspaceName: name,
-      harnesses: [...new Set(workspaceSamples.map(sample => sample.session.harness))].sort(),
+      workspaceId: session.workspaceName,
+      workspaceName: session.workspaceName,
+      source,
+      label: sourceLabel(source, group),
+      harnesses: [...new Set(group.map(sample => sample.session.harness))].sort(),
       breakdown,
     });
   }
@@ -324,10 +358,11 @@ export function analyzeComposition(
 ): { data: ContextCompositionData; tips: string[] } {
   const collected = collectSamples(requests, sessionOf);
   const { samples } = collected;
+  const sources = buildSourceRows(samples);
   const segments = summarizeSegments(collected.sessions);
   return {
     data: {
-      overall: breakdownOf(samples),
+      sources,
       harnesses: buildHarnessRows(collected),
       workspaces: buildWorkspaceRows(samples),
       trend: buildTrend(samples),
@@ -341,7 +376,7 @@ export function analyzeComposition(
       },
       toolHeavyThreshold: COMPOSITION_TOOL_HEAVY_PCT,
     },
-    tips: compositionTips(samples),
+    tips: compositionTips(sources),
   };
 }
 

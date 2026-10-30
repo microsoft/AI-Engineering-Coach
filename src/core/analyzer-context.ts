@@ -18,6 +18,7 @@ import {
   ContextTrend,
   WorkspaceTrendSeries,
   SessionContextDetail,
+  SessionRangeMatch,
   SessionTimelineEvent,
   WorkspaceContextSessionsData,
 } from './types';
@@ -181,8 +182,10 @@ export class ContextAnalyzer extends AnalyzerBase {
     const antiPatterns = this.detectContextAntiPatterns(sessions, thresholds);
     const requests = this.filter(f);
     const composition = analyzeComposition(requests, request => this.requestSessionMap.get(request));
+    // Composition counts requests in range, so it can have data when no session's last activity falls
+    // in range; skip utilization advice then rather than coaching on a score of 0.
     const tips = [
-      ...this.generateTips(workspaces, totalCompactions, overallScore, thresholds),
+      ...(sessions.length > 0 ? this.generateTips(workspaces, totalCompactions, overallScore, thresholds) : []),
       ...composition.tips,
     ];
 
@@ -620,8 +623,11 @@ export class ContextAnalyzer extends AnalyzerBase {
     return patterns;
   }
 
-  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter): WorkspaceContextSessionsData {
-    const sessions = this.filteredSessions(f).filter(s => this.matchesWorkspaceFilter(s, workspaceId));
+  /** Session details for one workspace. `rangeMatch: 'requests'` (Context Composition) keeps sessions with
+   *  any request in range; the default keys on last activity, like the utilization table. */
+  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter, rangeMatch: SessionRangeMatch = 'lastActivity'): WorkspaceContextSessionsData {
+    const inRange = rangeMatch === 'requests' ? this.sessionsWithRequestsInRange(f) : this.filteredSessions(f);
+    const sessions = inRange.filter(s => this.matchesWorkspaceFilter(s, workspaceId));
     const workspaceName = sessions[0]?.workspaceName ?? workspaceId;
     const thresholds = this.computeVerdictThresholds(sessions);
     const estimatedContextWindow = this.estimateContextWindowFromRequests(

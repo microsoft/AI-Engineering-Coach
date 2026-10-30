@@ -12,19 +12,38 @@ export interface CompositionSlice {
   category: ContextCategory;
   /** Percent of the prompt (slices of a breakdown sum to 100). */
   pct: number;
-  /** Estimated tokens per request (pct × average prompt size); `null` without prompt sizes. */
+  /** Estimated tokens per model call (pct × average prompt size); `null` without prompt sizes. */
   tokens: number | null;
 }
 
 export interface CompositionBreakdown {
   /** Slices in canonical category order, limited to categories the source reports. */
   slices: CompositionSlice[];
-  /** `tokens` = weighted by each request's prompt size; `requests` = every request counts equally. */
+  /** `tokens` = weighted by the prompt tokens of every recorded model call (a Copilot CLI turn counts
+   *  each of its calls; VS Code records one call per request); `requests` = every request counts equally. */
   weighting: 'tokens' | 'requests';
-  /** Requests that contributed to the breakdown. */
+  /** Requests (Copilot CLI: turns) that contributed to the breakdown. */
   samples: number;
-  /** Average prompt size of those requests; `null` when unknown. */
+  /** Average prompt size per recorded model call; `null` when unknown. */
   avgPromptTokens: number | null;
+}
+
+/** Composition pooled over the harnesses that report it the same way. VS Code and Copilot CLI
+ *  are never pooled: VS Code records only the last model call of each request, Copilot CLI every call. */
+export interface SourceComposition {
+  source: CompositionSource;
+  /** Display name, e.g. "VS Code" or "Copilot App and Copilot CLI". */
+  label: string;
+  harnesses: string[];
+  breakdown: CompositionBreakdown;
+  /** Requests (Copilot CLI: turns) with composition data, including those without a prompt size. */
+  requestsWithData: number;
+  /** Percent of those requests whose prompt is at least half tool definitions. */
+  toolHeavyPct: number | null;
+  /** Copilot CLI: average tool-definition tokens per model call. */
+  avgToolDefinitionTokens: number | null;
+  /** Copilot CLI: most tools offered to the model in one turn. */
+  maxAvailableTools: number | null;
 }
 
 export interface HarnessComposition {
@@ -45,9 +64,13 @@ export interface HarnessComposition {
   maxAvailableTools: number | null;
 }
 
+/** One workspace's composition for one source; a workspace used from both sources gets two rows. */
 export interface WorkspaceComposition {
   workspaceId: string;
   workspaceName: string;
+  source: CompositionSource;
+  /** Display name of the source's harnesses in this workspace, e.g. "VS Code" or "Copilot CLI". */
+  label: string;
   harnesses: string[];
   breakdown: CompositionBreakdown;
 }
@@ -73,10 +96,10 @@ export interface SystemSegmentSummary {
 }
 
 export interface ContextCompositionData {
-  /** All harnesses pooled; `null` when no request carries composition data. */
-  overall: CompositionBreakdown | null;
+  /** One entry per reporting source, most sampled first; empty when no request carries composition data. */
+  sources: SourceComposition[];
   harnesses: HarnessComposition[];
-  /** Top workspaces by sampled requests. */
+  /** Top workspace and source pairs by sampled requests. */
   workspaces: WorkspaceComposition[];
   trend: CompositionTrend;
   /** Copilot CLI system-prompt segments, largest first. */
@@ -210,6 +233,11 @@ export interface WorkspaceContextSessionsData {
   sessions: SessionContextDetail[];
 }
 
+/** How the session drill-down picks sessions for a date range: `lastActivity` (default) keys on each
+ *  session's last activity, like the utilization table; `requests` keeps every session with a request
+ *  in the range, like Context Composition. */
+export type SessionRangeMatch = 'lastActivity' | 'requests';
+
 export interface ContextManagementData {
   /** Overall context health score 0-100 */
   overallScore: number;
@@ -236,7 +264,8 @@ export interface ContextManagementData {
   antiPatterns: AntiPattern[];
   /** Actionable tips based on observed patterns */
   tips: string[];
-  /** What fills the prompt, by category, per harness and workspace. */
+  /** What fills the prompt, by category, per harness and workspace. Counts requests sent in the
+   *  range, so it can have data when `totalSessions` (keyed on last activity) is 0. */
   composition?: ContextCompositionData;
 }
 
