@@ -10,7 +10,6 @@ import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { rpc, rpcAllSettled, createChart, formatNum, COLORS, PALETTE, harnessColor, destroyChartById, scoreColor, scoreLabel } from './shared';
 import { html, render, CanvasEl, ScoreRing, PctBadge } from './render';
 import { clearSkillCache, setSkillCache, getSkillCache } from './skill-cache';
-import { llmAvailable } from './capabilities';
 
 // Module-level view state — survives filter/harness changes.
 let activeMetric = 'requests';
@@ -127,7 +126,7 @@ function renderDashboardMarkup(
     </div>
     ${!FF_TOKEN_REPORTING_ENABLED && html`<div class="dash-info-banner"><span class="dash-info-icon">\u2139</span><div><strong>Token Usage & Burndown temporarily hidden</strong><p>These features are disabled until we can verify that reported numbers align with GitHub's billing data. They will be re-enabled once validated.</p></div></div>`}
     ${scores.length > 0 && html`<section class="dash-section"><div class="dash-section-header"><h3>Anti-Patterns Summary</h3><a href="#" data-page="anti-patterns" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>View All Anti-Patterns \u2192</a></div><div class="ap-score-grid">${scores.map(g => html`<${PracticeCard} g=${g} />`)}</div></section>`}
-    ${llmAvailable() && html`<section class="dash-section"><div class="dash-section-header"><h3>Skill Finder</h3><a href="#" data-page="skills" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>Open Full View \u2192</a></div><p class="dash-section-desc">Scans your prompt history for repeated patterns that waste time re-explaining the same tasks.</p><div id="dashSkillContent" class="dash-card">${!skillCache && html`<div style="text-align:center;"><p style="color:var(--text-muted);margin:0 0 12px 0;font-size:13px;">Analyze your prompt history to discover skill opportunities.</p><button id="dashScanBtn" class="dash-scan-btn">Scan for Skills</button></div>`}</div></section>`}
+    <section class="dash-section llm-only"><div class="dash-section-header"><h3>Skill Finder</h3><a href="#" data-page="skills" style=${'font-size:12px;color:' + COLORS.blue + ';text-decoration:none;'}>Open Full View \u2192</a></div><p class="dash-section-desc">Scans your prompt history for repeated patterns that waste time re-explaining the same tasks.</p><div id="dashSkillContent" class="dash-card">${!skillCache && html`<div style="text-align:center;"><p style="color:var(--text-muted);margin:0 0 12px 0;font-size:13px;">Analyze your prompt history to discover skill opportunities.</p><button id="dashScanBtn" class="dash-scan-btn">Scan for Skills</button></div>`}</div></section>
     <section class="dash-section"><div style="display:flex;align-items:baseline;gap:16px;margin-bottom:8px;flex-wrap:wrap;"><h3 style="margin:0;">Daily Activity</h3><div id="activityTabs" class="dash-tabs"><button class=${'dash-tab' + (activeMetric === 'requests' ? ' dash-tab-active' : '')} data-metric="requests">Requests <strong>${formatNum(totalReqs)}</strong></button><button class=${'dash-tab' + (activeMetric === 'sessions' ? ' dash-tab-active' : '')} data-metric="sessions">Sessions <strong>${formatNum(totalSessions)}</strong></button><button class=${'dash-tab' + (activeMetric === 'loc' ? ' dash-tab-active' : '')} data-metric="loc">LoC <strong>${formatNum(totalLoc)}</strong></button><button class=${'dash-tab' + (activeMetric === 'workspaces' ? ' dash-tab-active' : '')} data-metric="workspaces">Workspaces <strong>${formatNum(stats.totalWorkspaces)}</strong></button></div></div><${CanvasEl} id="dailyChart" height=${160} /></section>
     <div class="two-col" style="margin-bottom:16px;"><${CanvasEl} id="wsChart" height=${140} title="Top Workspaces by Requests" /><${CanvasEl} id="harnessChart" height=${140} title="Requests by Harness" /></div>
     <div class="chart-modal-overlay" id="wsChartModal"><div class="chart-modal"><div class="chart-modal-header"><span class="chart-title" style="margin:0;">Top Workspaces by Requests</span><button class="chart-modal-close" id="wsChartModalClose" title="Close">\u00d7</button></div><div class="chart-modal-body"><div style="position:relative;height:360px;"><canvas id="wsChartFull"></canvas></div></div></div></div>
@@ -308,7 +307,7 @@ export async function renderDashboard(container: HTMLElement, currentFilter: Dat
   });
 
   renderWorkspaceCharts(wsBreakdown, harnessBreakdown);
-  if (llmAvailable()) renderDashboardSkillFinder(skillCache, currentFilter);
+  renderDashboardSkillFinder(skillCache, currentFilter);
 }
 
 /* ── Skill results rendering ──────────────────────────────────────── */

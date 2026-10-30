@@ -107,6 +107,37 @@ export class Dashboard {
     READY_TIMEOUT, `Expected ${expected} elements matching ${selector}`);
   }
 
+  /** Waits until `selector` matches at least one element and none of them is displayed. */
+  async expectHidden(selector: string): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+      try {
+        const elements = await this.webview.findWebElements(By.css(selector));
+        if (elements.length === 0) return false;
+        for (const element of elements) {
+          if (await element.isDisplayed()) return false;
+        }
+        return true;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, `Expected ${selector} to be rendered but hidden`);
+  }
+
+  /** Waits until `selector` is a displayed, disabled control with the given tooltip. */
+  async expectDisabled(selector: string, title: string): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+      try {
+        const element = await this.webview.findWebElement(By.css(selector));
+        return await element.isDisplayed() && !(await element.isEnabled())
+          && await element.getAttribute('title') === title;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, `Expected ${selector} to be displayed and disabled with the tooltip ${JSON.stringify(title)}`);
+  }
+
   async scrollTo(selector: string): Promise<void> {
     const element = await this.webview.findWebElement(By.css(selector));
     await VSBrowser.instance.driver.executeScript((target: HTMLElement) =>

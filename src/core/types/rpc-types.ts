@@ -142,8 +142,17 @@ export interface ExtensionMethodMap extends RpcMethodMap {
   saveModelBudgets: { params: { budgets: Record<string, number> }; result: { ok: boolean } };
   loadModelBudgets: { params: Record<string, unknown> | undefined; result: Record<string, number> };
   showOutput: { params: undefined; result: { ok: boolean } };
-  getCapabilities: { params: Record<string, unknown> | undefined; result: { host: 'vscode' | 'canvas'; llm: boolean } };
+  getCapabilities: { params: Record<string, unknown> | undefined; result: HostCapabilities };
 }
+
+/** What the dashboard host can do. `llm` is true when GitHub Copilot's Auto model is usable. */
+export interface HostCapabilities {
+  host: 'vscode' | 'canvas';
+  llm: boolean;
+}
+
+/** Pushed by the VS Code host when language model availability changes after load. */
+export type HostCapabilitiesMessage = { type: 'capabilities' } & HostCapabilities;
 
 export type ExtensionMethodName = keyof ExtensionMethodMap;
 export type WebviewRequestMessage<M extends ExtensionMethodName = ExtensionMethodName> = {

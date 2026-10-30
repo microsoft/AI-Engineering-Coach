@@ -132,3 +132,132 @@ test.describe('Anti-Patterns', () => {
     await expect(finding.locator('.occ-session-link')).toHaveCSS('color', 'rgb(55, 148, 255)');
   });
 });
+
+type HarnessWindow = MockWindow & { mockResponseDelay?: (method: string) => number };
+
+/** Give the Giant Prompt finding one session occurrence so it renders a Why? button. */
+async function showGiantPromptOccurrence(page: Page) {
+  await page.evaluate(() => {
+    const root = window as HarnessWindow;
+    const original = root.getMockData;
+    root.getMockData = (method, params) => {
+      const base = original(method, params);
+      if (method !== 'getAntiPatterns') return base;
+      const data = base as { patterns: Array<Record<string, unknown>> };
+      return {
+        ...data,
+        patterns: data.patterns.map(p => p.id === 'ap-1' ? {
+          ...p,
+          details: [{
+            timestamp: Date.parse('2026-09-29T10:00:00Z'), workspace: 'my-api', sessionId: 'session-why-1',
+            message: 'Pasted a 5200-token spec', model: 'gpt', kind: 'session',
+          }],
+        } : p),
+      };
+    };
+  });
+  await page.locator('#sidebar [data-page="anti-patterns"]').click();
+  const group = page.locator('.ap-group-details').first();
+  await group.locator('summary').first().click();
+  const finding = group.locator('.ap-finding').filter({ hasText: 'Giant Prompt Detected' });
+  await finding.locator('.ap-occurrences > summary').click();
+  return finding;
+}
+
+function pushCapabilities(page: Page, llm: boolean) {
+  return page.evaluate(value => {
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'capabilities', host: 'vscode', llm: value } }));
+  }, llm);
+}
+
+test.describe('Anti-Patterns Why? explanations', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-09-30T12:00:00Z'));
+    await navigateToAntiPatterns(page);
+  });
+
+  test('replaces the loading text with the explanation and asks again after hiding', async ({ page }) => {
+    await page.evaluate(() => {
+      const root = window as HarnessWindow;
+      const original = root.getMockData;
+      let calls = 0;
+      root.getMockData = (method, params) => method === 'explainOccurrence'
+        ? { ok: true, explanation: ++calls === 1 ? 'First explanation.' : 'Second explanation.' }
+        : original(method, params);
+      root.mockResponseDelay = method => method === 'explainOccurrence' ? 400 : 5;
+    });
+    const finding = await showGiantPromptOccurrence(page);
+    const why = finding.locator('.occ-explain-btn');
+    const result = finding.locator('.occ-explain-result');
+
+    await why.click();
+    await expect(result).toHaveText('Asking AI for an explanation...');
+    await expect(why).toBeDisabled();
+    await expect(result).toHaveText('First explanation.');
+    await expect(result).toHaveClass(/occ-explain-ok/);
+    await expect(why).toHaveText('Why?');
+
+    await why.click();
+    await expect(result).toBeHidden();
+
+    await why.click();
+    await expect(result).toHaveText('Second explanation.');
+    await expect(result).toBeVisible();
+  });
+
+  test('shows why an explanation is unavailable instead of spinning', async ({ page }) => {
+    const message = "GitHub Copilot isn't available. Sign in to GitHub Copilot in VS Code to use AI features.";
+    await page.evaluate(error => {
+      const root = window as HarnessWindow;
+      const original = root.getMockData;
+      root.getMockData = (method, params) => method === 'explainOccurrence'
+        ? { ok: false, explanation: '', error }
+        : original(method, params);
+    }, message);
+    const finding = await showGiantPromptOccurrence(page);
+
+    await finding.locator('.occ-explain-btn').click();
+
+    const result = finding.locator('.occ-explain-result');
+    await expect(result).toHaveText(message);
+    await expect(result).toHaveClass(/occ-explain-error/);
+  });
+
+  test('updates AI controls in place when GitHub Copilot availability changes', async ({ page }) => {
+    const finding = await showGiantPromptOccurrence(page);
+    const why = finding.locator('.occ-explain-btn');
+    const occurrences = finding.locator('.ap-occurrences');
+    const skills = page.locator('#sidebar [data-page="skills"]');
+    const levelUp = page.locator('#sidebar [data-page="level-up"]');
+    await expect(why).toBeVisible();
+    await expect(skills).toBeVisible();
+
+    await pushCapabilities(page, false);
+    await expect(why).toBeHidden();
+    await expect(skills).toBeHidden();
+    await expect(levelUp).toBeHidden();
+    // The page is not rebuilt: the expanded occurrence list stays open.
+    await expect(occurrences).toHaveAttribute('open', '');
+
+    await pushCapabilities(page, true);
+    await expect(why).toBeVisible();
+    await expect(skills).toBeVisible();
+    await expect(levelUp).toBeVisible();
+    await expect(occurrences).toHaveAttribute('open', '');
+  });
+
+  test('keeps an unsaved Rule Editor draft when GitHub Copilot availability changes', async ({ page }) => {
+    await page.locator('.ap-tab[data-tab="rules"]').click();
+    await page.locator('#rule-new-btn').click();
+    const modal = page.locator('#rule-editor-modal');
+    const name = page.locator('#rf-name');
+    await expect(modal).toBeVisible();
+    await name.fill('Draft rule that must survive');
+
+    await pushCapabilities(page, false);
+    await pushCapabilities(page, true);
+
+    await expect(modal).toBeVisible();
+    await expect(name).toHaveValue('Draft rule that must survive');
+  });
+});

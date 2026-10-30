@@ -13,11 +13,13 @@ import { panelCache } from './panel-cache';
 const mocks = vi.hoisted(() => ({
   receive: (_message: unknown) => {},
   disposed: () => {},
+  modelsChanged: () => {},
   html: '',
   post: vi.fn<(message: unknown) => Promise<boolean>>().mockResolvedValue(true),
   parse: vi.fn<() => Promise<ParseResult>>(),
   clearCache: vi.fn<() => void>(),
   warmUp: vi.fn<Analyzer['warmUp']>(),
+  probe: vi.fn<(timeoutMs: number) => Promise<boolean>>(),
   heavy: vi.fn(() => ({ kind: 'heavy' })),
   light: vi.fn(() => ({ kind: 'light' })),
 }));
@@ -35,6 +37,12 @@ vi.mock('vscode', () => ({
     dispose: () => {},
     reveal: () => {},
   }) },
+  lm: {
+    onDidChangeChatModels: (listener: typeof mocks.modelsChanged) => {
+      mocks.modelsChanged = listener;
+      return { dispose: () => {} };
+    },
+  },
   workspace: { name: 'test-workspace' },
   ViewColumn: { One: 1 },
   Uri: { joinPath: (uri: { fsPath: string }, segment: string) => ({ fsPath: `${uri.fsPath}/${segment}` }) },
@@ -51,6 +59,7 @@ vi.mock('./panel-html', () => ({
   getDashboardHtml: () => '<html></html>',
   getErrorHtml: (message: string) => `<html>Error: ${message}</html>`,
 }));
+vi.mock('./panel-llm-model', () => ({ isCopilotModelAvailable: mocks.probe }));
 vi.mock('./panel-request-service', () => ({ PanelRequestService: class { tryHandle() { return false; } } }));
 vi.mock('./panel-sidebar', () => ({ DashboardSidebarProvider: class {} }));
 vi.mock('./panel-rpc', () => ({
@@ -71,6 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.parse.mockResolvedValue(result);
   mocks.warmUp.mockResolvedValue(undefined);
+  mocks.probe.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -212,5 +222,60 @@ describe('dashboard startup', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(panelCache.analyzerInstance).toBe(newerAnalyzer);
     expect(mocks.html).not.toContain('Old worker failed');
+  });
+});
+
+describe('host capabilities', () => {
+  const capabilityPushes = () => mocks.post.mock.calls
+    .map(([message]) => message)
+    .filter(message => (message as { type?: string }).type === 'capabilities');
+
+  it('answers getCapabilities from the Copilot probe before data is ready', async () => {
+    mocks.warmUp.mockReturnValue(new Promise<void>(() => {}));
+    mocks.probe.mockResolvedValue(false);
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    mocks.receive({ type: 'request', id: 'caps', method: 'getCapabilities' });
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith({
+      type: 'response', id: 'caps', data: { host: 'vscode', llm: false },
+    }));
+    expect(mocks.probe).toHaveBeenCalledWith(3000);
+    expect(mocks.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' }));
+  });
+
+  it('pushes a capabilities update only when Copilot availability flips', async () => {
+    mocks.probe.mockResolvedValue(false);
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    mocks.receive({ type: 'request', id: 'caps', method: 'getCapabilities' });
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ id: 'caps' })));
+
+    mocks.probe.mockResolvedValue(true);
+    mocks.modelsChanged();
+    await vi.waitFor(() => expect(capabilityPushes()).toEqual([{ type: 'capabilities', host: 'vscode', llm: true }]));
+
+    mocks.modelsChanged();
+    await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(3));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(capabilityPushes()).toHaveLength(1);
+  });
+
+  it('does not push before the webview has asked for capabilities', async () => {
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    mocks.probe.mockResolvedValue(false);
+    mocks.modelsChanged();
+    await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(1));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(capabilityPushes()).toHaveLength(0);
+  });
+
+  it('stops pushing once the panel is disposed', async () => {
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    mocks.receive({ type: 'request', id: 'caps', method: 'getCapabilities' });
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ id: 'caps' })));
+    mocks.disposed();
+    mocks.probe.mockResolvedValue(false);
+    mocks.modelsChanged();
+    await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(capabilityPushes()).toHaveLength(0);
   });
 });

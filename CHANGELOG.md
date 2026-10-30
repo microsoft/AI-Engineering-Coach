@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix the anti-pattern **Why?** explanation getting stuck on "Asking AI for an explanation…" (#278):
+  every explanation state now renders through Preact, empty or failed responses show an error,
+  and timeouts, denied access, and quota errors fail fast instead of retrying for minutes
+- Use GitHub Copilot's Auto model for all AI features instead of hard-coded model families. In VS Code,
+  the Why? buttons, Skill Finder, and Level Up are hidden and the context review is disabled while
+  GitHub Copilot isn't available; they come back on sign-in without reopening the dashboard
 - Fix canvas mode intermittently loading with an empty content pane or a stuck
   loading screen (#269): the canvas bridge now subscribes to host events only
   after the dashboard signals it is listening, so the replayed `dataReady` is

@@ -9,7 +9,7 @@ import { createSession, createRequest } from '../core/parser-shared';
 import { detectCuriosity } from '../core/curiosity';
 import type { ParseResult } from '../core/cache';
 import { loadSessionImages } from '../core/session-image-loader';
-import { getRpcHandler, validateDateFilter } from './panel-rpc';
+import { generateRuleMarkdown, getRpcHandler, validateDateFilter, type RuleFeedback } from './panel-rpc';
 
 vi.mock('../core/session-image-loader', () => ({ loadSessionImages: vi.fn() }));
 
@@ -66,5 +66,83 @@ describe('panel-rpc', () => {
     expect(await handler(analyzer, parsed, { sessionId: 'session', requestId: 'unrelated' })).toEqual({ images: [] });
     expect(await handler(analyzer, parsed, { sessionId: 'missing', requestId: 'request' })).toEqual({ images: [] });
     expect(loadSessionImages).toHaveBeenCalledTimes(1);
+  });
+});
+
+const VALID_RULE = [
+  '---',
+  'id: long-sessions',
+  'name: Long sessions',
+  'group: session-hygiene',
+  'severity: medium',
+  'scope: sessions',
+  '---',
+  '',
+  '# Description',
+  'Sessions that run for too long.',
+  '',
+  '# When Triggered',
+  '{{count}} long sessions.',
+  '',
+  '# Detection Logic',
+  '```detect',
+  'scan: sessions',
+  'match: requestCount > 50',
+  'check: count >= 1',
+  '```',
+  '',
+  '# How to Improve',
+  'Start a new chat for each task.',
+].join('\n');
+
+const asker = () => vi.fn<(feedback?: RuleFeedback) => Promise<string>>();
+
+describe('generateRuleMarkdown', () => {
+  it('returns the first valid rule without asking again', async () => {
+    const ask = asker().mockResolvedValueOnce(VALID_RULE);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask).toHaveBeenCalledWith(undefined);
+  });
+
+  it('feeds validation issues back until the rule is valid', async () => {
+    const ask = asker()
+      .mockResolvedValueOnce('Here is a rule without frontmatter.')
+      .mockResolvedValueOnce(VALID_RULE);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(ask.mock.calls[1][0]?.reply).toBe('Here is a rule without frontmatter.');
+    expect(ask.mock.calls[1][0]?.issues).toContain('Missing YAML frontmatter (must start with ---)');
+  });
+
+  it('accepts the reply after two invalid drafts as-is', async () => {
+    const ask = asker()
+      .mockResolvedValueOnce('draft one')
+      .mockResolvedValueOnce('draft two')
+      .mockResolvedValueOnce('final reply');
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: 'final reply' });
+    expect(ask).toHaveBeenCalledTimes(3);
+    expect(ask.mock.calls[2][0]?.reply).toBe('draft two');
+  });
+});
+
+describe('generateRuleMarkdown failures', () => {
+  it('keeps the latest draft when a follow-up request runs out of time', async () => {
+    const outOfTime = new Error('GitHub Copilot did not respond in time. Try again.');
+    const ask = asker()
+      .mockResolvedValueOnce('draft one')
+      .mockRejectedValueOnce(outOfTime);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: 'draft one', retryError: outOfTime });
+  });
+
+  it('fails when the first request fails', async () => {
+    const unavailable = new Error("GitHub Copilot isn't available.");
+    const ask = asker().mockRejectedValueOnce(unavailable);
+
+    await expect(generateRuleMarkdown(ask)).rejects.toBe(unavailable);
   });
 });

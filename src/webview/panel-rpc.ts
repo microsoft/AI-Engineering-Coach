@@ -643,6 +643,43 @@ function validateRuleMarkdown(md: string): string[] {
   return issues;
 }
 
+/** Validation issues sent back to the model when a generated rule is incomplete. */
+export interface RuleFeedback {
+  reply: string;
+  issues: string[];
+}
+
+const RULE_GENERATION_ATTEMPTS = 2;
+
+/**
+ * Ask the model for a detection rule, feeding validation issues back for up to
+ * {@link RULE_GENERATION_ATTEMPTS} attempts and then accepting the next reply
+ * as-is. If a follow-up request fails (for example because the request's
+ * shared time budget ran out), the latest draft is returned along with the
+ * error instead of being discarded.
+ */
+export async function generateRuleMarkdown(
+  ask: (feedback?: RuleFeedback) => Promise<string>,
+): Promise<{ markdown: string; retryError?: unknown }> {
+  let feedback: RuleFeedback | undefined;
+  let draft: string | undefined;
+  try {
+    for (let attempt = 0; attempt < RULE_GENERATION_ATTEMPTS; attempt++) {
+      const reply = await ask(feedback);
+      const markdown = cleanRuleMarkdown(reply);
+      const issues = validateRuleMarkdown(markdown);
+      if (issues.length === 0) return { markdown };
+      draft = markdown;
+      feedback = { reply, issues };
+    }
+    // After retries, return the last attempt even if imperfect
+    return { markdown: cleanRuleMarkdown(await ask(feedback)) };
+  } catch (err: unknown) {
+    if (draft === undefined) throw err;
+    return { markdown: draft, retryError: err };
+  }
+}
+
 function ruleTemplate(id: string, prompt: string): string {
   return `---
 id: ${id}
@@ -1059,30 +1096,30 @@ Explain why this session triggered the rule.`;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const vscode = require('vscode') as typeof import('vscode');
-      const { callLlm } = await import('./panel-llm');
+      const { callLlm, llmDeadline } = await import('./panel-llm');
 
       const messages = [
         vscode.LanguageModelChatMessage.User(GENERATE_RULE_SYSTEM_PROMPT),
         vscode.LanguageModelChatMessage.User(`Generate a complete detection rule for: ${prompt}\n\nUse id: ${id}`),
       ];
 
-      const MAX_ATTEMPTS = 2;
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const result = await callLlm(messages);
-        const markdown = cleanRuleMarkdown(result);
-        const issues = validateRuleMarkdown(markdown);
-        if (issues.length === 0) return { markdown };
-
-        // Retry: tell the LLM what was wrong
-        messages.push(vscode.LanguageModelChatMessage.Assistant(result));
-        messages.push(vscode.LanguageModelChatMessage.User(
-          `The generated rule has issues:\n${issues.map(i => `- ${i}`).join('\n')}\n\nPlease fix and output the complete corrected rule markdown. No code fences around the output.`
-        ));
+      // One budget for every attempt, so the request settles before the webview's RPC timeout.
+      const deadline = llmDeadline();
+      const { markdown, retryError } = await generateRuleMarkdown(feedback => {
+        if (feedback) {
+          // Retry: tell the LLM what was wrong
+          messages.push(vscode.LanguageModelChatMessage.Assistant(feedback.reply));
+          messages.push(vscode.LanguageModelChatMessage.User(
+            `The generated rule has issues:\n${feedback.issues.map(i => `- ${i}`).join('\n')}\n\nPlease fix and output the complete corrected rule markdown. No code fences around the output.`
+          ));
+        }
+        return callLlm(messages, { deadline });
+      });
+      if (retryError !== undefined) {
+        const { warnCore } = await import('../core/log');
+        warnCore('generateRule', 'LLM retry failed, keeping the latest draft', retryError);
       }
-
-      // After retries, return the last attempt even if imperfect
-      const lastResult = await callLlm(messages);
-      return { markdown: cleanRuleMarkdown(lastResult) };
+      return { markdown };
     } catch (err: unknown) {
       // Log so the Output channel shows why; fall back to a template so the
       // editor still has something usable to edit.
