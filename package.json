@@ -358,12 +358,12 @@
     "vscode-extension-tester": "8.28.1"
   },
   "dependencies": {
-    "chart.js": "4.5.1",
+    "chart.js": "4.6.1",
     "chartjs-chart-treemap": "4.2.2",
-    "compromise": "14.18.0",
+    "compromise": "14.19.0",
     "htm": "3.1.1",
     "leo-profanity": "1.9.0",
-    "preact": "11.0.1",
+    "preact": "11.0.2",
     "zod": "4.6.7"
   },
   "overrides": {
