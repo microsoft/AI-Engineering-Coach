@@ -32,7 +32,7 @@ Reads session history from OpenAI's Codex terminal agent. Captures prompts, comp
 
 ## OpenCode
 
-Parses session logs from the open-source OpenCode terminal tool that supports multiple LLM backends.
+Parses session logs from the open-source OpenCode terminal tool that supports multiple LLM backends. Current OpenCode versions store sessions in a SQLite database (`opencode.db`), which is read in read-only mode; older installs that still use the legacy JSON storage layout continue to work.
 
 ## GitHub Copilot for Xcode
 
