@@ -11,10 +11,11 @@
  * We aggregate all events between consecutive user.message events into one SessionRequest.
  */
 
-import { Session, SessionRequest, CompactionEvent, ModelUsage } from './types';
+import { Session, SessionRequest, CompactionEvent, ModelUsage, CompactionContextSnapshot, SessionContextComposition, SystemPromptSegment } from './types';
 import { createRequest, createSession, detectDevcontainerFromRequests, recordFailedFile } from './parser-shared';
 import { forEachJsonlLine, forEachJsonlLineAsync } from './parser-vscode-files';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, normalizeModel } from './helpers';
+import { compositionFromCliUsage, readSystemSegments, type CliTurnUsage } from './context-composition';
 import { EditLocIndex } from './edit-loc-diff';
 import {
   FileEditLocMap,
@@ -67,6 +68,8 @@ interface TurnState {
   imageCount: number;
   editLocs: FileEditLocMap;
   pendingToolEdits: Map<string, PendingToolEdit>;
+  /** Main-agent model calls of this turn (from session.usage_record). */
+  usage: CliTurnUsage;
 }
 
 interface PendingToolEdit {
@@ -87,6 +90,14 @@ interface CLIParseState {
   requests: SessionRequest[];
   turn: TurnState | null;
   editLocIndex?: EditLocIndex;
+  /** Latest known system-prompt size (checkpoint segments, compaction or shutdown). */
+  systemTokens: number | null;
+  /** Turns flushed before any system-prompt size was known. */
+  pendingCompositions: { request: SessionRequest; usage: CliTurnUsage }[];
+  systemSegments: SystemPromptSegment[];
+  checkpointToolCount: number | null;
+  checkpointToolTokens: number | null;
+  compactionSnapshots: CompactionContextSnapshot[];
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -113,6 +124,7 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     imageCount: 0,
     editLocs: new Map(),
     pendingToolEdits: new Map(),
+    usage: { calls: 0, inputTokens: 0, toolTokens: 0, availableTools: 0 },
   };
 }
 
@@ -178,7 +190,7 @@ function flushTurn(state: CLIParseState): void {
   const responseText = turn.responseChunks.filter(Boolean).join('\n\n');
 
   const requestId = turn.lastAssistantId || `${state.sessionId}:cli:${state.requests.length}`;
-  state.requests.push(createRequest({
+  const request = createRequest({
     requestId,
     userEventId: turn.userEventId,
     answerEvidence: turn.answerEvidence,
@@ -208,8 +220,104 @@ function flushTurn(state: CLIParseState): void {
       ?? extractReasoningEffortFromModelId(turn.modelId || state.currentModelId),
     endState: getTurnEndState(turn),
     curiosity: turn.nonUser ? { kind: 'excluded', excerpts: [] } : undefined,
-  }));
+  });
+  state.requests.push(request);
+  if (turn.usage.calls > 0) {
+    if (state.systemTokens == null) state.pendingCompositions.push({ request, usage: turn.usage });
+    else attachComposition(request, turn.usage, state.systemTokens);
+  }
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
+}
+
+function attachComposition(request: SessionRequest, usage: CliTurnUsage, systemTokens: number | null): void {
+  const composition = compositionFromCliUsage(usage, systemTokens);
+  if (composition) request.promptComposition = composition;
+}
+
+/** Record the latest system-prompt size and resolve turns that were waiting for one. */
+function setSystemTokens(state: CLIParseState, tokens: unknown): void {
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) return;
+  state.systemTokens = tokens;
+  for (const pending of state.pendingCompositions) attachComposition(pending.request, pending.usage, tokens);
+  state.pendingCompositions = [];
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** Main-thread calls build the main context; sub-agent calls have their own. */
+function isMainAgentCall(usage: Record<string, unknown>): boolean {
+  if (typeof usage.interactionType === 'string') return usage.interactionType === 'conversation-agent';
+  return usage.initiator === 'user' || usage.initiator === 'agent';
+}
+
+function handleUsageRecord(data: Record<string, unknown>, state: CLIParseState): void {
+  const turn = state.turn;
+  const usage = recordValue(data.usage);
+  if (!turn || !usage || !isMainAgentCall(usage)) return;
+  const inputTokens = finiteNumber(usage.inputTokens);
+  const toolTokens = finiteNumber(usage.toolTokenCount);
+  if (inputTokens == null || toolTokens == null || inputTokens <= 0) return;
+  turn.usage.calls++;
+  turn.usage.inputTokens += inputTokens;
+  turn.usage.toolTokens += Math.max(0, toolTokens);
+  const availableTools = finiteNumber(usage.availableToolCount);
+  if (availableTools != null && availableTools > turn.usage.availableTools) turn.usage.availableTools = availableTools;
+}
+
+/** Reads only segment names/tokens and tool totals; hashes, tool names and schemas are ignored. */
+function handleUsageCheckpoint(data: Record<string, unknown>, state: CLIParseState): void {
+  const states = recordArrayValue(data.promptCacheBreakState);
+  const main = states.find(s => s.conversation === 'main') ?? (states.length === 1 ? states[0] : undefined);
+  const models = recordValue(main?.models);
+  if (!main || !models) return;
+  const active = str(main.lastActiveModel);
+  const model = Object.prototype.hasOwnProperty.call(models, active)
+    ? recordValue(models[active])
+    : recordValue(Object.values(models)[0]);
+  if (!model) return;
+  const segments = readSystemSegments(model.system_segments);
+  if (segments.length > 0) {
+    state.systemSegments = segments;
+    setSystemTokens(state, segments.reduce((sum, segment) => sum + segment.tokens, 0));
+  }
+  state.checkpointToolCount = finiteNumber(model.tool_count) ?? state.checkpointToolCount;
+  state.checkpointToolTokens = finiteNumber(model.tool_tokens) ?? state.checkpointToolTokens;
+}
+
+const MAX_COMPACTION_SNAPSHOTS = 50;
+
+function handleCompactionStart(ev: CLIEvent, state: CLIParseState): void {
+  const data = ev.data || {};
+  setSystemTokens(state, data.systemTokens);
+  const currentTokens = finiteNumber(data.currentTokens);
+  const systemTokens = finiteNumber(data.systemTokens);
+  const conversationTokens = finiteNumber(data.conversationTokens);
+  const toolDefinitionTokens = finiteNumber(data.toolDefinitionsTokens);
+  if (currentTokens == null || systemTokens == null || conversationTokens == null || toolDefinitionTokens == null) return;
+  if (currentTokens <= 0 || state.compactionSnapshots.length >= MAX_COMPACTION_SNAPSHOTS) return;
+  const ts = ev.timestamp ? new Date(ev.timestamp).getTime() : Number.NaN;
+  const tokenLimit = finiteNumber(data.tokenLimit);
+  state.compactionSnapshots.push({
+    timestamp: Number.isFinite(ts) ? ts : null,
+    systemTokens: Math.max(0, systemTokens),
+    toolDefinitionTokens: Math.max(0, toolDefinitionTokens),
+    conversationTokens: Math.max(0, conversationTokens),
+    currentTokens,
+    tokenLimit: tokenLimit != null && tokenLimit > 0 ? tokenLimit : null,
+  });
+}
+
+function buildSessionComposition(state: CLIParseState): SessionContextComposition | undefined {
+  if (state.systemSegments.length === 0 && state.compactionSnapshots.length === 0
+    && state.checkpointToolCount == null && state.checkpointToolTokens == null) return undefined;
+  return {
+    systemSegments: state.systemSegments,
+    toolCount: state.checkpointToolCount,
+    toolTokens: state.checkpointToolTokens,
+    compactions: state.compactionSnapshots,
+  };
 }
 
 function addAttachmentReferences(turn: TurnState, attachments: unknown): void {
@@ -368,6 +476,7 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
 }
 
 function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState): void {
+  setSystemTokens(state, data.systemTokens);
   const turn = state.turn;
   if (!turn) return;
   turn.compaction = {
@@ -409,6 +518,8 @@ function addModelUsage(collected: Record<string, ModelUsage>, rawModel: string, 
 
 function handleShutdown(data: Record<string, unknown>, state: CLIParseState): void {
   state.sawShutdown = true;
+  // Only the system size is used: shutdown toolDefinitionsTokens disagrees with per-call tool tokens.
+  setSystemTokens(state, data.systemTokens);
   const modelMetrics = recordValue(data.modelMetrics) || {};
   const collected: Record<string, ModelUsage> = {};
   for (const [rawModel, info] of Object.entries(modelMetrics)) {
@@ -417,7 +528,19 @@ function handleShutdown(data: Record<string, unknown>, state: CLIParseState): vo
   if (Object.keys(collected).length > 0) state.modelUsage = collected;
 }
 
+/* Context-composition events. A Map (not an object) because event types come from the file. */
+const CONTEXT_EVENT_HANDLERS = new Map<string, (ev: CLIEvent, state: CLIParseState) => void>([
+  ['session.usage_record', (ev, state) => handleUsageRecord(ev.data || {}, state)],
+  ['session.usage_checkpoint', (ev, state) => handleUsageCheckpoint(ev.data || {}, state)],
+  ['session.compaction_start', handleCompactionStart],
+]);
+
 function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void {
+  const contextHandler = CONTEXT_EVENT_HANDLERS.get(ev.type);
+  if (contextHandler) {
+    contextHandler(ev, state);
+    return;
+  }
   switch (ev.type) {
     case 'session.start':
       handleSessionStart(ev, state, wsId);
@@ -468,6 +591,12 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     requests: [],
     turn: null,
     editLocIndex,
+    systemTokens: null,
+    pendingCompositions: [],
+    systemSegments: [],
+    checkpointToolCount: null,
+    checkpointToolTokens: null,
+    compactionSnapshots: [],
   };
 }
 
@@ -478,10 +607,14 @@ function finalizeCliSession(
   customInstructionsBytes?: number,
 ): Session | null {
   flushTurn(state);
+  // No system-prompt size was ever recorded: keep the non-tool remainder unattributed.
+  for (const pending of state.pendingCompositions) attachComposition(pending.request, pending.usage, null);
+  state.pendingCompositions = [];
 
   if (state.requests.length === 0) return null;
 
   const creationDate = state.startTime ? new Date(state.startTime).getTime() : null;
+  const contextComposition = buildSessionComposition(state);
   return createSession({
     sessionId: state.sessionId,
     workspaceId: wsId,
@@ -491,6 +624,7 @@ function finalizeCliSession(
     ...(creationDate === null ? {} : { creationDate }),
     requests: state.requests,
     modelUsage: state.modelUsage,
+    ...(contextComposition ? { contextComposition } : {}),
     endReason: state.sawShutdown ? 'shutdown' : 'active',
     customInstructionsBytes,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests),

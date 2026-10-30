@@ -4,6 +4,117 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AntiPattern } from './analytics-types';
+import type { CompositionSource, ContextCategory, SystemPromptSegment } from './session-types';
+
+/* ---- Context Composition (what fills the prompt) ---- */
+
+export interface CompositionSlice {
+  category: ContextCategory;
+  /** Percent of the prompt (slices of a breakdown sum to 100). */
+  pct: number;
+  /** Estimated tokens per request (pct × average prompt size); `null` without prompt sizes. */
+  tokens: number | null;
+}
+
+export interface CompositionBreakdown {
+  /** Slices in canonical category order, limited to categories the source reports. */
+  slices: CompositionSlice[];
+  /** `tokens` = weighted by each request's prompt size; `requests` = every request counts equally. */
+  weighting: 'tokens' | 'requests';
+  /** Requests that contributed to the breakdown. */
+  samples: number;
+  /** Average prompt size of those requests; `null` when unknown. */
+  avgPromptTokens: number | null;
+}
+
+export interface HarnessComposition {
+  harness: string;
+  /** How this harness reports composition; `null` = not reported by this harness. */
+  source: CompositionSource | null;
+  /** `null` when no request in range carries composition data. */
+  breakdown: CompositionBreakdown | null;
+  totalRequests: number;
+  requestsWithData: number;
+  sessions: number;
+  sessionsWithData: number;
+  /** Percent of sampled requests whose prompt is at least half tool definitions. */
+  toolHeavyPct: number | null;
+  /** Copilot CLI: average tool-definition tokens per model call. */
+  avgToolDefinitionTokens: number | null;
+  /** Copilot CLI: most tools offered to the model in one turn. */
+  maxAvailableTools: number | null;
+}
+
+export interface WorkspaceComposition {
+  workspaceId: string;
+  workspaceName: string;
+  harnesses: string[];
+  breakdown: CompositionBreakdown;
+}
+
+/** Weekly share of a category per harness, aligned to `CompositionTrend.labels`. */
+export interface CompositionTrendSeries {
+  harness: string;
+  toolDefinitions: (number | null)[];
+  systemInstructions: (number | null)[];
+  samples: number[];
+}
+
+export interface CompositionTrend {
+  labels: string[];
+  series: CompositionTrendSeries[];
+}
+
+/** A Copilot CLI system-prompt segment averaged over sessions. */
+export interface SystemSegmentSummary {
+  name: string;
+  avgTokens: number;
+  sessions: number;
+}
+
+export interface ContextCompositionData {
+  /** All harnesses pooled; `null` when no request carries composition data. */
+  overall: CompositionBreakdown | null;
+  harnesses: HarnessComposition[];
+  /** Top workspaces by sampled requests. */
+  workspaces: WorkspaceComposition[];
+  trend: CompositionTrend;
+  /** Copilot CLI system-prompt segments, largest first. */
+  systemSegments: SystemSegmentSummary[];
+  /** Sessions that contributed to `systemSegments`. */
+  systemSegmentSessions: number;
+  coverage: {
+    requestsWithData: number;
+    totalRequests: number;
+    sessionsWithData: number;
+    totalSessions: number;
+  };
+  /** Tool-definition share (%) at which a request counts as tool-heavy. */
+  toolHeavyThreshold: number;
+}
+
+/** Context snapshot at a Copilot CLI compaction. Slice `tokens` are absolute token counts. */
+export interface CompactionCompositionSnapshot {
+  timestamp: number | null;
+  currentTokens: number;
+  tokenLimit: number | null;
+  slices: CompositionSlice[];
+}
+
+/** Composition of one session's prompts, for the session drill-down. */
+export interface SessionCompositionDetail {
+  source: CompositionSource;
+  /** `null` when only session-level details (segments, compactions) were recorded. */
+  breakdown: CompositionBreakdown | null;
+  /** Normalized shares per request, aligned with `SessionContextDetail.tokenCurve` (`null` = no data);
+   *  empty when no request carries composition data. */
+  perRequest: (Partial<Record<ContextCategory, number>> | null)[];
+  /** Copilot CLI: largest system-prompt segments from the latest checkpoint. */
+  systemSegments: SystemPromptSegment[];
+  toolCount: number | null;
+  toolTokens: number | null;
+  compactions: CompactionCompositionSnapshot[];
+}
 
 /* ---- Context Management (token-level health) ---- */
 
@@ -88,6 +199,8 @@ export interface SessionContextDetail {
   /** True when per-request token data is available (enables token curve chart).
    *  False for harnesses that only report session-aggregated tokens (e.g. Copilot CLI). */
   hasPerRequestTokens: boolean;
+  /** What filled this session's prompts; absent when the harness doesn't report it. */
+  composition?: SessionCompositionDetail;
 }
 
 export interface WorkspaceContextSessionsData {
@@ -123,6 +236,8 @@ export interface ContextManagementData {
   antiPatterns: AntiPattern[];
   /** Actionable tips based on observed patterns */
   tips: string[];
+  /** What fills the prompt, by category, per harness and workspace. */
+  composition?: ContextCompositionData;
 }
 
 /* ---- Context Review (agent-based) ---- */

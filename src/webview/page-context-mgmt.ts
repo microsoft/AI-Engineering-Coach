@@ -9,6 +9,16 @@
 import { DateFilter, ContextManagementData, ContextVerdictThresholds, WorkspaceContextScore, WorkspaceContextSessionsData, SessionContextDetail } from '../core/types';
 import { rpc, COLORS, createChart, destroyChartById, formatNum, PALETTE } from './shared';
 import { html, render, StatCard, CanvasEl, ComponentChildren } from './render';
+import {
+  SESSION_COMPOSITION_CHART_ID,
+  alignSessionChartAxis,
+  attachCompositionDrilldown,
+  compositionMiniBar,
+  renderCompositionSection,
+  renderCompositionTrendChart,
+  renderSessionCompositionChart,
+  renderSessionCompositionPanel,
+} from './context-composition-view';
 
 const VERDICT_COLORS: Record<string, string> = {
   optimal: COLORS.green,
@@ -75,6 +85,8 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
       ${renderTips(data.tips)}
 
+      ${data.composition ? renderCompositionSection(data.composition) : null}
+
       <h3 style="margin-top:24px;display:flex;align-items:center;gap:12px;">
         Context Utilization Trend
         ${data.workspaceTrend.length > 0 && data.trend.length > 1 ? html`
@@ -94,6 +106,11 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
   // Trend chart rendering
   const trendLabels = data.trend.map(t => t.label);
+  if (data.composition) {
+    renderCompositionTrendChart(data.composition);
+    const compositionSection = document.getElementById('ctxComposition');
+    if (compositionSection) attachCompositionDrilldown(compositionSection, currentFilter);
+  }
 
   function renderTrendChart(mode: 'avg' | 'workspace'): void {
     destroyChartById('ctxMgmtTrendChart');
@@ -291,6 +308,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
   function collapseInlineSessions(): void {
     destroyChartById('ctxSessionTokenChart');
+    destroyChartById(SESSION_COMPOSITION_CHART_ID);
     expandedSessionIdx = null;
     for (const el of tableWrap.querySelectorAll('.ctx-session-inline')) el.remove();
   }
@@ -345,6 +363,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
               <th style="text-align:center;padding:6px 6px;font-weight:600;">Sat.</th>
               <th style="text-align:center;padding:6px 6px;font-weight:600;">Events</th>
               <th style="text-align:left;padding:6px 6px;font-weight:600;">Token Curve</th>
+              <th style="text-align:left;padding:6px 6px;font-weight:600;" title="What filled this session's prompts, by category">Composition</th>
             </tr>
           </thead>
           <tbody>
@@ -374,6 +393,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         const existingChart = headerTr.querySelector('.ctx-session-chart-row');
         if (existingChart) {
           destroyChartById('ctxSessionTokenChart');
+          destroyChartById(SESSION_COMPOSITION_CHART_ID);
           existingChart.remove();
         }
 
@@ -400,13 +420,15 @@ export async function renderContextManagement(container: HTMLElement, currentFil
             <span style="font-size:12px;font-weight:600;color:var(--text-primary,#c9d1d9);">${s.date} — ${s.harness}</span>
             <span style="font-size:11px;color:var(--text-muted);">${s.requestCount} reqs, ${s.compactionCount} compactions${todoEvents.length > 0 ? ', ' + todoEvents.length + ' todo events' : ''}</span>
           </div>
-          <div style="position:relative;height:180px;"><${CanvasEl} id=${chartId} height=${180} /></div>
+          ${s.hasPerRequestTokens ? html`<div style="position:relative;height:226px;"><${CanvasEl} id=${chartId} height=${180} /></div>` : null}
+          ${renderSessionCompositionPanel(s)}
         </td>`, chartRow);
         targetRow.after(chartRow);
 
-        if (expandedSessionData) {
+        if (expandedSessionData && s.hasPerRequestTokens) {
           renderSessionTokenChart(chartId, s, expandedSessionData.estimatedContextWindow ?? 1, expandedSessionData.thresholds);
         }
+        renderSessionCompositionChart(s);
         chartRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     }
@@ -582,8 +604,11 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
         title: { display: true, text: 'Utilization %', color: '#8b949e' },
         ticks: { color: '#8b949e' },
         grid: { color: 'rgba(48,54,61,0.6)' },
+        afterFit: alignSessionChartAxis,
       },
       x: {
+        // Offset like the bar chart below so request N lines up in both charts.
+        offset: true,
         ticks: { color: '#8b949e', maxRotation: 0 },
         grid: { color: 'rgba(48,54,61,0.3)' },
       },
@@ -719,19 +744,19 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
     ? html`<span>${compEvts > 0 ? html`<span style=${'color:' + COLORS.yellow + ';'} title=${compEvts + ' compaction(s)'}>${compEvts}C</span>` : null}${compEvts > 0 && todoEvts > 0 ? ' ' : ''}${todoEvts > 0 ? html`<span style=${'color:' + COLORS.blue + ';'} title=${todoEvts + ' todo event(s)'}>${todoEvts}T</span>` : null}</span>`
     : html`<span style="color:var(--text-muted);">-</span>`;
 
-  const clickable = s.hasPerRequestTokens;
+  const clickable = s.hasPerRequestTokens || s.composition != null;
   const cursorStyle = clickable ? 'cursor:pointer;' : 'cursor:default;opacity:0.85;';
-  const sparklineContent = clickable
+  const sparklineContent = s.hasPerRequestTokens
     ? renderSparkline(s.tokenCurve, s.contextWindow || ctxWindow, thresholds)
     : html`<span style="color:var(--text-muted);font-size:10px;" title="Session-level data only — no per-turn breakdown available">—</span>`;
 
-  const utilContent = clickable
+  const utilContent = s.hasPerRequestTokens
     ? utilBar(s.avgUtilization)
     : html`<span style="color:var(--text-muted);" title="No per-turn token data">—</span>`;
-  const satContent = clickable
+  const satContent = s.hasPerRequestTokens
     ? html`<span style=${'color:' + satColor + ';font-weight:' + (s.saturation > 10 ? '600' : '400') + ';'}>${s.saturation.toFixed(1)}%</span>`
     : html`<span style="color:var(--text-muted);">—</span>`;
-  const tokensContent = clickable
+  const tokensContent = s.hasPerRequestTokens
     ? formatNum(s.avgPromptTokens)
     : html`<span style="color:var(--text-muted);">—</span>`;
 
@@ -748,6 +773,7 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
       <td style="text-align:center;padding:6px 6px;">${satContent}</td>
       <td style="text-align:center;padding:6px 6px;font-size:10px;">${evtContent}</td>
       <td style="padding:6px 6px;">${sparklineContent}</td>
+      <td style="padding:6px 6px;">${compositionMiniBar(s.composition)}</td>
     </tr>`;
 }
 

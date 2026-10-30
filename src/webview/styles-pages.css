@@ -1886,3 +1886,69 @@
   .curiosity-nav-shade { display: block; position: fixed; inset: 0 0 0 220px; z-index: 50; border: 0; background: rgba(0, 0, 0, 0.32); }
 }
 @media (prefers-reduced-motion: reduce) { .curiosity-research button, .curiosity-range .cons-range-btn { transition: none; } }
+
+/* ── Context Composition (Context Management tab) ──────────────── */
+.ctx-comp-intro { color: var(--text-muted); font-size: 12px; margin: 4px 0 12px; }
+.ctx-comp-note { color: var(--text-muted); font-size: 12px; padding: 8px 0; }
+.ctx-comp-kpis { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 12px; }
+.ctx-comp-kpi { min-width: 120px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.ctx-comp-kpi-value { font-size: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.ctx-comp-kpi-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.ctx-comp-kpi-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.ctx-comp-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; list-style: none; margin: 0 0 10px; padding: 0; font-size: 11px; color: var(--text-muted); }
+.ctx-comp-legend li { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+.ctx-comp-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.ctx-comp-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.ctx-comp-row { display: grid; grid-template-columns: minmax(130px, 200px) 1fr minmax(150px, auto); align-items: center; gap: 12px; font-size: 12px; }
+.ctx-comp-row-muted { opacity: 0.75; }
+.ctx-comp-harness { display: flex; align-items: center; gap: 2px; padding-left: 8px; border-left: 3px solid var(--border); min-width: 0; }
+.ctx-comp-harness-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ctx-comp-empty { color: var(--text-muted); font-style: italic; cursor: help; justify-self: start; }
+.ctx-comp-meta { display: flex; flex-direction: column; align-items: flex-end; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.ctx-comp-partial { color: #d29922; cursor: help; }
+.ctx-comp-bar { display: flex; width: 100%; background: rgba(110, 118, 129, 0.15); border-radius: 4px; }
+.ctx-comp-bar:focus { outline: 1px solid var(--focus-border, #58a6ff); outline-offset: 2px; }
+.ctx-comp-seg { display: flex; align-items: center; justify-content: center; min-width: 0; }
+.ctx-comp-seg.first { border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+.ctx-comp-seg.last { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+.ctx-comp-seg:hover { filter: brightness(1.15); }
+.ctx-comp-seg-label { font-size: 10px; font-weight: 700; color: #0d1117; pointer-events: none; }
+.ctx-comp-detail { margin-top: 4px; }
+.ctx-comp-ws-list { display: flex; flex-direction: column; gap: 10px; }
+.ctx-comp-ws-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 3px; }
+.ctx-comp-ws-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-comp-ws-stat { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.ctx-comp-ws-head .ctx-comp-ws-name { flex: 1; min-width: 0; }
+.ctx-comp-ws-toggle, .ctx-comp-ws-session { font: inherit; color: inherit; cursor: pointer; border: 1px solid var(--border); background: transparent; border-radius: 4px; }
+.ctx-comp-ws-toggle { font-size: 10px; padding: 0 6px; color: var(--text-muted); }
+.ctx-comp-ws-toggle[aria-expanded="true"] { color: var(--text); border-color: var(--text-muted); }
+.ctx-comp-ws-sessions { margin-top: 6px; }
+.ctx-comp-ws-session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ctx-comp-ws-session { width: 100%; display: grid; grid-template-columns: 82px minmax(0, 1fr) 82px 80px; align-items: center; gap: 8px; padding: 4px 8px; font-size: 11px; text-align: left; }
+.ctx-comp-ws-session:hover, .ctx-comp-ws-session[aria-expanded="true"] { background: rgba(88, 166, 255, 0.06); }
+.ctx-comp-ws-session-harness { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.ctx-comp-segments { margin: 4px 0 12px; }
+.ctx-comp-segment-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-width: 640px; }
+.ctx-comp-segment-list li { display: grid; grid-template-columns: minmax(150px, 220px) 1fr 60px 50px; align-items: center; gap: 8px; font-size: 11px; }
+.ctx-comp-segment-bar { height: 6px; border-radius: 3px; background: rgba(110, 118, 129, 0.15); }
+.ctx-comp-segment-bar span { display: block; height: 100%; border-radius: 3px; background: #bc8cff; }
+.ctx-comp-segment-tokens { text-align: right; font-variant-numeric: tabular-nums; }
+.ctx-comp-segment-sessions { color: var(--text-muted); text-align: right; }
+.ctx-comp-guide { display: inline-block; font-size: 12px; color: var(--vscode-textLink-foreground, #58a6ff); margin: 4px 0 8px; }
+.ctx-comp-dash { color: var(--text-muted); cursor: help; }
+.ctx-comp-mini { width: 80px; }
+.ctx-comp-session { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.ctx-comp-session-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px; }
+.ctx-comp-session-sub { margin-top: 10px; }
+.ctx-comp-values { display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; margin: 6px 0 0; padding: 0; font-size: 11px; color: var(--text-muted); }
+.ctx-comp-values li { display: inline-flex; align-items: center; gap: 4px; }
+.ctx-comp-values strong { color: var(--text); }
+.ctx-comp-tokens { color: var(--text-muted); }
+.ctx-comp-snapshot { margin-bottom: 8px; }
+/* Same horizontal inset as the token chart's .chart-wrap (16px padding + 1px border) so request bars line up. */
+.ctx-comp-session-chart { position: relative; height: 140px; margin-top: 8px; padding: 0 17px; }
+.ctx-comp-snapshot-head { font-size: 11px; color: var(--text-muted); margin-bottom: 3px; }
+@media (max-width: 800px) {
+  .ctx-comp-row { grid-template-columns: 1fr; gap: 4px; }
+  .ctx-comp-meta { align-items: flex-start; }
+}
