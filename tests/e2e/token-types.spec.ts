@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 
 type TokenTypesWindow = Window & { mockTokenTypesMode?: 'empty' | 'error'; tokenTypesRequests?: { filter?: { fromDate?: string } }[] };
 

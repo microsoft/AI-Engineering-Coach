@@ -1,7 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { CatalogItem, SkillTriageResult, WorkflowOptimizationData } from '../../src/core/types';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 
 type CatalogScenario = 'success' | 'discovery-error' | 'empty-catalog' | 'triage-error' | 'no-matches';
 
