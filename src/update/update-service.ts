@@ -15,7 +15,8 @@ import * as vscode from 'vscode';
 import { BUILD_INFO, type BuildInfo } from '../core/build-info';
 import { runtimeDebug } from '../core/runtime-debug';
 import type { UpdateStatus } from '../core/types/rpc-types';
-import { purgeStaleDownloads, saveDownload } from './download-folder';
+import { purgeStaleDownloads } from './download-folder';
+import { installRelease } from './install-release';
 import {
   canInstallCandidate, describeNetworkError, fetchLatestRelease, isUpdateCandidate, releasesPageUrl, resolveFeedEndpoints,
   type FeedEndpoints, type FeedResult, type UpdateCandidate,
@@ -25,7 +26,7 @@ import { automaticChecksEnabled, cooldownFromSetting, evaluateUpdate, isNewerVer
 import {
   afterFailure, afterRateLimit, afterSuccess, claimCheck, isCheckDue, nextCheckTime, timerDelay, type ScheduleState,
 } from './update-schedule';
-import { downloadVerifiedVsix, UpdateDownloadError } from './vsix-download';
+import { UpdateDownloadError } from './vsix-download';
 
 export const CHECK_FOR_UPDATES_COMMAND = 'aiEngineerCoach.checkForUpdates';
 export const INSTALL_UPDATE_COMMAND = 'aiEngineerCoach.installUpdate';
@@ -350,7 +351,9 @@ export class UpdateService implements vscode.Disposable {
     this.setStatus({ state: 'updating', latest: release.version });
     let failure: { error: unknown } | undefined;
     try {
-      await this.downloadAndInstall(release);
+      await installRelease(release, {
+        fetch: this.fetchImpl, endpoints: this.endpoints, downloadDirectory: () => this.downloadDirectory(),
+      });
     } catch (err: unknown) {
       failure = { error: err };
     } finally {
@@ -373,46 +376,6 @@ export class UpdateService implements vscode.Disposable {
     const choice = await vscode.window.showErrorMessage(
       `Couldn't install AI Engineer Coach v${release.version}: ${reason}.`, OPEN_RELEASE_PAGE);
     if (choice === OPEN_RELEASE_PAGE) await vscode.env.openExternal(vscode.Uri.parse(release.releaseUrl));
-  }
-
-  /** Downloads and verifies the package, hands it to VS Code, and deletes it again. */
-  private async downloadAndInstall(release: UpdateCandidate): Promise<void> {
-    let file: string | undefined;
-    try {
-      await vscode.window.withProgress({
-        location: vscode.ProgressLocation.Notification,
-        title: `Updating AI Engineer Coach to v${release.version}`,
-        cancellable: true,
-      }, async (progress, token) => {
-        const controller = new AbortController();
-        const cancellation = token.onCancellationRequested(() => controller.abort());
-        try {
-          let reported = 0;
-          progress.report({ message: 'Downloading…' });
-          const bytes = await downloadVerifiedVsix({
-            fetch: this.fetchImpl,
-            candidate: release,
-            endpoints: this.endpoints,
-            signal: controller.signal,
-            onProgress: (received, total) => {
-              const percent = Math.floor((received / total) * 100);
-              if (percent >= reported + 10) {
-                progress.report({ increment: percent - reported, message: `Downloading… ${percent}%` });
-                reported = percent;
-              }
-            },
-          });
-          controller.signal.throwIfAborted();
-          progress.report({ message: 'Installing…' });
-          file = await saveDownload(await this.downloadDirectory(), release.vsix.name, bytes);
-          await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(file));
-        } finally {
-          cancellation.dispose();
-        }
-      });
-    } finally {
-      if (file) await fs.rm(file, { force: true }).catch(() => undefined);
-    }
   }
 
   private async offerReload(version: string): Promise<void> {

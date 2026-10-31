@@ -31,70 +31,84 @@ export interface UpdateServer {
   close(): Promise<void>;
 }
 
+interface ServerState {
+  mode: UpdateServerMode;
+  readonly requests: RecordedRequest[];
+  readonly version: string;
+  readonly vsix: Buffer;
+  readonly name: string;
+  readonly digest: string;
+}
+
+function releaseJson(state: ServerState, origin: string): unknown {
+  const { version, name } = state;
+  const repo = `${origin}/${REPOSITORY}`;
+  return {
+    html_url: `${repo}/releases/tag/v${version}`,
+    tag_name: `v${version}`,
+    name: `v${version}`,
+    draft: false,
+    prerelease: false,
+    immutable: true,
+    published_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    body: `## [${version}]\n\nDesktop update test release.`,
+    assets: [{
+      name,
+      size: state.vsix.byteLength,
+      state: 'uploaded',
+      digest: `sha256:${state.mode === 'good' ? state.digest : createHash('sha256').update('not the package').digest('hex')}`,
+      browser_download_url: `${repo}/releases/download/v${version}/${name}`,
+      uploader: { login: 'github-actions[bot]', type: 'Bot' },
+    }],
+  };
+}
+
+function handleRequest(state: ServerState, req: IncomingMessage, res: ServerResponse, origin: string): void {
+  const path = new URL(req.url ?? '/', origin).pathname;
+  if (path === '/__test/requests') {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(state.requests));
+    return;
+  }
+  if (path === '/__test/mode' && req.method === 'POST') {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      state.mode = Buffer.concat(chunks).toString('utf8') === 'bad-digest' ? 'bad-digest' : 'good';
+      res.writeHead(204).end();
+    });
+    return;
+  }
+  state.requests.push({
+    method: req.method ?? '',
+    path,
+    userAgent: req.headers['user-agent'] ?? '',
+    authorization: req.headers.authorization !== undefined,
+  });
+  const { version, name, vsix } = state;
+  if (req.method === 'GET' && path === `/repos/${REPOSITORY}/releases/latest`) {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(releaseJson(state, origin)));
+  } else if (req.method === 'GET' && path === `/${REPOSITORY}/releases/download/v${version}/${name}`) {
+    // github.com redirects asset downloads to a short-lived storage URL.
+    res.writeHead(302, { location: `/release-assets/${name}?signature=test` }).end();
+  } else if (req.method === 'GET' && path === `/release-assets/${name}`) {
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(vsix.byteLength) }).end(vsix);
+  } else {
+    res.writeHead(404).end();
+  }
+}
+
 /** Serves `vsix` as release `v<version>`; `POST /__test/mode` switches modes and `GET /__test/requests` lists requests. */
 export async function startUpdateServer(version: string, vsix: Buffer): Promise<UpdateServer> {
-  let mode: UpdateServerMode = 'good';
-  const requests: RecordedRequest[] = [];
-  const name = `ai-engineer-coach-${version}.vsix`;
-  const digest = createHash('sha256').update(vsix).digest('hex');
-
-  function release(origin: string): unknown {
-    const repo = `${origin}/${REPOSITORY}`;
-    return {
-      html_url: `${repo}/releases/tag/v${version}`,
-      tag_name: `v${version}`,
-      name: `v${version}`,
-      draft: false,
-      prerelease: false,
-      immutable: true,
-      published_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      body: `## [${version}]\n\nDesktop update test release.`,
-      assets: [{
-        name,
-        size: vsix.byteLength,
-        state: 'uploaded',
-        digest: `sha256:${mode === 'good' ? digest : createHash('sha256').update('not the package').digest('hex')}`,
-        browser_download_url: `${repo}/releases/download/v${version}/${name}`,
-        uploader: { login: 'github-actions[bot]', type: 'Bot' },
-      }],
-    };
-  }
-
-  function handle(req: IncomingMessage, res: ServerResponse, origin: string): void {
-    const path = new URL(req.url ?? '/', origin).pathname;
-    if (path === '/__test/requests') {
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(requests));
-      return;
-    }
-    if (path === '/__test/mode' && req.method === 'POST') {
-      const chunks: Buffer[] = [];
-      req.on('data', (chunk: Buffer) => chunks.push(chunk));
-      req.on('end', () => {
-        mode = Buffer.concat(chunks).toString('utf8') === 'bad-digest' ? 'bad-digest' : 'good';
-        res.writeHead(204).end();
-      });
-      return;
-    }
-    requests.push({
-      method: req.method ?? '',
-      path,
-      userAgent: req.headers['user-agent'] ?? '',
-      authorization: req.headers.authorization !== undefined,
-    });
-    if (req.method === 'GET' && path === `/repos/${REPOSITORY}/releases/latest`) {
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(release(origin)));
-    } else if (req.method === 'GET' && path === `/${REPOSITORY}/releases/download/v${version}/${name}`) {
-      // github.com redirects asset downloads to a short-lived storage URL.
-      res.writeHead(302, { location: `/release-assets/${name}?signature=test` }).end();
-    } else if (req.method === 'GET' && path === `/release-assets/${name}`) {
-      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(vsix.byteLength) }).end(vsix);
-    } else {
-      res.writeHead(404).end();
-    }
-  }
-
+  const state: ServerState = {
+    mode: 'good',
+    requests: [],
+    version,
+    vsix,
+    name: `ai-engineer-coach-${version}.vsix`,
+    digest: createHash('sha256').update(vsix).digest('hex'),
+  };
   let origin = '';
-  const server: Server = createServer((req, res) => handle(req, res, origin));
+  const server: Server = createServer((req, res) => handleRequest(state, req, res, origin));
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());

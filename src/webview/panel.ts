@@ -12,8 +12,7 @@ import { saveSidebarStats } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult, type LoadProgress } from '../core/parser';
 import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
-import { WebviewMessage, type HostCapabilitiesMessage, type UpdateStatus, type UpdateStatusMessage } from '../core/types';
-import { getUpdateService } from '../update/update-service';
+import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
@@ -22,6 +21,7 @@ import { getRpcHandler } from './panel-rpc';
 import { PanelRequestService } from './panel-request-service';
 import { DashboardSidebarProvider } from './panel-sidebar';
 import { isRequestMessage, isSafeExternalHttpsUrl, postResponse, errorResult } from './panel-shared';
+import { forwardUpdateStatus, tryHandleUpdateRequest } from './panel-update';
 
 export { DashboardSidebarProvider } from './panel-sidebar';
 
@@ -72,7 +72,7 @@ export class DashboardPanel {
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg: unknown) => this.handleMessage(msg), null, this.disposables);
     vscode.lm.onDidChangeChatModels(() => this.refreshCapabilities(), null, this.disposables);
-    getUpdateService()?.onDidChangeStatus(status => this.postUpdateStatus(status), null, this.disposables);
+    forwardUpdateStatus(this.panel.webview, this.disposables);
 
     void this.loadData(forceReload);
   }
@@ -360,10 +360,7 @@ export class DashboardPanel {
     }
 
     // Update state for the build stamp footer, also answered before data readiness.
-    if (msg.method === 'getUpdateStatus' || msg.method === 'promptUpdate' || msg.method === 'reloadAfterUpdate') {
-      this.handleUpdateRequest(msg);
-      return;
-    }
+    if (tryHandleUpdateRequest(this.panel.webview, msg)) return;
 
     if (this.requestService.tryHandle(msg)) return;
 
@@ -427,26 +424,6 @@ export class DashboardPanel {
       const message: HostCapabilitiesMessage = { type: 'capabilities', host: 'vscode', llm };
       try { void this.panel.webview.postMessage(message); } catch { /* disposed */ }
     });
-  }
-
-  private handleUpdateRequest(msg: Extract<WebviewMessage, { type: 'request' }>): void {
-    const updates = getUpdateService();
-    if (msg.method === 'getUpdateStatus') {
-      try { postResponse(this.panel.webview, msg.id, updates?.getStatus() ?? { state: 'none' }); } catch { /* disposed */ }
-      return;
-    }
-    // The webview never chooses what to install: the service shows a native confirmation first.
-    const action = msg.method === 'promptUpdate' ? updates?.promptInstall() : updates?.reloadAfterUpdate();
-    void action?.catch((err: unknown) => runtimeDebug('update', 'webview-action-error', err));
-    try { postResponse(this.panel.webview, msg.id, { ok: updates !== undefined }); } catch { /* disposed */ }
-  }
-
-  private postUpdateStatus(status: UpdateStatus): void {
-    if (this.disposed) return;
-    const message: UpdateStatusMessage = { type: 'updateStatus', status };
-    try {
-      Promise.resolve(this.panel.webview.postMessage(message)).catch(() => undefined);
-    } catch { /* disposed */ }
   }
 
   private handleOpenExternal(msg: Extract<WebviewMessage, { type: 'request' }>): void {

@@ -171,7 +171,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
   const { ExTester, ReleaseQuality } = await import('vscode-extension-tester');
   const extensions = fixturePaths(root).extensions;
   const tester = new ExTester(storage, ReleaseQuality.Stable, extensions);
-  let updateFeed: UpdateServer | undefined;
+  const updateFeed = await startUpdateFeed(scenario);
   try {
     await tester.downloadCode(version);
     await tester.downloadChromeDriver(version);
@@ -183,7 +183,6 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     const installedManifest = manifestSchema.parse(JSON.parse(await fs.readFile(path.join(installedRoot, 'package.json'), 'utf8')));
     assert.deepEqual(installedManifest, manifest, 'Installed VSIX does not match the repository manifest');
     await assertInstalledPackage(root, installedRoot, installedManifest.version);
-    updateFeed = await startUpdateFeed(scenario);
     const suite = path.join(__dirname, 'suite', `${scenario}.spec.js`).replaceAll('\\', '/');
     const code = await tester.runTests(suite, {
       vscodeVersion: version, offline: true, config, settings, locale: 'en',

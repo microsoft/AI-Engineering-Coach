@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   probe: vi.fn<(timeoutMs: number) => Promise<boolean>>(),
   heavy: vi.fn(() => ({ kind: 'heavy' })),
   light: vi.fn(() => ({ kind: 'light' })),
-  updateStatus: { state: 'none' } as unknown,
+  updateStatus: undefined as Record<string, unknown> | undefined,
   updateListener: undefined as ((status: unknown) => void) | undefined,
   promptInstall: vi.fn<() => Promise<void>>(),
   reloadAfterUpdate: vi.fn<() => Promise<void>>(),
