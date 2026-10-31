@@ -140,6 +140,11 @@ describe('Packaged VSIX release notes', () => {
   const dashboard = new Dashboard();
   const { root } = scenarioContext();
 
+  before(async () => {
+    // Leave only the webviews under test: the activity-bar view and the Markdown preview.
+    await dashboard.close();
+  });
+
   it('shows the build stamp in the activity-bar view and opens What\'s New from its link', async () => {
     const build = await readInstalledBuild(root);
     const line = await dashboard.inActivityBarView(async view =>
@@ -149,6 +154,10 @@ describe('Packaged VSIX release notes', () => {
     await dashboard.inActivityBarView(async view => (await view.findWebElement(By.css('#whatsNew'))).click());
     // vsce packages CHANGELOG.md as changelog.md; What's New opens it in the Markdown preview.
     const preview = await dashboard.waitForEditor(/^Preview changelog\.md$/i);
+    const headings = await dashboard.markdownPreviewHeadings();
+    assert.ok(headings.includes('Changelog'), `Unexpected preview headings: ${headings.join(' | ')}`);
+    assert.ok(headings.some(heading => heading.startsWith(`${build.version} - `)),
+      `The preview has no section for ${build.version}: ${headings.join(' | ')}`);
     await dashboard.snapshot('09-whats-new',
       `What's New: the packaged changelog, and the activity-bar view showing ${line}`);
     await dashboard.closeEditor(preview);

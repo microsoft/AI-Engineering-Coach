@@ -89,22 +89,38 @@ export class Dashboard {
 
   /**
    * Opens the AI Engineer Coach activity-bar view, then runs `action` inside its webview and
-   * returns to the workbench. Retries while the view's frame is still loading.
+   * returns to the workbench.
    */
   async inActivityBarView<T>(action: (view: WebviewView) => Promise<T>): Promise<T> {
-    const driver = VSBrowser.instance.driver;
-    await driver.switchTo().defaultContent();
+    await VSBrowser.instance.driver.switchTo().defaultContent();
     const control = await new ActivityBar().getViewControl('AI Engineer Coach');
     if (!control) throw new Error('The AI Engineer Coach activity-bar container is missing');
     const view = new WebviewView(await control.openView());
+    // #whatsNew exists only in this view, so another ready webview is retried instead of read.
+    return this.inFrame(view, '#whatsNew', () => action(view), 'the AI Engineer Coach activity-bar view');
+  }
+
+  /** Headings of the active Markdown preview, once it has rendered. */
+  async markdownPreviewHeadings(): Promise<string[]> {
+    await VSBrowser.instance.driver.switchTo().defaultContent();
+    const view = new WebView();
+    return this.inFrame(view, '.markdown-body h1', async () => Promise.all(
+      (await view.findWebElements(By.css('.markdown-body h1, .markdown-body h2'))).map(heading => heading.getText())),
+    'the rendered Markdown preview');
+  }
+
+  /**
+   * Runs `action` inside `view`'s frame once it contains `marker`, then returns to the workbench.
+   * Retries while frames load: until a webview is ready, another one can be the only ready frame.
+   */
+  private async inFrame<T>(view: WebView | WebviewView, marker: string, action: () => Promise<T>, what: string): Promise<T> {
+    const driver = VSBrowser.instance.driver;
     let result: { value: T } | undefined;
     await driver.wait(async () => {
       try {
         await view.switchToFrame(READY_TIMEOUT);
-        // Until the view's own frame is ready, the open dashboard can be the only ready webview;
-        // require a view-only element so a wrong frame is retried instead of read.
-        await view.findWebElement(By.css('#whatsNew'));
-        result = { value: await action(view) };
+        await view.findWebElement(By.css(marker));
+        result = { value: await action() };
         return true;
       } catch (err: unknown) {
         if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError
@@ -113,8 +129,8 @@ export class Dashboard {
       } finally {
         await driver.switchTo().defaultContent();
       }
-    }, READY_TIMEOUT, 'Waiting for the AI Engineer Coach activity-bar view');
-    if (!result) throw new Error('The AI Engineer Coach activity-bar view did not load');
+    }, READY_TIMEOUT, `Waiting for ${what}`);
+    if (!result) throw new Error(`${what} did not load`);
     return result.value;
   }
 
