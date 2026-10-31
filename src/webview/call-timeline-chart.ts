@@ -36,6 +36,8 @@ export interface CallTimelineChartOptions {
   /** `calls`: one point per main-agent model call; `requests`: one per request. */
   unit: 'calls' | 'requests';
   yTitle: string;
+  /** Title of the right-hand axis, for datasets with `yAxisID: 'y1'`; the axis shows only when one is drawn. */
+  y1Title?: string;
 }
 
 const MAX_MARKER_LABELS = 12;
@@ -107,6 +109,13 @@ function markerPlugin(markers: Map<number, CallTimelineMarker[]>) {
 
 interface TooltipItem { dataIndex: number; dataset: { label?: string }; parsed: { y: number | null } }
 
+/** Right-hand axis for datasets with `yAxisID: 'y1'`, which are on a much smaller scale than the bars. */
+function rightAxis(title: string | undefined): Record<string, unknown> {
+  return {
+    y1: { position: 'right', beginAtZero: true, title: { display: Boolean(title), text: title ?? '', color: '#8b949e' }, ticks: { color: '#8b949e', callback: (value: number | string) => formatNum(Number(value)) }, grid: { drawOnChartArea: false } },
+  };
+}
+
 /** Draw the chart for the enabled layers; returns the chart, or `null` when the canvas isn't in the DOM. */
 export function renderCallTimelineChart(
   canvasId: string,
@@ -120,9 +129,10 @@ export function renderCallTimelineChart(
   const active = layers.filter(layer => options.enabled.has(layer.id));
   const markers = mergeMarkers(timeline, active);
   const labels = timeline.buckets.map(bucket => bucketLabel(bucket, options.unit));
+  const datasets = active.flatMap(layer => layer.datasets?.(timeline) ?? []);
   const chart = new Chart(canvas, {
     type: 'bar',
-    data: { labels, datasets: active.flatMap(layer => layer.datasets?.(timeline) ?? []) as never },
+    data: { labels, datasets: datasets as never },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -132,6 +142,7 @@ export function renderCallTimelineChart(
       scales: {
         x: { stacked: true, ticks: { color: '#8b949e', maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { display: false } },
         y: { stacked: true, beginAtZero: true, title: { display: true, text: options.yTitle, color: '#8b949e' }, ticks: { color: '#8b949e', callback: (value: number | string) => formatNum(Number(value)) }, grid: { color: 'rgba(48,54,61,0.6)' } },
+        ...(datasets.some(dataset => dataset.yAxisID === 'y1') ? rightAxis(options.y1Title) : {}),
       },
       plugins: {
         legend: { position: 'top', labels: { boxWidth: 10 } },
