@@ -51,4 +51,13 @@ describe('VS Code custom instructions', () => {
       { external: uri('AGENTS.md') },
     )).toEqual(['copilot-instructions.md', 'style.md', 'AGENTS.md']);
   });
+
+  it('keeps # and ? in file-system paths, which are valid in file and folder names', () => {
+    expect(instructions(
+      { fsPath: 'c:\\work\\project#1\\AGENTS.md' },
+      { fsPath: '/home/me/notes?/.github/copilot-instructions.md' },
+      { fsPath: '/home/me/repo/.claude/rules/#style.md' },
+      { external: `${uri('CLAUDE.md')}#L12` },
+    )).toEqual(['AGENTS.md', 'copilot-instructions.md', '#style.md', 'CLAUDE.md']);
+  });
 });
