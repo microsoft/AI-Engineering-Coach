@@ -134,9 +134,9 @@ Rule and metric front matter reads values this way:
 These functions take one pattern or an array of patterns, and match when any pattern matches:
 `matches(text, pattern)`, `matchesAny(text, patterns)`, `anyMatch(strings, pattern)` (1 or 0),
 `hasSkillByPattern(reqs, pattern)` (1 or 0), and the `"matches"` operator of `countWhere`, `anyWhere`,
-`someWhere` and `flatSomeWhere`. An empty array matches nothing, and elements that aren't strings
-are ignored. A regex literal such as `/^fix/i` works only in `matches()`; elsewhere, write
-`"(?i)^fix"`.
+`someWhere` and `flatSomeWhere`. An empty array, an empty pattern and a value that isn't a string
+match nothing, so an entry written as `[]` or left blank never matches. A regex literal such as
+`/^fix/i` works only in `matches()`; elsewhere, write `"(?i)^fix"`.
 
 ## Local testing workflow
 

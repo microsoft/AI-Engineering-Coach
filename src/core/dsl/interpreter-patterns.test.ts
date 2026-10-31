@@ -48,11 +48,10 @@ describe('builtins that take a pattern', () => {
     expect(call('matchesAny', stringNode('why'), strings(String.raw`\?{3,}`, '!{3,}'))).toBe(false);
   });
 
-  it('hasSkillByPattern() takes an array, and an empty pattern string still matches nothing', () => {
+  it('hasSkillByPattern() takes an array', () => {
     expect(call('hasSkillByPattern', identifierNode('reqs'), stringNode('(?i)CAVECREW'))).toBe(1);
     expect(call('hasSkillByPattern', identifierNode('reqs'), strings('^none', 'compress$'))).toBe(1);
     expect(call('hasSkillByPattern', identifierNode('reqs'), strings('^none'))).toBe(0);
-    expect(call('hasSkillByPattern', identifierNode('reqs'), stringNode(''))).toBe(0);
   });
 
   it('the "matches" operator of countWhere, anyWhere, someWhere and flatSomeWhere takes an array', () => {
@@ -76,6 +75,20 @@ describe('pattern arguments that match nothing', () => {
     expect(call('anyMatch', identifierNode('files'), none)).toBe(0);
     expect(call('hasSkillByPattern', identifierNode('reqs'), none)).toBe(0);
     expect(call('countWhere', identifierNode('kinds'), kind, op, none)).toBe(0);
+  });
+
+  it('an empty pattern string, alone or in an array, as a front matter [] or blank entry reads', () => {
+    const empty = stringNode('');
+    const emptyInArray = strings('');
+    expect(call('matches', stringNode('anything'), empty)).toBe(false);
+    expect(call('matches', stringNode('anything'), emptyInArray)).toBe(false);
+    expect(call('matches', stringNode('beta'), strings('', '^b'))).toBe(true);
+    expect(call('matchesAny', stringNode('anything'), emptyInArray)).toBe(false);
+    expect(call('anyMatch', identifierNode('files'), empty)).toBe(0);
+    expect(call('anyMatch', identifierNode('files'), emptyInArray)).toBe(0);
+    expect(call('hasSkillByPattern', identifierNode('reqs'), empty)).toBe(0);
+    expect(call('hasSkillByPattern', identifierNode('reqs'), emptyInArray)).toBe(0);
+    expect(call('countWhere', identifierNode('kinds'), kind, op, emptyInArray)).toBe(0);
   });
 
   it('values and elements that are not strings', () => {

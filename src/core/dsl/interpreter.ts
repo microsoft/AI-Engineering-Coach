@@ -302,11 +302,12 @@ function parseRegexFlags(pattern: string): { pattern: string; flags: string } {
 
 /**
  * The pattern strings of a pattern argument: one string, or an array such as a rule's `patterns.*`
- * entry (always an array). Non-string values and elements are ignored, so they never match.
+ * entry (always an array). Empty strings and values that aren't strings are skipped: they never match,
+ * where the empty regex would match everything. A front matter `[]` or blank entry reads as `['']`.
  */
 function patternStrings(pattern: unknown): string[] {
-  if (Array.isArray(pattern)) return pattern.filter((p): p is string => typeof p === 'string');
-  return typeof pattern === 'string' ? [pattern] : [];
+  if (Array.isArray(pattern)) return pattern.filter((p): p is string => typeof p === 'string' && p !== '');
+  return typeof pattern === 'string' && pattern !== '' ? [pattern] : [];
 }
 
 /** One pattern string, with optional inline flags such as (?i), compiled through the ReDoS guard. */
@@ -1641,8 +1642,7 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
   'hasSkillByPattern': (argNodes: ASTNode[], ctx: Record<string, unknown>) => {
     {
       const reqs = evaluate(argNodes[0], ctx);
-      // An empty pattern string matches no skill
-      const patterns = patternStrings(evaluate(argNodes[1], ctx)).filter(Boolean).map(compilePattern);
+      const patterns = patternStrings(evaluate(argNodes[1], ctx)).map(compilePattern);
       if (!Array.isArray(reqs) || patterns.length === 0) return 0;
       for (const r of reqs) {
         const skills = (r as Record<string, unknown>).skillsUsed;

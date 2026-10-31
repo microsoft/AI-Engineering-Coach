@@ -114,3 +114,21 @@ describe('no-spec-driven-development', () => {
     expect(triggered).toBe(true);
   });
 });
+
+describe('a front matter pattern written as [] or left blank', () => {
+  const source = [
+    '---', 'id: empty-patterns', 'name: Empty Patterns', 'group: prompt-quality', 'severity: low', 'scope: requests',
+    'patterns:', '  none: []', '  blank: ""', '---', '', '# Detection Logic', '```detect', 'scan: requests',
+    'match: matches(messageText, patterns.none) OR matchesAny(messageText, patterns.blank) OR ' +
+      'anyMatch(referencedFiles, patterns.none) OR anyWhere(referencedFiles, ".", "matches", patterns.blank)',
+    'aggregate: count', 'check: count > 0', '```', '',
+  ].join('\n');
+
+  it('matches nothing, where the empty regex would match everything', () => {
+    const rule = parseRule(source);
+    expect(rule?.patterns).toEqual({ none: [''], blank: [''] });
+    const { emission, triggered } = run(rule!, [request('anything at all', ['docs/spec.md'])], []);
+    expect(emission.count).toBe(0);
+    expect(triggered).toBe(false);
+  });
+});
