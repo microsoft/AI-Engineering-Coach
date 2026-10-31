@@ -279,6 +279,16 @@ describe('automatic checks', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('make no request when automatic checks are turned off while the lease settles', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    createService(fetch).start();
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    mocks.config.set('aiEngineerCoach.updates.autoCheck', false);
+    await vi.advanceTimersByTimeAsync(LEASE_SETTLE_MS + DAY);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('stay quiet when nothing has been released yet', async () => {
     vi.useFakeTimers({ now: NOW });
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response('{"message":"Not Found"}', { status: 404 }));

@@ -283,6 +283,8 @@ export class UpdateService implements vscode.Disposable {
 
   /** Runs under the lease and re-reads the shared state, since another window may have just acted. */
   private async checkAndAnnounce(): Promise<void> {
+    // The settings may have changed while the lease settled.
+    if (!this.automatic()) return;
     if (isCheckDue(this.readState(), this.now())) await this.check(false);
     const evaluation = this.refresh();
     const release = this.readState().release;
