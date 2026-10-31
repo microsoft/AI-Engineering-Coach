@@ -3,6 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { CallTimeline } from './call-timeline-types';
+import type { RequestPromptCache, SessionPromptCache } from './prompt-cache-types';
+
 export interface ToolConfirmation {
   toolId: string;
   confirmationType: number;
@@ -143,14 +146,19 @@ export interface SessionRequest {
   /** Completion token count — from request.completionTokens (CUMULATIVE across all agentic rounds)
    *  or metadata.outputTokens (last round only) as fallback for older sessions. */
   completionTokens: number | null;
-  /** Cached tokens read (subset of `promptTokens` when present); billed at cached rate */
+  /** Cached tokens read (subset of `promptTokens` when present); billed at cached rate. `null` when the
+   *  harness doesn't report cache usage, `0` when it reported none. */
   cacheReadTokens: number | null;
-  /** Cached tokens written / cache creation (subset of `promptTokens` when present); billed at cache-write rate */
+  /** Cached tokens written / cache creation (subset of `promptTokens` when present); billed at cache-write
+   *  rate. `null` when the harness doesn't report cache usage, `0` when it reported none. */
   cacheWriteTokens: number | null;
   /** Compaction/summarization event attached to this request, if one occurred */
   compaction: CompactionEvent | null;
   /** What filled the prompt, when the harness reports it (VS Code, Copilot CLI). */
   promptComposition?: PromptComposition;
+  /** Prompt-cache usage of the request's model calls, when the harness logs it per call
+   *  (Copilot CLI and Copilot App, Claude Code, OpenCode). */
+  promptCache?: RequestPromptCache;
   /** Final TODO list state at the end of this request (from manage_todo_list tool calls) */
   todoSnapshot: TodoItem[] | null;
   /** Precomputed work-type classification (feature, bug fix, refactor, etc.) */
@@ -217,6 +225,10 @@ export interface Session {
   modelUsage?: Record<string, ModelUsage>;
   /** System-prompt segments and compaction snapshots (Copilot CLI). */
   contextComposition?: SessionContextComposition;
+  /** Main-agent model calls in order, bucketed (Copilot CLI and Copilot App). */
+  callTimeline?: CallTimeline;
+  /** Prompt-cache breaks and their causes (Copilot CLI and Copilot App). */
+  promptCache?: SessionPromptCache;
   /** How the session ended. Drives "pending" vs "missing" classification
    *  in the Token Coverage view: active/aborted sessions cannot have full
    *  token data and so are excluded from the missing% denominator. */

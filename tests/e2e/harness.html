@@ -389,6 +389,115 @@ function mockSessionCompositionCli(n) {
   };
 }
 
+/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error') ---- */
+
+function cacheTotals(calls, input, readPct, writePct) {
+  const cacheRead = Math.round(input * readPct / 100);
+  const cacheWrite = Math.round(input * writePct / 100);
+  const uncached = input - cacheRead - cacheWrite;
+  return { calls, input, cacheRead, cacheWrite, uncached, hitPct: readPct, writePct, uncachedPct: Math.round(uncached / input * 1000) / 10 };
+}
+
+const MOCK_CACHE_SESSIONS = [
+  { sessionId: 'pc-1', date: '2026-05-03', workspaceName: 'my-api', harness: 'GitHub Copilot App', calls: 143, hitPct: 93.8, breaks: 3, rebuiltTokens: 254000, misses: 636000, topCause: 'ttl-agent', sparkline: [94000, 42000, 42000, 168000, 42000, 42000, 42000, 84000, 42000, 42000, 204000, 42000] },
+  { sessionId: 'pc-2', date: '2026-05-02', workspaceName: 'frontend-app', harness: 'GitHub Copilot App', calls: 96, hitPct: 96.2, breaks: 2, rebuiltTokens: 180000, misses: 410000, topCause: 'ttl-agent', sparkline: [90000, 40000, 160000, 30000, 120000, 20000] },
+  { sessionId: 'pc-3', date: '2026-05-01', workspaceName: 'data-pipeline', harness: 'Claude', calls: 64, hitPct: 91.0, breaks: null, rebuiltTokens: null, misses: 610000, topCause: null, sparkline: [200000, 60000, 50000, 40000] },
+];
+
+function mockPromptCache(mode, params) {
+  // Ranges longer than the default month report more requests, so e2e can tell which range rendered.
+  const fromDate = params?.filter?.fromDate;
+  const longRange = fromDate != null && Date.now() - Date.parse(fromDate) > 45 * 86400000;
+  const vscode = { harness: 'Local Agent', reporting: 'none', attribution: false, all: null, main: null, subagents: null, compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 640, requestsWithData: 0, sessions: 58, sessionsWithData: 0 };
+  if (mode === 'empty') {
+    return { harnesses: [vscode], attribution: null, models: [], workspaces: [], trend: { labels: [], series: [] }, topSessions: [], tips: [], coverage: { requestsWithData: 0, totalRequests: 640, sessionsWithData: 0, totalSessions: 58 } };
+  }
+  const app = {
+    harness: 'GitHub Copilot App', reporting: 'per-call', attribution: true,
+    all: cacheTotals(9200, 2400000000, 96.6, 3.3), main: cacheTotals(7600, 2100000000, 96.8, 3.1), subagents: cacheTotals(1500, 270000000, 95.8, 4.2), compaction: cacheTotals(100, 30000000, 78.0, 2.0),
+    cost: { savedPct: 90.4, missCostPct: 45.0, ratedPct: 100 }, breaks: 170, breaksPer100: 2.2, totalRequests: 820, requestsWithData: 610, sessions: 70, sessionsWithData: 55,
+  };
+  const claude = { harness: 'Claude', reporting: 'per-call', attribution: false, all: cacheTotals(2100, 380000000, 91.0, 8.5), main: cacheTotals(1900, 350000000, 91.4, 8.2), subagents: cacheTotals(200, 30000000, 86.0, 13.0), compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 300, requestsWithData: 300, sessions: 24, sessionsWithData: 24 };
+  const codex = { harness: 'Codex', reporting: 'per-session', attribution: false, all: cacheTotals(0, 90000000, 82.0, 0), main: cacheTotals(0, 90000000, 82.0, 0), subagents: null, compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 40, requestsWithData: 40, sessions: 6, sessionsWithData: 6 };
+  const attribution = mode === 'no-attribution' ? null : {
+    label: 'Copilot App', harnesses: ['GitHub Copilot App'], mainCalls: 7600, breaks: 170, breaksPer100: 2.2, omittedBreaks: 0, rebuiltTokens: 52000000,
+    causes: [
+      { key: 'ttl-user', control: 'you', breaks: 74, rebuiltTokens: 24500000, pctOfRebuilt: 47.1, costPct: 11.7, logged: 74, checkpoint: 0, segments: [], alsoSeen: [{ cause: 'resume', breaks: 9 }] },
+      { key: 'ttl-agent', control: 'partly', breaks: 31, rebuiltTokens: 14300000, pctOfRebuilt: 27.5, costPct: 6.9, logged: 31, checkpoint: 0, segments: [], alsoSeen: [] },
+      { key: 'unattributed', control: 'unknown', breaks: 18, rebuiltTokens: 5300000, pctOfRebuilt: 10.2, costPct: 2.5, logged: 0, checkpoint: 0, segments: [], alsoSeen: [] },
+      { key: 'resume', control: 'you', breaks: 15, rebuiltTokens: 3400000, pctOfRebuilt: 6.5, costPct: 1.6, logged: 15, checkpoint: 0, segments: [], alsoSeen: [] },
+      { key: 'tools-changed', control: 'partly', breaks: 7, rebuiltTokens: 2100000, pctOfRebuilt: 4.0, costPct: 0.9, logged: 5, checkpoint: 2, segments: [], alsoSeen: [] },
+      { key: 'system-prompt', control: 'harness', breaks: 10, rebuiltTokens: 2000000, pctOfRebuilt: 3.9, costPct: 0.9, logged: 0, checkpoint: 10, segments: [{ name: 'workspace_context', breaks: 8 }, { name: 'environment_context', breaks: 3 }], alsoSeen: [] },
+      { key: 'compaction', control: 'harness', breaks: 15, rebuiltTokens: 400000, pctOfRebuilt: 0.8, costPct: 0.2, logged: 15, checkpoint: 0, segments: [], alsoSeen: [] },
+    ],
+    confidence: { logged: 140, checkpoint: 12, unattributed: 18 },
+    controlPct: { you: 53.6, partly: 31.5, harness: 4.7, unknown: 10.2 },
+    misses: 96000000,
+    origins: [
+      { origin: 'growth', tokens: 22000000, pct: 22.9, costPct: 10.5 },
+      { origin: 'rebuilt', tokens: 52000000, pct: 54.2, costPct: 24.7 },
+      { origin: 'subagents', tokens: 13000000, pct: 13.5, costPct: 6.0 },
+      { origin: 'compaction', tokens: 6600000, pct: 6.9, costPct: 2.8 },
+      { origin: 'cold-start', tokens: 2400000, pct: 2.5, costPct: 1.1 },
+    ],
+    idle: {
+      ttlByModel: [{ model: 'gpt-6.1-sol', ttlSeconds: 1800, calls: 3900 }, { model: 'claude-opus-5.5', ttlSeconds: 300, calls: 3200 }, { model: 'claude-sonnet-5', ttlSeconds: 300, calls: 500 }],
+      returns: 450, expiredReturns: 78,
+      buckets: [{ label: '\u22642\u00d7', user: 18, agent: 22 }, { label: '2\u20136\u00d7', user: 19, agent: 7 }, { label: '6\u201324\u00d7', user: 21, agent: 2 }, { label: '>24\u00d7', user: 16, agent: 0 }],
+      medianIdleMinutes: 51,
+    },
+  };
+  return {
+    harnesses: [app, claude, codex, vscode],
+    attribution,
+    models: [
+      { harness: 'GitHub Copilot App', model: 'gpt-6.1-sol', calls: 4100, hitPct: 96.8, writePct: 3.1, breaksPer100: 2.2, ttlSeconds: 1800 },
+      { harness: 'GitHub Copilot App', model: 'claude-opus-5.5', calls: 3800, hitPct: 97.2, writePct: 2.8, breaksPer100: 2.0, ttlSeconds: 300 },
+      { harness: 'Claude', model: 'claude-sonnet-4.6', calls: 2100, hitPct: 91.0, writePct: 8.5, breaksPer100: null, ttlSeconds: null },
+    ],
+    workspaces: [
+      { workspaceId: 'my-api', workspaceName: 'my-api', harness: 'GitHub Copilot App', sessions: 31, calls: 5200, hitPct: 95.9, breaks: 102, rebuiltTokens: 31000000, misses: 58000000, topCause: 'ttl-user' },
+      { workspaceId: 'data-pipeline', workspaceName: 'data-pipeline', harness: 'Claude', sessions: 12, calls: 1300, hitPct: 90.2, breaks: null, rebuiltTokens: null, misses: 21000000, topCause: null },
+    ],
+    trend: {
+      labels: ['2026-04-13', '2026-04-20', '2026-04-27'],
+      series: [
+        { harness: 'GitHub Copilot App', hitPct: [95.1, 96.9, 96.8], breaksPer100: [2.6, 2.1, 2.0], calls: [2100, 2600, 2900] },
+        { harness: 'Claude', hitPct: [89.0, 91.5, 92.0], breaksPer100: [null, null, null], calls: [600, 700, 600] },
+      ],
+    },
+    topSessions: MOCK_CACHE_SESSIONS,
+    tips: mode === 'no-attribution' ? [] : [
+      'Prompt tokens that missed the cache cost about 45% of your Copilot App input cost, because cache reads are billed at a small fraction of the input price while cache writes and uncached tokens are not.',
+      '74 times you came back after the prompt cache had expired, and 24.5M tokens of context were rebuilt (47% of rebuilt tokens, about 12% of your input cost). Copilot App logged a cache lifetime of 5 minutes for claude-opus-5.5 and 30 minutes for gpt-6.1-sol. After a break, start a new session or run /compact before you continue.',
+    ],
+    coverage: { requestsWithData: 950, totalRequests: longRange ? 5400 : 1800, sessionsWithData: 85, totalSessions: 158 },
+  };
+}
+
+function mockSessionTimeline(sessionId) {
+  if (sessionId === 'pc-3') {
+    const buckets = Array.from({ length: 18 }, (_, i) => ({ firstCall: i, lastCall: i, firstRequest: i, lastRequest: i, startTs: Date.parse('2026-05-01T10:00:00Z') + i * 120000, endTs: Date.parse('2026-05-01T10:00:00Z') + i * 120000, cacheCalls: 1, cacheRead: 40000 + i * 9000, cacheWrite: 6000, uncached: 200 }));
+    return { sessionId, harness: 'Claude', unit: 'requests', timeline: { calls: 18, bucketSize: 1, buckets }, cache: { reporting: 'per-call', main: cacheTotals(64, 3000000, 91, 8.5), subagents: null, compaction: null, breaks: [], omittedBreaks: 0 } };
+  }
+  const start = Date.parse('2026-05-03T09:00:00Z');
+  const breakAt = new Map([[18, 'ttl-user'], [37, 'compaction'], [52, 'ttl-agent']]);
+  let size = 30000;
+  const buckets = Array.from({ length: 60 }, (_, i) => {
+    const cause = breakAt.get(i);
+    if (cause === 'compaction') size = 60000;
+    const write = i === 0 ? size : cause ? size - 35000 : 4000;
+    size += 4000;
+    return { firstCall: i * 2, lastCall: i * 2 + 1, firstRequest: Math.floor(i / 6), lastRequest: Math.floor((i * 2 + 1) / 12), startTs: start + i * 180000, endTs: start + i * 180000 + 60000, cacheCalls: 2, cacheRead: 2 * (size - write), cacheWrite: 2 * write, uncached: 400 };
+  });
+  const breaks = [
+    { requestIndex: 3, callIndex: 36, timestamp: start + 18 * 180000, model: 'claude-opus-5.5', causes: ['ttl-expired', 'resume'], confidence: 'logged', rebuiltTokens: 98000, idleSeconds: 3120, ttlSeconds: 300, initiator: 'user', key: 'ttl-user', control: 'you' },
+    { requestIndex: 6, callIndex: 74, timestamp: start + 37 * 180000, model: 'claude-opus-5.5', causes: ['compaction'], confidence: 'logged', rebuiltTokens: 25000, idleSeconds: 40, ttlSeconds: 300, initiator: 'agent', compactionTrigger: 'auto', key: 'compaction', control: 'harness' },
+    { requestIndex: 8, callIndex: 104, timestamp: start + 52 * 180000, model: 'claude-opus-5.5', causes: ['ttl-expired', 'system-prompt'], inferred: ['system-prompt'], segments: ['workspace_context'], confidence: 'logged', rebuiltTokens: 131000, idleSeconds: 610, ttlSeconds: 300, initiator: 'agent', key: 'ttl-agent', control: 'partly' },
+  ];
+  return { sessionId, harness: 'GitHub Copilot App', unit: 'calls', timeline: { calls: 120, bucketSize: 2, buckets }, cache: { reporting: 'per-call', main: cacheTotals(120, 9000000, 94.1, 5.8), subagents: cacheTotals(22, 900000, 95, 5), compaction: cacheTotals(1, 300000, 80, 2), breaks, omittedBreaks: 0 } };
+}
+
 function getMockData(method, params) {
   const labels30 = genLabels(30);
 
@@ -594,6 +703,18 @@ function getMockData(method, params) {
       harnessesWithoutRequestTokens: ['GitHub Copilot CLI']
     }),
 
+    getPromptCache: () => {
+      if (window.mockPromptCacheMode === 'error') throw new Error('mock getPromptCache failure');
+      return mockPromptCache(window.mockPromptCacheMode, params);
+    },
+    getPromptCacheSessions: () => ({
+      workspaceName: params?.workspaceId ?? '',
+      harness: params?.harness ?? null,
+      sessions: MOCK_CACHE_SESSIONS.filter(s => s.workspaceName === params?.workspaceId),
+      total: MOCK_CACHE_SESSIONS.filter(s => s.workspaceName === params?.workspaceId).length,
+    }),
+    getSessionTimeline: () => mockSessionTimeline(params?.sessionId),
+
     getDayTimeline: () => ({
       date: '2026-05-03',
       mode: 'day',
@@ -761,6 +882,7 @@ function getMockData(method, params) {
 
   // Lets e2e assert which params the session drill-downs send.
   if (method === 'getWorkspaceContextSessions') (window.workspaceSessionsRequests ||= []).push(params);
+  if (method === 'getPromptCacheSessions' || method === 'getSessionTimeline' || method === 'getPromptCache') (window.promptCacheRequests ||= []).push({ method, params });
   const handler = mocks[method];
   if (handler) return handler();
   return {};
