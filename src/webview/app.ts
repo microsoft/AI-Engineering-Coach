@@ -19,6 +19,7 @@ import { formatStatCount } from './loading-grid-model';
 import { renderWorkspaceGrid, updateWorkspaceCell } from './loading-grid-view';
 import { buildSkippedBanner } from './skipped-banner';
 import { mountBuildInfoFooter } from './build-info-footer';
+import { initUpdateStatus } from './update-status';
 import { loadCapabilities, llmAvailable } from './capabilities';
 import { html, render, unmount, ComponentChildren } from './render';
 import { renderDashboard } from './page-dashboard';
@@ -421,7 +422,10 @@ function maybeShowSkippedBanner(): void {
 }
 
 const sidebarNav = document.getElementById('sidebar');
-if (sidebarNav) mountBuildInfoFooter(sidebarNav);
+if (sidebarNav) {
+  mountBuildInfoFooter(sidebarNav);
+  void initUpdateStatus();
+}
 
 initMessageListener(handleProgress, onDataReady);
 

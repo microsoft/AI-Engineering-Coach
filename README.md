@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/9f0239bf-20e0-459f-b137-17cce0edd1b2
 
 ## What it does
 
-AI Engineer Coach reads your local AI session logs and turns them into actionable insights — no data leaves your machine.
+AI Engineer Coach reads your local AI session logs and turns them into actionable insights — your session data never leaves your machine.
 
 - **Track progress** -- practice scores, weekly trends, daily activity charts
 - **Detect anti-patterns** -- 45 rules across prompt quality, session hygiene, code review, tool mastery, and context management
@@ -125,6 +125,10 @@ Builds from different branches share the version in `package.json`, so each buil
 
 Run **AI Engineer Coach: What's New** to read the release notes ([`CHANGELOG.md`](CHANGELOG.md)). After an update to a newer version, a notification offers them once; turn it off with the `aiEngineerCoach.showReleaseNotesAfterUpdate` setting.
 
+### Updates
+
+Release builds check [GitHub Releases](https://github.com/microsoft/AI-Engineering-Coach/releases) about once a day and offer a newer version once, with **Update**, **Release Notes**, and **Skip This Version**. In local windows, **Update** downloads the `.vsix`, checks its SHA-256 checksum against the release, installs it, and then offers **Reload Window**; nothing happens without a click. Remote windows open the release page instead. Run **AI Engineer Coach: Check for Updates** to check on demand. See [Updates](docs/content/getting-started/installation.md#updates) for what is sent and how to turn it off.
+
 ---
 
 ## Run as a canvas in the GitHub Copilot app
@@ -212,7 +216,8 @@ image requests.
 
 - **Read-only** — the extension never modifies your session files
 - **Local analysis** — all parsing and analytics run entirely on your machine
-- **No proprietary telemetry** — the extension does not phone home or collect usage data
+- **No telemetry** — the extension doesn't collect or send usage data
+- **Update check** — release builds ask GitHub about once a day whether a newer release exists: one anonymous request to `api.github.com` with no identifiers or usage data. Nothing is downloaded or installed until you click **Update**. Turn it off with the `aiEngineerCoach.updates.autoCheck` setting or VS Code's `extensions.autoCheckUpdates` ([details](docs/content/getting-started/installation.md#updates))
 - **Optional AI features** — some features (rule compiler, skill finder, Level Up learning content, context review, anti-pattern **Why?** explanations) use GitHub Copilot's Auto model through the VS Code language model API when explicitly invoked by the user. In VS Code, the Why? buttons, Skill Finder, and Level Up are hidden and the context review is disabled while GitHub Copilot isn't available (for example, when you're signed out); they come back as soon as you sign in. Rule generation falls back to a starter template
 
 ---

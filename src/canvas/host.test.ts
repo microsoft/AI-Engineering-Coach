@@ -105,6 +105,25 @@ it('retains startup errors for RPC calls and clients that connect later', async 
   host.dispose();
 });
 
+it('never offers updates: they install into VS Code, not the canvas', () => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const host = createCanvasHost({ distDir: '/fixture/dist' });
+    expect(request(host, '/rpc', { id: 's', method: 'getUpdateStatus' }).end)
+      .toHaveBeenCalledWith(JSON.stringify({ type: 'response', id: 's', data: { state: 'none' } }));
+    for (const method of ['promptUpdate', 'reloadAfterUpdate']) {
+      expect(request(host, '/rpc', { id: method, method }).end).toHaveBeenCalledWith(JSON.stringify({
+        type: 'response', id: method, data: { error: 'This feature requires the local agent in VS Code.' },
+      }));
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    host.dispose();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it.each(['script', 'SCRIPT', 'Script'])('subscribes to replayed dataReady events only after the webview announces it is listening (%s tags)', (scriptTag) => {
   const host = createCanvasHost({ distDir: '/fixture/dist' });
   const html = String(request(host, '/').end.mock.calls[0][0])

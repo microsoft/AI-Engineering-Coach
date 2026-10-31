@@ -6,10 +6,30 @@
 import * as vscode from 'vscode';
 import { BUILD_INFO, formatBuildDetails, formatBuildTooltip } from '../core/build-info';
 import { loadSidebarStats } from '../core/cache';
+import { getUpdateService } from '../update/update-service';
 import { getNonce, escapeHtmlAttr } from './panel-shared';
 
 /** Commands the sidebar's buttons may run; anything else posted by the webview is ignored. */
-const SIDEBAR_COMMANDS = new Set(['aiEngineerCoach.open', 'aiEngineerCoach.reload', 'aiEngineerCoach.showReleaseNotes']);
+const SIDEBAR_COMMANDS = new Set([
+  'aiEngineerCoach.open', 'aiEngineerCoach.reload', 'aiEngineerCoach.showReleaseNotes', 'aiEngineerCoach.installUpdate',
+]);
+
+/** The update line under the build stamp; empty unless there is something to act on. */
+function renderUpdateLine(): string {
+  const status = getUpdateService()?.getStatus();
+  switch (status?.state) {
+    case 'available':
+      return `<p class="sidebar-note sidebar-update" id="update-status">v${escapeHtmlAttr(status.latest)} available `
+        + `<button id="updateAction" class="link">${status.canInstall ? 'Update…' : 'Download…'}</button></p>`;
+    case 'updating':
+      return `<p class="sidebar-note sidebar-update" id="update-status">Updating to v${escapeHtmlAttr(status.latest)}…</p>`;
+    case 'installed':
+      return `<p class="sidebar-note sidebar-update" id="update-status">v${escapeHtmlAttr(status.latest)} installed `
+        + '<button id="updateAction" class="link">Reload</button></p>';
+    default:
+      return '';
+  }
+}
 
 export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   public static instance: DashboardSidebarProvider | undefined;
@@ -73,6 +93,7 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
 <button id="open">Explore AI Insights</button>
 <button id="reload" class="secondary">Sync Sessions</button>
 <p class="sidebar-note sidebar-build" id="build-info" title="${escapeHtmlAttr(formatBuildTooltip(BUILD_INFO))}">${escapeHtmlAttr(formatBuildDetails(BUILD_INFO))}</p>
+${renderUpdateLine()}
 <button id="whatsNew" class="link">What's new</button>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -85,6 +106,8 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   document.getElementById('whatsNew').addEventListener('click', function() {
     vscode.postMessage({ command: 'aiEngineerCoach.showReleaseNotes' });
   });
+  const updateAction = document.getElementById('updateAction');
+  if (updateAction) updateAction.addEventListener('click', function() { vscode.postMessage({ command: 'aiEngineerCoach.installUpdate' }); });
 </script>
 </body>
 </html>`;

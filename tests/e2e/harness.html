@@ -629,6 +629,10 @@ function getMockData(method, params) {
     generateDidYouKnow: () => ({ facts: [] }),
     compileNlRule: () => ({ markdown: '' }),
     evaluateExpression: () => ({ result: null }),
+    // Update check: tests set window.mockUpdateStatus and read window.updateRequests.
+    getUpdateStatus: () => window.mockUpdateStatus || { state: 'none' },
+    promptUpdate: () => { (window.updateRequests = window.updateRequests || []).push('promptUpdate'); return { ok: true }; },
+    reloadAfterUpdate: () => { (window.updateRequests = window.updateRequests || []).push('reloadAfterUpdate'); return { ok: true }; },
   };
 
   const handler = mocks[method];

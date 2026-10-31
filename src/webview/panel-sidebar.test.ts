@@ -10,6 +10,7 @@ import { DashboardSidebarProvider } from './panel-sidebar';
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn<(command: string) => Promise<unknown>>(),
   receive: (_message: unknown) => {},
+  updateStatus: undefined as { state: string; latest?: string; canInstall?: boolean } | undefined,
 }));
 
 vi.mock('vscode', () => ({
@@ -17,6 +18,9 @@ vi.mock('vscode', () => ({
   commands: { executeCommand: mocks.executeCommand },
 }));
 vi.mock('../core/cache', () => ({ loadSidebarStats: () => null }));
+vi.mock('../update/update-service', () => ({
+  getUpdateService: () => (mocks.updateStatus ? { getStatus: () => mocks.updateStatus } : undefined),
+}));
 
 function resolveSidebar() {
   const view = {
@@ -36,6 +40,7 @@ function resolveSidebar() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.executeCommand.mockResolvedValue(undefined);
+  mocks.updateStatus = undefined;
 });
 
 describe('DashboardSidebarProvider', () => {
@@ -56,5 +61,37 @@ describe('DashboardSidebarProvider', () => {
     mocks.receive('aiEngineerCoach.reload');
     mocks.receive(null);
     expect(mocks.executeCommand.mock.calls).toEqual([['aiEngineerCoach.showReleaseNotes'], ['aiEngineerCoach.open']]);
+  });
+
+  it('shows no update line until there is something to act on', () => {
+    expect(resolveSidebar().html).not.toContain('id="update-status"');
+    mocks.updateStatus = { state: 'none' };
+    expect(resolveSidebar().html).not.toContain('id="update-status"');
+  });
+
+  it('offers an available update through the confirming install command', () => {
+    mocks.updateStatus = { state: 'available', latest: '0.4.0', canInstall: true };
+    const webview = resolveSidebar();
+    expect(webview.html).toContain(
+      '<p class="sidebar-note sidebar-update" id="update-status">v0.4.0 available <button id="updateAction" class="link">Update…</button></p>');
+    expect(webview.html).toContain("vscode.postMessage({ command: 'aiEngineerCoach.installUpdate' })");
+    mocks.receive({ command: 'aiEngineerCoach.installUpdate' });
+    expect(mocks.executeCommand.mock.calls).toEqual([['aiEngineerCoach.installUpdate']]);
+  });
+
+  it('offers a download when the update cannot be installed from this window', () => {
+    mocks.updateStatus = { state: 'available', latest: '0.4.0', canInstall: false };
+    expect(resolveSidebar().html).toContain(
+      '<p class="sidebar-note sidebar-update" id="update-status">v0.4.0 available <button id="updateAction" class="link">Download…</button></p>');
+  });
+
+  it('shows progress, then a reload button once installed', () => {
+    mocks.updateStatus = { state: 'updating', latest: '0.4.0' };
+    const updating = resolveSidebar().html;
+    expect(updating).toContain('<p class="sidebar-note sidebar-update" id="update-status">Updating to v0.4.0…</p>');
+    expect(updating).not.toContain('id="updateAction"');
+    mocks.updateStatus = { state: 'installed', latest: '0.4.0' };
+    expect(resolveSidebar().html).toContain(
+      '<p class="sidebar-note sidebar-update" id="update-status">v0.4.0 installed <button id="updateAction" class="link">Reload</button></p>');
   });
 });
