@@ -479,7 +479,83 @@ function mockPromptCache(mode, params) {
   };
 }
 
+/* Per-call timeline of the Copilot App session s5 in Context Management: 4 calls per turn (none in turn 10),
+ * a compaction in turn 7 (780K -> 70K) and one truncated call in turn 9. */
+function mockContextTimeline(sessionId) {
+  const ends = [42000, 96800, 151000, 230000, 310000, 420000, 70000, 118000, 165000, null, 205000, 248000];
+  const start = Date.parse('2026-05-02T09:00:00Z');
+  const buckets = [];
+  let prev = 20000;
+  let call = 0;
+  let compactionAt = 0;
+  ends.forEach((end, request) => {
+    if (end == null) return;
+    const sizes = request === 6 ? [600000, 780000, 70000, 70000] : [1, 2, 3, 4].map(k => Math.round(prev + ((end - prev) * k) / 4));
+    sizes.forEach((size, k) => {
+      if (request === 6 && k === 2) compactionAt = call;
+      const read = Math.round(size * 0.9);
+      const write = Math.round(size * 0.08);
+      const ts = start + call * 45000;
+      buckets.push({ firstCall: call, lastCall: call, firstRequest: request, lastRequest: request, startTs: ts, endTs: ts, cacheCalls: 1, cacheRead: read, cacheWrite: write, uncached: size - read - write,
+        peakPrompt: size, contextLimit: 968000, output: 1200 + k * 300, reasoning: 700 + k * 100, truncatedCalls: request === 8 && k === 3 ? 1 : 0 });
+      call++;
+    });
+    prev = end;
+  });
+  return {
+    sessionId, harness: 'GitHub Copilot App', unit: 'calls', timeline: { calls: call, bucketSize: 1, buckets }, cache: null,
+    context: { compactions: [{ callIndex: compactionAt, requestIndex: 6, tokensBefore: 780000, tokensAfter: 70000, tokenLimit: 968000, trigger: 'automatic', failed: false }], omittedCompactions: 0, turnEnds: ends },
+  };
+}
+
+function mockTokenTypes(mode) {
+  if (mode === 'error') throw new Error('mock getTokenTypes failure');
+  const all = value => ({ reasoning: value, compaction: value, subagents: value, truncation: value, latency: value });
+  const harnesses = [
+    { harness: 'GitHub Copilot App', source: 'copilot-cli', requests: 182, reports: all('reported') },
+    { harness: 'Claude', source: 'claude', requests: 41, reports: { ...all('not-reported'), truncation: 'reported' } },
+    { harness: 'Local Agent', source: null, requests: 96, reports: all('not-reported') },
+  ];
+  if (mode === 'empty') return { sources: [], harnesses, tips: [], coverage: { requests: 319, requestsWithData: 0 } };
+  const cli = {
+    source: 'copilot-cli', label: 'Copilot App', harnesses: ['GitHub Copilot App'], requests: 182,
+    reasoning: {
+      basis: 'calls',
+      main: { outputTokens: 1840000, reasoningTokens: 1130000, sharePct: 61.4 },
+      subagent: { outputTokens: 420000, reasoningTokens: 37000, sharePct: 8.9 },
+      byEffort: [
+        { effort: 'max', stream: 'main', calls: 1410, outputTokens: 1200000, reasoningTokens: 743000, sharePct: 61.9 },
+        { effort: 'high', stream: 'main', calls: 520, outputTokens: 500000, reasoningTokens: 279000, sharePct: 55.8 },
+        { effort: 'medium', stream: 'main', calls: 210, outputTokens: 140000, reasoningTokens: 43800, sharePct: 31.3 },
+        { effort: 'low', stream: 'subagent', calls: 860, outputTokens: 420000, reasoningTokens: 37000, sharePct: 8.9 },
+      ],
+    },
+    compaction: { count: 14, automatic: 14, manual: 0, failed: 1, avgTokensBefore: 245000, avgTokensAfter: 52000, yieldPct: 78.8, withUsage: 9, inputTokens: 2300000, outputTokens: 72000, shareOfMainInputPct: 1.3, modelTimeMs: 754000 },
+    subagents: {
+      runs: 38, totalTokens: 61400000, shareOfAllTokensPct: 11.8,
+      byType: [
+        { agentType: 'research', runs: 9, totalTokens: 26000000, toolCalls: 610, durationMs: 2700000, cancelled: 0, background: 9 },
+        { agentType: 'code-review', runs: 8, totalTokens: 14000000, toolCalls: 300, durationMs: 1500000, cancelled: 1, background: 6 },
+        { agentType: 'custom', runs: 7, totalTokens: 11000000, toolCalls: 120, durationMs: 900000, cancelled: 0, background: 2 },
+        { agentType: 'explore', runs: 14, totalTokens: 400000, toolCalls: 160, durationMs: 300000, cancelled: 0, background: 0 },
+      ],
+    },
+    truncation: { calls: 3000, truncatedCalls: 4, filteredCalls: 1 },
+    latency: [
+      { model: 'claude-opus-5.5', calls: 2104, ttftP50Ms: 3200, ttftP90Ms: 4700, durationP50Ms: 7800, durationP90Ms: 32200 },
+      { model: 'gpt-6.1-sol', calls: 896, ttftP50Ms: 16000, ttftP90Ms: 69200, durationP50Ms: 22900, durationP90Ms: 93100 },
+    ],
+  };
+  const claude = { source: 'claude', label: 'Claude Code', harnesses: ['Claude'], requests: 41, reasoning: null, compaction: null, subagents: null, truncation: { calls: 310, truncatedCalls: 2, filteredCalls: null }, latency: null };
+  return {
+    sources: [cli, claude], harnesses,
+    tips: ['Reasoning is 61% of Copilot App output tokens. At medium effort it was 31%. Use a lower reasoning effort for routine edits and questions, and keep high effort for hard problems.'],
+    coverage: { requests: 319, requestsWithData: 223 },
+  };
+}
+
 function mockSessionTimeline(sessionId) {
+  if (sessionId === 's5') return mockContextTimeline(sessionId);
   if (sessionId === 'pc-3') {
     const buckets = Array.from({ length: 18 }, (_, i) => ({ firstCall: i, lastCall: i, firstRequest: i, lastRequest: i, startTs: Date.parse('2026-05-01T10:00:00Z') + i * 120000, endTs: Date.parse('2026-05-01T10:00:00Z') + i * 120000, cacheCalls: 1, cacheRead: 40000 + i * 9000, cacheWrite: 6000, uncached: 200 }));
     return { sessionId, harness: 'Claude', unit: 'requests', timeline: { calls: 18, bucketSize: 1, buckets }, cache: { reporting: 'per-call', main: cacheTotals(64, 3000000, 91, 8.5), subagents: null, compaction: null, breaks: [], omittedBreaks: 0 } };
@@ -515,6 +591,10 @@ function mockReportedCliSession() {
     events: [{ type: 'compaction', requestIndex: 6, label: 'Compaction 780K\u219270K' }],
     requestQueries: Array.from({ length: 12 }, (_, i) => `Turn ${i + 1}`),
     hasPerRequestTokens: true, windowSource: 'reported', turnLimits: limits, turnPeaks: peaks,
+    turnCalls: prompts.map(p => (p == null ? null : 4)), turnCacheHitPct: prompts.map((p, i) => (p == null ? null : i === 6 ? 71.5 : 93.2)),
+    hasCallTimeline: true,
+    tokenTypes: { reasoningPct: 58.4, effort: 'high', subagentRuns: 3, subagentTokens: 4100000, subagentTypes: [{ agentType: 'research', runs: 2 }, { agentType: 'explore', runs: 1 }],
+      compactionCalls: 1, compactionTokens: 1200000, compactionTimeMs: 126000, truncatedCalls: 1, calls: 44, ttftMedianMs: 3200 },
     composition: mockSessionCompositionCli(12),
   };
 }
@@ -738,6 +818,7 @@ function getMockData(method, params) {
       total: MOCK_CACHE_SESSIONS.filter(s => s.workspaceName === params?.workspaceId).length,
     }),
     getSessionTimeline: () => mockSessionTimeline(params?.sessionId),
+    getTokenTypes: () => mockTokenTypes(window.mockTokenTypesMode),
 
     getDayTimeline: () => ({
       date: '2026-05-03',
@@ -907,6 +988,7 @@ function getMockData(method, params) {
   // Lets e2e assert which params the session drill-downs send.
   if (method === 'getWorkspaceContextSessions') (window.workspaceSessionsRequests ||= []).push(params);
   if (method === 'getPromptCacheSessions' || method === 'getSessionTimeline' || method === 'getPromptCache') (window.promptCacheRequests ||= []).push({ method, params });
+  if (method === 'getTokenTypes') (window.tokenTypesRequests ||= []).push(params);
   const handler = mocks[method];
   if (handler) return handler();
   return {};
