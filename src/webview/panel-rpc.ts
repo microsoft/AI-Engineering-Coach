@@ -30,7 +30,7 @@ import { getRuleLayerInfo, getPersonalRulesDir, getProjectRulesDir } from '../co
 import { getPending } from '../core/rule-trust';
 import { spotlight } from '../core/spotlight';
 import { isoWeek } from '../core/helpers';
-import { FIELD_SCHEMA, METRIC_PRIMITIVES, FUNCTION_CATALOG, compileFilter, validateExpression  } from '../core/dsl/index';
+import { FIELD_SCHEMA, METRIC_PRIMITIVES, FUNCTION_CATALOG, compileFilter, validateExpression, type FieldInfo } from '../core/dsl/index';
 import {
   getAllMetrics,
   parseRuleExtensions,
@@ -39,6 +39,8 @@ import {
   serializeCalibration,
 } from '../core/metric-engine';
 import { compileNaturalLanguageRule } from '../core/rule-compiler';
+import { toRuleRequestRows } from '../core/rule-rows';
+import { runInlineTests } from '../core/rule-inline-tests';
 import type { SessionRequest, Session } from '../core/types';
 import { errorResult, isString, isNumber, isOptionalString, isRecord } from './panel-shared';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
@@ -49,12 +51,18 @@ import type { EditLocIndex } from '../core/edit-loc-diff';
  * Pick `reqs` or `sessions` based on scope and return them typed as
  * DSL-friendly row records. Centralizes the cast so every DSL call site
  * uses the same shape. Accepts both 'sessions' (rule scope) and 'session'
- * (field scope) as truthy session values.
+ * (field scope) as truthy session values. Request rows carry their
+ * session's `harness`, as they do when rules run.
  */
 type DslRow = Record<string, unknown>;
 function pickRows(scope: string, reqs: SessionRequest[], sessions: Session[]): DslRow[] {
   const isSessionScope = scope === 'sessions' || scope === 'session';
-  return (isSessionScope ? sessions : reqs) as unknown as DslRow[];
+  return (isSessionScope ? sessions : toRuleRequestRows(reqs, sessions)) as unknown as DslRow[];
+}
+
+/** The Data Explorer reads `both` fields such as `harness` from sessions, where they're logged. */
+function explorerRows(field: FieldInfo, reqs: SessionRequest[], sessions: Session[]): DslRow[] {
+  return (field.scope === 'request' ? reqs : sessions) as unknown as DslRow[];
 }
 
 function isPathUnder(pathMod: typeof import('path'), resolved: string, dir: string): boolean {
@@ -246,7 +254,7 @@ name: Context Engineering Gaps
 group: prompt-quality
 severity: medium
 scope: both
-version: 1
+version: 2
 tags: [context, agents, skills, mcp, instructions]
 thresholds:
   minReqs: 30
@@ -255,16 +263,16 @@ thresholds:
 ---
 
 # Description
-Audits your context engineering setup: custom agents, skills, MCP tools, file references, and custom instructions.
+Audits your context engineering setup: custom agents, skills, MCP tools, file references, and custom instructions. Only VS Code (Local Agent) logs custom instructions, so that signal counts VS Code requests only.
 
 # When Triggered
-{{count}} of 5 context engineering signals missing. Your AI lacks the context to be maximally effective.
+{{count}} of {{total}} context engineering signals missing. Your AI lacks the context to be maximally effective.
 
 # How to Improve
 Level up your context engineering: create AGENTS.md for custom agents, SKILL.md for domain knowledge, connect MCP tools, use #file references, and add .instructions.md with project conventions.
 
 # Examples
-{{extra.gapCount}} of 5 context engineering signals missing
+{{extra.gapCount}} of {{extra.signalCount}} context engineering signals missing
 
 # Detection Logic
 \\\`\\\`\\\`detect
@@ -276,15 +284,17 @@ hasSubAgents: someWhere(allReqs, "agentName", "!=", "") AND someWhere(allReqs, "
 hasSkills: flatCount(allReqs, "skillsUsed") > 0
 hasMcp: flatSomeWhere(allReqs, "toolsUsed", ".", "mcp_", "startsWith")
 fileRefRate: countWhere(allReqs, "referencedFiles.length", ">", 0) / reqCount
-instrRate: countWhere(allReqs, "customInstructions.length", ">", 0) / reqCount
+instrReportedReqs: countWhere(allReqs, "harness", "matches", "^Local Agent")
+instrRate: countWhere(allReqs, "customInstructions.length", ">", 0) / instrReportedReqs
 gap1: hasSubAgents == 0
 gap2: hasSkills == 0
 gap3: hasMcp == 0
 gap4: fileRefRate < thresholds.fileRefMinRate
-gap5: instrRate < thresholds.instructionMinRate
+gap5: instrReportedReqs > 0 AND instrRate < thresholds.instructionMinRate
 gapCount: gap1 + gap2 + gap3 + gap4 + gap5
+signalCount: 4 + (instrReportedReqs > 0)
 emitCount: gapCount
-emitTotal: 5
+emitTotal: signalCount
 check: gapCount > 0 AND reqCount >= thresholds.minReqs
 severity: gapCount >= 4
 \\\`\\\`\\\`
@@ -482,7 +492,7 @@ check: models.topShare > thresholds.maxTopModelRate AND models.modelCount < thre
 \\\`\\\`\\\`
 \`\`\`
 
-### tool-mastery: No Plan Mode (boolean reduce + agent detection)
+### tool-mastery: No Plan Mode (boolean reduce + agent detection, counting only harnesses that log plan mode)
 \`\`\`markdown
 ---
 id: no-plan-mode
@@ -490,7 +500,7 @@ name: Never Uses Plan Mode
 group: tool-mastery
 severity: medium
 scope: requests
-version: 1
+version: 2
 tags: [tools, planning, agent]
 thresholds:
   minReqs: 30
@@ -498,7 +508,7 @@ thresholds:
 ---
 
 # Description
-Detects heavy agentic usage with no use of plan mode, which helps the agent understand scope before implementation.
+Detects heavy agentic usage with no use of plan mode, which helps the agent understand scope before implementation. Only VS Code (Local Agent), GitHub Copilot CLI and App, and OpenCode log plan mode, so only their requests count.
 
 # When Triggered
 {{extra.agenticReqs}} agentic requests but no use of plan mode.
@@ -512,12 +522,14 @@ Switch to Plan mode in the mode picker before starting large features
 # Detection Logic
 \\\`\\\`\\\`detect
 scan: requests
-match: agentMode == "agent" OR agentName != ""
+match: matches(harness, "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)") AND (agentMode == "agent" OR agentName != "")
 aggregate: count
-agentRatio: count / total
+planLoggedReqs: countWhere(all, "harness", "matches", "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)")
+agentRatio: count / planLoggedReqs
 planUsage: someWhere(all, "slashCommand", "plan") OR someWhere(all, "agentMode", "matches", "(?i)plan")
 agenticReqs: count
-check: planUsage == 0 AND total >= thresholds.minReqs AND agentRatio >= thresholds.agentRate
+emitTotal: planLoggedReqs
+check: planUsage == 0 AND planLoggedReqs >= thresholds.minReqs AND agentRatio >= thresholds.agentRate
 \\\`\\\`\\\`
 \`\`\`
 
@@ -962,7 +974,7 @@ const rpcHandlers: TypedRpcHandlers = {
       const sessions = a.filterSessions(filter);
       const resolved = resolveInheritance(rule);
       const pipeline = parsePipeline(resolved);
-      const emission = executePipeline(pipeline, resolved, { reqs, sessions, skipIdeDetectors: false });
+      const emission = executePipeline(pipeline, resolved, { reqs: toRuleRequestRows(reqs, sessions), sessions, skipIdeDetectors: false });
       const triggered = checkPipelineTrigger(pipeline, emission, resolved);
       const evalResult = evaluateRule(resolved, triggered ? emission : null);
       const pct = emission.total > 0 ? `${(emission.count / emission.total * 100).toFixed(0)}%` : '0%';
@@ -1210,7 +1222,12 @@ Explain why this session triggered the rule.`;
     if (!rule) return errorResult('Rule not found');
 
     const ext = parseRuleExtensions(rule.rawSource);
-    if (ext.testCases.length === 0) return errorResult('No test cases found in rule');
+    if (ext.testCases.length === 0) {
+      // Built-in rules ship an inline `# Tests` block instead of `# Test Cases`.
+      const inline = runInlineTests(rule);
+      if (inline.length === 0) return errorResult('No test cases found in rule');
+      return { results: inline, passed: inline.filter(r => r.passed).length, total: inline.length };
+    }
 
     const results = runTestCases(
       ext.filterExpr || '',
@@ -1246,7 +1263,7 @@ Explain why this session triggered the rule.`;
 
     // Compute summary stats for each field
     const fieldSummaries = FIELD_SCHEMA.map(field => {
-      const rows = pickRows(field.scope, reqs, sessions);
+      const rows = explorerRows(field, reqs, sessions);
 
       const values = rows.map(r => r[field.name]).filter(v => v != null && v !== '' && v !== 0);
       const nonEmpty = values.length;
@@ -1274,7 +1291,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = pickRows(fieldInfo.scope, reqs, sessions);
+    const rows = explorerRows(fieldInfo, reqs, sessions);
 
     const values = rows.map(r => r[fieldName]).filter(v => v != null);
 

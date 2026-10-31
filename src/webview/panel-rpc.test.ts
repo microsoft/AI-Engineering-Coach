@@ -69,6 +69,43 @@ describe('panel-rpc', () => {
   });
 });
 
+describe('rule evaluation RPCs', () => {
+  const at = Date.parse('2026-09-30T12:00:00Z');
+  const sessions = [['Claude', 3], ['Local Agent', 1]].map(([harness, count]) => createSession({
+    sessionId: String(harness), workspaceId: 'ws', workspaceName: 'Project', harness: String(harness),
+    requests: Array.from({ length: Number(count) }, (_, index) => createRequest({
+      requestId: `${String(harness)}-${index}`, timestamp: at + index, messageText: 'Refactor the parser', responseText: '',
+    })),
+  }));
+  const analyzer = new Analyzer(sessions, new Map());
+  const parsed: ParseResult = { sessions, workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+  const call = (method: string, params: Record<string, unknown>) => getRpcHandler(method)!(analyzer, parsed, params);
+  const claudeRule = [
+    '---', 'id: claude-requests', 'name: Claude requests', 'group: tool-mastery', 'severity: low', 'scope: requests', '---',
+    '', '# Detection Logic', '```detect', 'scan: requests', 'match: harness == "Claude"', 'check: count >= 3', '```',
+  ].join('\n');
+
+  it('lets the Playground read harness on request rows', () => {
+    expect(call('evaluateExpression', { expr: 'harness == "Claude"', scope: 'requests' })).toMatchObject({ matched: 3, total: 4 });
+    expect(call('evaluateExpression', { expr: 'harness == "Claude"', scope: 'sessions' })).toMatchObject({ matched: 1, total: 2 });
+  });
+
+  it('lets Test Rule read harness on request rows', () => {
+    expect(call('testRuleLive', { markdown: claudeRule })).toMatchObject({ ok: true, triggered: true, occurrences: 3, total: 4 });
+  });
+
+  it('keeps the Data Explorer reading harness from sessions', () => {
+    expect(call('getDataExplorer', { field: 'harness' })).toMatchObject({ count: 2, uniqueCount: 2 });
+    const { fields } = call('getDataExplorerFields', {}) as { fields: Array<{ name: string; fillRate: number; total: number }> };
+    expect(fields.find(field => field.name === 'harness')).toMatchObject({ fillRate: 100, total: 2 });
+  });
+
+  it("runs a built-in rule's inline # Tests", () => {
+    expect(call('runRuleTests', { ruleId: 'no-plan-mode' })).toMatchObject({ passed: 8, total: 8 });
+    expect(call('runRuleTests', { ruleId: 'abandon-sessions' })).toMatchObject({ error: 'No test cases found in rule' });
+  });
+});
+
 const VALID_RULE = [
   '---',
   'id: long-sessions',

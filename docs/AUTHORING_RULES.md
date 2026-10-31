@@ -77,8 +77,21 @@ examples: "{{messageText | truncate:80}}" ({{messageLength}} chars)
 ```
 ````
 
-The `# Tests` block is optional but strongly encouraged — each line is a synthetic row evaluated
-against the rule. Tests run as part of the standard `npm test` suite.
+The `# Tests` block is optional but strongly encouraged. Each line is a relaxed-JSON object (bare
+keys), `->`, and the expected outcome: `triggered` or `clean`.
+[`src/core/rule-inline-tests.test.ts`](../src/core/rule-inline-tests.test.ts) runs every built-in
+rule's block through the detector pipeline as part of `npm test`:
+
+- A line describes one request. Its fields override the defaults of `createRequest` in
+  [`src/core/parser-shared.ts`](../src/core/parser-shared.ts), which derives fields such as
+  `messageLength` from `messageText` unless the line sets them.
+- Fields the DSL reference lists with scope `session` or `both`, such as `harness`, `workspaceName`
+  and `requestCount`, go on the request's session. `harness` defaults to `Local Agent` (VS Code).
+- The request is repeated 100 times, each copy in its own session, so one line clears the rule's
+  sample-size thresholds. A line can't mix different rows or stay under a threshold; cover those
+  cases in a unit test.
+- Every line must parse. Don't put a word followed by `:` inside a string value, because the parser
+  quotes keys with a regex.
 
 ## Anatomy of a metric
 
@@ -117,8 +130,8 @@ Before opening a pull request:
    npm install
    npm run build
    ```
-2. **Run the rule and metric tests** — these load every markdown file under `src/core/rules/` and
-   `src/core/metrics/`, validate the frontmatter, and execute any `# Tests` blocks:
+2. **Run the unit tests.** `npm test` parses every built-in rule and runs each rule's `# Tests`
+   block:
    ```bash
    npm test
    ```
@@ -138,6 +151,7 @@ Before opening a pull request:
 - Built-in rules: [`src/core/rules/`](../src/core/rules/) — 45 worked examples across all categories
 - Built-in metrics: [`src/core/metrics/`](../src/core/metrics/)
 - A minimal rule with tests: [`src/core/rules/lazy-prompting.md`](../src/core/rules/lazy-prompting.md)
+- A rule that counts only the harnesses that log a field: [`src/core/rules/no-custom-instructions.md`](../src/core/rules/no-custom-instructions.md)
 - A rule using a custom aggregator and `extra.*` fields: [`src/core/rules/yolo-mode.md`](../src/core/rules/yolo-mode.md)
 - A minimal metric: [`src/core/metrics/weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md)
 - Anti-Patterns overview: [content/improve/anti-patterns.md](content/improve/anti-patterns.md)

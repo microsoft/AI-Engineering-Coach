@@ -643,12 +643,14 @@ function computeContextGaps(reqs: Record<string, unknown>[]): { gapCount: number
   }).length;
   if (total > 0 && fileRefCount / total < 0.1) gaps.push('Low file reference rate (< 10%)');
 
-  // 5. Custom instructions rate
+  // 5. Custom instructions rate. Only VS Code (Local Agent) logs active instruction
+  // files, so the rate is over its requests, and the signal is unknown without them.
+  const instrReported = reqs.filter(r => asStr(r.harness).startsWith('Local Agent')).length;
   const instrCount = reqs.filter(r => {
     const instr = r.customInstructions;
     return Array.isArray(instr) && instr.length > 0;
   }).length;
-  if (total > 0 && instrCount / total < 0.05) gaps.push('Low custom instructions usage (< 5%)');
+  if (instrReported > 0 && instrCount / instrReported < 0.05) gaps.push('Low custom instructions usage (< 5%)');
 
   return { gapCount: gaps.length, gaps, reqCount: total };
 }

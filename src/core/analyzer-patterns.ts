@@ -246,7 +246,8 @@ export class PatternsAnalyzer extends AnalyzerBase {
     });
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
-    const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors);
+    // Index every session, not only `sessions`: a date filter can keep a request whose session it drops.
+    const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors, this.requestSessionMap);
     patterns.push(...contribution.patterns);
     return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors, contribution.weekly);
   }
