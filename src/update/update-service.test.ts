@@ -9,6 +9,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import { fakeVsix, jsonResponse, releaseJson } from './test-fixtures';
+import { LEASE_SETTLE_MS } from './update-schedule';
 import { getUpdateService, registerUpdateCheck, UPDATE_STATE_KEY, UpdateService } from './update-service';
 
 type Listener<T> = (value: T) => void;
@@ -22,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn<(command: string, ...args: unknown[]) => Promise<unknown>>(),
   registerCommand: vi.fn<(command: string, handler: () => unknown) => { dispose(): void }>(),
   openExternal: vi.fn<(uri: { toString(): string }) => Promise<boolean>>(),
+  /** Clicks Cancel on the update's progress notification. */
+  cancelProgress: undefined as (() => void) | undefined,
 }));
 
 vi.mock('vscode', () => {
@@ -34,7 +37,13 @@ vi.mock('vscode', () => {
     fire(value: T): void { for (const listener of this.listeners) listener(value); }
     dispose(): void { this.listeners.clear(); }
   }
-  const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) };
+  const token = {
+    isCancellationRequested: false,
+    onCancellationRequested: (listener: () => void) => {
+      mocks.cancelProgress = listener;
+      return { dispose: () => { mocks.cancelProgress = undefined; } };
+    },
+  };
   return {
     EventEmitter,
     ExtensionMode: { Production: 1, Development: 2, Test: 3 },
@@ -115,19 +124,45 @@ function serve(routes: Record<string, () => Response>) {
 
 const inDownloads = () => Promise.resolve(downloads);
 
+/** Returns `values` in turn, then keeps returning the last one. */
+function sequence(...values: number[]): () => number {
+  return () => (values.length > 1 ? values.shift() : values[0]) ?? 0;
+}
+
 function createService(
   fetch: typeof globalThis.fetch,
-  options: { store?: Map<string, unknown>; build?: { version: string; dev: boolean }; mode?: number; extensionPath?: string } = {},
+  options: {
+    store?: Map<string, unknown>; build?: { version: string; dev: boolean }; mode?: number; extensionPath?: string;
+    random?: () => number; downloadDir?: () => Promise<string>;
+  } = {},
 ): Service {
   const service = new UpdateService(fakeContext(options.store, options.mode, options.extensionPath), {
     fetch,
     now: () => Date.now(),
-    random: () => 0,
+    random: options.random ?? (() => 0),
     build: options.build ?? RELEASE_BUILD,
-    downloadDir: inDownloads,
+    downloadDir: options.downloadDir ?? inDownloads,
   });
   services.push(service);
   return service;
+}
+
+/**
+ * globalState as VS Code shares it between windows: a window sees its own writes at once and
+ * other windows' writes only after `delayMs`.
+ */
+function propagatingStores(windows: number, delayMs: number): Map<string, unknown>[] {
+  const stores = Array.from({ length: windows }, () => new Map<string, unknown>());
+  for (const store of stores) {
+    store.set = (key: string, value: unknown) => {
+      Map.prototype.set.call(store, key, value);
+      for (const other of stores.filter(candidate => candidate !== store)) {
+        setTimeout(() => Map.prototype.set.call(other, key, value), delayMs);
+      }
+      return store;
+    };
+  }
+  return stores;
 }
 
 function installCalls() {
@@ -146,6 +181,7 @@ beforeEach(async () => {
   mocks.showWarningMessage.mockResolvedValue(undefined);
   mocks.showErrorMessage.mockResolvedValue(undefined);
   mocks.openExternal.mockResolvedValue(true);
+  mocks.cancelProgress = undefined;
   downloads = await fs.mkdtemp(path.join(os.tmpdir(), 'aec-update-test-'));
   services = [];
 });
@@ -183,7 +219,7 @@ describe('automatic checks', () => {
     service.start();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetch).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(60_000 + LEASE_SETTLE_MS);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1);
     expect(mocks.showInformationMessage).toHaveBeenCalledWith(
@@ -212,6 +248,35 @@ describe('automatic checks', () => {
     await vi.advanceTimersByTimeAsync(3 * DAY);
     expect(fetch.mock.calls.length).toBeLessThanOrEqual(4);
     expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('let one window check and notify even when shared state reaches other windows late', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const [first, second] = propagatingStores(2, 1_000);
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => Promise.resolve(jsonResponse(releaseJson('0.4.0'))));
+    // Both windows wake at the same moment and claim the lease before either sees the other's claim.
+    createService(fetch, { store: first }).start();
+    createService(fetch, { store: second, random: sequence(0, 0.5) }).start();
+    await vi.advanceTimersByTimeAsync(2 * 60_000 + LEASE_SETTLE_MS);
+    expect(fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3 * DAY);
+    expect(fetch.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignore a rate limit left behind by a clock that moved back', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const store = sharedStore();
+    store.set(UPDATE_STATE_KEY, { lastCheckAt: NOW + 5 * DAY, nextCheckAt: NOW + 5 * DAY, rateLimitedUntil: NOW + 5 * DAY });
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => Promise.resolve(new Response(null, { status: 404 })));
+    createService(fetch, { store }).start();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('stay quiet when nothing has been released yet', async () => {
@@ -304,6 +369,39 @@ describe('Check for Updates', () => {
     expect(installCalls()).toHaveLength(0);
     expect(mocks.executeCommand).not.toHaveBeenCalledWith('workbench.action.reloadWindow');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('installs nothing when Cancel is clicked while the package is being saved', async () => {
+    const bytes = fakeVsix(512);
+    const fetch = serve({
+      [API]: () => jsonResponse(releaseJson('0.4.0', { bytes })),
+      [VSIX_URL]: () => new Response(null, { status: 302, headers: { location: STORAGE_URL } }),
+      [STORAGE_URL]: () => new Response(bytes),
+    });
+    mocks.showInformationMessage.mockResolvedValueOnce('Update');
+    const downloadDir = () => {
+      mocks.cancelProgress?.();
+      return Promise.resolve(downloads);
+    };
+    const service = createService(fetch, { downloadDir });
+    service.start();
+    await service.checkNow();
+    expect(installCalls()).toHaveLength(0);
+    expect(await fs.readdir(downloads)).toEqual([]);
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(service.getStatus()).toMatchObject({ state: 'available', latest: '0.4.0' });
+  });
+
+  it('drops a revealed update when a later check no longer finds it', async () => {
+    let respond = () => jsonResponse(releaseJson('0.4.0'));
+    const service = createService(serve({ [API]: () => respond() }), { build: { version: '0.2.0', dev: true } });
+    service.start();
+    await service.checkNow();
+    expect(service.getStatus()).toMatchObject({ state: 'available', latest: '0.4.0' });
+    respond = () => new Response(null, { status: 404 });
+    await service.checkNow();
+    expect(service.getStatus()).toEqual({ state: 'none' });
+    expect(mocks.executeCommand).toHaveBeenLastCalledWith('setContext', 'aiEngineerCoach.updateAvailable', false);
   });
 
   it('refuses a download whose checksum does not match, and offers the release page', async () => {
@@ -448,6 +546,51 @@ describe('Install Update', () => {
     service.start();
     await service.reloadAfterUpdate();
     expect(mocks.executeCommand).not.toHaveBeenCalledWith('workbench.action.reloadWindow');
+  });
+});
+
+describe('an update notification answered late', () => {
+  const V6_URL = 'https://github.com/microsoft/AI-Engineering-Coach/releases/download/v0.6.0/ai-engineer-coach-0.6.0.vsix';
+
+  /** Leaves the v0.4.0 notification open while a second check finds v0.6.0 and answers its notification. */
+  async function leaveOpen(answerForV6: string | undefined) {
+    const bytes = fakeVsix(512);
+    let latest = '0.4.0';
+    const fetch = serve({
+      [API]: () => jsonResponse(releaseJson(latest, { bytes })),
+      [VSIX_URL]: () => new Response(null, { status: 302, headers: { location: STORAGE_URL } }),
+      [V6_URL]: () => new Response(null, { status: 302, headers: { location: STORAGE_URL } }),
+      [STORAGE_URL]: () => new Response(bytes),
+    });
+    let answer: (choice: string) => void = () => {};
+    mocks.showInformationMessage
+      .mockImplementationOnce(() => new Promise<string | undefined>(resolve => { answer = resolve; }))
+      .mockResolvedValueOnce(answerForV6);
+    const service = createService(fetch);
+    service.start();
+    const first = service.checkNow();
+    await vi.waitFor(() => expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1));
+    latest = '0.6.0';
+    await service.checkNow();
+    return { service, clickUpdate: () => { answer('Update'); return first; } };
+  }
+
+  it('offers the pending reload instead of installing an older release', async () => {
+    const { service, clickUpdate } = await leaveOpen('Update');
+    expect(service.getStatus()).toEqual({ state: 'installed', latest: '0.6.0' });
+    await clickUpdate();
+    expect(installCalls()).toHaveLength(1);
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
+      'AI Engineer Coach v0.6.0 is installed. Reload the window to start using it.', 'Reload Window');
+  });
+
+  it('installs the newest release this window knows about', async () => {
+    const { clickUpdate } = await leaveOpen(undefined);
+    await clickUpdate();
+    expect(installCalls()).toHaveLength(1);
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(path.basename((installCalls()[0][1] as { fsPath: string }).fsPath)).toMatch(/^ai-engineer-coach-0\.6\.0-/);
   });
 });
 

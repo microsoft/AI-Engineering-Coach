@@ -8,6 +8,7 @@
  * VSIX only after the user clicks Update. Nothing reloads the window without a click. Registered
  * from extension.ts only; the Copilot app canvas never loads this module. */
 
+import { randomUUID } from 'crypto';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
@@ -24,9 +25,10 @@ import {
 import { describeManualCheck } from './update-messages';
 import { automaticChecksEnabled, cooldownFromSetting, evaluateUpdate, isNewerVersion, type Evaluation, type UpdateMarkers } from './update-policy';
 import {
-  afterFailure, afterRateLimit, afterSuccess, claimCheck, isCheckDue, nextCheckTime, timerDelay, type ScheduleState,
+  activeRateLimit, afterFailure, afterRateLimit, afterSuccess, claimCheck, isCheckDue, nextCheckTime, timerDelay, type ScheduleState,
 } from './update-schedule';
 import { UpdateDownloadError } from './vsix-download';
+import { runUnderLease } from './window-lease';
 
 export const CHECK_FOR_UPDATES_COMMAND = 'aiEngineerCoach.checkForUpdates';
 export const INSTALL_UPDATE_COMMAND = 'aiEngineerCoach.installUpdate';
@@ -58,6 +60,7 @@ export interface UpdateServiceOptions {
   endpoints?: FeedEndpoints;
   /** Directory for downloaded packages; defaults to `<globalStorage>/updates`. */
   downloadDir?: () => Promise<string>;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 function isAbort(err: unknown): boolean {
@@ -86,6 +89,9 @@ export class UpdateService implements vscode.Disposable {
   private readonly build: Pick<BuildInfo, 'version' | 'dev'>;
   private readonly endpoints: FeedEndpoints;
   private readonly downloadDir: (() => Promise<string>) | undefined;
+  private readonly sleep: (ms: number) => Promise<void>;
+  /** Tells this window's lease apart from other windows'. */
+  private readonly windowId = randomUUID();
   /** Identifies this installation: local or a remote host, and its extensions folder. */
   private readonly location: string;
   /** One-click install is verified in local windows only; remote windows get the release page. */
@@ -99,6 +105,7 @@ export class UpdateService implements vscode.Disposable {
     this.build = options.build ?? BUILD_INFO;
     this.endpoints = options.endpoints ?? resolveFeedEndpoints();
     this.downloadDir = options.downloadDir;
+    this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.location = `${vscode.env.remoteName ?? 'local'}:${path.posix.dirname(context.extensionUri.path)}`;
     this.localWindow = vscode.env.remoteName === undefined;
   }
@@ -130,6 +137,8 @@ export class UpdateService implements vscode.Disposable {
     const result = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Window, title: 'Checking for AI Engineer Coach updates' },
       () => this.check(true));
+    // The check may have replaced or dropped the cached release that the status still shows.
+    this.refresh();
     this.reschedule(false);
     const report = describeManualCheck(result, this.readState().release, this.build.version);
     if (report.kind === 'offer') {
@@ -244,29 +253,41 @@ export class UpdateService implements vscode.Disposable {
     this.statusEmitter.fire(status);
   }
 
-  private reschedule(justActivated: boolean): void {
+  private reschedule(justActivated: boolean, notBefore = 0): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     if (this.disposed || !this.automatic()) return;
     const now = this.now();
-    const at = nextCheckTime(this.readState(), now, this.random, justActivated);
+    const at = Math.max(nextCheckTime(this.readState(), now, this.random, justActivated), notBefore);
     this.timer = setTimeout(() => { void this.onTimer(); }, timerDelay(at, now));
   }
 
   private async onTimer(): Promise<void> {
     this.timer = undefined;
     if (this.disposed || !this.automatic()) return;
+    let notBefore: number | undefined;
     try {
-      if (isCheckDue(this.readState(), this.now())) await this.check(false);
-      const evaluation = this.refresh();
-      const release = this.readState().release;
-      if (evaluation.notify && release && !this.installing) {
-        this.offer(release, 'automatic').catch((err: unknown) => runtimeDebug('update', 'offer-error', err));
+      if (isCheckDue(this.readState(), this.now()) || this.evaluate().notify) {
+        notBefore = await runUnderLease({
+          owner: this.windowId, now: this.now, random: this.random, sleep: this.sleep, closed: () => this.disposed,
+          read: () => this.readState(), write: lease => this.writeState({ lease }),
+        }, () => this.checkAndAnnounce());
       }
+      this.refresh();
     } catch (err: unknown) {
       runtimeDebug('update', 'check-error', err);
     } finally {
-      if (!this.disposed) this.reschedule(false);
+      if (!this.disposed) this.reschedule(false, notBefore);
+    }
+  }
+
+  /** Runs under the lease and re-reads the shared state, since another window may have just acted. */
+  private async checkAndAnnounce(): Promise<void> {
+    if (isCheckDue(this.readState(), this.now())) await this.check(false);
+    const evaluation = this.refresh();
+    const release = this.readState().release;
+    if (evaluation.notify && release && !this.installing) {
+      this.offer(release, 'automatic').catch((err: unknown) => runtimeDebug('update', 'offer-error', err));
     }
   }
 
@@ -279,9 +300,8 @@ export class UpdateService implements vscode.Disposable {
   private async runCheck(manual: boolean): Promise<FeedResult> {
     const now = this.now();
     const before = this.readState();
-    if (before.rateLimitedUntil !== undefined && before.rateLimitedUntil > now) {
-      return { kind: 'rate-limited', retryAt: before.rateLimitedUntil };
-    }
+    const rateLimitedUntil = activeRateLimit(before, now);
+    if (rateLimitedUntil !== undefined) return { kind: 'rate-limited', retryAt: rateLimitedUntil };
     await this.writeState(claimCheck(before, now));
     const etag = before.release ? before.etag : undefined;
     const result = await fetchLatestRelease({ fetch: this.fetchImpl, endpoints: this.endpoints, etag, now: this.now });
@@ -341,8 +361,15 @@ export class UpdateService implements vscode.Disposable {
     }
   }
 
-  private async installUpdate(release: UpdateCandidate): Promise<void> {
+  private async installUpdate(chosen: UpdateCandidate): Promise<void> {
     if (this.installing) return;
+    // A notification can outlive its release: never install over an update that is waiting for a reload.
+    if (this.status.state === 'installed') {
+      await this.offerReload(this.status.latest);
+      return;
+    }
+    const cached = this.readState().release;
+    const release = cached && isNewerVersion(cached.version, chosen.version) ? cached : chosen;
     if (!this.canInstall(release)) {
       await vscode.env.openExternal(vscode.Uri.parse(release.releaseUrl));
       return;

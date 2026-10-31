@@ -5,8 +5,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  afterFailure, afterRateLimit, afterSuccess, CHECK_INTERVAL_MS, claimCheck, isCheckDue, nextCheckTime, timerDelay,
-  type ScheduleState,
+  activeRateLimit, afterFailure, afterLease, afterRateLimit, afterSuccess, CHECK_INTERVAL_MS, claimCheck, isCheckDue, LEASE_MS,
+  leasedByOther, nextCheckTime, takeLease, timerDelay, type ScheduleState,
 } from './update-schedule';
 
 const MINUTE = 60_000;
@@ -42,7 +42,11 @@ describe('nextCheckTime', () => {
     const latest = nextCheckTime({}, NOW, high, true);
     expect(latest).toBeGreaterThan(NOW + 9 * MINUTE);
     expect(latest).toBeLessThan(NOW + 10 * MINUTE);
-    expect(nextCheckTime({}, NOW, low, false)).toBe(NOW);
+  });
+
+  it('never wakes again within a minute, so a check that makes no progress cannot spin', () => {
+    expect(nextCheckTime({}, NOW, low, false)).toBe(NOW + MINUTE);
+    expect(nextCheckTime({ nextCheckAt: NOW - HOUR }, NOW, low, false)).toBe(NOW + MINUTE);
   });
 
   it('wakes a few minutes after the shared due time', () => {
@@ -99,6 +103,40 @@ describe('state after a check', () => {
     });
     expect(afterRateLimit({}, NOW, NOW - HOUR, low).rateLimitedUntil).toBe(NOW + MINUTE);
     expect(afterRateLimit({}, NOW, NOW + 5 * CHECK_INTERVAL_MS, low).rateLimitedUntil).toBe(NOW + CHECK_INTERVAL_MS);
+  });
+
+  it('honors a rate limit only while it is ahead and plausible', () => {
+    expect(activeRateLimit({ rateLimitedUntil: NOW + 20 * MINUTE }, NOW)).toBe(NOW + 20 * MINUTE);
+    expect(activeRateLimit({ rateLimitedUntil: NOW - MINUTE }, NOW)).toBeUndefined();
+    // Left behind by a clock that moved back: waiting for it would stall checks for days.
+    expect(activeRateLimit({ rateLimitedUntil: NOW + 5 * CHECK_INTERVAL_MS }, NOW)).toBeUndefined();
+    expect(activeRateLimit({}, NOW)).toBeUndefined();
+  });
+});
+
+describe('lease', () => {
+  it('keeps other windows out until it lapses', () => {
+    const state: ScheduleState = { lease: takeLease('a', NOW) };
+    expect(state.lease).toEqual({ owner: 'a', until: NOW + LEASE_MS });
+    expect(leasedByOther(state, 'b', NOW + MINUTE)).toBe(true);
+    expect(leasedByOther(state, 'a', NOW + MINUTE)).toBe(false);
+    expect(leasedByOther(state, 'b', NOW + LEASE_MS)).toBe(false);
+    expect(leasedByOther({}, 'b', NOW)).toBe(false);
+  });
+
+  it('ignores leases that are malformed or from a clock that moved back', () => {
+    expect(leasedByOther({ lease: { owner: 'a', until: NOW + 5 * LEASE_MS } }, 'b', NOW)).toBe(false);
+    expect(leasedByOther({ lease: 'a' } as unknown as ScheduleState, 'b', NOW)).toBe(false);
+    expect(leasedByOther({ lease: { owner: 7, until: NOW + MINUTE } } as unknown as ScheduleState, 'b', NOW)).toBe(false);
+  });
+
+  it('retries after the lease lapses, spread by up to a minute', () => {
+    const lease = takeLease('a', NOW);
+    expect(afterLease(lease, NOW, low)).toBe(NOW + LEASE_MS);
+    expect(afterLease(lease, NOW, high)).toBeGreaterThan(NOW + LEASE_MS + 59_000);
+    expect(afterLease(lease, NOW, high)).toBeLessThan(NOW + LEASE_MS + MINUTE);
+    expect(afterLease({ owner: 'a', until: NOW + 5 * LEASE_MS }, NOW, low)).toBe(NOW + LEASE_MS);
+    expect(afterLease(undefined, NOW, low)).toBe(NOW + LEASE_MS);
   });
 });
 

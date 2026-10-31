@@ -49,6 +49,8 @@ export async function installRelease(release: UpdateCandidate, options: InstallR
         controller.signal.throwIfAborted();
         progress.report({ message: 'Installing…' });
         file = await saveDownload(await options.downloadDirectory(), release.vsix.name, bytes);
+        // Cancel may have been clicked while the file was written; the installer can't be stopped.
+        controller.signal.throwIfAborted();
         await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(file));
       } finally {
         cancellation.dispose();
