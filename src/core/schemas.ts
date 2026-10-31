@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { z } from 'zod';
+import { CompactionTokensUsedSchema, MAX_TURN_COMPACTIONS, MAX_TURN_SUBAGENT_RUNS, SubagentRunSchema, TurnContextUsageSchema } from './token-usage-schemas';
 import type { Session } from './types';
 import { warnCore } from './log';
 import { CACHE_MAX_BREAKS_PER_SESSION } from './constants';
@@ -32,6 +33,11 @@ export const CompactionEventSchema = z.object({
   durationMs: z.number(),
   model: z.string(),
   outcome: z.string(),
+  contextLengthAfter: z.number().min(0).optional(),
+  tokenLimit: z.number().positive().optional(),
+  trigger: z.string().max(32).optional(),
+  checkpointNumber: z.number().int().min(0).optional(),
+  tokensUsed: CompactionTokensUsedSchema.optional(),
 }).passthrough();
 
 export const TodoItemSchema = z.object({
@@ -207,6 +213,9 @@ export const SessionRequestSchema = z.object({
   ]).optional(),
   reasoningEffort: z.enum(['max', 'high', 'medium', 'low']).nullable().optional(),
   endState: z.enum(['pending', 'errored', 'no-data']).optional(),
+  contextUsage: TurnContextUsageSchema.optional(),
+  compactions: z.array(CompactionEventSchema).max(MAX_TURN_COMPACTIONS).optional(),
+  subagentRuns: z.array(SubagentRunSchema).max(MAX_TURN_SUBAGENT_RUNS).optional(),
 }).passthrough();
 
 /* ---- Session ---- */

@@ -18,10 +18,20 @@ export interface CompactionEvent {
   mode: 'full' | 'simple';
   numRounds: number;
   numRoundsSinceLastSummarization: number;
+  /** Context size in tokens when compaction started (Copilot CLI: `preCompactionTokens`). */
   contextLengthBefore: number;
   durationMs: number;
   model: string;
   outcome: string;
+  /** Context size after compaction (Copilot CLI: `postCompactionTokens`, or before − `tokensRemoved`). */
+  contextLengthAfter?: number;
+  /** Context limit the harness reported (Copilot CLI: `tokenLimit`, the same as the calls' `maxPromptTokens`). */
+  tokenLimit?: number;
+  /** What started it, as logged. Copilot CLI: `threshold` = automatic. */
+  trigger?: string;
+  checkpointNumber?: number;
+  /** Tokens of the compaction call itself (Copilot CLI: `compactionTokensUsed`); input includes cached tokens. */
+  tokensUsed?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 /** Authoritative per-model usage totals reported at the session level
@@ -197,6 +207,13 @@ export interface SessionRequest {
    *              the harness (parser limitation that cannot be fixed
    *              from the source data) */
   endState?: 'pending' | 'errored' | 'no-data';
+  /** Main-agent context size and limit for the turn (Copilot CLI and Copilot App, Codex). */
+  contextUsage?: import('./token-usage-types').TurnContextUsage;
+  /** Every compaction during the turn, in order, when the harness can log several (Copilot CLI).
+   *  `compaction` holds the first of them. */
+  compactions?: CompactionEvent[];
+  /** Sub-agent runs launched during the turn (Copilot CLI and Copilot App). */
+  subagentRuns?: import('./token-usage-types').SubagentRun[];
 }
 
 export interface CodeBlock {
