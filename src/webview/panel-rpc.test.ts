@@ -135,12 +135,21 @@ describe('generateRuleMarkdown', () => {
     expect(ask).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts scope: both', async () => {
-    const rule = VALID_RULE.replace('scope: sessions', 'scope: both');
+  it.each(['scope: both', 'scope: "both"'])('accepts %s', async scope => {
+    const rule = VALID_RULE.replace('scope: sessions', scope);
     const ask = asker().mockResolvedValueOnce(rule);
 
     await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: rule });
     expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again when the scope only starts with an allowed one', async () => {
+    const ask = asker()
+      .mockResolvedValueOnce(VALID_RULE.replace('scope: sessions', 'scope: both requests and sessions'))
+      .mockResolvedValueOnce(VALID_RULE);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask.mock.calls[1][0]?.issues).toContain('Missing or invalid "scope:" (must be requests, sessions, or both)');
   });
 });
 

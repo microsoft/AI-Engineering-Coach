@@ -9,7 +9,7 @@ import { DateFilter } from '../core/types';
 import { rpc } from './shared';
 import { html, render, type ComponentChildren } from './render';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
-import { mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
+import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULE_EDITOR_SYSTEM_PROMPT = `You are an expert at writing detection rules for the AI Engineer Coach VS Code extension.
 Rules are markdown files with YAML frontmatter and a Detection Logic block using a custom DSL.
@@ -17,6 +17,8 @@ Rules are markdown files with YAML frontmatter and a Detection Logic block using
 ${DSL_CHEATSHEET}
 
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
+
+const NO_DETECTION_LOGIC = 'This rule has no detection logic. Add a detect block under Detection Logic first.';
 
 export function parseThresholdsFromMarkdown(markdown: string): Record<string, number> {
   const result: Record<string, number> = {};
@@ -213,6 +215,10 @@ export function wireRuleEditorModal(
         markdown = formToMarkdown(container);
       }
       if (!markdown.trim()) return;
+      if (!hasDetectionLogic(markdown)) {
+        alert(`Failed to save: ${NO_DETECTION_LOGIC}`);
+        return;
+      }
       const ruleId = modal.dataset.ruleId || undefined;
       try {
         await rpc<{ ok: boolean }>('saveRule', { markdown, ruleId });
@@ -233,6 +239,13 @@ export function wireRuleEditorModal(
       markdown = formToMarkdown(container);
     }
     if (!markdown.trim()) return;
+    if (!hasDetectionLogic(markdown)) {
+      const results = container.querySelector<HTMLElement>('#rule-test-results')!;
+      results.style.display = '';
+      results.className = 'rule-test-results rule-test-error';
+      render(html`<strong>Error:</strong> ${NO_DETECTION_LOGIC}`, results);
+      return;
+    }
 
     if (overrides && Object.keys(overrides).length > 0) {
       markdown = applyThresholdOverrides(markdown, overrides);

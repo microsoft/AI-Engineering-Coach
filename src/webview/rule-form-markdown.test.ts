@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseRuleExtensions } from '../core/metric-engine';
 import { parseRule } from '../core/rule-parser';
-import { mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
+import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'rules');
 const toLf = (md: string) => md.replaceAll('\r\n', '\n');
@@ -141,9 +141,25 @@ describe('readRuleFields', () => {
     });
   });
 
-  it('keeps a detect block out of the text sections', () => {
+  it('reads a text section up to a detect block in it', () => {
     const md = '---\nid: x\n---\n# Examples\n"{{message}}"\n```detect\nscan: requests\n```\nmore\n';
-    expect(readRuleFields(md)).toMatchObject({ examples: '"{{message}}"\n\nmore', detect: 'scan: requests' });
+    expect(readRuleFields(md)).toMatchObject({ examples: '"{{message}}"', detect: 'scan: requests' });
+  });
+
+  it('reads quoted values without their quotes, as the rule parser does', () => {
+    const md = '---\nid: "quoted"\nname: \'Quoted rule\'\ngroup: "code-review"\nseverity: \'low\'\nscope: "both"\nversion: "2"\n---\n';
+    expect(readRuleFields(md)).toMatchObject({ id: 'quoted', name: 'Quoted rule', group: 'code-review', severity: 'low', scope: 'both', version: '2' });
+    expect(parseRule(`${md}# Detection Logic\n\`\`\`detect\nscan: requests\n\`\`\`\n`)).toMatchObject({ group: 'code-review', severity: 'low', scope: 'both' });
+  });
+
+  it('reads the entries after a comment in a front-matter block, as the rule parser does', () => {
+    const md = '---\nid: x\nthresholds:\n  a: 1\n# explanation\n  b: 2\n# about the next key\nversion: 1\n---\n';
+    expect(readRuleFields(md).thresholds).toBe('a: 1\n# explanation\nb: 2');
+  });
+
+  it('finds the sections after a fence that contains the other kind of fence', () => {
+    const md = '---\nid: x\n---\n# Description\nText\n```\n~~~\n```\n\n# When Triggered\n{{count}} found.\n';
+    expect(readRuleFields(md)).toMatchObject({ description: 'Text\n```\n~~~\n```', whenTriggered: '{{count}} found.' });
   });
 
   it('leaves the front-matter fields out when the markdown has no front matter', () => {
@@ -216,6 +232,26 @@ describe('mergeRuleMarkdown edits', () => {
     expect(merged).toBe(CUSTOM_RULE.replace('scope: both\n', ''));
     expect(parseRule(merged)?.scope).toBe('requests');
   });
+
+  it('rewrites a thresholds block with a comment in it, and keeps the comment after it', () => {
+    const md = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\nthresholds:\n  a: 1\n# explanation\n  b: 2\n# about the next key\nversion: 1\n---\n';
+    const fields = { ...fullFields(md), thresholds: 'a: 1\n# explanation\nb: 3' };
+    const merged = mergeRuleMarkdown(md, fields, new Set<RuleFormField>(['thresholds']));
+    expect(merged).toBe(md.replace('  a: 1\n# explanation\n  b: 2\n', '  a: 1\n  # explanation\n  b: 3\n'));
+    expect(parseRule(merged)?.thresholds).toEqual({ a: 1, b: 3 });
+  });
+
+  it('keeps the comment after a rewritten key', () => {
+    const md = '---\nid: x\nscope: both\n# Bump the version on every change.\nversion: 1\n---\n';
+    const merged = mergeRuleMarkdown(md, { ...fullFields(md), scope: 'sessions' }, new Set<RuleFormField>(['scope']));
+    expect(merged).toBe(md.replace('scope: both', 'scope: sessions'));
+  });
+
+  it('rewrites a section before a fence that contains the other kind of fence, and keeps the sections after it', () => {
+    const md = '---\nid: x\n---\n# Description\nText\n```\n~~~\n```\n\n# When Triggered\n{{count}} found.\n\n# Tests\n```test\n{} -> clean\n```\n';
+    const merged = mergeRuleMarkdown(md, { ...fullFields(md), description: 'New text' }, new Set<RuleFormField>(['description']));
+    expect(merged).toBe(md.replace('Text\n```\n~~~\n```\n', 'New text\n'));
+  });
 });
 
 describe('mergeRuleMarkdown additions', () => {
@@ -231,8 +267,14 @@ describe('mergeRuleMarkdown additions', () => {
     const base = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\n---\n\n# Examples\n"{{message}}"\n```detect\nscan: requests\ncheck: count >= 1\n```\n';
     const fields = { ...fullFields(base), examples: 'New example', detect: 'scan: requests\ncheck: count >= 2' };
     const merged = mergeRuleMarkdown(base, fields, new Set<RuleFormField>(['examples', 'detect']));
-    expect(merged).toBe('---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\n---\n\n# Examples\nNew example\n\n```detect\nscan: requests\ncheck: count >= 2\n```\n');
+    expect(merged).toBe('---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\n---\n\n# Examples\nNew example\n```detect\nscan: requests\ncheck: count >= 2\n```\n');
     expect(readRuleFields(merged)).toMatchObject({ examples: 'New example', detect: 'scan: requests\ncheck: count >= 2' });
+  });
+
+  it('keeps a detect block where it is when the text before it changes', () => {
+    const base = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\n---\n\n# Examples\nline one\n```detect\nscan: requests\n```\nline two\n';
+    const merged = mergeRuleMarkdown(base, { ...fullFields(base), examples: 'LINE ONE' }, new Set<RuleFormField>(['examples']));
+    expect(merged).toBe(base.replace('line one', 'LINE ONE'));
   });
 
   it('adds a detect block to the Detection Logic section, or a new section', () => {
@@ -277,5 +319,19 @@ describe('mergeRuleMarkdown new rules', () => {
       '# Detection Logic', '```detect', 'scan: requests', 'match: messageLength > 0', 'aggregate: count', 'check: count >= 1', '```', '',
     ].join('\n'));
     expect(parseRule(merged)).toMatchObject({ id: 'my-custom-rule', scope: 'both', thresholds: { minChars: 30 } });
+  });
+});
+
+describe('hasDetectionLogic', () => {
+  it('accepts a detect block, a # Filter section, a metric or a parent rule, and nothing else', () => {
+    expect(hasDetectionLogic('# Detection Logic\r\n```detect\r\nscan: requests\r\n```\r\n')).toBe(true);
+    expect(hasDetectionLogic('# Filter\nmessageLength < 30\n')).toBe(true);
+    expect(hasDetectionLogic('---\nmetric: short-prompts\n---\n')).toBe(true);
+    expect(hasDetectionLogic('---\nextends: lazy-prompting\n---\n')).toBe(true);
+    expect(hasDetectionLogic('---\nid: x\n---\n# Description\nNo logic yet.\n')).toBe(false);
+  });
+
+  it('finds detection logic in every built-in rule', () => {
+    expect(BUILT_IN_RULES.filter(rule => !hasDetectionLogic(toCrlf(rule.lf))).map(rule => rule.id)).toEqual([]);
   });
 });

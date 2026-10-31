@@ -117,6 +117,17 @@ async function openRule(page: HTMLElement, id: string, source: string): Promise<
   await vi.waitFor(() => expect(input(page, 'rf-id').value).toBe(id));
 }
 
+/** Opens a new rule and fills it with Generate, which returns `draft`. */
+async function generateDraft(draft: string): Promise<HTMLElement> {
+  generatedDraft = draft;
+  const page = await renderPage();
+  openRuleEditor(page, null);
+  input(page, 'rule-ai-input').value = 'Short prompts without context';
+  page.querySelector<HTMLButtonElement>('#rule-ai-generate')!.click();
+  await vi.waitFor(() => expect(page.querySelector('#rule-ai-status')!.textContent).toContain('Rule generated'));
+  return page;
+}
+
 beforeEach(() => {
   mocks.rpc.mockReset().mockImplementation(route);
 });
@@ -175,6 +186,13 @@ describe('Rule Editor form', () => {
     const scope = page.querySelector<HTMLSelectElement>('#rf-scope')!;
     expect(scope.value).toBe('both');
     expect(scope.selectedOptions[0]?.textContent).toBe('Both');
+  });
+
+  it('selects Both for a quoted scope, and keeps the quotes', () => {
+    const lf = builtIn('no-devcontainer').replace('scope: both', 'scope: "both"');
+    markdownToForm(page, toCrlf(lf));
+    expect(page.querySelector<HTMLSelectElement>('#rf-scope')!.value).toBe('both');
+    expect(formToMarkdown(page)).toBe(lf);
   });
 
   it('leaves out the fields a rule doesn\'t have', () => {
@@ -236,6 +254,16 @@ describe('Rule Editor Test Rule', () => {
     expect(markdown).toMatch(/^requiresIdeContext: true$/m);
     expect(await testRuleLive(markdown)).toMatchObject({ ok: true, triggered: false, occurrences: 30 });
   });
+
+  it('tests a rule whose detection logic is a # Filter section', async () => {
+    const md = ['---', 'id: filter-rule', 'name: Filter rule', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '', '# Filter', 'messageLength > 0', ''].join('\n');
+    const page = await renderPage();
+    await openRule(page, 'filter-rule', md);
+
+    page.querySelector<HTMLButtonElement>('#rule-editor-test')!.click();
+    await vi.waitFor(() => sentMarkdown('testRuleLive'));
+    expect(sentMarkdown('testRuleLive')).toBe(md);
+  });
 });
 
 describe('Rule Editor Save Rule', () => {
@@ -288,15 +316,10 @@ describe('Rule Editor new rules', () => {
   });
 
   it('saves a generated draft without front matter as a rule with the form\'s front matter', async () => {
-    generatedDraft = [
+    const page = await generateDraft([
       '# Description', 'Short prompts without context.', '',
       '# Detection Logic', '```detect', 'scan: requests', 'match: messageLength < 30', 'aggregate: count', 'check: count >= 5', '```', '',
-    ].join('\n');
-    const page = await renderPage();
-    openRuleEditor(page, null);
-    input(page, 'rule-ai-input').value = 'Short prompts without context';
-    page.querySelector<HTMLButtonElement>('#rule-ai-generate')!.click();
-    await vi.waitFor(() => expect(page.querySelector('#rule-ai-status')!.textContent).toContain('Rule generated'));
+    ].join('\n'));
     expect(input(page, 'rf-id').value).toBe('short-prompts-without-context');
 
     page.querySelector<HTMLButtonElement>('#rule-editor-save')!.click();
@@ -307,5 +330,24 @@ describe('Rule Editor new rules', () => {
       id: 'short-prompts-without-context', name: 'My Custom Rule', group: 'prompt-quality', severity: 'medium', scope: 'requests',
       description: 'Short prompts without context.',
     });
+  });
+});
+
+describe('Rule Editor drafts without detection logic', () => {
+  it('won\'t test or save a generated draft without detection logic', async () => {
+    const alert = vi.fn();
+    vi.stubGlobal('alert', alert);
+    try {
+      const page = await generateDraft('# Description\nShort prompts without context.\n');
+      page.querySelector<HTMLButtonElement>('#rule-editor-test')!.click();
+      await vi.waitFor(() => expect(page.querySelector('#rule-test-results')!.textContent).toContain('no detection logic'));
+      page.querySelector<HTMLButtonElement>('#rule-editor-save')!.click();
+      expect(String(alert.mock.calls[0]?.[0])).toContain('no detection logic');
+      const methods = mocks.rpc.mock.calls.map(([method]) => String(method));
+      expect(methods).not.toContain('testRuleLive');
+      expect(methods).not.toContain('saveRule');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

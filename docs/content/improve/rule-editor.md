@@ -35,6 +35,8 @@ Click **Test Rule** to run the current draft against your real session data usin
 
 Threshold sliders appear above the result so you can sweep a value without retyping the markdown. Changes are applied to the draft in memory; nothing is persisted until you hit **Save**.
 
+A draft with no detection logic (no detect block, `# Filter` section, metric or parent rule) shows an error instead of running, and isn't saved.
+
 ## AI Builder
 
 Use the **Generate** button to describe the rule you want in natural language. The AI builder drafts a complete markdown rule -- frontmatter, detection logic, examples -- and loads it into the editor. The generator retries automatically if it produces invalid DSL. You can always review the output before saving.

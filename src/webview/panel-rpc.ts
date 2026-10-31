@@ -626,7 +626,7 @@ function validateRuleMarkdown(md: string): string[] {
     issues.push('Missing or invalid "group:" (must be one of: prompt-quality, session-hygiene, code-review, tool-mastery, context-management)');
   }
   if (!md.match(/^severity:\s*(low|medium|high)/m)) issues.push('Missing or invalid "severity:" (must be low, medium, or high)');
-  if (!md.match(/^scope:\s*(requests|sessions|both)/m)) issues.push('Missing or invalid "scope:" (must be requests, sessions, or both)');
+  if (!md.match(/^scope:[ \t]*(['"]?)(requests|sessions|both)\1[ \t]*$/m)) issues.push('Missing or invalid "scope:" (must be requests, sessions, or both)');
   if (!md.includes('# Description')) issues.push('Missing "# Description" section');
   if (!md.includes('# When Triggered')) issues.push('Missing "# When Triggered" section');
   if (!md.includes('# How to Improve')) issues.push('Missing "# How to Improve" section');
