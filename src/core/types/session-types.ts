@@ -215,6 +215,9 @@ export interface SessionRequest {
   /** Context size of the turn: the last and largest prompt of its model calls, and the limit when the harness
    *  logs one (Copilot CLI and Copilot App, Codex, Claude Code, OpenCode). */
   contextUsage?: import('./token-usage-types').TurnContextUsage;
+  /** Prompt-token limit of the request's model when the harness logs one for the model rather than per call
+   *  (VS Code: the selected model's configured context size). `contextUsage.contextLimit` takes precedence. */
+  modelContextLimit?: number;
   /** Every compaction during the turn, in order, when the harness can log several (Copilot CLI).
    *  `compaction` holds the first of them. */
   compactions?: CompactionEvent[];
