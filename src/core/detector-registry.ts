@@ -10,6 +10,7 @@ import { registerAllBuiltinRules, loadPersonalRules, registerAllBuiltinMetrics }
 import { fillTemplate } from './rule-parser';
 import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from './rule-pipeline';
 import { isoWeek } from './helpers';
+import { toRuleRequestRows } from './rule-rows';
 
 registerAllBuiltinRules();
 registerAllBuiltinMetrics();
@@ -228,28 +229,35 @@ function parseIsoWeek(wk: string): Date {
 /*  Pipeline-based registry build                                     */
 /* ------------------------------------------------------------------ */
 
+function buildDetector(rawRule: DetectionRule): DetectorDefinition {
+  const rule = resolveInheritance(rawRule);
+  const pipeline = parsePipeline(rule);
+
+  return {
+    name: rule.name,
+    group: rule.group,
+    requiresIdeContext: rule.requiresIdeContext,
+    rule,
+    run: (ctx) => {
+      const emission = executePipeline(pipeline, rule, ctx);
+      if (!checkPipelineTrigger(pipeline, emission, rule)) return null;
+      return emissionToAntiPattern(emission, rule);
+    },
+  };
+}
+
 function buildRegistry(): DetectorDefinition[] {
-  const rules = getAllRules();
-  const registry: DetectorDefinition[] = [];
+  return getAllRules().map(rule => buildDetector(rule));
+}
 
-  for (const rawRule of rules) {
-    const rule = resolveInheritance(rawRule);
-    const pipeline = parsePipeline(rule);
-
-    registry.push({
-      name: rule.name,
-      group: rule.group,
-      requiresIdeContext: rule.requiresIdeContext,
-      rule,
-      run: (ctx) => {
-        const emission = executePipeline(pipeline, rule, ctx);
-        if (!checkPipelineTrigger(pipeline, emission, rule)) return null;
-        return emissionToAntiPattern(emission, rule);
-      },
-    });
-  }
-
-  return registry;
+/** Rules read each request with its session's `harness` (see toRuleRequestRows). */
+function detectorContext(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): DetectorContext {
+  return { reqs: toRuleRequestRows(reqs, sessionOf ?? sessions), sessions, skipIdeDetectors };
 }
 
 let _registry: DetectorDefinition[] | null = null;
@@ -270,23 +278,45 @@ export function getActiveDetectors(skipIdeDetectors: boolean): DetectorDefinitio
   return registry.filter(detector => !skipIdeDetectors || !detector.requiresIdeContext);
 }
 
-export function runDetectors(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): AntiPattern[] {
+/**
+ * Run every active detector. `sessionOf` resolves each request's session for its
+ * `harness`; pass it when `reqs` can hold requests whose session isn't in `sessions`.
+ */
+export function runDetectors(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): AntiPattern[] {
+  const ctx = detectorContext(reqs, sessions, skipIdeDetectors, sessionOf);
   return getActiveDetectors(skipIdeDetectors)
-    .map(detector => detector.run({ reqs, sessions, skipIdeDetectors }))
+    .map(detector => detector.run(ctx))
     .filter((pattern): pattern is AntiPattern => pattern !== null);
+}
+
+/** Run one rule the way runDetectors does, e.g. for the rule's inline `# Tests`. */
+export function runDetector(rule: DetectionRule, reqs: SessionRequest[], sessions: Session[]): AntiPattern | null {
+  return buildDetector(rule).run(detectorContext(reqs, sessions, false));
 }
 
 /**
  * Run emitters only (no trigger evaluation). Used by rule-engine preview.
+ * `sessionOf` works as in runDetectors.
  */
-export function runEmitters(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): Map<string, DetectorEmission> {
+export function runEmitters(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): Map<string, DetectorEmission> {
   const rules = getAllRules();
+  const ctx = detectorContext(reqs, sessions, skipIdeDetectors, sessionOf);
   const results = new Map<string, DetectorEmission>();
   for (const rawRule of rules) {
     if (skipIdeDetectors && rawRule.requiresIdeContext) continue;
     const rule = resolveInheritance(rawRule);
     const pipeline = parsePipeline(rule);
-    results.set(rule.id, executePipeline(pipeline, rule, { reqs, sessions, skipIdeDetectors }));
+    results.set(rule.id, executePipeline(pipeline, rule, ctx));
   }
   return results;
 }

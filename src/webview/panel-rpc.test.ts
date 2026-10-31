@@ -69,6 +69,75 @@ describe('panel-rpc', () => {
   });
 });
 
+describe('rule evaluation RPCs', () => {
+  const at = Date.parse('2026-09-30T12:00:00Z');
+  const sessions = [['Claude', 3], ['Local Agent', 1]].map(([harness, count]) => createSession({
+    sessionId: String(harness), workspaceId: 'ws', workspaceName: 'Project', harness: String(harness),
+    requests: Array.from({ length: Number(count) }, (_, index) => createRequest({
+      requestId: `${String(harness)}-${index}`, timestamp: at + index, messageText: 'Refactor the parser', responseText: '',
+    })),
+  }));
+  const analyzer = new Analyzer(sessions, new Map());
+  const parsed: ParseResult = { sessions, workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+  const call = (method: string, params: Record<string, unknown>) => getRpcHandler(method)!(analyzer, parsed, params);
+  const claudeRule = [
+    '---', 'id: claude-requests', 'name: Claude requests', 'group: tool-mastery', 'severity: low', 'scope: requests', '---',
+    '', '# Detection Logic', '```detect', 'scan: requests', 'match: harness == "Claude"', 'check: count >= 3', '```',
+  ].join('\n');
+
+  it('lets the Playground read harness on request rows', () => {
+    expect(call('evaluateExpression', { expr: 'harness == "Claude"', scope: 'requests' })).toMatchObject({ matched: 3, total: 4 });
+    expect(call('evaluateExpression', { expr: 'harness == "Claude"', scope: 'sessions' })).toMatchObject({ matched: 1, total: 2 });
+  });
+
+  it('lets Test Rule read harness on request rows', () => {
+    expect(call('testRuleLive', { markdown: claudeRule })).toMatchObject({ ok: true, triggered: true, occurrences: 3, total: 4 });
+  });
+
+  it('keeps the Data Explorer reading harness from sessions', () => {
+    expect(call('getDataExplorer', { field: 'harness' })).toMatchObject({ count: 2, uniqueCount: 2 });
+    const { fields } = call('getDataExplorerFields', {}) as { fields: Array<{ name: string; fillRate: number; total: number }> };
+    expect(fields.find(field => field.name === 'harness')).toMatchObject({ fillRate: 100, total: 2 });
+  });
+
+  it("runs a built-in rule's inline # Tests", () => {
+    expect(call('runRuleTests', { ruleId: 'no-plan-mode' })).toMatchObject({ passed: 15, total: 15 });
+    expect(call('runRuleTests', { ruleId: 'abandon-sessions' })).toMatchObject({ error: 'No test cases found in rule' });
+  });
+});
+
+describe('rule evaluation RPCs across a date filter', () => {
+  // One VS Code session: 15 requests in each of two weeks inside the range, and its last message after toDate,
+  // so filterSessions drops the session while filterRequests keeps the 30 requests.
+  const days = [15, 22, 30].map(day => new Date(2026, 8, day, 12).getTime());
+  const requests = [...Array.from({ length: 30 }, (_, index) => days[index < 15 ? 0 : 1] + index), days[2]].map((timestamp, index) =>
+    createRequest({ requestId: `r${index}`, timestamp, messageText: 'Refactor the parser', responseText: '' }));
+  const sessions = [createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'Project', harness: 'Local Agent', requests })];
+  const analyzer = new Analyzer(sessions, new Map());
+  const parsed: ParseResult = { sessions, workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+  const call = (method: string, params: Record<string, unknown>) => getRpcHandler(method)!(analyzer, parsed, params);
+  const filter = { toDate: '2026-09-25' };
+  const vscodeRule = [
+    '---', 'id: vscode-requests', 'name: VS Code requests', 'group: tool-mastery', 'severity: low', 'scope: requests', '---',
+    '', '# Detection Logic', '```detect', 'scan: requests', 'match: harness == "Local Agent"', 'check: count >= 30', '```',
+  ].join('\n');
+
+  it('keeps the harness of requests whose session the filter drops', () => {
+    expect(analyzer.filterSessions(filter)).toHaveLength(0);
+    expect(call('evaluateExpression', { expr: 'harness == "Local Agent"', scope: 'requests', filter })).toMatchObject({ matched: 30, total: 30 });
+    expect(call('testRuleLive', { markdown: vscodeRule, filter })).toMatchObject({ triggered: true, occurrences: 30 });
+    expect(call('getRulePreview', { ruleId: 'no-custom-instructions', ...filter })).toMatchObject({ triggered: true, occurrences: 30, total: 30 });
+    expect((call('getRuleCoverage', { filter }) as { rules: Array<{ id: string }> }).rules.map(rule => rule.id)).toContain('no-custom-instructions');
+
+    const editor = call('getRuleEditor', filter) as {
+      previews: Array<{ ruleId: string; triggered: boolean; total: number }>;
+      dateHistograms: Record<string, { counts: number[] }>;
+    };
+    expect(editor.previews.find(preview => preview.ruleId === 'no-custom-instructions')).toMatchObject({ triggered: true, total: 30 });
+    expect(editor.dateHistograms['no-custom-instructions'].counts).toEqual([15, 15]);
+  });
+});
+
 const VALID_RULE = [
   '---',
   'id: long-sessions',

@@ -13,7 +13,7 @@ interface ExplorerField {
   name: string;
   type: string;
   description: string;
-  scope: 'request' | 'session';
+  scope: 'request' | 'session' | 'both';
   fillRate: number;
 }
 
@@ -62,7 +62,8 @@ export async function renderDataExplorer(content: HTMLElement, filter: DateFilte
 
   const fields = data.fields ?? [];
   const reqFields = fields.filter(f => f.scope === 'request');
-  const sessionFields = fields.filter(f => f.scope === 'session');
+  // `both` fields (harness) are logged per session; rules can also read them on request rows.
+  const sessionFields = fields.filter(f => f.scope !== 'request');
 
   render(html`
     <div class="explorer-header">

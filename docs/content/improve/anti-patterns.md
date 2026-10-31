@@ -58,6 +58,8 @@ Evaluates how broadly you use available features:
 - **Premium Waste / Model Overreliance** -- Using expensive models for simple questions
 - **No Skills / No Custom Instructions** -- Gaps in your context-engineering setup
 
+Some rules read fields that only some harnesses log, so they count only those harnesses' requests. **No Plan Mode** counts VS Code, GitHub Copilot CLI and App, and OpenCode, whose logs record plan mode. **No Custom Instructions**, and the custom-instructions signal of **Context Engineering Gaps**, count only VS Code, the only harness that logs active instruction files.
+
 ### Context Management
 
 Evaluates how efficiently your sessions use the context window:

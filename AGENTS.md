@@ -94,7 +94,7 @@ front matter and a small DSL, no code changes required.
 - Trust layers (built-in / personal / project) gated through
   [`src/core/rule-trust.ts`](src/core/rule-trust.ts)
 
-Rules ship with inline `# Tests` blocks that run as part of `npm test`.
+Rules can ship an inline `# Tests` block; `src/core/rule-inline-tests.test.ts` runs every built-in rule's block as part of `npm test`.
 
 ## Workers
 

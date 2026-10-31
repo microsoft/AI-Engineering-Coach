@@ -50,6 +50,7 @@ export class Analyzer {
   private readonly sessions: Session[];
   private readonly editLocIndex: EditLocIndex;
   private readonly workspaces: Map<string, Workspace>;
+  private readonly requestSessionMap: Map<SessionRequest, Session>;
   private cache = new Map<string, unknown>();
 
   constructor(sessions: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
@@ -58,6 +59,7 @@ export class Analyzer {
     this.editLocIndex = elIdx;
     this.workspaces = workspaces ?? new Map<string, Workspace>();
     const sharedMap = AnalyzerBase.buildRequestSessionMap(sessions);
+    this.requestSessionMap = sharedMap;
     this.dashboard = new DashboardAnalyzer(sessions, elIdx, sharedMap);
     this.production = new ProductionAnalyzer(sessions, elIdx, sharedMap);
     this.consumption = new ConsumptionAnalyzer(sessions, elIdx, sharedMap);
@@ -140,6 +142,8 @@ export class Analyzer {
   filterRequests(f?: DateFilter): SessionRequest[] { return this.patterns.getFilteredRequests(f); }
   /** Public access to filtered sessions for rule editor preview. */
   filterSessions(f?: DateFilter): Session[] { return this.patterns.getFilteredSessions(f); }
+  /** Every request's session, including sessions a date filter drops, so rule rows can resolve `harness`. */
+  getRequestSessionMap(): ReadonlyMap<SessionRequest, Session> { return this.requestSessionMap; }
   getHarnessComparison(f?: DateFilter): HarnessComparisonData { return this.dashboard.getHarnessComparison(f); }
   getParserCoverage(): ParserCoverageData { return this.dashboard.getParserCoverage(); }
   getParserPreview(focusField?: string): ParserPreviewData { return this.dashboard.getParserPreview(focusField); }
