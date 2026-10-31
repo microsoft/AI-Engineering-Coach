@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 
 /** Opens the dashboard and waits until its first page has rendered. */
 async function openDashboard(page: Page) {

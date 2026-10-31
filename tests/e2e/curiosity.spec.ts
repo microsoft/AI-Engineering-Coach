@@ -2,8 +2,9 @@ import { test, expect, type Page } from '@playwright/test';
 import type { CuriosityData } from '../../src/core/types/curiosity-types';
 import { curiosityBalance } from '../../src/core/curiosity-balance';
 import type { Session } from '../../src/core/types';
+import { harnessUrl } from './harness-url';
 
-const URL = 'http://localhost:3999/tests/e2e/harness?page=curiosity';
+const URL = harnessUrl('tests/e2e/harness?page=curiosity');
 type MockWindow = Window & {
   getMockData: (method: string, params: Record<string, unknown>) => unknown;
   curiosityParams?: Record<string, unknown>;
