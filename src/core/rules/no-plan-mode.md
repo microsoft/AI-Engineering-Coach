@@ -4,7 +4,6 @@ name: Never Uses Plan Mode
 group: tool-mastery
 severity: medium
 scope: requests
-requiresIdeContext: true
 version: 2
 tags: [tools, planning, agent]
 thresholds:
@@ -42,9 +41,11 @@ check: planUsage == 0 AND planLoggedReqs >= thresholds.minReqs AND agentRatio >=
 # Tests
 ```test
 {harness: "Local Agent", agentName: "GitHub Copilot", agentMode: "agent"} -> triggered
+{harness: "Local Agent (Server Insiders)", agentName: "GitHub Copilot", agentMode: "agent"} -> triggered
 {harness: "Local Agent (Insiders)", agentName: "GitHub Copilot", agentMode: "agent", slashCommand: "plan"} -> clean
 {harness: "Local Agent", agentName: "GitHub Copilot", agentMode: "plan"} -> clean
 {harness: "GitHub Copilot CLI", agentName: "GitHub Copilot CLI", agentMode: "agent"} -> triggered
+{harness: "GitHub Copilot App", agentName: "GitHub Copilot App", agentMode: "agent"} -> triggered
 {harness: "GitHub Copilot App", agentName: "GitHub Copilot App", agentMode: "plan"} -> clean
 {harness: "OpenCode", agentName: "build", agentMode: "build"} -> triggered
 {harness: "Claude", agentName: "Claude", agentMode: "agent"} -> clean

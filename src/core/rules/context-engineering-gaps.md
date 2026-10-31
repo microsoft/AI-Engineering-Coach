@@ -56,6 +56,7 @@ severity: gapCount >= 4
 {harness: "Local Agent"} -> triggered
 {harness: "Claude"} -> triggered
 {harness: "Local Agent", agentName: "reviewer", agentMode: "agent", skillsUsed: ["pdf"], toolsUsed: ["mcp_github_search"], referencedFiles: ["src/app.ts"]} -> triggered
+{harness: "Local Agent (Insiders)", agentName: "reviewer", agentMode: "agent", skillsUsed: ["pdf"], toolsUsed: ["mcp_github_search"], referencedFiles: ["src/app.ts"]} -> triggered
 {harness: "Local Agent", agentName: "reviewer", agentMode: "agent", skillsUsed: ["pdf"], toolsUsed: ["mcp_github_search"], referencedFiles: ["src/app.ts"], customInstructions: [".github/copilot-instructions.md"]} -> clean
 {harness: "Claude", agentName: "reviewer", agentMode: "agent", skillsUsed: ["pdf"], toolsUsed: ["mcp_github_search"], referencedFiles: ["src/app.ts"]} -> clean
 {harness: "GitHub Copilot CLI", agentName: "reviewer", agentMode: "agent", toolsUsed: ["mcp_github_search"], referencedFiles: ["src/app.ts"]} -> triggered

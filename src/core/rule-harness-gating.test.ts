@@ -74,6 +74,18 @@ describe('no-plan-mode', () => {
     expect(detect(sessions, 'no-plan-mode')?.occurrences).toBe(35);
     expect(emission(sessions, 'no-plan-mode')).toMatchObject({ count: 35, total: 35 });
   });
+
+  it('runs under the harness filters whose logs record plan mode', () => {
+    const sessions = [
+      session('GitHub Copilot CLI', requests(40, cliAgent)),
+      session('OpenCode', requests(40, { agentName: 'build', agentMode: 'build' })),
+      session('Claude', requests(40, { agentName: 'Claude', agentMode: 'agent' })),
+    ];
+    const shown = (harness: string) => new Analyzer(sessions).getAntiPatterns({ harness }).patterns.some(pattern => pattern.id === 'no-plan-mode');
+    expect(shown('GitHub Copilot CLI')).toBe(true);
+    expect(shown('OpenCode')).toBe(true);
+    expect(shown('Claude')).toBe(false);
+  });
 });
 
 describe('no-custom-instructions', () => {
