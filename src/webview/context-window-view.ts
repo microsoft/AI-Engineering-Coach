@@ -4,14 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 /* Context-window labels for Context Management: utilization is measured against the limit the harness
- * reported (Copilot CLI and Copilot App, Codex) or against an estimate from the largest prompt seen. */
+ * reported (Copilot CLI and Copilot App, Codex, VS Code) or against an estimate from the largest prompt seen. */
 
 import type { ContextWindowSource, SessionContextDetail, WorkspaceContextScore } from '../core/types';
 import { formatNum } from './shared';
 import { html, ComponentChildren } from './render';
 
 const WINDOW_HELP: Record<ContextWindowSource | 'mixed', string> = {
-  reported: 'Utilization uses the context limit the harness reported for each turn.',
+  reported: 'Utilization uses the context limit the harness reported for each turn or its model.',
   estimated: 'Utilization uses an estimated window: the largest prompt seen, rounded up. The harness does not report its limit, so utilization near the top is overstated.',
   mixed: 'Some turns use the context limit the harness reported; the others use an estimate from the largest prompt seen among them.',
 };
@@ -66,7 +66,7 @@ export function windowFootnote(workspaces: WorkspaceContextScore[]): ComponentCh
   const timeline = workspaces.some(w => TIMELINE_HARNESSES.has(w.harness));
   if (!reported && !timeline) return null;
   return html`
-    ${reported ? html`<p class="ctx-window-note">Copilot CLI, Copilot App and Codex report their context limit, so their utilization is measured against it. Other harnesses don\u2019t; their window is estimated from the largest prompt seen, which overstates utilization near the top.</p>` : null}
+    ${reported ? html`<p class="ctx-window-note">Copilot CLI, Copilot App and Codex report their context limit, and VS Code logs the context size of the model you selected, so their utilization is measured against it. Claude Code and OpenCode don\u2019t; their window is estimated from the largest prompt seen, which overstates utilization near the top.</p>` : null}
     ${timeline ? html`<p class="ctx-timeline-hint">${TIMELINE_HINT}</p>` : null}`;
 }
 
