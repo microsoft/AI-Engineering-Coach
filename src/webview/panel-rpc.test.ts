@@ -127,6 +127,21 @@ describe('generateRuleMarkdown', () => {
     expect(ask).toHaveBeenCalledTimes(3);
     expect(ask.mock.calls[2][0]?.reply).toBe('draft two');
   });
+
+  it('accepts a reply with CRLF line endings and returns it with LF', async () => {
+    const ask = asker().mockResolvedValueOnce(VALID_RULE.replaceAll('\n', '\r\n'));
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts scope: both', async () => {
+    const rule = VALID_RULE.replace('scope: sessions', 'scope: both');
+    const ask = asker().mockResolvedValueOnce(rule);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: rule });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('generateRuleMarkdown failures', () => {

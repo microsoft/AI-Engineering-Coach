@@ -261,3 +261,122 @@ test.describe('Anti-Patterns Why? explanations', () => {
     await expect(name).toHaveValue('Draft rule that must survive');
   });
 });
+
+const BOTH_SCOPE_RULE = [
+  '---',
+  'id: context-both',
+  'name: Context both',
+  'group: prompt-quality',
+  'severity: medium',
+  'scope: both',
+  'version: 1',
+  'tags: [context]',
+  'thresholds:',
+  '  minReqs: 30',
+  '---',
+  '',
+  '# Description',
+  'Audits context engineering.',
+  '',
+  '# When Triggered',
+  '{{count}} signals missing.',
+  '',
+  '# How to Improve',
+  'Add instructions.',
+  '',
+  '# Examples',
+  '{{extra.gapCount}} signals missing',
+  '',
+  '# Detection Logic',
+  '```detect',
+  'scan: requests',
+  'match: true',
+  'check: count >= thresholds.minReqs',
+  '```',
+  '',
+  '# Tests',
+  '```test',
+  '{harness: "Local Agent"} -> triggered',
+  '```',
+  '',
+].join('\n');
+
+type RuleEditorWindow = MockWindow & { ruleEditorCalls?: Array<{ method: string; params: Record<string, unknown> }> };
+
+/** Lists one rule whose source is `source`, then opens it with Edit Source. */
+async function editRuleSource(page: Page, source: string) {
+  await page.evaluate(source => {
+    const root = window as RuleEditorWindow;
+    const original = root.getMockData;
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    root.ruleEditorCalls = calls;
+    root.getMockData = (method, params) => {
+      calls.push({ method, params });
+      if (method === 'getRuleEditor') {
+        return {
+          rules: [{
+            id: 'context-both', name: 'Context both', group: 'prompt-quality', severity: 'medium', scope: 'both',
+            requiresIdeContext: false, description: 'Audits context engineering.', descriptionTemplate: '',
+            suggestionTemplate: '', exampleTemplate: '', thresholds: { minReqs: 30 }, tags: ['context'],
+            source: 'built-in', sourceFilePath: '', version: 1, rawSource: source,
+          }],
+          previews: [], layers: [], pending: [],
+        };
+      }
+      if (method === 'getRuleSource') return { source };
+      if (method === 'testRuleLive') {
+        return {
+          ok: true, triggered: true, occurrences: 4, total: 5, pct: '80%', severity: 'medium',
+          description: '4 signals missing.', suggestion: '', examples: [],
+        };
+      }
+      return original(method, params);
+    };
+  }, source);
+  await page.locator('#sidebar [data-page="anti-patterns"]').click();
+  await page.locator('.ap-tab[data-tab="rules"]').click();
+  await page.locator('.rule-card[data-rule-id="context-both"]').click();
+  await page.locator('#rule-edit-source-btn').click();
+  await expect(page.locator('#rule-editor-modal')).toBeVisible();
+}
+
+/** Runs Test Rule and returns the markdown the editor sent. */
+async function testRuleMarkdown(page: Page): Promise<string> {
+  await page.locator('#rule-editor-test').click();
+  await expect(page.locator('#rule-test-results')).toContainText('TRIGGERED');
+  return page.evaluate(() => {
+    const call = (window as RuleEditorWindow).ruleEditorCalls?.find(c => c.method === 'testRuleLive');
+    return String(call?.params.markdown);
+  });
+}
+
+test.describe('Anti-Patterns Rule Editor', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-09-30T12:00:00Z'));
+    await navigateToAntiPatterns(page);
+  });
+
+  test('shows scope: both in the form and keeps it, with the # Tests, when testing the rule', async ({ page }) => {
+    await editRuleSource(page, BOTH_SCOPE_RULE);
+    await expect(page.locator('#rf-id')).toHaveValue('context-both');
+    await expect(page.locator('#rf-scope')).toHaveValue('both');
+    await expect(page.locator('#rf-scope option:checked')).toHaveText('Both');
+
+    const markdown = await testRuleMarkdown(page);
+    expect(markdown).toMatch(/^scope: both$/m);
+    expect(markdown).toContain('# Tests\n```test\n{harness: "Local Agent"} -> triggered\n```');
+    expect(markdown).toBe(BOTH_SCOPE_RULE);
+  });
+
+  test('fills the form from a rule with CRLF line endings and tests that rule', async ({ page }) => {
+    await editRuleSource(page, BOTH_SCOPE_RULE.replaceAll('\n', '\r\n'));
+    await expect(page.locator('#rf-id')).toHaveValue('context-both');
+    await expect(page.locator('#rf-name')).toHaveValue('Context both');
+    await expect(page.locator('#rf-scope')).toHaveValue('both');
+    await expect(page.locator('#rf-thresholds')).toHaveValue('minReqs: 30');
+    await expect(page.locator('#rf-description')).toHaveValue('Audits context engineering.');
+    await expect(page.locator('#rf-detect')).toHaveValue('scan: requests\nmatch: true\ncheck: count >= thresholds.minReqs');
+
+    expect(await testRuleMarkdown(page)).toBe(BOTH_SCOPE_RULE);
+  });
+});

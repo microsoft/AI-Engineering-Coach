@@ -85,4 +85,18 @@ describe('page-antipatterns-editor threshold helpers', () => {
       expect(out).toContain('shortLen: 999');
     });
   });
+
+  describe('with CRLF line endings', () => {
+    const crlfMd = sampleMd.replaceAll('\n', '\r\n');
+
+    it('parseThresholdsFromMarkdown reads the thresholds', () => {
+      expect(parseThresholdsFromMarkdown(crlfMd)).toEqual({ shortLen: 50, ratioLimit: 0.25 });
+    });
+
+    it('applyThresholdOverrides applies the overrides', () => {
+      const out = applyThresholdOverrides(crlfMd, { shortLen: 100 });
+      expect(out).toContain('  shortLen: 100\n');
+      expect(parseThresholdsFromMarkdown(out)).toEqual({ shortLen: 100, ratioLimit: 0.25 });
+    });
+  });
 });
