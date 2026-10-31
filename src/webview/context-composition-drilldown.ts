@@ -57,10 +57,13 @@ function closeWorkspacePanels(toggles: HTMLButtonElement[]): void {
 export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter): void {
   const toggles = [...root.querySelectorAll<HTMLButtonElement>('.ctx-comp-ws-toggle')];
   for (const toggle of toggles) {
+    let generation = 0;
     toggle.addEventListener('click', () => {
       const workspace = toggle.closest<HTMLElement>('.ctx-comp-ws');
       const panel = workspace?.querySelector<HTMLElement>('.ctx-comp-ws-sessions');
       if (!workspace || !panel) return;
+      // Every click supersedes a load still in flight, so a late response can't overwrite a newer panel.
+      const load = ++generation;
       const wasOpen = toggle.getAttribute('aria-expanded') === 'true';
       closeWorkspacePanels(toggles);
       if (wasOpen) return;
@@ -68,13 +71,16 @@ export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter
       panel.hidden = false;
       render(html`<div class="ctx-comp-note">Loading sessions\u2026</div>`, panel);
       const source = workspace.dataset.source;
+      const isCurrent = () => load === generation && toggle.getAttribute('aria-expanded') === 'true' && root.isConnected && panel.isConnected;
       void rpc<WorkspaceContextSessionsData>('getWorkspaceContextSessions', { workspaceId: workspace.dataset.workspace, filter, rangeMatch: 'requests' })
         .then(data => {
-          if (toggle.getAttribute('aria-expanded') !== 'true') return;
+          if (!isCurrent()) return;
           const sessions = data.sessions.filter(s => hasSessionComposition(s) && (source == null || s.composition?.source === source));
           renderWorkspaceSessions(panel, sessions.slice(0, MAX_DRILLDOWN_SESSIONS), sessions.length, null);
         })
-        .catch(() => render(html`<div class="ctx-comp-note">Could not load sessions.</div>`, panel));
+        .catch(() => {
+          if (isCurrent()) render(html`<div class="ctx-comp-note">Could not load sessions.</div>`, panel);
+        });
     });
   }
 }

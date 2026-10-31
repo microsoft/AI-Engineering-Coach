@@ -257,6 +257,27 @@ test.describe('Context Composition', () => {
     expect(request).toMatchObject({ workspaceId: 'ws-1' });
     expect(request).not.toHaveProperty('rangeMatch');
   });
+
+  test('expands a session row from the keyboard through its composition button', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    const rows = page.locator('.ctx-session-row');
+    const cliButton = rows.nth(1).locator('.ctx-session-expand');
+    await expect(cliButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(cliButton).toHaveAttribute('aria-label', 'Show details for the GitHub Copilot CLI session on 2026-05-03');
+    // The bar inside the button is no longer a separate tab stop.
+    await expect(rows.nth(1).locator('.ctx-comp-bar')).not.toHaveAttribute('tabindex');
+    await rows.nth(0).locator('.ctx-session-expand').focus();
+    await page.keyboard.press('Tab');
+    await expect(cliButton).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(cliButton).toHaveAttribute('aria-expanded', 'true');
+    const panel = page.locator('.ctx-session-chart-row .ctx-comp-session');
+    await expect(panel).toContainText(/System prompt \(latest checkpoint\)/i);
+    await expect(panel).toContainText('774.8K of 968.0K tokens (80%)');
+    await page.keyboard.press('Space');
+    await expect(cliButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.ctx-session-chart-row')).toHaveCount(0);
+  });
 });
 
 test.describe('Context Composition without a session in range', () => {

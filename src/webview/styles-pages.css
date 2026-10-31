@@ -1937,6 +1937,8 @@
 .ctx-comp-guide { display: inline-block; font-size: 12px; color: var(--vscode-textLink-foreground, #58a6ff); margin: 4px 0 8px; }
 .ctx-comp-dash { color: var(--text-muted); cursor: help; }
 .ctx-comp-mini { width: 80px; }
+.ctx-session-expand { display: block; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px; padding: 2px; margin: 0; cursor: pointer; }
+.ctx-session-expand:focus-visible { outline: 1px solid var(--focus-border, #58a6ff); outline-offset: 2px; }
 .ctx-comp-session { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .ctx-comp-session-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px; }
 .ctx-comp-session-sub { margin-top: 10px; }

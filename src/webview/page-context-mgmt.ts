@@ -401,7 +401,8 @@ export async function renderContextManagement(container: HTMLElement, currentFil
       </td>`, headerTr);
     summaryTr.after(headerTr);
 
-    // Attach session row click handlers — expand chart inline below the clicked row
+    // Attach session row click handlers — expand chart inline below the clicked row. The row's
+    // expand button (keyboard users) bubbles its click up to this handler.
     for (const row of headerTr.querySelectorAll('.ctx-session-row')) {
       row.addEventListener('click', () => {
         const clickable = (row as HTMLElement).dataset.clickable === 'true';
@@ -418,6 +419,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
           destroyChartById(SESSION_COMPOSITION_CHART_ID);
           existingChart.remove();
         }
+        for (const button of headerTr.querySelectorAll('.ctx-session-expand')) button.setAttribute('aria-expanded', 'false');
 
         // Toggle off if same session
         if (expandedSessionIdx === idx) {
@@ -432,6 +434,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         const pageRelIdx = idx - start;
         const targetRow = innerRows[pageRelIdx] as HTMLElement | null;
         if (!targetRow) return;
+        targetRow.querySelector('.ctx-session-expand')?.setAttribute('aria-expanded', 'true');
 
         const chartRow = document.createElement('tr');
         chartRow.className = 'ctx-session-chart-row';
@@ -795,7 +798,9 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
       <td style="text-align:center;padding:6px 6px;">${satContent}</td>
       <td style="text-align:center;padding:6px 6px;font-size:10px;">${evtContent}</td>
       <td style="padding:6px 6px;">${sparklineContent}</td>
-      <td style="padding:6px 6px;">${compositionMiniBar(s.composition)}</td>
+      <td style="padding:6px 6px;">${clickable
+        ? html`<button type="button" class="ctx-session-expand" aria-expanded="false" aria-label=${`Show details for the ${s.harness} session on ${s.date}`}>${compositionMiniBar(s.composition, false)}</button>`
+        : compositionMiniBar(s.composition)}</td>
     </tr>`;
 }
 

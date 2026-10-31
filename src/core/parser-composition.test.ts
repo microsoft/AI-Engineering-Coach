@@ -157,13 +157,13 @@ function usageRecord(inputTokens: number, toolTokenCount: number, overrides: Rec
   };
 }
 
-function checkpoint(segments: Array<{ segment: string; tokens: number }>, extra: Record<string, unknown> = {}): Record<string, unknown> {
+function checkpoint(segments: Array<{ segment: string; tokens: number }>, extra: Record<string, unknown> = {}, conversation: string | null = 'main'): Record<string, unknown> {
   return {
     type: 'session.usage_checkpoint',
     data: {
       totalNanoAiu: 1,
       promptCacheBreakState: [{
-        conversation: 'main',
+        ...(conversation == null ? {} : { conversation }),
         lastActiveModel: 'claude-opus-5.5',
         pendingRewriteSources: [],
         models: {
@@ -235,6 +235,43 @@ describe('Copilot CLI composition extraction', () => {
     const session = parseCLIEventsFile(file, 'ws', 'demo');
     expect(session?.requests[0].promptComposition?.shares).toEqual({ toolDefinitions: 25, other: 75 });
     expect(session).not.toHaveProperty('contextComposition');
+  });
+
+  it('ignores a lone checkpoint from another conversation instead of overwriting the main agent', () => {
+    const subagent = checkpoint([{ segment: 'task_prompt', tokens: 2_000 }], { tool_count: 12, tool_tokens: 4_000 }, 'subagent-1');
+    const file = writeEvents([
+      START,
+      user('u1', 1),
+      usageRecord(100_000, 30_000),
+      assistant('a1'),
+      user('u2', 5),
+      // Before any main checkpoint: must not back-fill turn 1 with the sub-agent's 2K system prompt.
+      subagent,
+      usageRecord(100_000, 30_000),
+      assistant('a2'),
+      checkpoint(SEGMENTS),
+      user('u3', 9),
+      // After the main checkpoint: must not replace its segments, tool totals or system size.
+      subagent,
+      usageRecord(100_000, 30_000),
+      assistant('a3'),
+    ]);
+    const session = parseCLIEventsFile(file, 'ws', 'demo');
+    expect(session?.requests.map(request => request.promptComposition?.shares)).toEqual(
+      Array.from({ length: 3 }, () => ({ toolDefinitions: 30, systemInstructions: 20, conversation: 50 })),
+    );
+    expect(session?.contextComposition).toMatchObject({
+      systemSegments: [{ name: 'tool_instructions', tokens: 9_000 }, { name: 'custom_instructions', tokens: 6_000 }, { name: 'memory', tokens: 5_000 }],
+      toolCount: 64,
+      toolTokens: 33_000,
+    });
+  });
+
+  it('still reads a lone checkpoint that does not name its conversation', () => {
+    const file = writeEvents([START, user('u1', 1), usageRecord(100_000, 30_000), checkpoint(SEGMENTS, {}, null), assistant('a1')]);
+    const session = parseCLIEventsFile(file, 'ws', 'demo');
+    expect(session?.requests[0].promptComposition?.shares).toEqual({ toolDefinitions: 30, systemInstructions: 20, conversation: 50 });
+    expect(session?.contextComposition?.systemSegments).toHaveLength(3);
   });
 
   it('records compaction snapshots with their unattributed residual and ignores shutdown tool totals', () => {

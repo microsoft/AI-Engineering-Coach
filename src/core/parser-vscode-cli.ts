@@ -269,7 +269,10 @@ function handleUsageRecord(data: Record<string, unknown>, state: CLIParseState):
 /** Reads only segment names/tokens and tool totals; hashes, tool names and schemas are ignored. */
 function handleUsageCheckpoint(data: Record<string, unknown>, state: CLIParseState): void {
   const states = recordArrayValue(data.promptCacheBreakState);
-  const main = states.find(s => s.conversation === 'main') ?? (states.length === 1 ? states[0] : undefined);
+  // A lone entry counts as the main agent only when it doesn't name its conversation: a sub-agent's
+  // checkpoint must not replace the main agent's segments and tool totals or back-fill its turns.
+  const main = states.find(s => s.conversation === 'main')
+    ?? (states.length === 1 && states[0].conversation == null ? states[0] : undefined);
   const models = recordValue(main?.models);
   if (!main || !models) return;
   const active = str(main.lastActiveModel);
