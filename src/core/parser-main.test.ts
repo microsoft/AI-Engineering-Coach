@@ -32,7 +32,7 @@ vi.mock('./cache', () => ({
   setMemoryCache: vi.fn(),
   computeDirMetasAsync: vi.fn(() => Promise.resolve({})),
   loadCacheData: vi.fn(() => Promise.resolve(null)),
-  saveCacheData: vi.fn(() => Promise.resolve()),
+  saveCacheData: vi.fn(() => Promise.resolve(true)),
   findStaleDirs: vi.fn(() => ({ stale: new Set(), removed: new Set() })),
   clearCache: vi.fn(),
   stripSessionsForMemory: vi.fn(),
@@ -120,7 +120,7 @@ beforeEach(() => {
   vi.mocked(setMemoryCache).mockImplementation(() => {});
   vi.mocked(computeDirMetasAsync).mockResolvedValue({});
   vi.mocked(loadCacheData).mockResolvedValue(null);
-  vi.mocked(saveCacheData).mockResolvedValue();
+  vi.mocked(saveCacheData).mockResolvedValue(true);
   vi.mocked(findStaleDirs).mockReturnValue({ stale: new Set(), removed: new Set() });
   vi.mocked(stripSessionsForMemory).mockImplementation(() => {});
 });
