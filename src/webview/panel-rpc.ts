@@ -52,12 +52,18 @@ import type { EditLocIndex } from '../core/edit-loc-diff';
  * DSL-friendly row records. Centralizes the cast so every DSL call site
  * uses the same shape. Accepts both 'sessions' (rule scope) and 'session'
  * (field scope) as truthy session values. Request rows carry their
- * session's `harness`, as they do when rules run.
+ * session's `harness`, as they do when rules run; `sessionOf` must index
+ * every request's session, because a date filter can drop the session.
  */
 type DslRow = Record<string, unknown>;
-function pickRows(scope: string, reqs: SessionRequest[], sessions: Session[]): DslRow[] {
+function pickRows(
+  scope: string,
+  reqs: SessionRequest[],
+  sessions: Session[],
+  sessionOf: ReadonlyMap<SessionRequest, Session>,
+): DslRow[] {
   const isSessionScope = scope === 'sessions' || scope === 'session';
-  return (isSessionScope ? sessions : toRuleRequestRows(reqs, sessions)) as unknown as DslRow[];
+  return (isSessionScope ? sessions : toRuleRequestRows(reqs, sessionOf)) as unknown as DslRow[];
 }
 
 /** The Data Explorer reads `both` fields such as `harness` from sessions, where they're logged. */
@@ -823,8 +829,9 @@ const rpcHandlers: TypedRpcHandlers = {
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
     const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
-    const detectorResults = runDetectors(reqs, sessions, skipIde);
-    const emissions = runEmitters(reqs, sessions, skipIde);
+    const sessionOf = a.getRequestSessionMap();
+    const detectorResults = runDetectors(reqs, sessions, skipIde, sessionOf);
+    const emissions = runEmitters(reqs, sessions, skipIde, sessionOf);
     const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions);
     const rules = getAllRules().map(r => ({
       id: r.id,
@@ -868,7 +875,7 @@ const rpcHandlers: TypedRpcHandlers = {
       const weekEmissions = new Map<string, Map<string, number>>();
       for (const wk of sortedWeeks) {
         const wkReqs = weekBuckets.get(wk) || [];
-        const wkEmissions = runEmitters(wkReqs, sessions, skipIde);
+        const wkEmissions = runEmitters(wkReqs, sessions, skipIde, sessionOf);
         const counts = new Map<string, number>();
         for (const [ruleId, emission] of wkEmissions) {
           counts.set(ruleId, emission.count);
@@ -896,8 +903,9 @@ const rpcHandlers: TypedRpcHandlers = {
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
     const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
-    const detectorResults = runDetectors(reqs, sessions, skipIde);
-    const emissions = runEmitters(reqs, sessions, skipIde);
+    const sessionOf = a.getRequestSessionMap();
+    const detectorResults = runDetectors(reqs, sessions, skipIde, sessionOf);
+    const emissions = runEmitters(reqs, sessions, skipIde, sessionOf);
     const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions);
     return previews.find(p => p.ruleId === ruleId) || { ruleId, triggered: false, occurrences: 0, total: 0, pct: 0, severity: rule.severity, group: rule.group, previewDescription: 'No data.', previewExamples: [] };
   },
@@ -974,7 +982,7 @@ const rpcHandlers: TypedRpcHandlers = {
       const sessions = a.filterSessions(filter);
       const resolved = resolveInheritance(rule);
       const pipeline = parsePipeline(resolved);
-      const emission = executePipeline(pipeline, resolved, { reqs: toRuleRequestRows(reqs, sessions), sessions, skipIdeDetectors: false });
+      const emission = executePipeline(pipeline, resolved, { reqs: toRuleRequestRows(reqs, a.getRequestSessionMap()), sessions, skipIdeDetectors: false });
       const triggered = checkPipelineTrigger(pipeline, emission, resolved);
       const evalResult = evaluateRule(resolved, triggered ? emission : null);
       const pct = emission.total > 0 ? `${(emission.count / emission.total * 100).toFixed(0)}%` : '0%';
@@ -1063,7 +1071,7 @@ Explain why this session triggered the rule.`;
         return e;
       });
 
-      const detectorResults = runDetectors(enrichedReqs, sessions, skipIde);
+      const detectorResults = runDetectors(enrichedReqs, sessions, skipIde, a.getRequestSessionMap());
       // Build workspaces list (top N by session count)
       const wsCounts = new Map<string, number>();
       for (const s of sessions) {
@@ -1174,7 +1182,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = pickRows(scope, reqs, sessions);
+    const rows = pickRows(scope, reqs, sessions, a.getRequestSessionMap());
 
     try {
       const filterFn = compileFilter(expr);
@@ -1203,7 +1211,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = pickRows(rule.scope, reqs, sessions);
+    const rows = pickRows(rule.scope, reqs, sessions, a.getRequestSessionMap());
 
     const result = calibrate(
       ext.filterExpr || '',

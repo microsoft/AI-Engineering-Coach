@@ -301,10 +301,16 @@ export function runDetector(rule: DetectionRule, reqs: SessionRequest[], session
 
 /**
  * Run emitters only (no trigger evaluation). Used by rule-engine preview.
+ * `sessionOf` works as in runDetectors.
  */
-export function runEmitters(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): Map<string, DetectorEmission> {
+export function runEmitters(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): Map<string, DetectorEmission> {
   const rules = getAllRules();
-  const ctx = detectorContext(reqs, sessions, skipIdeDetectors);
+  const ctx = detectorContext(reqs, sessions, skipIdeDetectors, sessionOf);
   const results = new Map<string, DetectorEmission>();
   for (const rawRule of rules) {
     if (skipIdeDetectors && rawRule.requiresIdeContext) continue;
