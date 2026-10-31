@@ -109,6 +109,23 @@ describe('Claude Code request token fields', () => {
 });
 
 describe('Claude Code request token fields and prompt-cache rows', () => {
+  it('agree when the lines of one response log different usage, the largest counting in both', () => {
+    withProject({
+      [`${SESSION}.jsonl`]: [
+        user('stream', '2026-10-28T10:00:00Z'),
+        block('msg_a', '2026-10-28T10:00:01Z', { input_tokens: 10, cache_read_input_tokens: 5_000, cache_creation_input_tokens: 1_000, output_tokens: 1 }, { kind: 'thinking' }),
+        block('msg_a', '2026-10-28T10:00:02Z', { input_tokens: 10, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2_000, output_tokens: 300 }),
+      ],
+    }, projectsDir => {
+      const [request] = requestsOf(projectsDir);
+      const rows = request.promptCache?.rows ?? [];
+      expect(request).toMatchObject({ promptTokens: 12_010, cacheReadTokens: 10_000, cacheWriteTokens: 2_000 });
+      expect(rows.map(row => [row.stream, row.calls, row.input, row.cacheRead, row.cacheWrite])).toEqual([['main', 1, 12_010, 10_000, 2_000]]);
+      // The session's first main-agent call is its cold start: everything it didn't read from the cache.
+      expect(request.promptCache?.coldStart).toBe(2_010);
+    });
+  });
+
   it('agree for the same request, sub-agent calls included', () => {
     withProject({
       [`${SESSION}.jsonl`]: [
