@@ -13,6 +13,7 @@ import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import { exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFixtures, readInstalledBuild, scenarioContext } from './fixtures';
 import { writeSnapshotReport } from './snapshots';
+import { CLOSED_LOOPBACK_ORIGIN, startUpdateServer, UPDATE_TEST_ORIGIN_ENV, type UpdateServer } from './update-server';
 
 const PROJECT = path.resolve(__dirname, '..', '..');
 const manifestSchema = z.object({
@@ -99,6 +100,50 @@ async function assertInstalledPackage(root: string, installedRoot: string, manif
     + `${build.dev ? ' (dev)' : ''}, built ${build.builtAt}`);
 }
 
+/**
+ * Packages the same sources as the next patch version for the update suite's loopback release
+ * server. vsce's prepublish rebuilds dist with that stamp, so dist is rebuilt with the stamp of the
+ * package under test afterwards. `package.json` is never modified.
+ */
+async function packageNextVersion(directory: string, manifest: { name: string; version: string }): Promise<{ vsix: string; version: string }> {
+  const [major, minor, patch] = manifest.version.split('.').map(Number);
+  const version = `${major}.${minor}.${patch + 1}`;
+  const vsix = path.join(directory, `${manifest.name}-${version}.vsix`);
+  const original = await fs.readFile(path.join(PROJECT, 'dist', 'build-info.json'), 'utf8').catch(() => undefined);
+  const commit = original ? (JSON.parse(original) as { commit?: string }).commit ?? 'unknown' : 'unknown';
+  // The build stamp override must be complete (scripts/build-info.mjs rejects partial stamps).
+  const stamp = { version, commit, dirty: false, branch: 'desktop-update-test', builtAt: new Date().toISOString(), dev: true };
+  // README.extension.md becomes the package README, so the repository README must stay out.
+  const ignoreFile = path.join(directory, 'update-test.vscodeignore');
+  await fs.writeFile(ignoreFile, `${await fs.readFile(path.join(PROJECT, '.vscodeignore'), 'utf8')}\nREADME.md\n`);
+  try {
+    const vsce = path.join(PROJECT, 'node_modules', '@vscode', 'vsce', 'vsce');
+    assert.equal(await execute(process.execPath, [vsce, 'package', version, '--no-update-package-json', '--no-dependencies',
+      '--allow-missing-repository', '--readme-path', 'README.extension.md', '--ignoreFile', ignoreFile, '--out', vsix],
+    { ...process.env, AIC_BUILD_INFO: JSON.stringify(stamp) }), 0, 'Packaging the update test VSIX failed');
+  } finally {
+    if (original) {
+      assert.equal(await execute(process.execPath, [path.join(PROJECT, 'esbuild.mjs')], { ...process.env, AIC_BUILD_INFO: original }),
+        0, 'Restoring dist after packaging the update test VSIX failed');
+    }
+  }
+  return { vsix, version };
+}
+
+/** The update suite gets a loopback release server; every other suite points updates at a closed port. */
+async function startUpdateFeed(scenario: string): Promise<UpdateServer | undefined> {
+  if (scenario !== 'update') {
+    process.env[UPDATE_TEST_ORIGIN_ENV] = CLOSED_LOOPBACK_ORIGIN;
+    return undefined;
+  }
+  const vsix = process.env.AIC_E2E_UPDATE_VSIX;
+  const version = process.env.AIC_E2E_UPDATE_VERSION;
+  if (!vsix || !version) throw new Error('Missing the update test VSIX');
+  const server = await startUpdateServer(version, await fs.readFile(vsix));
+  process.env[UPDATE_TEST_ORIGIN_ENV] = server.origin;
+  return server;
+}
+
 async function runWorker(vsix: string, version: string, scenario: string): Promise<void> {
   if (!(await discoverSuites(SUITES)).includes(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
   const { root, timestamp } = scenarioContext();
@@ -118,12 +163,15 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     'workbench.enableExperiments': false,
     'chat.disableAIFeatures': true,
     'workbench.colorTheme': 'Default Dark Modern',
+    // Only "Check for Updates" asks the release feed during tests.
+    'aiEngineerCoach.updates.autoCheck': false,
   }));
 
   // Import only in the child, after its home/profile environment has been isolated.
   const { ExTester, ReleaseQuality } = await import('vscode-extension-tester');
   const extensions = fixturePaths(root).extensions;
   const tester = new ExTester(storage, ReleaseQuality.Stable, extensions);
+  let updateFeed: UpdateServer | undefined;
   try {
     await tester.downloadCode(version);
     await tester.downloadChromeDriver(version);
@@ -135,6 +183,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     const installedManifest = manifestSchema.parse(JSON.parse(await fs.readFile(path.join(installedRoot, 'package.json'), 'utf8')));
     assert.deepEqual(installedManifest, manifest, 'Installed VSIX does not match the repository manifest');
     await assertInstalledPackage(root, installedRoot, installedManifest.version);
+    updateFeed = await startUpdateFeed(scenario);
     const suite = path.join(__dirname, 'suite', `${scenario}.spec.js`).replaceAll('\\', '/');
     const code = await tester.runTests(suite, {
       vscodeVersion: version, offline: true, config, settings, locale: 'en',
@@ -142,6 +191,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     });
     if (code !== 0) throw new Error(`${scenario} VS Code smoke tests failed (${code})`);
   } finally {
+    await updateFeed?.close();
     await copyIfPresent(fixturePaths(root).runtimeLog, path.join(artifacts, 'coach-runtime.log'));
     for (const name of ['screenshots', 'chromedriver.log', 'test.log', path.join('settings', 'logs')]) {
       await copyIfPresent(path.join(storage, name), path.join(artifacts, path.basename(name)));
@@ -180,6 +230,7 @@ async function main(): Promise<void> {
   console.log(`Desktop diagnostics: ${artifacts}`);
   try {
     await copyArchives(cache, storage);
+    const update = scenarios.includes('update') ? await packageNextVersion(runRoot, manifest) : undefined;
     for (const scenario of scenarios) {
       const root = path.join(runRoot, scenario);
       const env = {
@@ -188,6 +239,7 @@ async function main(): Promise<void> {
         AIC_E2E_TIMESTAMP: String(fixtureDate.getTime()),
         AIC_E2E_STORAGE: storage,
         AIC_E2E_ARTIFACTS: path.join(artifacts, scenario),
+        ...(update ? { AIC_E2E_UPDATE_VSIX: update.vsix, AIC_E2E_UPDATE_VERSION: update.version } : {}),
       };
       const exitCode = await execute(process.execPath, [__filename, '--worker', scenario, '--vsix', vsix, '--vscode-version', version], env);
       results.push({ scenario, exitCode });
