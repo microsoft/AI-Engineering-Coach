@@ -12,6 +12,9 @@ import { e2ePort, harnessUrl } from './harness-url';
 // Everything the specs load from the server. Each served copy must match this checkout byte for
 // byte, so a server from another checkout fails the run instead of being tested.
 const SERVED_FILES = ['tests/e2e/harness.html', 'dist/webview/app.js', 'dist/webview/styles.css'];
+// Bounds each request and body read, so a reused server that never finishes a response fails the
+// check instead of hanging global setup, which has no timeout of its own.
+const RESPONSE_TIMEOUT_MS = 10_000;
 
 const digest = (data: Uint8Array) => createHash('sha256').update(data).digest('hex').slice(0, 12);
 
@@ -26,9 +29,10 @@ async function localDigest(root: string, file: string): Promise<string> {
 
 async function servedDigest(file: string): Promise<string> {
   try {
-    const response = await fetch(harnessUrl(file));
+    const response = await fetch(harnessUrl(file), { signal: AbortSignal.timeout(RESPONSE_TIMEOUT_MS) });
     return response.ok ? digest(new Uint8Array(await response.arrayBuffer())) : `HTTP ${response.status}`;
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') return `no complete response within ${RESPONSE_TIMEOUT_MS / 1000} s`;
     return `unreachable (${String((error as { cause?: unknown }).cause ?? error)})`;
   }
 }
@@ -36,11 +40,10 @@ async function servedDigest(file: string): Promise<string> {
 export default async function verifyServedBuild(config: FullConfig): Promise<void> {
   const configDir = path.dirname(config.configFile ?? path.join(process.cwd(), 'playwright.config.ts'));
   const root = path.resolve(configDir, config.webServer?.cwd ?? '.');
-  const mismatches: string[] = [];
-  for (const file of SERVED_FILES) {
+  const mismatches = (await Promise.all(SERVED_FILES.map(async file => {
     const [local, served] = await Promise.all([localDigest(root, file), servedDigest(file)]);
-    if (served !== local) mismatches.push(`  ${file}: served ${served}, local ${local}`);
-  }
+    return served === local ? [] : [`  ${file}: served ${served}, local ${local}`];
+  }))).flat();
   if (mismatches.length) {
     throw new Error([
       `The server on port ${e2ePort()} is not serving this checkout (${root}):`,
