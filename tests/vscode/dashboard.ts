@@ -101,6 +101,9 @@ export class Dashboard {
     await driver.wait(async () => {
       try {
         await view.switchToFrame(READY_TIMEOUT);
+        // Until the view's own frame is ready, the open dashboard can be the only ready webview;
+        // require a view-only element so a wrong frame is retried instead of read.
+        await view.findWebElement(By.css('#whatsNew'));
         result = { value: await action(view) };
         return true;
       } catch (err: unknown) {

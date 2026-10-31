@@ -143,7 +143,7 @@ describe('Packaged VSIX release notes', () => {
   it('shows the build stamp in the activity-bar view and opens What\'s New from its link', async () => {
     const build = await readInstalledBuild(root);
     const line = await dashboard.inActivityBarView(async view =>
-      (await view.findWebElement(By.css('#build-info'))).getText());
+      (await view.findWebElement(By.css('p#build-info'))).getText());
     const version = build.version.replaceAll('.', String.raw`\.`);
     assert.match(line, new RegExp(`^v${version}${build.dev ? String.raw` \(dev\)` : ''} · ${build.commit}${build.dirty ? '-dirty' : ''} · `));
     await dashboard.inActivityBarView(async view => (await view.findWebElement(By.css('#whatsNew'))).click());
