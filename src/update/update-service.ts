@@ -87,6 +87,8 @@ export class UpdateService implements vscode.Disposable {
   private readonly downloadDir: (() => Promise<string>) | undefined;
   /** Identifies this installation: local or a remote host, and its extensions folder. */
   private readonly location: string;
+  /** One-click install is verified in local windows only; remote windows get the release page. */
+  private readonly localWindow: boolean;
 
   constructor(private readonly context: vscode.ExtensionContext, options: UpdateServiceOptions = {}) {
     // Bound late so VS Code's proxy-aware fetch patch is the one that runs.
@@ -97,6 +99,7 @@ export class UpdateService implements vscode.Disposable {
     this.endpoints = options.endpoints ?? resolveFeedEndpoints();
     this.downloadDir = options.downloadDir;
     this.location = `${vscode.env.remoteName ?? 'local'}:${path.posix.dirname(context.extensionUri.path)}`;
+    this.localWindow = vscode.env.remoteName === undefined;
   }
 
   start(): void {
@@ -153,11 +156,13 @@ export class UpdateService implements vscode.Disposable {
       await this.checkNow();
       return;
     }
-    const installable = canInstallCandidate(release);
+    const installable = this.canInstall(release);
+    const reason = this.localWindow ? "This release can't be installed from here."
+      : 'One-click updates are available only in local windows.';
     const detail = installable
       ? `This downloads ${release.vsix.name} from GitHub Releases, checks its SHA-256 checksum, and installs it. `
         + 'Reload the window afterwards to start using it.'
-      : `This release can't be installed from here. Download ${release.vsix.name} from the release page and run `
+      : `${reason} Download ${release.vsix.name} from the release page and run `
         + '"Extensions: Install from VSIX..." to install it.';
     const actions = installable ? [INSTALL, RELEASE_NOTES, SKIP] : [OPEN_RELEASE_PAGE, SKIP];
     const choice = await vscode.window.showInformationMessage(
@@ -182,6 +187,11 @@ export class UpdateService implements vscode.Disposable {
     for (const disposable of this.disposables) disposable.dispose();
     this.disposables.length = 0;
     this.statusEmitter.dispose();
+  }
+
+  /** One-click install needs a verifiable release and, until remote installs are verified, a local window. */
+  private canInstall(release: UpdateCandidate): boolean {
+    return this.localWindow && canInstallCandidate(release);
   }
 
   private readState(): PersistedUpdateState {
@@ -214,6 +224,7 @@ export class UpdateService implements vscode.Disposable {
       markers: { ...state, installedVersion: installedHere ? state.installedVersion : undefined },
       automatic: this.automatic(),
       revealedVersion: this.revealedVersion,
+      allowInstall: this.localWindow,
       cooldownMs: cooldownFromSetting(vscode.workspace.getConfiguration('extensions').get<number>('autoUpdateDelay')),
       now: this.now(),
     });
@@ -302,7 +313,7 @@ export class UpdateService implements vscode.Disposable {
 
   private async offer(release: UpdateCandidate, origin: 'automatic' | 'manual'): Promise<void> {
     if (origin === 'automatic') await this.writeState({ notifiedVersion: release.version });
-    const actions = canInstallCandidate(release) ? [UPDATE, RELEASE_NOTES, SKIP] : [OPEN_RELEASE_PAGE, SKIP];
+    const actions = this.canInstall(release) ? [UPDATE, RELEASE_NOTES, SKIP] : [OPEN_RELEASE_PAGE, SKIP];
     const choice = await vscode.window.showInformationMessage(
       `AI Engineer Coach v${release.version} is available. You have v${this.build.version}.`, ...actions);
     await this.handleChoice(choice, release);
@@ -331,7 +342,7 @@ export class UpdateService implements vscode.Disposable {
 
   private async installUpdate(release: UpdateCandidate): Promise<void> {
     if (this.installing) return;
-    if (!canInstallCandidate(release)) {
+    if (!this.canInstall(release)) {
       await vscode.env.openExternal(vscode.Uri.parse(release.releaseUrl));
       return;
     }

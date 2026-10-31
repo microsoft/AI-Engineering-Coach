@@ -75,7 +75,7 @@ Type `@aicoach` in any VS Code chat panel for conversational access to all coach
 4. Run **AI Engineer Coach: Reload Data** to re-parse after new sessions.
 5. Type `@aicoach` in VS Code chat for conversational coaching.
 6. Run **AI Engineer Coach: What's New** for the release notes. The bottom of the dashboard sidebar shows the installed version and build.
-7. Run **AI Engineer Coach: Check for Updates** to look for a newer release. Release builds also check about once a day and offer an update once; nothing is downloaded or installed until you click **Update**.
+7. Run **AI Engineer Coach: Check for Updates** to look for a newer release. Release builds also check about once a day and offer an update once; nothing is downloaded or installed until you click **Update**. In remote windows (WSL, Remote-SSH, Dev Containers, Codespaces), **Open Release Page** takes you to the download instead.
 
 ## Privacy
 

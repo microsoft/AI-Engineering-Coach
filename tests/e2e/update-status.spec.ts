@@ -42,6 +42,14 @@ test.describe('Update status in the build stamp footer', () => {
     await expect.poll(() => updateRequests(page)).toEqual(['promptUpdate']);
   });
 
+  test('offers a download when the host can only open the release page', async ({ page }) => {
+    await openDashboard(page, { ...available, canInstall: false });
+    const status = page.locator('#build-info-status');
+    await expect(status.locator('.build-info-status-text')).toHaveText('v0.4.0 available');
+    await status.getByRole('button', { name: 'Download…' }).click();
+    await expect.poll(() => updateRequests(page)).toEqual(['promptUpdate']);
+  });
+
   test('follows the host from updating to installed, then reloads on request', async ({ page }) => {
     await openDashboard(page);
     const status = page.locator('#build-info-status');

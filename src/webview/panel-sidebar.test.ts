@@ -10,7 +10,7 @@ import { DashboardSidebarProvider } from './panel-sidebar';
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn<(command: string) => Promise<unknown>>(),
   receive: (_message: unknown) => {},
-  updateStatus: undefined as { state: string; latest?: string } | undefined,
+  updateStatus: undefined as { state: string; latest?: string; canInstall?: boolean } | undefined,
 }));
 
 vi.mock('vscode', () => ({
@@ -70,13 +70,19 @@ describe('DashboardSidebarProvider', () => {
   });
 
   it('offers an available update through the confirming install command', () => {
-    mocks.updateStatus = { state: 'available', latest: '0.4.0' };
+    mocks.updateStatus = { state: 'available', latest: '0.4.0', canInstall: true };
     const webview = resolveSidebar();
     expect(webview.html).toContain(
       '<p class="sidebar-note sidebar-update" id="update-status">v0.4.0 available <button id="updateAction" class="link">Update…</button></p>');
     expect(webview.html).toContain("vscode.postMessage({ command: 'aiEngineerCoach.installUpdate' })");
     mocks.receive({ command: 'aiEngineerCoach.installUpdate' });
     expect(mocks.executeCommand.mock.calls).toEqual([['aiEngineerCoach.installUpdate']]);
+  });
+
+  it('offers a download when the update cannot be installed from this window', () => {
+    mocks.updateStatus = { state: 'available', latest: '0.4.0', canInstall: false };
+    expect(resolveSidebar().html).toContain(
+      '<p class="sidebar-note sidebar-update" id="update-status">v0.4.0 available <button id="updateAction" class="link">Download…</button></p>');
   });
 
   it('shows progress, then a reload button once installed', () => {

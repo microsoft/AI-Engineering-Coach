@@ -352,6 +352,21 @@ describe('Check for Updates', () => {
     expect(service.getStatus()).toMatchObject({ state: 'available', canInstall: false });
   });
 
+  it('opens the release page instead of installing in remote windows', async () => {
+    mocks.remoteName = 'ssh-remote';
+    const fetch = serve({ [API]: () => jsonResponse(releaseJson('0.4.0')) });
+    mocks.showInformationMessage.mockResolvedValueOnce('Open Release Page');
+    const service = createService(fetch, { extensionPath: '/home/u/.vscode-server/extensions/ai-engineer-coach.ai-engineer-coach-0.2.0' });
+    service.start();
+    await service.checkNow();
+    expect(mocks.showInformationMessage).toHaveBeenCalledWith(
+      'AI Engineer Coach v0.4.0 is available. You have v0.2.0.', 'Open Release Page', 'Skip This Version');
+    expect(mocks.openExternal.mock.calls.map(([uri]) => uri.toString())).toEqual([RELEASE_PAGE]);
+    expect(installCalls()).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(service.getStatus()).toMatchObject({ state: 'available', canInstall: false });
+  });
+
   it.each([
     ['nothing is released', () => new Response(null, { status: 404 }), 'showInformationMessage',
       'No AI Engineer Coach releases have been published yet.'],
@@ -398,6 +413,25 @@ describe('Install Update', () => {
         + 'Reload the window afterwards to start using it.',
     }, 'Install', 'Release Notes', 'Skip This Version');
     expect(installCalls()).toHaveLength(0);
+  });
+
+  it('points remote windows at the release page', async () => {
+    mocks.remoteName = 'wsl';
+    const fetch = serve({ [API]: () => jsonResponse(releaseJson('0.4.0')) });
+    const service = createService(fetch);
+    service.start();
+    await service.checkNow();
+    mocks.showInformationMessage.mockClear();
+    mocks.showInformationMessage.mockResolvedValueOnce('Open Release Page');
+    await service.promptInstall();
+    expect(mocks.showInformationMessage).toHaveBeenCalledWith('Update AI Engineer Coach to v0.4.0?', {
+      modal: true,
+      detail: 'One-click updates are available only in local windows. Download ai-engineer-coach-0.4.0.vsix from the '
+        + 'release page and run "Extensions: Install from VSIX..." to install it.',
+    }, 'Open Release Page', 'Skip This Version');
+    expect(mocks.openExternal.mock.calls.map(([uri]) => uri.toString())).toEqual([RELEASE_PAGE]);
+    expect(installCalls()).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('checks first when no update is known', async () => {

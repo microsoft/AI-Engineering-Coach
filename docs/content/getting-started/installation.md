@@ -47,7 +47,7 @@ Run **AI Engineer Coach: What's New** from the Command Palette, or select **What
 
 Release builds, the ones installed from a [GitHub Release](https://github.com/microsoft/AI-Engineering-Coach/releases), check about once a day whether a newer release is out. Builds marked **dev** never check on their own. When a newer version is available, a notification offers it once, and the bottom of the dashboard sidebar and the activity-bar view show **v0.4.0 available** until you update or choose **Skip This Version**. Run **AI Engineer Coach: Check for Updates** to check at any time, from any build.
 
-**Update** downloads the release's `.vsix`, checks its size and SHA-256 checksum against the release, installs it with VS Code's extension installer, and then offers **Reload Window**. Nothing is downloaded, installed, or reloaded until you click. One-click updates are offered only for releases that GitHub marks as immutable and whose package the release workflow uploaded; for any other release, **Open Release Page** takes you to the download instead.
+**Update** downloads the release's `.vsix`, checks its size and SHA-256 checksum against the release, installs it with VS Code's extension installer, and then offers **Reload Window**. Nothing is downloaded, installed, or reloaded until you click. One-click updates are offered only for releases that GitHub marks as immutable and whose package the release workflow uploaded, and only in local windows; for any other release, and in remote windows (WSL, Remote-SSH, Dev Containers, Codespaces), **Open Release Page** takes you to the download instead.
 
 What the update check sends:
 

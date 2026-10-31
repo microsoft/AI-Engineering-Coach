@@ -45,6 +45,8 @@ export interface EvaluateInput {
   automatic: boolean;
   /** A manual check in this window showed this version. */
   revealedVersion?: string;
+  /** One-click install is available in this window; remote windows open the release page instead. */
+  allowInstall: boolean;
   /** VS Code's `extensions.autoUpdateDelay`, in milliseconds. */
   cooldownMs: number;
   now: number;
@@ -84,7 +86,7 @@ export function evaluateUpdate(input: EvaluateInput): Evaluation {
       current,
       latest: candidate.version,
       publishedAt: candidate.publishedAt,
-      canInstall: canInstallCandidate(candidate),
+      canInstall: input.allowInstall && canInstallCandidate(candidate),
     },
     notify: !revealed && markers.notifiedVersion !== candidate.version,
   };

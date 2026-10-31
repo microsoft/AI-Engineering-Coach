@@ -21,8 +21,9 @@ minor versions are pre-releases.
 - Release builds check GitHub Releases about once a day and offer a newer version once, at the
   bottom of the dashboard sidebar and in the activity-bar view too. **Update** downloads the VSIX,
   checks its SHA-256 checksum against the release, installs it, and offers **Reload Window**;
-  nothing installs without a click. **AI Engineer Coach: Check for Updates** checks on demand,
-  and the `aiEngineerCoach.updates.autoCheck` setting turns automatic checks off
+  nothing installs without a click. Remote windows open the release page instead.
+  **AI Engineer Coach: Check for Updates** checks on demand, and the
+  `aiEngineerCoach.updates.autoCheck` setting turns automatic checks off
 - GitHub Releases take their notes from this changelog and attach a SHA-256 checksum
   next to the VSIX
 - **Curiosity** page with question analytics and **Prompt Quality** checks (#284, #287)

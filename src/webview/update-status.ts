@@ -3,10 +3,11 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Shows the host's update state in the build stamp footer: "v0.4.0 available" with Update…,
- * "Updating…", or "v0.4.0 installed" with Reload. The webview only asks the host to act; the
- * host confirms natively before installing and decides what to install. The canvas host
- * always reports `none`, so nothing appears there. */
+/* Shows the host's update state in the build stamp footer: "v0.4.0 available" with Update…
+ * (or Download… when the host can only open the release page), "Updating…", or
+ * "v0.4.0 installed" with Reload. The webview only asks the host to act; the host confirms
+ * natively before installing and decides what to install. The canvas host always reports
+ * `none`, so nothing appears there. */
 
 import type { UpdateStatus } from '../core/types/rpc-types';
 import { setBuildInfoStatus } from './build-info-footer';
@@ -50,7 +51,7 @@ export function renderUpdateStatus(status: UpdateStatus): void {
       setBuildInfoStatus({
         text: `v${status.latest} available`,
         title: `You have v${status.current}.${published ? ` v${status.latest} was published on ${published}.` : ''}`,
-        actionLabel: 'Update…',
+        actionLabel: status.canInstall ? 'Update…' : 'Download…',
         onAction: () => requestFromHost('promptUpdate'),
       });
       return;

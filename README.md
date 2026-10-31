@@ -127,7 +127,7 @@ Run **AI Engineer Coach: What's New** to read the release notes ([`CHANGELOG.md`
 
 ### Updates
 
-Release builds check [GitHub Releases](https://github.com/microsoft/AI-Engineering-Coach/releases) about once a day and offer a newer version once, with **Update**, **Release Notes**, and **Skip This Version**. **Update** downloads the `.vsix`, checks its SHA-256 checksum against the release, installs it, and then offers **Reload Window**; nothing happens without a click. Run **AI Engineer Coach: Check for Updates** to check on demand. See [Updates](docs/content/getting-started/installation.md#updates) for what is sent and how to turn it off.
+Release builds check [GitHub Releases](https://github.com/microsoft/AI-Engineering-Coach/releases) about once a day and offer a newer version once, with **Update**, **Release Notes**, and **Skip This Version**. In local windows, **Update** downloads the `.vsix`, checks its SHA-256 checksum against the release, installs it, and then offers **Reload Window**; nothing happens without a click. Remote windows open the release page instead. Run **AI Engineer Coach: Check for Updates** to check on demand. See [Updates](docs/content/getting-started/installation.md#updates) for what is sent and how to turn it off.
 
 ---
 

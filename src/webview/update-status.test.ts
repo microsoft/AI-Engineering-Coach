@@ -61,6 +61,16 @@ describe('update status in the build stamp footer', () => {
     expect(mocks.rpc).toHaveBeenLastCalledWith('promptUpdate');
   });
 
+  it('offers a download when the host can only open the release page', async () => {
+    mocks.rpc.mockResolvedValueOnce({ ...available, canInstall: false });
+    const { initUpdateStatus } = await loadModule();
+    await initUpdateStatus();
+    const action = slot().querySelector<HTMLButtonElement>('.build-info-action')!;
+    expect(action.textContent).toBe('Download…');
+    action.click();
+    expect(mocks.rpc).toHaveBeenLastCalledWith('promptUpdate');
+  });
+
   it('follows the host through updating and installed', async () => {
     const { initUpdateStatus } = await loadModule();
     await initUpdateStatus();

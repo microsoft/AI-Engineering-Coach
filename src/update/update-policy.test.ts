@@ -23,6 +23,7 @@ function input(patch: Partial<EvaluateInput> = {}): EvaluateInput {
     current: '0.2.0',
     markers: {},
     automatic: true,
+    allowInstall: true,
     cooldownMs: 12 * HOUR,
     now: PUBLISHED + 13 * HOUR,
     ...patch,
@@ -88,6 +89,7 @@ describe('evaluateUpdate', () => {
   it('marks releases that need a manual download', () => {
     expect(evaluateUpdate(input({ candidate: candidate('0.4.0', { immutable: false }) })).status)
       .toEqual({ ...available, canInstall: false });
+    expect(evaluateUpdate(input({ allowInstall: false })).status).toEqual({ ...available, canInstall: false });
   });
 });
 

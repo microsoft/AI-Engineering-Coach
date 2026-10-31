@@ -20,7 +20,7 @@ function renderUpdateLine(): string {
   switch (status?.state) {
     case 'available':
       return `<p class="sidebar-note sidebar-update" id="update-status">v${escapeHtmlAttr(status.latest)} available `
-        + '<button id="updateAction" class="link">Update…</button></p>';
+        + `<button id="updateAction" class="link">${status.canInstall ? 'Update…' : 'Download…'}</button></p>`;
     case 'updating':
       return `<p class="sidebar-note sidebar-update" id="update-status">Updating to v${escapeHtmlAttr(status.latest)}…</p>`;
     case 'installed':
