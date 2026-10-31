@@ -542,16 +542,51 @@ function handleCompactionComplete(data: Record<string, unknown>, state: CLIParse
   turn.compaction ??= event;
 }
 
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** Billed tokens per type from a model's `tokenDetails` (`input`, `cache_read`, `cache_write` and `output`, each
+ *  `{ tokenCount }`). They cover every billed call of the model, compaction summaries included, and `input` is
+ *  the uncached part. `null` unless all four are logged, so the totals never mix the two scopes. */
+function billedTokens(details: unknown): Pick<ModelUsage, 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'> | null {
+  const record = recordValue(details);
+  if (!record) return null;
+  const countOf = (type: string): number | null => tokenCount(recordValue(record[type])?.tokenCount);
+  const inputTokens = countOf('input');
+  const cacheReadTokens = countOf('cache_read');
+  const cacheWriteTokens = countOf('cache_write');
+  const outputTokens = countOf('output');
+  if (inputTokens == null || cacheReadTokens == null || cacheWriteTokens == null || outputTokens == null) return null;
+  return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
+}
+
+/** Token totals of one model from `session.shutdown.modelMetrics`, with `inputTokens` uncached like every other
+ *  `ModelUsage`. `usage.inputTokens` counts the tokens read from and written to the cache too, so without
+ *  `tokenDetails` the cached tokens are subtracted (unless it's below them, as it would be if a build reported
+ *  them separately). */
+function shutdownTokens(info: Record<string, unknown>): Omit<ModelUsage, 'reasoningTokens'> {
+  const billed = billedTokens(info.tokenDetails);
+  if (billed) return billed;
+  const usage = recordValue(info.usage) || {};
+  const input = tokenCount(usage.inputTokens) ?? 0;
+  const cacheReadTokens = tokenCount(usage.cacheReadTokens) ?? 0;
+  const cacheWriteTokens = tokenCount(usage.cacheWriteTokens) ?? 0;
+  const cached = cacheReadTokens + cacheWriteTokens;
+  return {
+    inputTokens: input >= cached ? input - cached : input,
+    outputTokens: tokenCount(usage.outputTokens) ?? 0,
+    cacheReadTokens,
+    cacheWriteTokens,
+  };
+}
+
 function addModelUsage(collected: Record<string, ModelUsage>, rawModel: string, info: unknown): void {
   const infoRecord = recordValue(info);
   if (!infoRecord) return;
 
-  const usage = recordValue(infoRecord.usage) || {};
-  const inputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
-  const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
-  const cacheReadTokens = typeof usage.cacheReadTokens === 'number' ? usage.cacheReadTokens : 0;
-  const cacheWriteTokens = typeof usage.cacheWriteTokens === 'number' ? usage.cacheWriteTokens : 0;
-  const reasoningTokens = typeof usage.reasoningTokens === 'number' ? usage.reasoningTokens : 0;
+  const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = shutdownTokens(infoRecord);
+  const reasoningTokens = tokenCount(recordValue(infoRecord.usage)?.reasoningTokens) ?? 0;
   if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0) return;
 
   const key = normalizeModel(rawModel);
