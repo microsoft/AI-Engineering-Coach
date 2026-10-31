@@ -57,11 +57,19 @@ describe('readCallOutputs', () => {
       finishReason: 'other',
     });
     expect(readCallOutputs({})).toEqual({
-      outputTokens: 0, reasoningTokens: null, maxPromptTokens: null, finishReason: null, contentFilter: false, ttftMs: null,
+      outputTokens: 0, reasoningTokens: null, maxPromptTokens: null, finishReason: null, contentFilter: null, ttftMs: null,
     });
     expect(readCallOutputs({ finishReason: 'content_filter', maxPromptTokens: 0, timeToFirstTokenMs: -1 })).toMatchObject({
       contentFilter: true, maxPromptTokens: null, ttftMs: null,
     });
+  });
+
+  it('keeps a stop reason or content-filter flag the call did not log unknown, not false', () => {
+    expect(readCallOutputs({ finishReason: 'stop' }).contentFilter).toBeNull();
+    expect(readCallOutputs({ contentFilterTriggered: false })).toMatchObject({ finishReason: null, contentFilter: false });
+    expect(cliOutputSample({ ...readCallOutputs({ outputTokens: 5 }), durationMs: null })).toMatchObject({ truncated: null, filtered: null });
+    expect(cliOutputSample({ ...readCallOutputs({ finishReason: 'stop', contentFilterTriggered: false }), durationMs: null }))
+      .toMatchObject({ truncated: false, filtered: false });
   });
 });
 
@@ -77,8 +85,9 @@ describe('row outputs', () => {
     const r = row();
     addRowOutputs(r, stopReasonSample(false));
     addRowOutputs(r, stopReasonSample(true));
-    expect(r).toMatchObject({ truncatedCalls: 1 });
-    for (const key of ['outputTokens', 'reasoningTokens', 'filteredCalls', 'ttftMs', 'durationMs']) expect(r).not.toHaveProperty(key);
+    addRowOutputs(r, stopReasonSample(null));
+    expect(r).toMatchObject({ truncatedCalls: 1, stopCalls: 2 });
+    for (const key of ['outputTokens', 'reasoningTokens', 'reasoningByEffort', 'filteredCalls', 'ttftMs', 'durationMs']) expect(r).not.toHaveProperty(key);
   });
 
   it('thins latency samples evenly, keeping the first and last', () => {
@@ -96,7 +105,9 @@ describe('row outputs', () => {
     expect(r.ttftMs).toHaveLength(MAX_LATENCY_SAMPLES);
     expect(r.durationMs).toHaveLength(MAX_LATENCY_SAMPLES);
   });
+});
 
+describe('row outputs through the request builder', () => {
   it('goes through the shared request builder and passes the row schema', () => {
     const builder = new RequestCacheBuilder();
     for (let i = 0; i < 200; i++) {
@@ -114,6 +125,8 @@ describe('row outputs', () => {
     expect(main.durationMs?.[0]).toBe(5_000);
     expect(main.durationMs?.at(-1)).toBe(5_199);
     expect(sub).toMatchObject({ stream: 'subagent', calls: 1, truncatedCalls: 1 });
+    // Every call logged its stop reason and ran at one effort, so neither the denominator nor the split is stored.
+    for (const key of ['stopCalls', 'reasoningByEffort']) expect(main).not.toHaveProperty(key);
     for (const r of taken?.rows ?? []) expect(ModelCallRowSchema.safeParse(r).success).toBe(true);
     expect(JSON.stringify(taken)).not.toContain('secret_tool_name');
   });

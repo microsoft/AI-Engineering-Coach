@@ -92,6 +92,18 @@ test.describe('Context Management with reported context limits', () => {
     await expect(page.locator('.ctx-ws-row[data-ws-id="ws-1"] .ctx-window-tag')).toHaveText('mixed limits');
     await expect(page.locator('.ctx-ws-row[data-ws-id="ws-2"] .ctx-window-tag')).toHaveCount(0);
     await expect(page.locator('.ctx-window-note')).toContainText('Copilot CLI, Copilot App and Codex report their context limit');
+    // A Copilot App workspace is listed, so the table says how to reach its sessions' context timeline.
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-6"] .ctx-window-tag')).toHaveText('reported limit');
+    await expect(page.locator('.ctx-timeline-hint')).toContainText('context timeline, with every model call, the context limit and each compaction, click its workspace, then the session');
+  });
+
+  test('points from the Context Composition session list to the timeline in the workspace table', async ({ page }) => {
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    await workspace.locator('.ctx-comp-ws-toggle').click();
+    await workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot App' }).click();
+    await expect(workspace.locator('.ctx-comp-timeline-note')).toContainText('under Per-Workspace Context Session Health: click this workspace there, then the session');
+    await workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot CLI' }).click();
+    await expect(workspace.locator('.ctx-comp-timeline-note')).toHaveCount(0);
   });
 
   test('shows a Copilot App session against the limit it reported', async ({ page }) => {

@@ -170,7 +170,7 @@ export interface WorkspaceContextScore {
   score: number;
   verdict: 'optimal' | 'degraded' | 'limited';
   /** Whether utilization uses context limits the harness reported (Copilot CLI and Copilot App, Codex),
-   *  the estimate from the largest prompt seen, or both across the workspace's sessions. */
+   *  the estimate from the largest prompt seen, or both across or within the workspace's sessions. */
   windowSource: ContextWindowSource | 'mixed';
 }
 
@@ -226,8 +226,9 @@ export interface SessionContextDetail {
   /** True when per-request token data is available (enables token curve chart).
    *  False for sessions that only report session-aggregated tokens (older Copilot CLI builds). */
   hasPerRequestTokens: boolean;
-  /** Where `contextWindow` comes from. `reported`: the turns' own limits (`turnLimits`). */
-  windowSource: ContextWindowSource;
+  /** Where `contextWindow` comes from. `reported`: the turns' own limits (`turnLimits`). `mixed`: some turns
+   *  reported their limit; `contextWindow` is the estimate used for the others. */
+  windowSource: ContextWindowSource | 'mixed';
   /** Context limit each turn reported, aligned with `tokenCurve`; absent when no turn reported one. */
   turnLimits?: (number | null)[];
   /** Largest prompt within each turn, aligned with `tokenCurve`; absent when not reported. */

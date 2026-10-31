@@ -134,7 +134,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
   if (data.composition) {
     renderCompositionTrendChart(data.composition);
     const compositionSection = document.getElementById('ctxComposition');
-    if (compositionSection) attachCompositionDrilldown(compositionSection, currentFilter);
+    if (compositionSection) attachCompositionDrilldown(compositionSection, currentFilter, true);
   }
 
   function renderTrendChart(mode: 'avg' | 'workspace'): void {

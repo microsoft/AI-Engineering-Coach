@@ -111,7 +111,14 @@ export const ModelCallRowSchema = z.object({
   cacheBreaks: z.number().int().min(0).optional(),
   outputTokens: tokenSchema.optional(),
   reasoningTokens: tokenSchema.optional(),
+  reasoningByEffort: z.array(z.object({
+    effort: z.enum(['max', 'high', 'medium', 'low', 'unknown']),
+    calls: z.number().int().min(0),
+    outputTokens: tokenSchema,
+    reasoningTokens: tokenSchema,
+  }).strict()).max(5).optional(),
   truncatedCalls: z.number().int().min(0).optional(),
+  stopCalls: z.number().int().min(0).optional(),
   filteredCalls: z.number().int().min(0).optional(),
   ttftMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
   durationMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
@@ -169,6 +176,7 @@ export const CallTimelineSchema = z.object({
     contextLimit: z.number().positive().optional(),
     output: tokenSchema.optional(),
     reasoning: tokenSchema.optional(),
+    reasoningCalls: z.number().int().min(0).optional(),
     truncatedCalls: z.number().int().min(0).optional(),
   }).strict()).max(MAX_TIMELINE_BUCKETS),
 }).strict();

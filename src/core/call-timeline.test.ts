@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { CallTimelineBuilder, MAX_TIMELINE_BUCKETS, bucketOfCall, mergeBuckets, singleCallBucket, type CallTimelineSample } from './call-timeline';
+import { CallTimelineBuilder, MAX_TIMELINE_BUCKETS, bucketOfCall, mergeBuckets, reasoningCallsOf, singleCallBucket, type CallTimelineSample } from './call-timeline';
 import { CallTimelineSchema } from './schemas';
 
 function sample(requestIndex: number, timestamp: number | null, cacheRead = 900, cacheReported = true): CallTimelineSample {
@@ -73,5 +73,23 @@ describe('call timeline context fields', () => {
     const timeline = builder.build()!;
     expect(timeline.buckets[2]).toMatchObject({ peakPrompt: 1_005, contextLimit: 200_000, output: 20, reasoning: 8, truncatedCalls: 1 });
     expect(CallTimelineSchema.safeParse(timeline).success).toBe(true);
+  });
+
+  it('counts the calls that logged reasoning when not every call of a bucket did', () => {
+    const call = (index: number, reasoningTokens: number | null) => singleCallBucket(index, { ...sample(0, null), outputTokens: 1_000, reasoningTokens });
+    const logged = mergeBuckets(call(2, 600), call(3, 600));
+    expect(logged).toMatchObject({ output: 2_000, reasoning: 1_200 });
+    expect(logged).not.toHaveProperty('reasoningCalls');
+    expect(reasoningCallsOf(logged)).toBe(2);
+
+    const partial = mergeBuckets(call(0, 600), call(1, null));
+    expect(partial).toMatchObject({ output: 2_000, reasoning: 600, reasoningCalls: 1 });
+    expect(mergeBuckets(partial, logged)).toMatchObject({ output: 4_000, reasoning: 1_800, reasoningCalls: 3 });
+
+    const none = mergeBuckets(call(4, null), call(5, null));
+    expect(none).not.toHaveProperty('reasoning');
+    expect(reasoningCallsOf(none)).toBe(0);
+    expect(mergeBuckets(logged, none)).toMatchObject({ reasoning: 1_200, reasoningCalls: 2 });
+    expect(CallTimelineSchema.safeParse({ calls: 4, bucketSize: 4, buckets: [mergeBuckets(partial, logged)] }).success).toBe(true);
   });
 });

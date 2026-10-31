@@ -75,6 +75,17 @@ describe('Context Management with reported context limits', () => {
     expect(data.workspaces[0].windowSource).toBe('mixed');
   });
 
+  it('scores a turn without a reported limit against the estimate, not another turn\u2019s limit', () => {
+    const noLimit = { contextUsage: { lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: null, calls: 1 } };
+    const partial = cliSession('partial', [100_000, 150_000], i => (i === 1 ? noLimit : {}));
+    const analyzer = new Analyzer([partial]);
+    expect(analyzer.getContextManagement().workspaces[0].windowSource).toBe('mixed');
+    const detail = analyzer.getWorkspaceContextSessions('partial').sessions[0];
+    expect(detail).toMatchObject({ windowSource: 'mixed', contextWindow: 160_000, turnLimits: [LIMIT, null] });
+    // 150K of the 160K estimate, where the other turn's 968K limit would have said 15.5%.
+    expect(detail.peakUtilization).toBe(93.8);
+  });
+
   it('keeps adaptive thresholds from estimated windows only', () => {
     // 25 VS Code sessions whose average sits well above the default optimal cutoff.
     const estimated = Array.from({ length: 25 }, (_, i) => vscodeSession(`vs-${i}`, [90_000, 95_000, 100_000, 105_000, 110_000], i * 3_600_000));
@@ -85,6 +96,11 @@ describe('Context Management with reported context limits', () => {
     const reported = Array.from({ length: 25 }, (_, i) => cliSession(`cli-${i}`, [20_000, 30_000, 40_000, 50_000, 60_000]));
     const after = new Analyzer([...estimated, ...reported]).getContextManagement().thresholds;
     expect(after).toEqual(before);
+
+    // Sessions with a reported limit on only some turns don't shift the cutoffs either.
+    const noLimit = { contextUsage: { lastPromptTokens: 20_000, peakPromptTokens: 20_000, contextLimit: null, calls: 1 } };
+    const mixed = Array.from({ length: 25 }, (_, i) => cliSession(`mixed-${i}`, [20_000, 30_000, 40_000, 50_000, 60_000], j => (j === 0 ? noLimit : {})));
+    expect(new Analyzer([...estimated, ...mixed]).getContextManagement().thresholds).toEqual(before);
   });
 
   it('counts every compaction of a turn', () => {

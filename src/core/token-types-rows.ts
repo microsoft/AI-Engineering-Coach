@@ -4,11 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 /* Row-based token types: reasoning share by effort, truncated calls and model-call latency, summed over the
- * shared per-request rows (`ModelCallRow`, filled by call-outputs.ts). Ratios are ratios of sums; latency
- * percentiles are over the stored per-call samples. Compaction-summary rows are left out: compaction has its
- * own figures (`CompactionEvent.tokensUsed`). */
+ * shared per-request rows (`ModelCallRow`, filled by call-outputs.ts). Ratios are ratios of sums over the
+ * calls that logged each value; latency percentiles are over the stored per-call samples. Compaction-summary
+ * rows are left out: compaction has its own figures (`CompactionEvent.tokensUsed`). */
 
 import type {
+  EffortReasoning,
   LatencyByModel,
   ModelCallRow,
   ReasoningByEffort,
@@ -17,7 +18,7 @@ import type {
   TokenTypesReasoning,
   TokenTypesTruncation,
 } from './types';
-import { canonicalizeReasoningEffort } from './helpers';
+import { effortKey } from './call-outputs';
 
 type Effort = ReasoningByEffort['effort'];
 type CallStream = ReasoningByEffort['stream'];
@@ -50,28 +51,36 @@ export function hasPerCallOutputs(request: SessionRequest): boolean {
 }
 
 export function effortOf(row: ModelCallRow): Effort {
-  return canonicalizeReasoningEffort(row.reasoningEffort) ?? 'unknown';
+  return effortKey(row.reasoningEffort);
 }
 
-/** Reasoning share of output for the main agent and sub-agents, and by reasoning effort. `null` without any
- *  row that logged both output and reasoning tokens. */
+/** A row's reasoning by effort, over the calls that logged both output and reasoning tokens. */
+export function reasoningParts(row: ModelCallRow): EffortReasoning[] {
+  if (row.outputTokens == null || row.reasoningTokens == null) return [];
+  return row.reasoningByEffort
+    ?? [{ effort: effortOf(row), calls: row.calls, outputTokens: row.outputTokens, reasoningTokens: row.reasoningTokens }];
+}
+
+/** Reasoning share of output for the main agent and sub-agents, and by reasoning effort. Only calls that logged
+ *  reasoning tokens count, in both parts of the share. `null` without any such call. */
 export function rowReasoning(rows: ModelCallRow[]): TokenTypesReasoning | null {
   const streams = new Map<CallStream, { output: number; reasoning: number }>();
   const byEffort = new Map<string, ReasoningByEffort>();
   for (const row of rows) {
-    if (row.outputTokens == null || row.reasoningTokens == null || row.stream === 'compaction') continue;
+    if (row.stream === 'compaction') continue;
     const stream = row.stream;
-    const totals = streams.get(stream) ?? { output: 0, reasoning: 0 };
-    totals.output += row.outputTokens;
-    totals.reasoning += row.reasoningTokens;
-    streams.set(stream, totals);
-    const effort = effortOf(row);
-    const key = `${stream}:${effort}`;
-    const entry = byEffort.get(key) ?? { effort, stream, calls: 0, outputTokens: 0, reasoningTokens: 0, sharePct: null };
-    entry.calls += row.calls;
-    entry.outputTokens += row.outputTokens;
-    entry.reasoningTokens += row.reasoningTokens;
-    byEffort.set(key, entry);
+    for (const part of reasoningParts(row)) {
+      const totals = streams.get(stream) ?? { output: 0, reasoning: 0 };
+      totals.output += part.outputTokens;
+      totals.reasoning += part.reasoningTokens;
+      streams.set(stream, totals);
+      const key = `${stream}:${part.effort}`;
+      const entry = byEffort.get(key) ?? { effort: part.effort, stream, calls: 0, outputTokens: 0, reasoningTokens: 0, sharePct: null };
+      entry.calls += part.calls;
+      entry.outputTokens += part.outputTokens;
+      entry.reasoningTokens += part.reasoningTokens;
+      byEffort.set(key, entry);
+    }
   }
   if (streams.size === 0) return null;
   const shareOf = (stream: CallStream): ReasoningShare | null => {
@@ -89,12 +98,13 @@ export function rowReasoning(rows: ModelCallRow[]): TokenTypesReasoning | null {
   };
 }
 
-/** Truncated (and, where logged, content-filtered) calls. `null` when no row logged why calls stopped. */
+/** Truncated (and, where logged, content-filtered) calls, over the calls that logged why they stopped. `null`
+ *  when no row logged it. */
 export function rowTruncation(rows: ModelCallRow[]): TokenTypesTruncation | null {
   let calls = 0, truncated = 0, filtered = 0, filterLogged = false;
   for (const row of rows) {
     if (row.truncatedCalls == null) continue;
-    calls += row.calls;
+    calls += row.stopCalls ?? row.calls;
     truncated += row.truncatedCalls;
     if (row.filteredCalls != null) {
       filterLogged = true;

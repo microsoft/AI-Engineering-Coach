@@ -1942,6 +1942,7 @@
 .ctx-session-expand:focus-visible { outline: 1px solid var(--focus-border, #58a6ff); outline-offset: 2px; }
 .ctx-window-tag { display: block; text-align: center; font-size: 9px; color: var(--text-muted); letter-spacing: 0.2px; margin-top: 1px; }
 .ctx-window-note { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; line-height: 1.45; }
+.ctx-timeline-hint { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; line-height: 1.45; }
 .ctx-comp-session { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .ctx-comp-session-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px; }
 .ctx-comp-session-sub { margin-top: 10px; }

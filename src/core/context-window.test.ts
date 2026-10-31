@@ -72,4 +72,31 @@ describe('sessionContextWindow', () => {
     expect(estimateContextWindow(0)).toBe(CONTEXT_WINDOW_DEFAULT);
     expect(estimateContextWindow(10_000)).toBe(CONTEXT_WINDOW_DEFAULT);
   });
+
+  it('sizes the estimate by the largest prompt within a turn, not only its last one', () => {
+    // A compaction within the turn: the context peaked at 200K and ended at 30K, and no limit was logged.
+    const session = createSession({
+      sessionId: 's', workspaceId: 'w', workspaceName: 'w', harness: 'Codex',
+      requests: [req({ contextUsage: { lastPromptTokens: 30_000, peakPromptTokens: 200_000, contextLimit: null, calls: 5 } })],
+    });
+    const window = sessionContextWindow(session);
+    expect(window).toEqual({ source: 'estimated', window: 224_000, perRequest: [224_000] });
+    expect(sessionUtilization(session, window)[0]).toBeCloseTo(13.39, 1);
+  });
+
+  it('estimates the window of a turn without a limit instead of borrowing another turn\u2019s, and labels the session mixed', () => {
+    const session = createSession({
+      sessionId: 's', workspaceId: 'w', workspaceName: 'w', harness: 'GitHub Copilot CLI',
+      requests: [
+        req({ contextUsage: { lastPromptTokens: 800_000, peakPromptTokens: 800_000, contextLimit: 968_000, calls: 1 } }),
+        req({ promptTokens: 200_000 }),
+      ],
+    });
+    // The reported turn's 800K prompt doesn't size the other turn's window.
+    const window = sessionContextWindow(session);
+    expect(window).toEqual({ source: 'mixed', window: 224_000, perRequest: [968_000, 224_000] });
+    const util = sessionUtilization(session, window);
+    expect(util[0]).toBeCloseTo(82.64, 1);
+    expect(util[1]).toBeCloseTo(89.29, 1);
+  });
 });

@@ -56,11 +56,11 @@ describe('Claude Code prompt-cache usage', () => {
       const [session] = parseClaudeSessions(projectsDir)[0].sessions;
       const [first, second] = session.requests;
       expect(first.promptCache).toEqual({
-        rows: [{ stream: 'main', model: 'claude-opus-4.6', calls: 2, input: 82_015, cacheRead: 40_000, cacheWrite: 42_000, truncatedCalls: 0 }],
+        rows: [{ stream: 'main', model: 'claude-opus-4.6', calls: 2, input: 82_015, cacheRead: 40_000, cacheWrite: 42_000 }],
         coldStart: 40_010,
       });
       expect(second.promptCache).toEqual({
-        rows: [{ stream: 'main', model: 'claude-opus-4.6', calls: 1, input: 43_003, cacheRead: 42_000, cacheWrite: 1_000, truncatedCalls: 0 }],
+        rows: [{ stream: 'main', model: 'claude-opus-4.6', calls: 1, input: 43_003, cacheRead: 42_000, cacheWrite: 1_000 }],
       });
       // Existing per-request token fields keep their current behavior.
       expect(first.promptTokens).toBe(3 * 40_010 + 2 * 42_005);
@@ -151,7 +151,7 @@ describe('OpenCode prompt-cache usage', () => {
     ], (storageDir) => {
       const request = parseOpenCodeSessions(storageDir)[0].requests[0];
       expect(request.promptCache).toEqual({
-        rows: [{ stream: 'main', model: 'big-pickle', calls: 2, input: 14_738, cacheRead: 9_664, cacheWrite: 0, truncatedCalls: 0 }],
+        rows: [{ stream: 'main', model: 'big-pickle', calls: 2, input: 14_738, cacheRead: 9_664, cacheWrite: 0 }],
         coldStart: 4_874,
       });
       // The existing request fields still describe the first assistant message only, which reported zero

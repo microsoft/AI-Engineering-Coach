@@ -124,9 +124,9 @@ interface ClaudeAssistantData {
   /** Prompt-cache usage per API response (counted once per `message.id`). */
   cache: RequestCacheBuilder;
   responseIds: Set<string>;
-  /** Responses passed to `cache`, and whether each is already counted as truncated: `stop_reason: max_tokens`
-   *  can be on any of a response's lines. */
-  truncation: Map<string, boolean>;
+  /** Responses passed to `cache`, and whether each stopped at the output-token limit (`stop_reason: max_tokens`),
+   *  as known so far: `null` until one of the response's lines logs a stop reason. */
+  truncation: Map<string, boolean | null>;
 }
 
 /** Session-wide prompt-cache state across Claude requests. */
@@ -393,19 +393,33 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
+/** Whether a line's response stopped at the output-token limit; `null` when the line logs no stop reason. */
+function claudeTruncated(line: ClaudeLine): boolean | null {
+  const stopReason = line.message?.stop_reason;
+  return typeof stopReason === 'string' && stopReason ? stopReason === 'max_tokens' : null;
+}
+
+/** A later line of a response already counted can still log why it stopped. Claude Code logs the stop reason on
+ *  some of a response's lines only, so a response counts toward truncation once any line logs one. */
+function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, responseId: string): void {
+  const truncated = claudeTruncated(line);
+  const seen = data.truncation.get(responseId);
+  const stream = line.isSidechain ? 'subagent' : 'main';
+  if (truncated != null && seen === null) {
+    data.truncation.set(responseId, truncated);
+    data.cache.addStopReason(stream, cacheModelName(line.message?.model), truncated);
+  } else if (truncated === true && seen === false) {
+    data.truncation.set(responseId, true);
+    data.cache.addTruncated(stream, cacheModelName(line.message?.model));
+  }
+}
+
 /** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain), and whether it
  *  stopped at the output-token limit. */
 function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
   const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
-  const stream = line.isSidechain ? 'subagent' : 'main';
-  const model = cacheModelName(line.message?.model);
-  const truncated = line.message?.stop_reason === 'max_tokens';
-  // A later line of a response already counted can still log that it stopped at the limit.
   if (responseId && data.responseIds.has(responseId)) {
-    if (truncated && data.truncation.get(responseId) === false) {
-      data.truncation.set(responseId, true);
-      data.cache.addTruncated(stream, model);
-    }
+    addClaudeStopReason(data, line, responseId);
     return;
   }
   const usage = line.message?.usage;
@@ -415,15 +429,20 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
   const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
   if (sample.input <= 0) return;
+  const truncated = claudeTruncated(line);
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
-  if (responseId) data.responseIds.add(responseId);
-  data.cache.addCall(stream, model, { ...sample, outputs: stopReasonSample(truncated) });
-  if (responseId) data.truncation.set(responseId, truncated);
+  if (responseId) {
+    data.responseIds.add(responseId);
+    data.truncation.set(responseId, truncated);
+  }
+  const stream = line.isSidechain ? 'subagent' : 'main';
+  data.cache.addCall(stream, cacheModelName(line.message?.model), { ...sample, outputs: stopReasonSample(truncated) });
   if (stream === 'main' && !cacheState.sawMain) {
     cacheState.sawMain = true;
     data.cache.addColdStart(missTokens(sample), undefined);
   }
 }
+
 function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, lastTs: number | null, cacheState: ClaudeCacheState): ClaudeAssistantData {
   const data: ClaudeAssistantData = {
     nextIndex: startIndex,

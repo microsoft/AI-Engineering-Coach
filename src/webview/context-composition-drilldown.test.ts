@@ -72,14 +72,14 @@ function response(...sessions: SessionContextDetail[]): WorkspaceContextSessions
 }
 
 /** One workspace row as the composition card renders it, wired to the drill-down. */
-function setup(): { toggle: HTMLButtonElement; panel: HTMLElement } {
+function setup(timelineInTable = false): { toggle: HTMLButtonElement; panel: HTMLElement } {
   const root = document.createElement('section');
   root.innerHTML = `<div class="ctx-comp-ws" data-workspace="infra" data-source="copilot-cli">
     <button type="button" class="ctx-comp-ws-toggle" aria-expanded="false">Sessions</button>
     <div class="ctx-comp-ws-sessions" hidden></div>
   </div>`;
   document.body.replaceChildren(root);
-  attachCompositionDrilldown(root, { fromDate: '2026-09-01' });
+  attachCompositionDrilldown(root, { fromDate: '2026-09-01' }, timelineInTable);
   return { toggle: root.querySelector<HTMLButtonElement>('.ctx-comp-ws-toggle')!, panel: root.querySelector<HTMLElement>('.ctx-comp-ws-sessions')! };
 }
 
@@ -119,6 +119,21 @@ describe('composition workspace drill-down', () => {
     toggle.click();
     await flush();
     expect(panel.textContent).toContain('Could not load sessions.');
+  });
+
+  it('points a session with a context timeline to the workspace table, when the table is shown', async () => {
+    for (const timelineInTable of [true, false]) {
+      mocks.rpc.mockResolvedValueOnce(response({ ...session('timeline'), hasCallTimeline: true }, session('older')));
+      const { toggle, panel } = setup(timelineInTable);
+      toggle.click();
+      await flush();
+      listed(panel)[0].click();
+      expect(panel.querySelectorAll('.ctx-comp-timeline-note')).toHaveLength(timelineInTable ? 1 : 0);
+      if (timelineInTable) expect(panel.textContent).toContain('under Per-Workspace Context Session Health: click this workspace there, then the session');
+      // A session without a timeline gets no pointer.
+      listed(panel)[1].click();
+      expect(panel.querySelectorAll('.ctx-comp-timeline-note')).toHaveLength(0);
+    }
   });
 });
 

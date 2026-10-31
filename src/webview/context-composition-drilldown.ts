@@ -10,6 +10,7 @@ import type { DateFilter, SessionContextDetail, WorkspaceContextSessionsData } f
 import { destroyChartById, rpc } from './shared';
 import { html, render, unmount } from './render';
 import { compositionMiniBar, countText, renderSessionCompositionChart, renderSessionCompositionPanel } from './context-composition-view';
+import { timelineLocationNote } from './context-window-view';
 
 const WORKSPACE_SESSION_CHART_ID = 'ctxCompWsSessionChart';
 const MAX_DRILLDOWN_SESSIONS = 10;
@@ -19,9 +20,17 @@ function hasSessionComposition(s: SessionContextDetail): boolean {
   return detail != null && (detail.breakdown != null || detail.systemSegments.length > 0 || detail.compactions.length > 0);
 }
 
-function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDetail[], total: number, selected: string | null): void {
+interface SessionList {
+  sessions: SessionContextDetail[];
+  total: number;
+  /** The workspace table below lists these sessions with their context timeline. */
+  timelineInTable: boolean;
+}
+
+function renderWorkspaceSessions(panel: HTMLElement, list: SessionList, selected: string | null): void {
+  const { sessions, total } = list;
   destroyChartById(WORKSPACE_SESSION_CHART_ID);
-  const select = (id: string) => renderWorkspaceSessions(panel, sessions, total, id === selected ? null : id);
+  const select = (id: string) => renderWorkspaceSessions(panel, list, id === selected ? null : id);
   render(sessions.length === 0
     ? html`<div class="ctx-comp-note">No session in this workspace has composition data in this range.</div>`
     : html`<ul class="ctx-comp-ws-session-list" aria-label="Sessions with composition data">
@@ -33,6 +42,7 @@ function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDet
           ${compositionMiniBar(s.composition, false)}
         </button>
         ${s.sessionId === selected ? renderSessionCompositionPanel(s, WORKSPACE_SESSION_CHART_ID) : null}
+        ${s.sessionId === selected && s.hasCallTimeline && list.timelineInTable ? timelineLocationNote() : null}
       </li>`)}
       ${total > sessions.length ? html`<li class="ctx-comp-note">Showing the ${sessions.length} most recent of ${total} sessions.</li>` : null}
     </ul>`, panel);
@@ -51,10 +61,11 @@ function closeWorkspacePanels(toggles: HTMLButtonElement[]): void {
   }
 }
 
-/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches
- *  Copilot CLI workspaces, which the utilization table omits because they lack per-request tokens.
- *  Sessions are matched like the card's requests: any session with a request in range counts. */
-export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter): void {
+/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches sessions of
+ *  older Copilot CLI builds, which the utilization table omits because they log no per-turn prompt size.
+ *  Sessions are matched like the card's requests: any session with a request in range counts.
+ *  `timelineInTable`: the workspace table is shown, so a session with a context timeline points to it. */
+export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter, timelineInTable = false): void {
   const toggles = [...root.querySelectorAll<HTMLButtonElement>('.ctx-comp-ws-toggle')];
   for (const toggle of toggles) {
     let generation = 0;
@@ -76,7 +87,7 @@ export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter
         .then(data => {
           if (!isCurrent()) return;
           const sessions = data.sessions.filter(s => hasSessionComposition(s) && (source == null || s.composition?.source === source));
-          renderWorkspaceSessions(panel, sessions.slice(0, MAX_DRILLDOWN_SESSIONS), sessions.length, null);
+          renderWorkspaceSessions(panel, { sessions: sessions.slice(0, MAX_DRILLDOWN_SESSIONS), total: sessions.length, timelineInTable }, null);
         })
         .catch(() => {
           if (isCurrent()) render(html`<div class="ctx-comp-note">Could not load sessions.</div>`, panel);

@@ -767,7 +767,8 @@ function getMockData(method, params) {
         workspaces: noSessions ? [] : [
           { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null, windowSource: reported ? 'mixed' : 'estimated' },
           { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null, windowSource: 'estimated' },
-          { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null, windowSource: 'estimated' }
+          { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null, windowSource: 'estimated' },
+          ...(reported ? [{ workspaceId: 'ws-6', workspaceName: 'agent-app', harness: 'GitHub Copilot App', sessionCount: 1, requestsWithTokens: 11, avgPromptTokens: 186000, maxPromptTokens: 420000, avgUtilization: 19.2, peakUtilization: 43.4, saturation: 0, compactionCount: 1, costEfficiency: null, windowSource: 'reported' }] : [])
         ],
         trend: noSessions ? [] : [
           { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
