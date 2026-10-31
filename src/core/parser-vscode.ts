@@ -15,6 +15,7 @@ import { canonicalizeReasoningEffort } from './helpers';
 import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { parseCLIWorkspaceName, parseWorkspaceName, parseWorkspaceFolderPath, parseCLIWorkspaceFolderPath, readFile, reconstructFromJsonl, stripImageData } from './parser-vscode-files';
+import { SelectedModelLimits } from './vscode-model-limits';
 
 export function harnessFromPath(logsDir: string): string {
   if (logsDir.includes('Code - Insiders')) return 'Local Agent (Insiders)';
@@ -488,13 +489,16 @@ interface SessionFileData {
 export function parseSessionFile(sessionFile: string, wsId: string, wsName: string, harness: string, customInstructionsBytes?: number): Session | null {
 
   let data: SessionFileData;
+  const modelLimits = new SelectedModelLimits();
   try {
     if (sessionFile.endsWith('.jsonl')) {
-      const result = reconstructFromJsonl(sessionFile);
+      const result = reconstructFromJsonl(sessionFile, true, modelLimits);
       if (!result) return null;
       data = result as SessionFileData;
     } else {
       data = JSON.parse(stripImageData(readFile(sessionFile))) as SessionFileData;
+      modelLimits.select(data.inputState?.selectedModel);
+      modelLimits.stamp(data.requests);
     }
   } catch (e) {
     debugCore('parser-vscode', `Cannot read/parse session file ${sessionFile}`, e);
@@ -532,6 +536,8 @@ export function parseSessionFile(sessionFile: string, wsId: string, wsName: stri
     // When absent, clear the per-request agent.id (a participant identifier
     // like "copilot") so downstream analytics don't misclassify it as a mode.
     req.agentMode = sessionMode;
+    const contextLimit = modelLimits.limitFor(r.requestId, r.modelId);
+    if (contextLimit != null) req.modelContextLimit = contextLimit;
     return req;
   });
   const hasDevcontainer = detectDevcontainerFromRequests(parsedRequests);

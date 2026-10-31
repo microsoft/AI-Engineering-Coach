@@ -12,6 +12,7 @@ import { assertTrustedPath, MAX_FILE_SIZE, prefetchCache, readFileSafe, recordFa
 import { fileUriToPath } from './helpers';
 import { debugCore, warnCore } from './log';
 import { imageReferencesFromVariables, loadImageReferences } from './image-data';
+import type { SelectedModelLimits } from './vscode-model-limits';
 
 export function readFile(fpath: string): string {
   assertTrustedPath(fpath);
@@ -353,7 +354,24 @@ function appendAtPath(obj: JsonValue, keys: PathKey[], items: JsonValue): void {
   }
 }
 
-export function reconstructFromJsonl(fpath: string, stripImages = true): Record<string, unknown> | null {
+/** Track the selected model's context limit while a session is replayed: on a change of `inputState`, and when
+ *  requests are added (the session's initial state, a whole request set, or requests appended). */
+function trackModelLimits(limits: SelectedModelLimits, state: JsonObject, entry: { kind: number; k?: PathKey[]; v?: JsonValue }): void {
+  const keys = entry.k ?? [];
+  const inputState = state.inputState;
+  const selected = inputState && typeof inputState === 'object' && !Array.isArray(inputState) ? inputState.selectedModel : undefined;
+  if (entry.kind === 0) {
+    limits.select(selected);
+    limits.stamp(state.requests);
+  } else if (keys[0] === 'inputState') {
+    limits.select(selected);
+  } else if (keys[0] === 'requests') {
+    if (entry.kind === 2 && keys.length === 1) limits.stamp(entry.v);
+    else if (entry.kind === 1 && keys.length <= 2) limits.stamp(state.requests);
+  }
+}
+
+export function reconstructFromJsonl(fpath: string, stripImages = true, modelLimits?: SelectedModelLimits): Record<string, unknown> | null {
   let state: JsonObject = {};
   let initialModeId: string | undefined;
   try {
@@ -380,6 +398,7 @@ export function reconstructFromJsonl(fpath: string, stripImages = true): Record<
         } else if (entry.kind === 2) {
           appendAtPath(state, entry.k || [], entry.v as JsonValue);
         }
+        if (modelLimits) trackModelLimits(modelLimits, state, entry);
       } catch {
         // Skip malformed lines, don't abort the entire file
         recordSkippedLines();
