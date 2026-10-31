@@ -399,9 +399,9 @@ function buildOpenCodeRequest(
     // are tracked separately for billing.
     promptTokens: hasTokenData ? (assistantData.tokenSource?.input ?? 0) + cacheRead + cacheWrite : null,
     completionTokens: hasTokenData ? (assistantData.tokenSource?.output ?? 0) : null,
-    // null: no usage was reported. 0: usage was reported with no cache reads or writes (caching off).
-    cacheReadTokens: hasTokenData ? cacheRead : null,
-    cacheWriteTokens: hasTokenData ? cacheWrite : null,
+    // null: no cache usage was reported. 0: it was reported with no cache reads or writes (caching off).
+    cacheReadTokens: assistantData.tokenSource?.cache ? cacheRead : null,
+    cacheWriteTokens: assistantData.tokenSource?.cache ? cacheWrite : null,
     // OpenCode stores reasoning effort as "variant" on user messages
     reasoningEffort: canonicalizeReasoningEffort(msg.variant)
       ?? extractReasoningEffortFromModelId(assistantData.modelId),
@@ -418,7 +418,8 @@ function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawM
   const builder = new RequestCacheBuilder();
   for (const message of assistantMessages) {
     const tokens = message.tokens;
-    if (!tokens) continue;
+    // A message whose tokens carry no cache entry didn't report cache usage; don't count it as uncached.
+    if (!tokens?.cache) continue;
     const cacheRead = tokenCount(tokens.cache?.read);
     const cacheWrite = tokenCount(tokens.cache?.write);
     const sample = { input: tokenCount(tokens.input) + cacheRead + cacheWrite, cacheRead, cacheWrite };

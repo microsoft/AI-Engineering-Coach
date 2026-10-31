@@ -12,7 +12,7 @@ import type { CacheBreakDetail, CacheSessionSummary, DateFilter, PromptCacheSess
 import { bucketOfCall } from '../core/call-timeline';
 import { destroyChartById, formatNum, rpc } from './shared';
 import { html, render, unmount, type ComponentChildren } from './render';
-import { renderCallTimelineChart, type CallTimelineLayer, type CallTimelineMarker } from './call-timeline-chart';
+import { callTimelineTable, renderCallTimelineChart, type CallTimelineLayer, type CallTimelineMarker } from './call-timeline-chart';
 import { CAUSE_META, CAUSE_NAMES, TOKEN_META, countText, durationText, pctText, shortHarness } from './prompt-cache-labels';
 
 const CHART_PREFIX = 'ctxCacheTimeline';
@@ -116,7 +116,11 @@ function breakTable(data: SessionTimelineData): ComponentChildren {
 
 function describeTimeline(data: SessionTimelineData): string {
   const count = data.cache?.breaks.length ?? 0;
-  return `Prompt tokens per ${data.unit === 'calls' ? 'model call' : 'request'}, split by cache status${count > 0 ? `, with ${count} cache breaks marked; the table below lists them` : ''}.`;
+  return `Prompt tokens per ${data.unit === 'calls' ? 'model call' : 'request'}, split by cache status${count > 0 ? `, with ${countText(count, 'cache break')} marked` : ''}. Show the chart as a table, below it, for the values${count > 0 ? '; the break table lists the breaks' : ''}.`;
+}
+
+function tableCaption(data: SessionTimelineData): string {
+  return `Average prompt tokens per ${data.unit === 'calls' ? 'model call' : 'request'} in each bar, by cache status${data.unit === 'calls' ? ', with cache breaks' : ''}`;
 }
 
 function renderPanel(panel: HTMLElement, data: SessionTimelineData): void {
@@ -141,7 +145,8 @@ function renderPanel(panel: HTMLElement, data: SessionTimelineData): void {
       <div class="ctx-cache-layers" role="group" aria-label="Chart layers">
         ${layers.map(layer => html`<button type="button" class="ctx-cache-layer" data-layer=${layer.id} aria-pressed=${String(enabled.has(layer.id))} data-tip=${layer.help} onClick=${toggleLayer}>${layer.label}</button>`)}
       </div>
-      <div class="ctx-cache-timeline"><canvas id=${chartId} role="img" aria-label=${describeTimeline(data)}></canvas></div>` : html`<div class="ctx-comp-note">Nothing to plot for this session.</div>`}
+      <div class="ctx-cache-timeline"><canvas id=${chartId} role="img" aria-label=${describeTimeline(data)}></canvas></div>
+      ${callTimelineTable(data.timeline, layers, data.unit, tableCaption(data))}` : html`<div class="ctx-comp-note">Nothing to plot for this session.</div>`}
     ${breakTable(data)}
   </div>`, panel);
   draw();

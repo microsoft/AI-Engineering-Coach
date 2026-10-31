@@ -113,6 +113,9 @@ interface ClaudeAssistantData {
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
   assistantCount: number;
+  /** An assistant line's usage reported cache tokens, even zero ones (`cache_read_input_tokens` or
+   *  `cache_creation_input_tokens`); otherwise the request's cache fields stay null (not reported). */
+  cacheUsageReported: boolean;
   editLocs: FileEditLocMap;
   answerEvidence: 'final' | 'legacy' | 'missing';
   investigationDelegations: ('research' | 'explore')[];
@@ -237,6 +240,11 @@ function getTimestamp(timestamp?: string): number | null {
 function getNumberField(record: Record<string, unknown> | undefined, key: string): number {
   const value = record?.[key];
   return typeof value === 'number' ? value : 0;
+}
+
+/** The usage block reports cache tokens, even zero ones. Without them the request's cache fields stay null. */
+function reportsCacheUsage(usage: Record<string, unknown> | undefined): boolean {
+  return typeof usage?.cache_read_input_tokens === 'number' || typeof usage?.cache_creation_input_tokens === 'number';
 }
 
 function getInputPath(input: Record<string, unknown> | undefined, key: string): string | null {
@@ -384,16 +392,16 @@ function collectClaudeToolResults(
 /** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain). */
 function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
   const usage = line.message?.usage;
-  if (!usage) return;
+  // Usage without cache fields didn't report cache usage; don't count the response as uncached.
+  if (!usage || !reportsCacheUsage(usage)) return;
   const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
-  if (responseId) {
-    if (data.responseIds.has(responseId)) return;
-    data.responseIds.add(responseId);
-  }
+  if (responseId && data.responseIds.has(responseId)) return;
   const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
   const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
   if (sample.input <= 0) return;
+  // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
+  if (responseId) data.responseIds.add(responseId);
   const stream = line.isSidechain ? 'subagent' : 'main';
   data.cache.addCall(stream, cacheModelName(line.message?.model), sample);
   if (stream === 'main' && !cacheState.sawMain) {
@@ -417,6 +425,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
     totalCacheReadTokens: 0,
     totalCacheWriteTokens: 0,
     assistantCount: 0,
+    cacheUsageReported: false,
     editLocs: new Map(),
     answerEvidence: 'missing',
     investigationDelegations: [],
@@ -443,6 +452,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
       const usage = next.message?.usage;
       const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
       const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
+      if (reportsCacheUsage(usage)) data.cacheUsageReported = true;
       data.totalInputTokens += getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite;
       data.totalOutputTokens += getNumberField(usage, 'output_tokens');
       data.totalCacheReadTokens += cacheRead;
@@ -815,9 +825,9 @@ function buildClaudeRequest(
     totalElapsed: userTs && assistantData.lastTs ? assistantData.lastTs - userTs : null,
     promptTokens: hasAnyTokens ? assistantData.totalInputTokens : null,
     completionTokens: hasAnyTokens ? assistantData.totalOutputTokens : null,
-    // null: no usage was reported. 0: usage was reported with no cache reads or writes (caching off).
-    cacheReadTokens: hasAnyTokens ? assistantData.totalCacheReadTokens : null,
-    cacheWriteTokens: hasAnyTokens ? assistantData.totalCacheWriteTokens : null,
+    // null: no cache usage was reported. 0: it was reported with no cache reads or writes (caching off).
+    cacheReadTokens: assistantData.cacheUsageReported ? assistantData.totalCacheReadTokens : null,
+    cacheWriteTokens: assistantData.cacheUsageReported ? assistantData.totalCacheWriteTokens : null,
     reasoningEffort: extractReasoningEffortFromModelId(assistantData.model),
     curiosity: line.isSidechain || line.isMeta || line.isCompactSummary ? { kind: 'excluded', excerpts: [] } : undefined,
     ...(promptCache ? { promptCache } : {}),

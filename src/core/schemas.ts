@@ -97,6 +97,7 @@ export const ModelCallRowSchema = z.object({
   cacheWrite: tokenSchema,
   cost: tokenSchema.optional(),
   missCost: tokenSchema.optional(),
+  baselineCost: tokenSchema.optional(),
   ratedInput: tokenSchema.optional(),
   ttlSeconds: tokenSchema.optional(),
   cacheBreaks: z.number().int().min(0).optional(),

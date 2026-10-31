@@ -24,12 +24,15 @@ export interface ModelCallRow {
   input: number;
   cacheRead: number;
   cacheWrite: number;
-  /** Input-cost units: Σ uncached + cacheRead × read rate + cacheWrite × write rate, with rates relative to
-   *  the input rate as the harness logged them per call. Only over calls that logged rates. */
+  /** Input cost of the calls that logged prices, in the harness's price unit (Copilot: nano-AIU, one unit for
+   *  every model, so costs add up across models): Σ (uncached + cacheRead × read rate + cacheWrite × write
+   *  rate) × input price. Only percentages are shown. */
   cost?: number;
-  /** The part of `cost` spent on tokens not read from the cache (uncached + cacheWrite × write rate). */
+  /** The part of `cost` spent on tokens not read from the cache (uncached and written tokens). */
   missCost?: number;
-  /** Prompt tokens of the calls that logged rates (the base of `cost`). */
+  /** What the same prompts would have cost uncached: Σ prompt tokens × input price. */
+  baselineCost?: number;
+  /** Prompt tokens of the calls that logged prices (the base of the rated share). */
   ratedInput?: number;
   /** Cache lifetime the harness logged for these calls, in seconds. */
   ttlSeconds?: number;
@@ -45,6 +48,7 @@ export interface RequestPromptCache {
   rows: ModelCallRow[];
   /** Main-agent prompt tokens not read from the cache on the session's first model call. */
   coldStart?: number;
+  /** In the price unit of `ModelCallRow.cost`, like `rebuiltCost`. */
   coldStartCost?: number;
   /** Main-agent prompt tokens rebuilt after cache breaks (Copilot CLI and Copilot App). */
   rebuilt?: number;
@@ -127,9 +131,10 @@ export interface CacheTotals {
   uncachedPct: number | null;
 }
 
-/** Cost effect of caching, from per-call rates the harness logged. Percentages only, never amounts. */
+/** Cost effect of caching, from per-call prices the harness logged. Percentages only, never amounts. */
 export interface CacheCost {
-  /** How much caching cut input cost, in percent (1 − cost ÷ the same tokens at the input rate). */
+  /** How much caching cut input cost, in percent: 1 − cost ÷ what the same prompts would have cost uncached,
+   *  both summed in the logged price unit, so pricier models weigh more. */
   savedPct: number;
   /** Percent of input cost spent on tokens not read from the cache. */
   missCostPct: number;
