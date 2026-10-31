@@ -167,3 +167,41 @@ describe('VS Code request context limits as a session is replayed', () => {
     expect(workspace.peakUtilization).toBeCloseTo((150_000 / 935_793) * 100, 1);
   });
 });
+
+describe('VS Code request context limits around model changes', () => {
+  it('give the first request after a model switch the model selected right after it, as VS Code saves that request first', () => {
+    const file = jsonl([
+      { kind: 0, v: { sessionId: 's', inputState: { selectedModel: GPT(272_000) }, requests: [] } },
+      { kind: 2, k: ['requests'], v: [request('r1', 'copilot/claude-opus-4.8')] },
+      { kind: 1, k: ['inputState', 'inputText'], v: '' },
+      { kind: 1, k: ['inputState', 'selectedModel'], v: OPUS },
+      { kind: 2, k: ['requests'], v: [request('r2', 'copilot/claude-opus-4.8')] },
+    ]);
+    expect(limitsOf(file)).toEqual([935_793, 935_793]);
+  });
+
+  it('never give a request a model selected only after later requests, even when the file rewrites its requests', () => {
+    const file = jsonl([
+      { kind: 0, v: { sessionId: 's', inputState: { selectedModel: GPT(272_000) }, requests: [] } },
+      { kind: 2, k: ['requests'], v: [request('r1', 'copilot/claude-opus-4.8')] },
+      { kind: 2, k: ['requests'], v: [request('r2', 'copilot/gpt-5.6-sol')] },
+      { kind: 1, k: ['inputState', 'selectedModel'], v: OPUS },
+      { kind: 1, k: ['requests'], v: [request('r1', 'copilot/claude-opus-4.8'), request('r2', 'copilot/gpt-5.6-sol')] },
+      { kind: 2, k: ['requests'], v: [request('r3', 'copilot/claude-opus-4.8')] },
+    ]);
+    expect(limitsOf(file)).toEqual([null, 272_000, 935_793]);
+  });
+
+  it('prefer the selection logged right after a request over an older setting of its model', () => {
+    const opus200k = model('copilot/claude-opus-4.8', { maxInput: 935_793, options: [200_000, 936_000], fallback: 936_000, configured: 200_000 });
+    const file = jsonl([
+      { kind: 0, v: { sessionId: 's', inputState: { selectedModel: OPUS }, requests: [] } },
+      { kind: 2, k: ['requests'], v: [request('r1', 'copilot/claude-opus-4.8')] },
+      { kind: 1, k: ['inputState', 'selectedModel'], v: GPT(272_000) },
+      { kind: 2, k: ['requests'], v: [request('r2', 'copilot/gpt-5.6-sol')] },
+      { kind: 2, k: ['requests'], v: [request('r3', 'copilot/claude-opus-4.8')] },
+      { kind: 1, k: ['inputState', 'selectedModel'], v: opus200k },
+    ]);
+    expect(limitsOf(file)).toEqual([935_793, 272_000, 200_000]);
+  });
+});
