@@ -87,11 +87,12 @@ rule's block through the detector pipeline as part of `npm test`:
   `messageLength` from `messageText` unless the line sets them.
 - Fields the DSL reference lists with scope `session` or `both`, such as `harness`, `workspaceName`
   and `requestCount`, go on the request's session. `harness` defaults to `Local Agent` (VS Code).
+- `timestamp` defaults to noon on a Wednesday. A string `timestamp` such as `"2026-01-17T02:00:00"`
+  is a local date-time, so `hour()` and `dayOfWeek()` tests pass in every time zone.
 - The request is repeated 100 times, each copy in its own session, so one line clears the rule's
   sample-size thresholds. A line can't mix different rows or stay under a threshold; cover those
   cases in a unit test.
-- Every line must parse. Don't put a word followed by `:` inside a string value, because the parser
-  quotes keys with a regex.
+- Every line must parse. Strings use double or single quotes and can contain `:`.
 
 ## Anatomy of a metric
 
