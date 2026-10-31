@@ -9,6 +9,7 @@ file with YAML front matter that names it and describes when an AI agent should 
 |---|---|
 | [update-docs](update-docs.md) | Update or add a page under `docs/content/` |
 | [package-extension](package-extension.md) | Build the `.vsix` via `npm run package` |
+| [cut-release](cut-release.md) | Bump the version, finalize `CHANGELOG.md`, and tag a release |
 
 ## Layout
 

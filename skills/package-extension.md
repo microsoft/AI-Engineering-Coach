@@ -34,6 +34,10 @@ which:
    `dist/extension.js`.
 4. Restores the original `README.md` regardless of build success.
 
+Before step 1 it computes the build stamp and hands it to the nested build through the
+`AIC_BUILD_INFO` environment variable, so the temporary README swap doesn't mark the package as
+built from uncommitted changes.
+
 The `--no-dependencies` flag is required because runtime dependencies are bundled into
 `dist/extension.js` by esbuild; `node_modules/` is excluded via `.vscodeignore`.
 
@@ -41,6 +45,9 @@ The `--no-dependencies` flag is required because runtime dependencies are bundle
 
 - `ai-engineer-coach-<version>.vsix` at the repo root.
 - `dist/extension.js` (the bundled entry point).
+- `dist/build-info.json`, the build stamp (see [Versioning and build stamps](#versioning-and-build-stamps)).
+- `CHANGELOG.md`, which vsce packages as `extension/changelog.md`: VS Code's **Changelog** tab and
+  **AI Engineer Coach: What's New** show it.
 
 Install locally to smoke-test:
 
@@ -49,6 +56,10 @@ code --install-extension ai-engineer-coach-*.vsix
 ```
 
 Then **AI Engineer Coach: Open Dashboard** from the command palette.
+
+`code --install-extension` refuses to replace an installed extension with an older version. Add
+`--force` when you go back to an older build, for example one from a branch that predates a
+version bump.
 
 ## Size budgets
 
@@ -77,11 +88,22 @@ npm run check-size
 - **Spellcheck or lint fails first** — `npm run check` (typecheck + lint + spellcheck + knip +
   test) is what CI runs; fix those before packaging if the goal is a release.
 
-## Versioning
+## Versioning and build stamps
 
-Bump `version` in `package.json`, add a `CHANGELOG.md` entry, then commit before packaging so
-the `.vsix` filename matches the released tag. Do not amend the commit after building — it's
-fine to ship a `.vsix` whose embedded git SHA differs from the tag.
+Don't change `version` when packaging. It changes only in a release pull request made with
+`npm run release:prepare` (see [cut-release](cut-release.md)), so every branch packages the same
+file name. Each build is identified by its stamp instead:
+
+- [`scripts/build-info.mjs`](../scripts/build-info.mjs) records `version`, the short `commit`,
+  `dirty` (uncommitted changes to tracked files), the `branch` of a dev build, `builtAt`, and
+  `dev`, which is false only for a clean build of the `v<version>` tag.
+- `esbuild.mjs` injects the stamp into every bundle as `__AIC_BUILD_INFO__` (read through
+  [`src/core/build-info.ts`](../src/core/build-info.ts)) and writes `dist/build-info.json`.
+
+To find out which build is installed, look at the bottom of the dashboard sidebar or the
+activity-bar view, the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log`
+(`version=… commit=… dirty=… dev=… branch=… builtAt=…`), or `dist/build-info.json` in the
+installed extension's folder.
 
 ## Anti-patterns
 
@@ -91,3 +113,8 @@ fine to ship a `.vsix` whose embedded git SHA differs from the tag.
   GitHub Release instead.
 - Don't disable `--no-dependencies` "to be safe" — it will bloat the package past the 5 MB
   budget and double-ship code that's already bundled.
+- Don't pass a version to vsce (`vsce package 0.2.0`, `vsce package minor`) to tell builds apart:
+  it rewrites `package.json` and, in a git repository, creates a version commit and tag. The build
+  stamp already identifies every build.
+- Don't put `-beta`, `-dev`, or a commit SHA in `version`: the Marketplace accepts only
+  `major.minor.patch`.
