@@ -270,6 +270,23 @@ describe('Codex data source (no native tokens)', () => {
 
 /* ── Mixed harness end-to-end ────────────────────────────────────── */
 
+describe('session-level usage totals', () => {
+  it('counts a session whose session-level prompt tokens were all written to the cache', () => {
+    const withTokens = sess({
+      sessionId: 's-tokens', harness: 'GitHub Copilot CLI', workspaceId: 'ws-cli', workspaceName: 'cli-project',
+      requests: flatTokenRequests(5, 50_000),
+    });
+    const totalsOnly: Session = {
+      ...sess({
+        sessionId: 's-totals', harness: 'GitHub Copilot CLI', workspaceId: 'ws-cli', workspaceName: 'cli-project',
+        requests: [req({ requestId: 'r-totals', timestamp: BASE_TS + 3_600_000 })],
+      }),
+      modelUsage: { 'claude-opus-5.5': { inputTokens: 0, outputTokens: 900, cacheReadTokens: 0, cacheWriteTokens: 40_000 } },
+    };
+    expect(getCtxMgmt([withTokens, totalsOnly]).sessionsWithTokenData).toBe(2);
+  });
+});
+
 describe('mixed harness end-to-end', () => {
   it('combines VS Code + Claude + Codex sessions correctly', () => {
     const sessions = [

@@ -42,7 +42,8 @@ export interface CompactionEvent {
  *  Used for billing math when present; preferred over per-request data
  *  for sessions where per-request input is not available. */
 export interface ModelUsage {
-  /** Uncached input tokens billed at the input rate */
+  /** Uncached input tokens billed at the input rate. Copilot CLI: `modelMetrics[m].tokenDetails.input`, or
+   *  `usage.inputTokens` minus the cached tokens it includes. */
   inputTokens: number;
   /** Output tokens billed at the output rate */
   outputTokens: number;
