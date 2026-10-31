@@ -58,6 +58,7 @@ const PARTIAL_HELP: Record<CompositionSource, string> = {
 
 const NOT_REPORTED_HELP = 'This harness does not record what fills its prompt, so nothing is shown. Nothing is estimated.';
 const SESSION_NOT_REPORTED_HELP = 'No composition recorded for this session. Claude Code, Codex, OpenCode and Xcode don\u2019t report it, and older VS Code and Copilot CLI builds didn\u2019t record it.';
+const EQUAL_WEIGHT_HELP = 'These requests didn\u2019t record a prompt size, so each one counts equally in this bar.';
 
 function pctText(pct: number): string {
   return pct >= 10 || pct === 0 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
@@ -124,14 +125,23 @@ function unitFor(source: CompositionSource): string {
   return source === 'copilot-cli' ? ' per call' : ' per request';
 }
 
+/** Marks a bar whose requests recorded no prompt size, so each request counts equally. */
+function equalWeightTag(): ComponentChildren {
+  return html`<span class="ctx-comp-equal" data-tip=${EQUAL_WEIGHT_HELP} tabindex="0">equal weight</span>`;
+}
+
 /** Tooltip for a source's tool-definition share, stating how it is weighted and why it isn't pooled with `other`. */
 function toolShareHelp(s: SourceComposition, other: SourceComposition | undefined): string {
   if (s.breakdown.weighting === 'requests') {
     return `Share of ${s.label} prompts spent on tool definitions. Each request counts equally because prompt sizes were not recorded.`;
   }
-  return s.source === 'copilot-cli'
+  const help = s.source === 'copilot-cli'
     ? `Share of the prompt tokens sent on ${s.label} main-agent model calls that went to tool definitions. Every call counts${other ? `, so it is shown separately from ${other.label}, which records only the last model call of each request` : ''}.`
     : `Share of ${s.label} prompt tokens spent on tool definitions, weighted by prompt size. VS Code records only the last model call of each request${other ? `, so it is shown separately from ${other.label}, which records every call` : ''}.`;
+  const leftOut = s.requestsWithData - s.breakdown.samples;
+  if (leftOut <= 0) return help;
+  const noun = s.source === 'copilot-cli' ? 'turns' : 'requests';
+  return `${help} ${formatNum(leftOut)} of ${formatNum(s.requestsWithData)} ${s.label} ${noun} didn\u2019t record a prompt size and ${leftOut === 1 ? 'is' : 'are'} left out.`;
 }
 
 function kpis(data: ContextCompositionData): ComponentChildren {
@@ -181,10 +191,16 @@ function harnessRow(h: HarnessComposition, index: number): ComponentChildren {
   const unit = unitFor(h.source);
   const noun = h.source === 'copilot-cli' ? 'turns' : 'requests';
   const partialTip = `${formatNum(h.totalRequests - h.requestsWithData)} ${noun} in range have no composition data. ${PARTIAL_HELP[h.source]}`;
+  const equal = h.breakdown.weighting === 'requests';
+  const leftOut = equal ? 0 : h.requestsWithData - h.breakdown.samples;
+  const avgTip = leftOut > 0
+    ? `Average prompt size. ${countText(leftOut, noun.slice(0, -1))} without a recorded prompt size ${leftOut === 1 ? 'is' : 'are'} left out of this bar.`
+    : 'Average prompt size';
   return html`<div class="ctx-comp-row" data-harness=${h.harness}>${name}
-    ${compositionBar(h.breakdown.slices, `${h.harness} prompt composition`, { unit })}
+    ${compositionBar(h.breakdown.slices, `${h.harness} prompt composition${equal ? ', each request counts equally' : ''}`, { unit })}
     <div class="ctx-comp-meta">
-      ${h.breakdown.avgPromptTokens == null ? null : html`<span title="Average prompt size">\u2248${formatNum(h.breakdown.avgPromptTokens)} tokens${unit}</span>`}
+      ${h.breakdown.avgPromptTokens == null ? null : html`<span class="ctx-comp-tokens-avg" data-tip=${avgTip} tabindex=${leftOut > 0 ? 0 : undefined}>\u2248${formatNum(h.breakdown.avgPromptTokens)} tokens${unit}</span>`}
+      ${equal ? equalWeightTag() : null}
       <span class=${partial ? 'ctx-comp-partial' : ''} data-tip=${partial ? partialTip : undefined} tabindex=${partial ? 0 : undefined}>
         ${formatNum(h.requestsWithData)} of ${formatNum(h.totalRequests)} ${noun}${partial ? ` (${pctText(coverage)})` : ''}
       </span>
@@ -198,14 +214,15 @@ function workspaceList(data: ContextCompositionData): ComponentChildren {
     ${data.workspaces.map((w, i) => {
       const tools = shareOf(w.breakdown, 'toolDefinitions');
       const panelId = `ctxCompWsSessions${i}`;
+      const equal = w.breakdown.weighting === 'requests';
       return html`<div class="ctx-comp-ws" data-workspace=${w.workspaceName} data-source=${w.source}>
         <div class="ctx-comp-ws-head">
           <span class="ctx-comp-ws-name" title=${w.workspaceName}>${w.workspaceName}</span>
-          <span class="ctx-comp-ws-stat">${tools == null ? '' : `${pctText(tools)} tools \u00b7 `}${formatNum(w.breakdown.samples)} req \u00b7 ${w.label}</span>
+          <span class="ctx-comp-ws-stat">${tools == null ? '' : `${pctText(tools)} tools \u00b7 `}${formatNum(w.breakdown.samples)} req \u00b7 ${w.label}${equal ? html` \u00b7 ${equalWeightTag()}` : null}</span>
           <button type="button" class="ctx-comp-ws-toggle" aria-expanded="false" aria-controls=${panelId}
             aria-label=${`Show ${w.label} sessions for ${w.workspaceName}`}>Sessions</button>
         </div>
-        ${compositionBar(w.breakdown.slices, `${w.workspaceName} prompt composition (${w.harnesses.join(', ')})`, { height: 10, labels: false, unit: unitFor(w.source) })}
+        ${compositionBar(w.breakdown.slices, `${w.workspaceName} prompt composition (${w.harnesses.join(', ')})${equal ? ', each request counts equally' : ''}`, { height: 10, labels: false, unit: unitFor(w.source) })}
         <div class="ctx-comp-ws-sessions" id=${panelId} hidden></div>
       </div>`;
     })}
@@ -237,16 +254,22 @@ function openGuide(event: Event): void {
   void rpc('openExternal', { url: GUIDE_URL }).catch(() => undefined);
 }
 
-/** How the shares on the card are weighted, per source present. */
-function weightingNote(sources: SourceComposition[]): string {
+/** How the card's shares are weighted. Each bar has its own weighting: a source can mix harnesses or
+ *  workspaces that recorded prompt sizes with ones that didn't, so request-weighted bars are tagged. */
+function weightingNote(data: ContextCompositionData): string {
+  const bars = [...data.harnesses.map(h => h.breakdown), ...data.workspaces.map(w => w.breakdown)];
+  const weighted = bars.some(b => b?.weighting === 'tokens');
+  const equal = bars.some(b => b?.weighting === 'requests');
   const parts: string[] = [];
-  if (sources.some(s => s.breakdown.weighting === 'tokens')) parts.push('Shares are weighted by prompt tokens, so larger prompts count more.');
-  for (const s of sources) {
-    if (s.breakdown.weighting === 'requests') parts.push(`${s.label}: each request counts equally because prompt sizes were not recorded.`);
-    else if (s.source === 'copilot-cli') parts.push(`${s.label}: every main-agent model call counts.`);
+  if (weighted) parts.push('Shares are weighted by prompt tokens, so larger prompts count more.');
+  if (equal) {
+    parts.push(weighted
+      ? 'Bars marked \u201cequal weight\u201d count each request equally because their requests didn\u2019t record a prompt size.'
+      : 'Each request counts equally because prompt sizes were not recorded.');
   }
-  const cli = sources.find(s => s.source === 'copilot-cli');
-  if (cli && sources.some(s => s.source === 'vscode')) {
+  const cli = data.sources.find(s => s.source === 'copilot-cli');
+  if (cli?.breakdown.weighting === 'tokens') parts.push(`${cli.label}: every main-agent model call counts.`);
+  if (cli && data.sources.some(s => s.source === 'vscode')) {
     parts.push(`VS Code records only the last model call of each request, so VS Code and ${cli.label} are shown separately rather than pooled.`);
   }
   return parts.join(' ');
@@ -260,7 +283,7 @@ export function renderCompositionSection(data: ContextCompositionData): Componen
     <h3 id="ctxCompositionTitle" style="margin-top:24px;">Context Composition
       ${infoTip('What fills your prompts, by category, as each harness reports it. VS Code splits the conversation into messages, tool results and files; Copilot CLI reports it as one conversation bucket. Claude Code, Codex, OpenCode and Xcode don\u2019t report it. Only category names and token counts are read, never prompt text.', 'About context composition')}
     </h3>
-    <p class="ctx-comp-intro">What fills your prompts, by category. ${weightingNote(data.sources)}</p>
+    <p class="ctx-comp-intro">What fills your prompts, by category. ${weightingNote(data)}</p>
     ${empty
       ? html`<div class="ctx-comp-note">No request in this range carries composition data. Recent VS Code Copilot Chat and Copilot CLI builds record it.</div>`
       : html`${kpis(data)}${legend(categoriesIn(reporting.map(h => h.breakdown)))}`}

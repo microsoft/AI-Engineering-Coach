@@ -1906,6 +1906,7 @@
 .ctx-comp-empty { color: var(--text-muted); font-style: italic; cursor: help; justify-self: start; }
 .ctx-comp-meta { display: flex; flex-direction: column; align-items: flex-end; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 .ctx-comp-partial { color: #d29922; cursor: help; }
+.ctx-comp-equal { color: var(--text-muted); font-style: italic; cursor: help; }
 .ctx-comp-bar { display: flex; width: 100%; background: rgba(110, 118, 129, 0.15); border-radius: 4px; }
 .ctx-comp-bar:focus { outline: 1px solid var(--focus-border, #58a6ff); outline-offset: 2px; }
 .ctx-comp-seg { display: flex; align-items: center; justify-content: center; min-width: 0; }

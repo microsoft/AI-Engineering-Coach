@@ -307,6 +307,28 @@ describe('context composition tips', () => {
   });
 });
 
+describe('context composition tips with mixed prompt sizes', () => {
+  const heavy: PromptComposition['shares'] = { systemInstructions: 25, toolDefinitions: 55, messages: 0, toolResults: 20, files: 0 };
+  const compositionTips = (sessions: Session[]) => new Analyzer(sessions).getContextManagement().tips
+    .filter(tip => /^(System instructions|Tool definitions|Tool results|Conversation history)/.test(tip));
+
+  it('counts only requests that shape the breakdown toward the minimum sample size', () => {
+    // Ten requests with composition, but only one recorded a prompt size, so the token-weighted shares rest on one request.
+    const mixed = Array.from({ length: 10 }, (_, i) => req(MONDAY + i, { source: 'vscode', promptTokens: i === 0 ? 20_000 : null, shares: heavy }));
+    const data = new Analyzer([sess('Local Agent', 'api', mixed)]).getContextManagement();
+    expect(data.composition?.sources[0]).toMatchObject({ requestsWithData: 10, breakdown: { weighting: 'tokens', samples: 1 } });
+    expect(compositionTips([sess('Local Agent', 'api', mixed)])).toEqual([]);
+  });
+
+  it('still coaches when no request recorded a prompt size, because each one then shapes the breakdown', () => {
+    const unsized = Array.from({ length: 10 }, (_, i) => req(MONDAY + i, { source: 'vscode', promptTokens: null, shares: heavy }));
+    expect(compositionTips([sess('Local Agent', 'api', unsized)]).map(tip => tip.slice(0, 30))).toEqual([
+      'Tool definitions take 55% of y',
+      'System instructions take 25% o',
+    ]);
+  });
+});
+
 describe('session composition detail', () => {
   it('aligns per-request shares with the token curve for VS Code sessions', () => {
     const session = sess('Local Agent', 'api', [

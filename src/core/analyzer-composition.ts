@@ -235,7 +235,8 @@ function toolTip(row: SourceComposition, tools: number): string | null {
 function compositionTips(sources: SourceComposition[]): string[] {
   const tips: string[] = [];
   for (const row of sources) {
-    if (row.requestsWithData < COMPOSITION_TIP_MIN_SAMPLES) continue;
+    // Count the requests that shape the shares: token-weighted breakdowns leave out requests without a prompt size.
+    if (row.breakdown.samples < COMPOSITION_TIP_MIN_SAMPLES) continue;
     const { breakdown, label } = row;
     const tools = toolTip(row, shareOf(breakdown, 'toolDefinitions') ?? 0);
     if (tools) tips.push(tools);
