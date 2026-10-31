@@ -50,6 +50,8 @@ afterEach(() => {
 const CODE_ONLY = '```ts\nconst total = items.length;\n```';
 const URL_ONLY = 'https://example.test/issues/1';
 const QUOTE_ONLY = '> Error: the build failed';
+/** A typed prompt around a block in a harness wrapper's format. */
+const TYPED_WITH_WRAPPER = 'Why does this fail?\n<system_notification>The build finished.</system_notification>';
 
 describe('Copilot CLI and Copilot App', () => {
   const turns: Array<[string, Record<string, unknown>, NonHumanKind | undefined, 'analyzed' | 'excluded']> = [
@@ -101,8 +103,11 @@ describe('VS Code (Local Agent, Insiders and Server)', () => {
     request('r5', 'Continue', { confirmation: 'Continue' }),
     request('r6', 'Why did the terminal command stop?', { isSystemInitiated: true }),
     request('r7', 'Why does the test fail?', { origin: { kind: 'delegation' } }),
+    request('r8', URL_ONLY),
+    request('r9', QUOTE_ONLY),
+    request('r10', TYPED_WITH_WRAPPER),
   ];
-  const expected = [undefined, undefined, undefined, undefined, undefined, 'system', 'relayed'];
+  const expected = [undefined, undefined, undefined, undefined, undefined, 'system', 'relayed', undefined, undefined, undefined];
 
   it.each([
     ['Code', 'Local Agent'],
@@ -117,7 +122,7 @@ describe('VS Code (Local Agent, Insiders and Server)', () => {
     const session = parseSessionFile(file, 'ws', 'Workspace', harnessFromPath(logsDir));
     expect(session?.harness).toBe(harness);
     expect(kinds(session?.requests ?? [])).toEqual(expected);
-    expect(curiosity(session?.requests ?? []).slice(5)).toEqual(['excluded', 'excluded']);
+    expect(curiosity(session?.requests ?? []).slice(5)).toEqual(['excluded', 'excluded', 'excluded', 'excluded', 'analyzed']);
   });
 
   it('reads the flags from incremental JSONL session files', () => {
@@ -125,7 +130,7 @@ describe('VS Code (Local Agent, Insiders and Server)', () => {
     writeLines(file, [
       { kind: 0, v: { sessionId: 'vscode-2', creationDate: 1_790_000_000_000, requests: [] } },
       { kind: 2, k: ['requests'], v: requests.slice(0, 1) },
-      { kind: 2, k: ['requests'], v: requests.slice(5) },
+      { kind: 2, k: ['requests'], v: requests.slice(5, 7) },
     ]);
     expect(kinds(parseSessionFile(file, 'ws', 'Workspace', 'Local Agent')?.requests ?? [])).toEqual([undefined, 'system', 'relayed']);
   });
@@ -211,10 +216,14 @@ describe('Codex', () => {
       { type: 'event_msg', timestamp: '2026-09-30T12:00:01Z', payload: { type: 'agent_message', message: 'Done.' } },
       { type: 'event_msg', timestamp: '2026-09-30T12:00:10Z', payload: { type: 'user_message', message: CODE_ONLY } },
       { type: 'event_msg', timestamp: '2026-09-30T12:00:11Z', payload: { type: 'agent_message', message: 'Done.' } },
+      ...[URL_ONLY, QUOTE_ONLY, '', '/prompts:triage Why does the build fail?', TYPED_WITH_WRAPPER].flatMap((message, index) => [
+        { type: 'event_msg', timestamp: `2026-09-30T12:00:${20 + index * 5}Z`, payload: { type: 'user_message', message, ...(message ? {} : { images: ['data:image/png;base64,AAAA'] }) } },
+        { type: 'event_msg', timestamp: `2026-09-30T12:00:${21 + index * 5}Z`, payload: { type: 'agent_message', message: 'Done.' } },
+      ]),
     ]);
     const requests = parseCodexSessions(sessionsDir)[0]?.requests ?? [];
-    expect(kinds(requests)).toEqual([expected, expected]);
-    expect(curiosity(requests)).toEqual(expected ? ['excluded', 'excluded'] : ['analyzed', 'excluded']);
+    expect(kinds(requests)).toEqual(Array(7).fill(expected));
+    expect(curiosity(requests)).toEqual(expected ? Array(7).fill('excluded') : ['analyzed', 'excluded', 'excluded', 'excluded', 'excluded', 'analyzed', 'analyzed']);
   });
 });
 
@@ -225,6 +234,11 @@ const syntheticText = (text: string) => ({ type: 'text', text, synthetic: true }
 const OPENCODE_MESSAGES: Array<[string, object[], NonHumanKind | undefined]> = [
   ['typed prompt', [typedText('Why does the build fail?')], undefined],
   ['code only', [typedText(CODE_ONLY)], undefined],
+  ['URL only', [typedText(URL_ONLY)], undefined],
+  ['quote only', [typedText(QUOTE_ONLY)], undefined],
+  ['slash command', [typedText('/review Why does the build fail?')], undefined],
+  ['wrapper text in a typed prompt', [typedText(TYPED_WITH_WRAPPER)], undefined],
+  ['typed prompt with a harness reminder', [typedText('Why?'), syntheticText('<system-reminder>Plan mode is active.</system-reminder>')], undefined],
   ['attachment only', [{ type: 'file', mime: 'image/png', filename: 'shot.png', url: 'data:image/png;base64,AAAA' }], undefined],
   ['typed prompt with an attached file', [typedText('Why?'), syntheticText('Called the Read tool with the following input: {}'), { type: 'file', mime: 'text/plain', filename: 'a.ts', url: 'file:///repo/a.ts' }], undefined],
   ['typed /compact', [{ type: 'compaction', auto: false }], undefined],
@@ -331,6 +345,9 @@ describe('Xcode', () => {
       { content: CODE_ONLY, requestType: 'conversation' },
       { content: '', requestType: 'conversation', contentImageReferences: [{ fileUrl: 'file:///tmp/shot.png' }] },
       { content: '/fix', requestType: 'conversation' },
+      { content: URL_ONLY, requestType: 'conversation' },
+      { content: QUOTE_ONLY, requestType: 'conversation' },
+      { content: TYPED_WITH_WRAPPER, requestType: 'conversation' },
       { content: 'Review the staged changes', requestType: 'codeReview' },
     ];
     for (const [index, data] of userTurns.entries()) {
