@@ -250,6 +250,16 @@ describe('FlowAnalyzer', () => {
       });
     });
 
+    it('counts prompts typed while a sub-agent still works as follow-ups with no wait', () => {
+      const start = new Date('2024-03-15T10:00:00').getTime();
+      const at = (sec: number, elapsedSec: number, nonHumanKind?: 'subagent') =>
+        makeRequest({ timestamp: start + sec * 1000, totalElapsed: elapsedSec * 1000, nonHumanKind });
+      const session = makeSession({ requests: [at(0, 10), at(5, 595, 'subagent'), at(20, 10), at(40, 10)], lastMessageDate: start + 600_000 });
+      const [flow] = createAnalyzer([session]).getFlowState().days[0].sessions;
+      expect(flow).toMatchObject({ requestCount: 3, medianFollowUpSec: 0, rapidFollowUpRate: 1 });
+      expect(flow.flowScore).toBeGreaterThan(0);
+    });
+
     it('leaves out a session with fewer than 3 typed prompts, however many automated turns it has', () => {
       const start = new Date('2024-03-15T10:00:00').getTime();
       const requests = [

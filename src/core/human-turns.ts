@@ -39,7 +39,8 @@ export function splitHumanTurns<T extends { nonHumanKind?: NonHumanKind }>(reque
  * assistant's work to the typed turn: the end of the previous typed turn, or of automated work that ends later, such
  * as a sub-agent still running across typed turns. Automated turns extend that work but never start a gap. A typed
  * turn has no gap when nothing came before it. When every turn is typed, these are the gaps between consecutive
- * turns. A gap is negative when the turn started before that work ended; callers decide how to treat it.
+ * turns. A turn typed while automated work still runs has a gap of 0: the user followed up without waiting. A gap is
+ * negative only when the turn started before the previous typed turn's work ended; callers decide how to treat that.
  */
 export function humanFollowUpGaps<T>(
   turns: readonly T[],
@@ -57,7 +58,10 @@ export function humanFollowUpGaps<T>(
       continue;
     }
     const workEnd = latest(typedEnd, automatedEnd);
-    if (workEnd !== null) gaps.push(startOf(turn) - workEnd);
+    if (workEnd !== null) {
+      const gap = startOf(turn) - workEnd;
+      gaps.push(gap < 0 && workEnd !== typedEnd ? 0 : gap);
+    }
     typedEnd = end;
   }
   return gaps;
