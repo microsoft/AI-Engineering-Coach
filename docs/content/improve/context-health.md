@@ -88,7 +88,7 @@ The section shows:
 - **Key figures** -- Shown separately for VS Code and for Copilot CLI and the Copilot App: the share of prompt tokens spent on tool definitions, the share of VS Code requests whose prompt is at least half tool definitions, the average tool-definition tokens per Copilot CLI model call, and coverage (how many requests in the range carry composition data).
 - **A 100% stacked bar per harness** -- Hover a segment to see its share and estimated tokens. Shares are weighted by prompt tokens, so larger prompts count more. A Copilot CLI turn counts each of its model calls, and its averages are per call. Requests that didn't record a prompt size are left out of token-weighted figures, and the tooltips say how many. A bar whose requests recorded no prompt size counts every request equally and is marked **equal weight**.
 - **Tool-definition share by week** -- One line per harness, so you can check whether trimming tools is working.
-- **By workspace** -- The workspaces with the most composition data. A workspace you use from both VS Code and Copilot CLI gets one row for each. Select **Sessions** to see each session's composition, including sessions of older Copilot CLI builds, which the per-workspace utilization table doesn't list because they log no per-turn prompt size. The list includes every session with a request in the range, even one that continues past it. A Copilot CLI or Copilot App session's context timeline isn't here: the list points you to it in the per-workspace table.
+- **By workspace** -- The workspaces with the most composition data. A workspace you use from both VS Code and Copilot CLI gets one row for each. Select **Sessions** to see each session's composition, including sessions of older Copilot CLI builds, which the per-workspace utilization table doesn't list because they log no per-turn prompt size. The list includes every session with a request in the range, even one that continues past it. Open a Copilot CLI or Copilot App session there to see its context timeline below its composition.
 - **Copilot CLI system prompt** -- Each system-prompt segment, such as `custom_instructions`, `memory`, and `tool_instructions`, with its size and how many sessions include it. Segments that add the most tokens overall come first.
 
 Click a session in the per-workspace table to see its composition. For VS Code sessions, a per-request chart lines up with the token curve. For Copilot CLI sessions, the panel also lists the system-prompt segments from the latest checkpoint and the context when each compaction started, including tokens the CLI didn't attribute.
@@ -145,7 +145,12 @@ Click a workspace row to expand inline session-level details with per-session ve
 
 ![Context Management session timeline](/screenshots/screen-context-management-timeline.png)
 
-Open a Copilot CLI or Copilot App session to load its call timeline: on the **Context Management** tab, click the session's workspace in **Per-Workspace Context Session Health**, then the session. The chart is the same as the Prompt Cache tab's, with context layers on top. In long sessions, a bar covers a group of consecutive model calls. Use the buttons above the chart to show or hide each layer:
+Open a Copilot CLI or Copilot App session to load its call timeline. It opens in two places on the **Context Management** tab:
+
+- In **Per-Workspace Context Session Health**, click the session's workspace, then the session. The timeline shows with the session's utilization, verdict, and token types.
+- In **Context Composition**, select **Sessions** on the session's workspace, then the session. The timeline shows below the session's composition.
+
+The chart is the same as the Prompt Cache tab's, with context layers on top. In long sessions, a bar covers a group of consecutive model calls. Use the buttons above the chart to show or hide each layer:
 
 | Layer | What it shows | Shown by default |
 |---|---|---|
@@ -157,7 +162,7 @@ Open a Copilot CLI or Copilot App session to load its call timeline: on the **Co
 | **Output and reasoning** | Average output tokens per call and the part that was reasoning, on the right-hand axis | No |
 | **Cache tokens** and **Cache breaks** | The Prompt Cache tab's layers | No |
 
-**Turns as a table** lists each turn with its context at the end, largest prompt, limit, utilization, model calls, cache hit ratio, and compactions. A line under the chart sums up the session's token types. Sessions from other harnesses keep the per-request chart.
+**Turns as a table** lists each turn with its context at the end, largest prompt, limit, utilization, model calls, cache hit ratio, and compactions. For keyboard and screen-reader use, **Show the chart as a table** lists every bar with its time span, the values of every layer, and the full text of its markers. A line under the chart sums up the session's token types. Sessions from other harnesses keep the per-request chart.
 
 ### Insights
 

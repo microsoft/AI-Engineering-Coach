@@ -18,7 +18,7 @@ const WINDOW_HELP: Record<ContextWindowSource | 'mixed', string> = {
 
 /** Harnesses whose sessions open on a per-call context timeline. */
 const TIMELINE_HARNESSES = new Set(['GitHub Copilot CLI', 'GitHub Copilot App']);
-const TIMELINE_HINT = 'To see a Copilot CLI or Copilot App session\u2019s context timeline, with every model call, the context limit and each compaction, click its workspace, then the session.';
+const TIMELINE_HINT = 'To see a Copilot CLI or Copilot App session\u2019s context timeline, with every model call, the context limit and each compaction, click its workspace, then the session. It also opens from the session in Context Composition\u2019s Sessions list.';
 
 export function windowSourceHelp(source: ContextWindowSource | 'mixed' | undefined): string {
   return WINDOW_HELP[source ?? 'estimated'];
@@ -70,7 +70,7 @@ export function windowFootnote(workspaces: WorkspaceContextScore[]): ComponentCh
     ${timeline ? html`<p class="ctx-timeline-hint">${TIMELINE_HINT}</p>` : null}`;
 }
 
-/** Note in Context Composition's session list: the session's context timeline is in the workspace table. */
-export function timelineLocationNote(): ComponentChildren {
-  return html`<div class="ctx-comp-note ctx-comp-timeline-note">This session\u2019s context timeline, with every model call, the context limit and each compaction, is under Per-Workspace Context Session Health: click this workspace there, then the session.</div>`;
+/** Note under a context timeline in Context Composition's session list: the workspace table shows it too, with more. */
+export function timelineAlsoInTableNote(): ComponentChildren {
+  return html`<div class="ctx-comp-note ctx-comp-timeline-note">Per-Workspace Context Session Health shows the same timeline with the session\u2019s utilization, verdict and token types: click this workspace there, then the session.</div>`;
 }
