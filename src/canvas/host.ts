@@ -54,6 +54,9 @@ const AGENT_ONLY = new Set<string>([
   'reviewContextFiles',
   'explainOccurrence',
   'generateRule',
+  // Updates install into VS Code, so the canvas never offers them.
+  'promptUpdate',
+  'reloadAfterUpdate',
 ]);
 
 /* Host-only methods backed by VS Code services. Return empty-but-valid shapes so
@@ -66,6 +69,7 @@ const HOST_STUBS: Record<string, () => unknown> = {
   getSdlcGitHubData: () => ({}),
   loadModelBudgets: () => ({}),
   saveModelBudgets: () => ({ ok: true }),
+  getUpdateStatus: () => ({ state: 'none' }),
 };
 
 const MIME: Record<string, string> = {

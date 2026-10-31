@@ -143,7 +143,20 @@ export interface ExtensionMethodMap extends RpcMethodMap {
   loadModelBudgets: { params: Record<string, unknown> | undefined; result: Record<string, number> };
   showOutput: { params: undefined; result: { ok: boolean } };
   getCapabilities: { params: Record<string, unknown> | undefined; result: HostCapabilities };
+  getUpdateStatus: { params: undefined; result: UpdateStatus };
+  promptUpdate: { params: undefined; result: { ok: boolean } };
+  reloadAfterUpdate: { params: undefined; result: { ok: boolean } };
 }
+
+/** Update state shown under the build stamp. Only actionable states are visible; everything else is `none`. */
+export type UpdateStatus =
+  | { state: 'none' }
+  | { state: 'available'; current: string; latest: string; publishedAt: string; canInstall: boolean }
+  | { state: 'updating'; latest: string }
+  | { state: 'installed'; latest: string };
+
+/** Pushed by the VS Code host whenever the update state changes. */
+export type UpdateStatusMessage = { type: 'updateStatus'; status: UpdateStatus };
 
 /** What the dashboard host can do. `llm` is true when GitHub Copilot's Auto model is usable. */
 export interface HostCapabilities {
