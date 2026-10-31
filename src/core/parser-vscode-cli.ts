@@ -20,6 +20,8 @@ import { readCliModelCall, type CliModelCall } from './cli-model-calls';
 import { CallTimelineBuilder } from './call-timeline';
 import { CliCacheTracker } from './prompt-cache-cli';
 import { uncachedTokens } from './prompt-cache-usage';
+import { addTurnCompaction, readCliCompaction } from './cli-compaction';
+import { SubagentRunTracker } from './cli-subagents';
 import { EditLocIndex } from './edit-loc-diff';
 import {
   FileEditLocMap,
@@ -68,6 +70,8 @@ interface TurnState {
   modelId: string;
   isCanceled: boolean;
   compaction: CompactionEvent | null;
+  /** Every compaction of the turn; `compaction` is the first. */
+  compactions: CompactionEvent[];
   reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null;
   imageCount: number;
   editLocs: FileEditLocMap;
@@ -106,6 +110,8 @@ interface CLIParseState {
   timeline: CallTimelineBuilder;
   /** Prompt-cache usage and breaks (`SessionRequest.promptCache`, `Session.promptCache`). */
   cache: CliCacheTracker;
+  /** Sub-agent runs, attributed to the turn that launched them when the session is finalized. */
+  subagents: SubagentRunTracker;
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -128,6 +134,7 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     modelId: '',
     isCanceled: false,
     compaction: null,
+    compactions: [],
     reasoningEffort,
     imageCount: 0,
     editLocs: new Map(),
@@ -230,6 +237,7 @@ function flushTurn(state: CLIParseState): void {
     curiosity: turn.nonUser ? { kind: 'excluded', excerpts: [] } : undefined,
   });
   state.requests.push(request);
+  if (turn.compactions.length > 1) request.compactions = turn.compactions;
   attachTurnUsage(state, turn, request);
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
@@ -513,15 +521,9 @@ function handleCompactionComplete(data: Record<string, unknown>, state: CLIParse
   setSystemTokens(state, data.systemTokens);
   const turn = state.turn;
   if (!turn) return;
-  turn.compaction = {
-    mode: str(data.mode) === 'simple' ? 'simple' : 'full',
-    numRounds: typeof data.numRounds === 'number' ? data.numRounds : 0,
-    numRoundsSinceLastSummarization: typeof data.numRoundsSinceLastSummarization === 'number' ? data.numRoundsSinceLastSummarization : 0,
-    contextLengthBefore: typeof data.contextLengthBefore === 'number' ? data.contextLengthBefore : 0,
-    durationMs: typeof data.durationMs === 'number' ? data.durationMs : 0,
-    model: typeof data.model === 'string' ? data.model : '',
-    outcome: typeof data.outcome === 'string' ? data.outcome : '',
-  };
+  const event = readCliCompaction(data);
+  addTurnCompaction(turn.compactions, event);
+  turn.compaction ??= event;
 }
 
 function addModelUsage(collected: Record<string, ModelUsage>, rawModel: string, info: unknown): void {
@@ -609,6 +611,12 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
     case 'session.compaction_complete':
       handleCompactionComplete(ev.data || {}, state);
       return;
+    case 'subagent.started':
+      state.subagents.start(ev.data || {}, state.turn ? state.requests.length : null);
+      return;
+    case 'subagent.completed':
+      state.subagents.complete(ev.data || {}, state.turn ? state.requests.length : null);
+      return;
     case 'session.shutdown':
       handleShutdown(ev.data || {}, state);
       return;
@@ -635,6 +643,7 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     compactionSnapshots: [],
     timeline: new CallTimelineBuilder(),
     cache: new CliCacheTracker(),
+    subagents: new SubagentRunTracker(),
   };
 }
 
@@ -648,6 +657,7 @@ function finalizeCliSession(
   // No system-prompt size was ever recorded: keep the non-tool remainder unattributed.
   for (const pending of state.pendingCompositions) attachComposition(pending.request, pending.usage, null);
   state.pendingCompositions = [];
+  state.subagents.attach(state.requests);
 
   if (state.requests.length === 0) return null;
 
