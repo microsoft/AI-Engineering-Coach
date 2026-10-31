@@ -501,6 +501,8 @@ function finishClaudeUsage(data: ClaudeAssistantData): void {
   }
   const contextUsage = context.result();
   if (contextUsage) data.contextUsage = contextUsage;
+  // Only sub-agent calls logged usage: the turn's own context is unknown, and its prompt tokens are theirs.
+  else if (data.responseUsage.length > 0) data.contextUsage = { lastPromptTokens: 0, peakPromptTokens: 0, contextLimit: null, calls: 0 };
 }
 
 /** Assistant data of the request whose prompt is the user line at `userIndex`. */

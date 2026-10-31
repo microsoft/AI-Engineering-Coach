@@ -9,6 +9,7 @@ import {
   requestCompactions,
   requestContextLimit,
   requestContextTokens,
+  requestPeakTokens,
   sessionContextWindow,
   sessionUtilization,
 } from './context-window';
@@ -29,6 +30,12 @@ describe('request accessors', () => {
     expect(requestContextTokens(req({ promptTokens: 900_000, contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 240_000, contextLimit: 968_000, calls: 1 } }))).toBe(80_000);
     expect(requestContextTokens(req({ promptTokens: 52_000 }))).toBe(52_000);
     expect(requestContextTokens(req())).toBe(0);
+  });
+
+  it('has no context for a turn whose calls were all sub-agent calls, whatever their prompt tokens', () => {
+    const subagentsOnly = req({ promptTokens: 60_000, contextUsage: { lastPromptTokens: 0, peakPromptTokens: 0, contextLimit: null, calls: 0 } });
+    expect(requestContextTokens(subagentsOnly)).toBe(0);
+    expect(requestPeakTokens(subagentsOnly)).toBe(0);
   });
 
   it('returns the reported limit only when one was logged', () => {
