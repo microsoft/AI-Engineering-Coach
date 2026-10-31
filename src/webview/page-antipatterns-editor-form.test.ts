@@ -254,16 +254,6 @@ describe('Rule Editor Test Rule', () => {
     expect(markdown).toMatch(/^requiresIdeContext: true$/m);
     expect(await testRuleLive(markdown)).toMatchObject({ ok: true, triggered: false, occurrences: 30 });
   });
-
-  it('tests a rule whose detection logic is a # Filter section', async () => {
-    const md = ['---', 'id: filter-rule', 'name: Filter rule', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '', '# Filter', 'messageLength > 0', ''].join('\n');
-    const page = await renderPage();
-    await openRule(page, 'filter-rule', md);
-
-    page.querySelector<HTMLButtonElement>('#rule-editor-test')!.click();
-    await vi.waitFor(() => sentMarkdown('testRuleLive'));
-    expect(sentMarkdown('testRuleLive')).toBe(md);
-  });
 });
 
 describe('Rule Editor Save Rule', () => {
@@ -334,11 +324,11 @@ describe('Rule Editor new rules', () => {
 });
 
 describe('Rule Editor drafts without detection logic', () => {
-  it('won\'t test or save a generated draft without detection logic', async () => {
+  /** Clicks Test Rule and Save Rule, and checks that both refuse the draft without calling the extension. */
+  async function expectRefused(page: HTMLElement): Promise<void> {
     const alert = vi.fn();
     vi.stubGlobal('alert', alert);
     try {
-      const page = await generateDraft('# Description\nShort prompts without context.\n');
       page.querySelector<HTMLButtonElement>('#rule-editor-test')!.click();
       await vi.waitFor(() => expect(page.querySelector('#rule-test-results')!.textContent).toContain('no detection logic'));
       page.querySelector<HTMLButtonElement>('#rule-editor-save')!.click();
@@ -349,5 +339,27 @@ describe('Rule Editor drafts without detection logic', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  }
+
+  it('won\'t test or save a generated draft without detection logic', async () => {
+    await expectRefused(await generateDraft('# Description\nShort prompts without context.\n'));
+  });
+
+  it('won\'t test or save a rule whose detection logic was cleared, and shows its empty detect block', async () => {
+    const lf = builtIn('lazy-prompting');
+    const page = await renderPage();
+    await openRule(page, 'lazy-prompting', toCrlf(lf));
+    input(page, 'rf-detect').value = '';
+    await expectRefused(page);
+
+    page.querySelector<HTMLElement>('.rule-editor-tab[data-editor-tab="source"]')!.click();
+    expect(page.querySelector<HTMLTextAreaElement>('#rule-editor-raw')!.value).toBe(lf.replace(/(```detect\n)[\s\S]*?(```)/, '$1$2'));
+  });
+
+  it('won\'t test or save a rule whose only logic is a # Filter section, which Test Rule doesn\'t run', async () => {
+    const md = ['---', 'id: filter-rule', 'name: Filter rule', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '', '# Filter', 'messageLength > 0', ''].join('\n');
+    const page = await renderPage();
+    await openRule(page, 'filter-rule', md);
+    await expectRefused(page);
   });
 });

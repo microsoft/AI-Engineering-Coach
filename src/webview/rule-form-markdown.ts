@@ -60,6 +60,8 @@ interface Block {
 const FRONTMATTER_RE = /^---[^\S\n]*\n([\s\S]*?)\n---[^\S\n]*(?:\n|$)/;
 /** The logic of the first detect block, found the way the rule parser finds it. */
 const DETECT_LOGIC_RE = /(```detect\s*\n)([\s\S]*?)(```)/;
+/** A line that opens a detect block for the rule parser, which finds the marker anywhere, after a fence of any length. */
+const DETECT_OPEN_LINE = /```detect\s*$/;
 const BLANK = /^\s*$/;
 /** Blank lines and comments, which the rule parser skips in front matter. */
 const BLANK_OR_COMMENT = /^\s*(#.*)?$/;
@@ -127,7 +129,7 @@ function trailingCount(lines: string[], pattern: RegExp, keep = 1): number {
 
 /** Splits a text section's lines at its first detect block: the form edits the text before it and keeps the rest. */
 function splitAtDetectBlock(lines: string[]): { text: string[]; rest: string[] } {
-  const at = lines.findIndex(line => /^\s*```detect/.test(line));
+  const at = lines.findIndex(line => DETECT_OPEN_LINE.test(line));
   return at < 0 ? { text: lines, rest: [] } : { text: lines.slice(0, at), rest: lines.slice(at) };
 }
 
@@ -143,10 +145,12 @@ function insertSection(blocks: Block[], section: Block): void {
   blocks.push(section);
 }
 
+/** Writes the detect logic into the first detect block, or adds a block. Cleared logic leaves the block empty. */
 function writeDetectLogic(body: string, logic: string): string {
   if (DETECT_LOGIC_RE.test(body)) {
-    return body.replace(DETECT_LOGIC_RE, (_block, open: string, _logic: string, close: string) => `${open}${logic}\n${close}`);
+    return body.replace(DETECT_LOGIC_RE, (_block, open: string, _logic: string, close: string) => `${open}${logic ? `${logic}\n` : ''}${close}`);
   }
+  if (!logic) return body;
   const blocks = sectionBlocks(body);
   const fence = ['```detect', ...logic.split('\n'), '```'];
   const section = blocks.find(block => block.key === 'detection logic');
@@ -167,12 +171,30 @@ function frontmatterLines(field: FrontmatterField, value: string): string[] {
 }
 
 /**
- * Whether rule markdown says how to detect: a detect block, a `# Filter` section, a metric, or a parent rule to
- * extend. Without any of these, the rule pipeline matches every row, so the rule triggers whenever there's data.
+ * Whether rule markdown has detection logic: a detect block with a `match:` or `check:` expression, read the way
+ * the rule pipeline reads it. Test Rule and detection run nothing else (not a `# Filter` section, a `metric:` or
+ * the rule named by `extends:`), and a pipeline without either expression matches every row, so the rule would
+ * trigger on any data.
  */
 export function hasDetectionLogic(markdown: string): boolean {
-  const md = normalizeLineEndings(markdown);
-  return DETECT_LOGIC_RE.test(md) || /^#+\s+Filter\s*$/im.test(md) || /^(metric|extends):[ \t]*\S/m.test(md);
+  const lines: string[] = [];
+  for (const line of DETECT_LOGIC_RE.exec(normalizeLineEndings(markdown))?.[2].split('\n') ?? []) {
+    const text = line.trim();
+    if (!text) continue;
+    const last = lines.length - 1;
+    // Like the pipeline, a line that ends with a backslash continues on the next one.
+    if (last >= 0 && lines[last].endsWith('\\')) lines[last] = `${lines[last].slice(0, -1).trimEnd()} ${text}`;
+    else lines.push(text);
+  }
+  let match = '';
+  let check = '';
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    const key = colon < 0 ? '' : line.slice(0, colon).trim().toLowerCase();
+    if (key === 'match') match = line.slice(colon + 1).trim();
+    else if (key === 'check') check = line.slice(colon + 1).trim();
+  }
+  return Boolean(match || check);
 }
 
 /**
@@ -262,6 +284,7 @@ export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed:
     }
     text = joinBlocks(blocks);
   }
-  if (changed.has('detect')) text = writeDetectLogic(text, fields.detect || EMPTY_FIELD_DEFAULTS.detect || '');
+  // Only a new rule gets the template's detect logic; cleared logic in a rule stays cleared.
+  if (changed.has('detect')) text = writeDetectLogic(text, fields.detect || (md.trim() ? '' : EMPTY_FIELD_DEFAULTS.detect ?? ''));
   return head + text;
 }

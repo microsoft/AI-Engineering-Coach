@@ -18,7 +18,7 @@ ${DSL_CHEATSHEET}
 
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
 
-const NO_DETECTION_LOGIC = 'This rule has no detection logic. Add a detect block under Detection Logic first.';
+const NO_DETECTION_LOGIC = 'This rule has no detection logic, so it would match everything. Add a detect block with a match: or check: line under Detection Logic first.';
 
 export function parseThresholdsFromMarkdown(markdown: string): Record<string, number> {
   const result: Record<string, number> = {};

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseRuleExtensions } from '../core/metric-engine';
 import { parseRule } from '../core/rule-parser';
+import { parsePipeline } from '../core/rule-pipeline';
 import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'rules');
@@ -254,6 +255,20 @@ describe('mergeRuleMarkdown edits', () => {
   });
 });
 
+describe('mergeRuleMarkdown cleared detect logic', () => {
+  it('empties the detect block when its logic is cleared, rather than writing the template\'s', () => {
+    const merged = mergeRuleMarkdown(CUSTOM_RULE, { ...fullFields(CUSTOM_RULE), detect: '' }, new Set<RuleFormField>(['detect']));
+    expect(merged).toBe(CUSTOM_RULE.replace('scan: sessions\nmatch: requestCount > thresholds.maxMessages\ncheck: count >= 1\n', ''));
+    expect(readRuleFields(merged).detect).toBe('');
+    expect(hasDetectionLogic(merged)).toBe(false);
+  });
+
+  it('adds no detect block for empty logic', () => {
+    const md = '---\nid: x\n---\n\n# Description\nText\n';
+    expect(mergeRuleMarkdown(md, { ...fullFields(md), detect: '' }, new Set<RuleFormField>(['detect']))).toBe(md);
+  });
+});
+
 describe('mergeRuleMarkdown additions', () => {
   it('adds a field the rule lacks once it has a value', () => {
     const base = CUSTOM_RULE.replace('scope: both\n', '').replace('# Examples\n{{workspaceName}}\n\n', '');
@@ -275,6 +290,16 @@ describe('mergeRuleMarkdown additions', () => {
     const base = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\n---\n\n# Examples\nline one\n```detect\nscan: requests\n```\nline two\n';
     const merged = mergeRuleMarkdown(base, { ...fullFields(base), examples: 'LINE ONE' }, new Set<RuleFormField>(['examples']));
     expect(merged).toBe(base.replace('line one', 'LINE ONE'));
+  });
+
+  it.each([
+    ['a four-backtick', '````detect', '````'],
+    ['an indented', '  ```detect', '  ```'],
+  ])('keeps %s detect block that the rule parser reads in a rewritten text section', (_name, open, close) => {
+    const base = `---\nid: x\n---\n\n# Examples\n"{{message}}"\n${open}\nscan: requests\ncheck: count >= 1\n${close}\n`;
+    expect(readRuleFields(base)).toMatchObject({ examples: '"{{message}}"', detect: 'scan: requests\ncheck: count >= 1' });
+    const merged = mergeRuleMarkdown(base, { ...fullFields(base), examples: 'New example' }, new Set<RuleFormField>(['examples']));
+    expect(merged).toBe(base.replace('"{{message}}"', 'New example'));
   });
 
   it('adds a detect block to the Detection Logic section, or a new section', () => {
@@ -323,15 +348,41 @@ describe('mergeRuleMarkdown new rules', () => {
 });
 
 describe('hasDetectionLogic', () => {
-  it('accepts a detect block, a # Filter section, a metric or a parent rule, and nothing else', () => {
-    expect(hasDetectionLogic('# Detection Logic\r\n```detect\r\nscan: requests\r\n```\r\n')).toBe(true);
-    expect(hasDetectionLogic('# Filter\nmessageLength < 30\n')).toBe(true);
-    expect(hasDetectionLogic('---\nmetric: short-prompts\n---\n')).toBe(true);
-    expect(hasDetectionLogic('---\nextends: lazy-prompting\n---\n')).toBe(true);
-    expect(hasDetectionLogic('---\nid: x\n---\n# Description\nNo logic yet.\n')).toBe(false);
+  const head = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\nscope: requests\n---\n';
+  const detectRule = (...lines: string[]) => `${head}\n# Detection Logic\n${lines.join('\n')}\n`;
+
+  /** Whether the rule pipeline that Test Rule and detection run finds an expression in the rule. */
+  function pipelineHasLogic(md: string): boolean {
+    const rule = parseRule(md);
+    expect(rule).not.toBeNull();
+    const pipeline = parsePipeline(rule!);
+    return Boolean(pipeline.matchExpr || pipeline.checkExpr);
+  }
+
+  it.each<[string, string, boolean]>([
+    ['a match', detectRule('```detect', 'scan: requests', 'match: messageLength < 30', '```'), true],
+    ['only a check', detectRule('```detect', 'scan: sessions', 'check: count >= 5', '```'), true],
+    ['an upper-case key', detectRule('```detect', 'MATCH: messageLength < 30', '```'), true],
+    ['a four-backtick fence', detectRule('````detect', 'match: messageLength < 30', '````'), true],
+    ['a match continued on the next line', detectRule('```detect', 'match: messageLength < 30 \\', '  && messageLength > 0', '```'), true],
+    ['CRLF line endings', toCrlf(detectRule('```detect', 'match: messageLength < 30', '```')), true],
+    ['a block without a match or check', detectRule('```detect', 'scan: requests', 'aggregate: count', '```'), false],
+    ['an empty block', detectRule('```detect', '```'), false],
+    ['an empty match and check', detectRule('```detect', 'match:', 'check:', '```'), false],
+    ['a match replaced by an empty one', detectRule('```detect', 'match: messageLength < 30', 'match:', '```'), false],
+    ['a match that continues another line', detectRule('```detect', 'examples: {{messageText}} \\', 'match: messageLength < 30', '```'), false],
+    ['an unclosed block', detectRule('```detect', 'match: messageLength < 30'), false],
+    ['a # Filter section', `${head}\n# Filter\nmessageLength < 30\n`, false],
+    ['a metric', head.replace('scope: requests\n', 'scope: requests\nmetric: short-messages\n'), false],
+    ['a parent rule', head.replace('scope: requests\n', 'scope: requests\nextends: lazy-prompting\n'), false],
+    ['no detection logic', `${head}\n# Description\nNo logic yet.\n`, false],
+  ])('reads %s as the rule pipeline does', (_name, md, expected) => {
+    expect(hasDetectionLogic(md)).toBe(expected);
+    expect(pipelineHasLogic(md)).toBe(expected);
   });
 
   it('finds detection logic in every built-in rule', () => {
     expect(BUILT_IN_RULES.filter(rule => !hasDetectionLogic(toCrlf(rule.lf))).map(rule => rule.id)).toEqual([]);
+    expect(BUILT_IN_RULES.filter(rule => !pipelineHasLogic(rule.lf)).map(rule => rule.id)).toEqual([]);
   });
 });

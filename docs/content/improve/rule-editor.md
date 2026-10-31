@@ -35,7 +35,7 @@ Click **Test Rule** to run the current draft against your real session data usin
 
 Threshold sliders appear above the result so you can sweep a value without retyping the markdown. Changes are applied to the draft in memory; nothing is persisted until you hit **Save**.
 
-A draft with no detection logic (no detect block, `# Filter` section, metric or parent rule) shows an error instead of running, and isn't saved.
+A draft without detection logic -- a detect block with a `match:` or `check:` line -- shows an error instead of running, and isn't saved, because it would match everything. Test Rule and detection run only the detect block, so a `# Filter` section doesn't count.
 
 ## AI Builder
 

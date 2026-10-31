@@ -153,6 +153,34 @@ describe('generateRuleMarkdown', () => {
   });
 });
 
+/** A rule that ends with its detect block, as the generator prompt asks for. */
+const RULE_ENDING_WITH_DETECT = [
+  '---', 'id: long-sessions', 'name: Long sessions', 'group: session-hygiene', 'severity: medium', 'scope: sessions', '---', '',
+  '# Description', 'Sessions that run for too long.', '',
+  '# When Triggered', '{{count}} long sessions.', '',
+  '# How to Improve', 'Start a new chat for each task.', '',
+  '# Detection Logic', '```detect', 'scan: sessions', 'match: requestCount > 50', 'check: count >= 1', '```',
+].join('\n');
+
+describe('generateRuleMarkdown fences', () => {
+  it('keeps the closing fence of a rule that ends with its detect block', async () => {
+    const ask = asker().mockResolvedValueOnce(`${RULE_ENDING_WITH_DETECT}\n`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['an outer fence', '```markdown\n', '\n```\n'],
+    ['an outer fence without a language', '```\n', '\n```'],
+    ['prose and an outer fence', 'Here is the rule:\n\n```md\n', '\n```'],
+  ])('strips %s around the rule', async (_name, before, after) => {
+    const ask = asker().mockResolvedValueOnce(`${before}${RULE_ENDING_WITH_DETECT}${after}`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+});
+
 describe('generateRuleMarkdown failures', () => {
   it('keeps the latest draft when a follow-up request runs out of time', async () => {
     const outOfTime = new Error('GitHub Copilot did not respond in time. Try again.');
