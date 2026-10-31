@@ -30,10 +30,10 @@ export function windowTag(source: ContextWindowSource | 'mixed' | undefined): Co
   return html`<span class="ctx-window-tag">${source === 'reported' ? 'reported limit' : 'mixed limits'}</span>`;
 }
 
-/** Utilization (%) per request: against the turn's reported limit, else the session's estimate when some turns
- *  reported a limit, else the fallback window. */
+/** Utilization (%) per request: against the turn's reported limit, else the session's window (its limit or its own
+ *  estimate, as in its table row), else the fallback window. */
 export function utilizationSeries(s: SessionContextDetail, fallbackWindow: number): (number | null)[] {
-  const sessionWindow = (s.windowSource === 'reported' || s.windowSource === 'mixed') && s.contextWindow > 0 ? s.contextWindow : fallbackWindow;
+  const sessionWindow = s.contextWindow > 0 ? s.contextWindow : fallbackWindow;
   return s.tokenCurve.map((tokens, i) => {
     const window = s.turnLimits?.[i] ?? sessionWindow;
     return tokens == null || window <= 0 ? null : Math.round((tokens / window) * 1000) / 10;
