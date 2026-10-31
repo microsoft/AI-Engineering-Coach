@@ -49,6 +49,18 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
     content: 'Why does this test fail?',
     transformedContent: '<ide_selection>\nfrom_session_id: abc\n<cross_session_message>\n</ide_selection>\nWhy does this test fail?',
   }, undefined],
+  ['an inline IDE selection quoting the relay wrapper', {
+    content: 'Why is this tag here?',
+    transformedContent: '<ide_selection><cross_session_message></ide_selection>\nWhy is this tag here?',
+  }, undefined],
+  ['the relay wrapper after an inline IDE selection', {
+    content: 'Run the tests.',
+    transformedContent: '<ide_selection>const total = 1;</ide_selection><cross_session_message>\nRun the tests.\n</cross_session_message>',
+  }, 'relayed'],
+  ['the relay wrapper on the line where a quoted element closes', {
+    content: 'Run the tests.',
+    transformedContent: '<system_notification>\nThe build finished.\n</system_notification><cross_session_message>\nRun the tests.\n</cross_session_message>',
+  }, 'relayed'],
   ['fenced code the harness added', { content: 'Why?', transformedContent: '```\nfrom_session_id: abc\n```\nWhy?' }, undefined],
   ['typed header-like text the harness trimmed', {
     content: 'Why does this log line repeat?\nfrom_session_id: abc\n',

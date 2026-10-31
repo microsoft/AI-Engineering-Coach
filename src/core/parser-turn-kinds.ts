@@ -19,12 +19,12 @@ function text(value: unknown): string {
 
 /* ---- Copilot CLI and Copilot App (`user.message` events) ---- */
 
-/** The element the harness wraps a message from another session in, anywhere on a line. */
-const RELAY_WRAPPER = /<(?:cross_session_message|relayed_message)\b/;
+/** The elements the harness wraps a message from another session in. */
+const RELAY_ELEMENT = /^(?:cross_session_message|relayed_message)$/;
 /** A sender ID header the harness adds to a message from another session, for example `from_session_id:`. */
 const RELAY_ID_HEADER = /^(?:from|sender)(?:_project)?_(?:session|agent)_id[ \t]*[:=]/;
-/** A line that opens a block the harness adds around text it quotes, such as `<ide_selection>`; group 1 is the tag. */
-const BLOCK_START = /^<([a-z][\w-]*)\b[^>]*>/;
+/** An element tag: group 1 is `/` in a closing tag, group 2 the name, group 3 `/` in a self-closing tag. */
+const TAG = /<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>/g;
 
 /** What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
  *  endings or surrounding whitespace, which the harness may change. */
@@ -35,30 +35,49 @@ function harnessAddedText(data: Record<string, unknown> | undefined): string {
   return at < 0 ? transformed : transformed.slice(0, at) + transformed.slice(at + typed.length);
 }
 
+/** Where a scan of the text the harness added is: in fenced code, or in a quoted element that spans lines. */
+interface QuoteState { fenced: boolean; element?: string }
+
 /**
- * True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
- * sender ID header. Blocks it adds around quoted text (an IDE selection, a file) and fenced code hold the user's
- * own text, so nothing inside them counts.
+ * True when a line carries a relay marker outside quoted text. Every element other than the relay wrapper quotes
+ * text (an IDE selection, a file, a notification), whether it closes on the same line or a later one, and so does
+ * fenced code; markers after a quoted element closes still count. Updates `state` for the next line.
  */
-function isRelayed(data: Record<string, unknown> | undefined): boolean {
-  let block: string | undefined;
-  let fenced = false;
-  for (const raw of harnessAddedText(data).split('\n')) {
-    const line = raw.trim();
-    if (block) {
-      if (line.includes(`</${block}>`)) block = undefined;
-      continue;
-    }
+function lineIsRelayed(raw: string, state: QuoteState): boolean {
+  let line = raw.trim();
+  if (state.element) {
+    const close = line.indexOf(`</${state.element}>`);
+    if (close < 0) return false;
+    line = line.slice(close + state.element.length + 3);
+    state.element = undefined;
+  } else {
     if (line.startsWith('```')) {
-      fenced = !fenced;
-      continue;
+      state.fenced = !state.fenced;
+      return false;
     }
-    if (fenced) continue;
-    if (RELAY_WRAPPER.test(line) || RELAY_ID_HEADER.test(line)) return true;
-    const start = BLOCK_START.exec(line);
-    if (start && !line.includes(`</${start[1]}>`)) block = start[1];
+    if (state.fenced) return false;
+    if (RELAY_ID_HEADER.test(line)) return true;
+  }
+  TAG.lastIndex = 0;
+  for (let tag = TAG.exec(line); tag; tag = TAG.exec(line)) {
+    const [, closing, name, selfClosing] = tag;
+    if (closing || selfClosing) continue;
+    if (RELAY_ELEMENT.test(name)) return true;
+    const close = line.indexOf(`</${name}>`, TAG.lastIndex);
+    if (close < 0) {
+      state.element = name;
+      return false;
+    }
+    TAG.lastIndex = close + name.length + 3;
   }
   return false;
+}
+
+/** True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
+ *  sender ID header, outside the text it quotes. */
+function isRelayed(data: Record<string, unknown> | undefined): boolean {
+  const state: QuoteState = { fenced: false };
+  return harnessAddedText(data).split('\n').some(line => lineIsRelayed(line, state));
 }
 
 /**
