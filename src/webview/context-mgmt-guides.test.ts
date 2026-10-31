@@ -61,6 +61,27 @@ describe('sessionChartGuides', () => {
       ['\u2714 Plan', 0, 3, 0, '#3fb95080'],
       ['\u25B6 Build', 1, 6, 1, '#d2992280'],
       ['\u2714 Ship', 0, 4, 2, '#3fb95080'],
+      // Added again after it was completed: a new lifetime, still open.
+      ['Plan', 5, 6, 3, '#58a6ff80'],
+    ]);
+  });
+});
+
+describe('sessionChartGuides to-do lifetimes', () => {
+  it('starts a new lifetime when a completed to-do is put back in progress, and ignores a repeated completion', () => {
+    const events: Events = [
+      { requestIndex: 1, type: 'todo-add', label: 'Fix' },
+      { requestIndex: 3, type: 'todo-progress', label: 'Fix' },
+      { requestIndex: 5, type: 'todo-complete', label: 'Fix' },
+      { requestIndex: 7, type: 'todo-progress', label: 'Fix' },
+      { requestIndex: 9, type: 'todo-complete', label: 'Fix' },
+      { requestIndex: 10, type: 'todo-complete', label: 'Fix' },
+      { requestIndex: 10, type: 'todo-progress', label: 'Unknown' },
+    ];
+    const { bands } = sessionChartGuides({ events, requestCount: 12 }, THRESHOLDS);
+    expect(bands?.map(b => [b.label, b.xMin, b.xMax, b.row])).toEqual([
+      ['\u2714 Fix', 1, 5, 0],
+      ['\u2714 Fix', 7, 9, 1],
     ]);
   });
 

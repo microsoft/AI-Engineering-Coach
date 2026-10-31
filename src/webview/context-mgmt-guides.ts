@@ -45,28 +45,33 @@ function eventMarker(event: SessionTimelineEvent): GuideMarker {
 
 interface TodoLife { title: string; addedAt: number; startedAt: number | null; completedAt: number | null }
 
-/** Each to-do item's lifetime, from the request that added it to the one that completed it. */
+/** Each to-do item's lifetimes, from the request that added it to the one that completed it. An item added again
+ *  or put back in progress after it was completed starts a new lifetime; a repeated completion is ignored. */
 function todoLives(events: SessionTimelineEvent[]): TodoLife[] {
   const items: TodoLife[] = [];
-  const byTitle = new Map<string, TodoLife>();
+  const open = new Map<string, TodoLife>();
+  const seen = new Set<string>();
   for (const event of events) {
     if (event.type === 'compaction') continue;
     const title = event.label;
-    const item = byTitle.get(title);
-    if (event.type === 'todo-add') {
-      if (item) continue;
-      const added: TodoLife = { title, addedAt: event.requestIndex, startedAt: null, completedAt: null };
-      items.push(added);
-      byTitle.set(title, added);
-    } else if (event.type === 'todo-progress') {
-      if (item && item.startedAt == null) item.startedAt = event.requestIndex;
-    } else if (event.type === 'todo-complete') {
-      if (item) item.completedAt = event.requestIndex;
-      else {
-        const completed: TodoLife = { title, addedAt: 0, startedAt: null, completedAt: event.requestIndex };
-        items.push(completed);
-        byTitle.set(title, completed);
+    const item = open.get(title);
+    if (event.type === 'todo-complete') {
+      if (item) {
+        item.completedAt = event.requestIndex;
+        open.delete(title);
+      } else if (!seen.has(title)) {
+        // Completed without having been added in this session: shown from its start.
+        items.push({ title, addedAt: 0, startedAt: null, completedAt: event.requestIndex });
+        seen.add(title);
       }
+    } else if (item) {
+      if (event.type === 'todo-progress' && item.startedAt == null) item.startedAt = event.requestIndex;
+    } else if (event.type === 'todo-add' || seen.has(title)) {
+      const started = event.type === 'todo-progress' ? event.requestIndex : null;
+      const life: TodoLife = { title, addedAt: event.requestIndex, startedAt: started, completedAt: null };
+      items.push(life);
+      open.set(title, life);
+      seen.add(title);
     }
   }
   return items;
