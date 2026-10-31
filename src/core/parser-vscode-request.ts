@@ -165,13 +165,20 @@ function isInstructionFile(lowerPath: string, lowerName: string): boolean {
     || (lowerName.endsWith('.md') && lowerPath.includes('/.claude/rules/'));
 }
 
+/** A content reference's path with `/` separators. A URI loses its query and fragment; a file-system path keeps
+ *  `?` and `#`, which are valid in file and folder names. */
+function referencePath(ref: { external?: string; fsPath?: string }): string {
+  const raw = ref.external ? ref.external.split(/[?#]/)[0] : ref.fsPath ?? '';
+  return raw.replaceAll('\\', '/');
+}
+
 function extractCustomInstructions(contentRefs: RawContentRef[] | undefined): string[] {
   const instructions: string[] = [];
   for (const cr of (contentRefs || [])) {
     if (typeof cr !== 'object' || !cr) continue;
     const ref = cr.reference;
     if (typeof ref !== 'object' || !ref) continue;
-    const filePath = (ref.external || ref.fsPath || '').split(/[?#]/)[0].replaceAll('\\', '/');
+    const filePath = referencePath(ref);
     const fname = filePath.split('/').pop() || '';
     if (fname && isInstructionFile(filePath.toLowerCase(), fname.toLowerCase()) && !instructions.includes(fname)) {
       instructions.push(fname);
