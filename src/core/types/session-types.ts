@@ -154,8 +154,9 @@ export interface SessionRequest {
   userCode: CodeBlock[];
   aiCode: CodeBlock[];
   toolConfirmations: ToolConfirmation[];
-  /** Prompt token count — from result.metadata.promptTokens (LAST agentic round's input only,
-   *  not cumulative across all rounds). Cumulative input tokens are not persisted by VS Code. */
+  /** Prompt token count, cached tokens included. VS Code: result.metadata.promptTokens (the LAST agentic round's
+   *  input only; cumulative input isn't persisted). Claude Code, Codex and OpenCode: the input of every model call
+   *  in the turn, each API response counted once. The context size of a turn is in `contextUsage` when known. */
   promptTokens: number | null;
   /** Completion token count — from request.completionTokens (CUMULATIVE across all agentic rounds)
    *  or metadata.outputTokens (last round only) as fallback for older sessions. */
@@ -211,7 +212,8 @@ export interface SessionRequest {
    *              the harness (parser limitation that cannot be fixed
    *              from the source data) */
   endState?: 'pending' | 'errored' | 'no-data';
-  /** Main-agent context size and limit for the turn (Copilot CLI and Copilot App, Codex). */
+  /** Context size of the turn: the last and largest prompt of its model calls, and the limit when the harness
+   *  logs one (Copilot CLI and Copilot App, Codex, Claude Code, OpenCode). */
   contextUsage?: import('./token-usage-types').TurnContextUsage;
   /** Every compaction during the turn, in order, when the harness can log several (Copilot CLI).
    *  `compaction` holds the first of them. */

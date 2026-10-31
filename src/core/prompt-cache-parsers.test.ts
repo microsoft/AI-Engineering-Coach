@@ -62,8 +62,8 @@ describe('Claude Code prompt-cache usage', () => {
       expect(second.promptCache).toEqual({
         rows: [{ stream: 'main', model: 'claude-opus-4.6', calls: 1, input: 43_003, cacheRead: 42_000, cacheWrite: 1_000 }],
       });
-      // Existing per-request token fields keep their current behavior.
-      expect(first.promptTokens).toBe(3 * 40_010 + 2 * 42_005);
+      // The per-request token fields count each response once too.
+      expect(first).toMatchObject({ promptTokens: 40_010 + 42_005, completionTokens: 50 + 80, cacheReadTokens: 40_000, cacheWriteTokens: 42_000 });
     });
   });
 

@@ -5,8 +5,8 @@
 
 /* Context size and context window of requests and sessions, shared by the context analyzers.
  *
- * A request's context size is the prompt of its last model call. Copilot CLI, Copilot App and Codex
- * record it per turn (`contextUsage`); the other harnesses in `promptTokens`. The window is the limit
+ * A request's context size is the prompt of its last model call. Copilot CLI, Copilot App, Codex, Claude Code
+ * and OpenCode record it per turn (`contextUsage`); VS Code in `promptTokens`. The window is the limit
  * the harness reported for the turn when it logs one (`reported`); otherwise it's estimated from the
  * largest prompt seen in the session's turns without a reported limit, peaks within a turn included and
  * rounded up (`estimated`), which overstates utilization near the top. */

@@ -162,7 +162,7 @@ export class ContextAnalyzer extends AnalyzerBase {
 
   /**
    * Per-request context-size series for a session: the prompt of each request's last model call
-   * (Copilot CLI and Codex: `contextUsage`; other harnesses: native `promptTokens`), `0` for a request
+   * (`contextUsage` when the harness logs per-call usage; VS Code: native `promptTokens`), `0` for a request
    * without native data. No token approximation (see helpers.ts).
    */
   private estimateSessionTokens(session: Session): number[] {
