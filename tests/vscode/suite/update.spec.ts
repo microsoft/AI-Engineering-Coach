@@ -9,28 +9,10 @@ import { after, before, describe, it } from 'mocha';
 import { By } from 'vscode-extension-tester';
 import { Dashboard } from '../dashboard';
 import { fixturePaths, readInstalledBuild, scenarioContext, type InstalledBuild } from '../fixtures';
+import { splitAtReload, unexpectedShutdownErrors } from '../runtime-log';
 import { setUpdateServerMode, UPDATE_TEST_ORIGIN_ENV, updateServerRequests } from '../update-server';
 
 const escape = (text: string) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-
-/**
- * Splits runtime.log into entries (stack lines belong to the entry above) and separates the
- * shutdown of the extension host that "Reload Window" replaced: VS Code cancels that host's
- * pending calls, including its built-in authentication providers' unregistration.
- */
-function splitAtReload(log: string): { normal: string[]; replacedHostShutdown: string[] } {
-  const entries = log.split(/\r?\n(?=\d{4}-\d{2}-\d{2}T)/);
-  const replacedPid = /pid=(\d+)/.exec(entries.find(entry => /\[update\] reload \|/.test(entry)) ?? '')?.[1];
-  const normal: string[] = [];
-  const replacedHostShutdown: string[] = [];
-  let shuttingDown = false;
-  for (const entry of entries) {
-    const pid = /pid=(\d+)/.exec(entry)?.[1];
-    if (pid === replacedPid && /\[extension\] deactivate \|/.test(entry)) shuttingDown = true;
-    (shuttingDown && pid === replacedPid ? replacedHostShutdown : normal).push(entry);
-  }
-  return { normal, replacedHostShutdown };
-}
 
 describe('Packaged VSIX update from a local release server', () => {
   const dashboard = new Dashboard();
@@ -60,9 +42,8 @@ describe('Packaged VSIX update from a local release server', () => {
     const { normal, replacedHostShutdown } = splitAtReload(log);
     const problems = normal.filter(entry => /uncaught-exception|unhandled-rejection/.test(entry));
     assert.deepEqual(problems, [], 'The extension must not leave uncaught exceptions or unhandled rejections');
-    const unexpected = replacedHostShutdown.filter(entry =>
-      /uncaught-exception/.test(entry) || (/unhandled-rejection/.test(entry) && !/unhandled-rejection \|[^\n]*\| Canceled: Canceled/.test(entry)));
-    assert.deepEqual(unexpected, [], 'Only cancellations may happen while the replaced extension host shuts down');
+    const unexpected = unexpectedShutdownErrors(replacedHostShutdown);
+    assert.deepEqual(unexpected, [], 'Only VS Code itself may fail while the replaced extension host shuts down');
   });
 
   it('refuses a download whose checksum does not match the release', async () => {
