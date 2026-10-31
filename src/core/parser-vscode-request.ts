@@ -154,18 +154,27 @@ function extractVariableKinds(vdVars: RawVariable[]): Record<string, number> {
   return kinds;
 }
 
+/** Instruction files the VS Code Local harness attaches to a request: project instructions
+ *  (`copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`) and targeted instructions (`*.instructions.md`, Markdown
+ *  files in `.claude/rules`). Prompt files (`*.prompt.md`) are prompts you run, not instructions. */
+function isInstructionFile(lowerPath: string, lowerName: string): boolean {
+  return lowerName === 'copilot-instructions.md'
+    || lowerName === 'agents.md'
+    || lowerName === 'claude.md'
+    || lowerName.endsWith('.instructions.md')
+    || (lowerName.endsWith('.md') && lowerPath.includes('/.claude/rules/'));
+}
+
 function extractCustomInstructions(contentRefs: RawContentRef[] | undefined): string[] {
   const instructions: string[] = [];
   for (const cr of (contentRefs || [])) {
     if (typeof cr !== 'object' || !cr) continue;
     const ref = cr.reference;
     if (typeof ref !== 'object' || !ref) continue;
-    const ext = (ref.external || ref.fsPath || '');
-    const lower = ext.toLowerCase();
-    if (lower.includes('.instructions.md') || lower.includes('copilot-instructions') || lower.includes('.prompt.md') || lower.includes('agents.md')) {
-      const parts = ext.split('/');
-      const fname = parts[parts.length - 1] || ext;
-      if (fname && !instructions.includes(fname)) instructions.push(fname);
+    const filePath = (ref.external || ref.fsPath || '').split(/[?#]/)[0].replaceAll('\\', '/');
+    const fname = filePath.split('/').pop() || '';
+    if (fname && isInstructionFile(filePath.toLowerCase(), fname.toLowerCase()) && !instructions.includes(fname)) {
+      instructions.push(fname);
     }
   }
   return instructions;
