@@ -3,9 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Computes the build stamp that esbuild injects into every bundle as __AIC_BUILD_INFO__ and
- * writes to dist/build-info.json, so a running or installed build can be identified.
- * Reads package.json and local git state only, and never fails the build when git is missing. */
+/* Computes the build stamp that every bundle reads as the global __AIC_BUILD_INFO__ and that
+ * esbuild.mjs writes to dist/build-info.json, so a running or installed build can be identified.
+ * Reads package.json and local git state only, and never fails the build when git is missing.
+ * buildInfoOptions() serves the stamp to esbuild; createWatchStamp() keeps it fresh in watch mode. */
 
 import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
@@ -98,4 +99,139 @@ export function describeBuildInfo(info) {
   const kind = info.dev ? 'dev build' : 'release build';
   const branch = info.branch ? ` on ${info.branch}` : '';
   return `v${info.version} ${kind}, commit ${commit}${branch}, built ${info.builtAt}`;
+}
+
+/** The module `inject` adds to every bundle; the stamp plugin serves it from memory. */
+const STAMP_MODULE = 'virtual:aic-build-info';
+
+/**
+ * @typedef {object} BuildHooks
+ * @property {() => void} [onStart]  runs before each build
+ * @property {(result: { errors: unknown[] }) => void} [onEnd]  runs after each build
+ */
+
+/**
+ * esbuild options that give a bundle the global `__AIC_BUILD_INFO__`. esbuild injects a virtual
+ * module whose contents come from `stamp()` on every build and rebuild, so a watch rebuild can
+ * embed a fresh stamp (a `define` is fixed when the context is created).
+ * @param {() => BuildInfo} stamp
+ * @param {BuildHooks} [hooks]
+ */
+export function buildInfoOptions(stamp, hooks = {}) {
+  return {
+    inject: [STAMP_MODULE],
+    plugins: [{
+      name: 'aic-build-info',
+      /** @param {import('esbuild').PluginBuild} build */
+      setup(build) {
+        if (hooks.onStart) build.onStart(hooks.onStart);
+        build.onResolve({ filter: /^virtual:aic-build-info$/ }, args => ({ path: args.path, namespace: 'aic-build-info' }));
+        build.onLoad({ filter: /.*/, namespace: 'aic-build-info' }, () => ({
+          contents: `export const __AIC_BUILD_INFO__ = ${JSON.stringify(stamp())};\n`,
+          loader: 'js',
+        }));
+        if (hooks.onEnd) build.onEnd(hooks.onEnd);
+      },
+    }],
+  };
+}
+
+/**
+ * Keeps watch-mode stamps fresh and identical across bundles. The first rebuild that the watcher
+ * starts after a change computes a new stamp; rebuilds it starts while that one runs belong to the
+ * same change and reuse it. Once no build is running, every bundle that embeds an older stamp is
+ * rebuilt, and then `write` records the stamp that all of them share (for dist/build-info.json).
+ * A bundle whose last build failed waits for its own files to change, so a broken file can't cause
+ * a rebuild loop.
+ * @param {{
+ *   initial: BuildInfo,
+ *   compute: () => BuildInfo,
+ *   write: (info: BuildInfo, generation: number) => void,
+ *   settleMs?: number,
+ * }} options
+ */
+export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
+  let info = initial;
+  let generation = 0;
+  let written = -1;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  /** @type {Map<string, { rebuild(): Promise<unknown> }>} */
+  const contexts = new Map();
+  /** @type {Map<string, number>} the generation each bundle's last successful build embeds */
+  const served = new Map();
+  /** @type {Map<string, number>} the generation served to each build in progress */
+  const serving = new Map();
+  const started = new Set(); // bundles past their first build, which uses `initial`
+  const building = new Set(); // builds in progress
+  const watcherBuilds = new Set(); // builds in progress that the watcher started
+  const requested = new Set(); // bundles this coordinator asked to rebuild
+  const failed = new Set(); // bundles whose last build failed
+
+  function settle() {
+    if (building.size > 0) return; // each build schedules another check when it ends
+    const names = [...contexts.keys()];
+    if (!names.every(name => served.has(name) || failed.has(name))) return;
+    const stale = names.filter(name => !failed.has(name) && served.get(name) !== generation);
+    for (const name of stale) {
+      requested.add(name);
+      contexts.get(name)?.rebuild().catch(() => { requested.delete(name); });
+    }
+    if (stale.length === 0 && written !== generation && names.some(name => served.get(name) === generation)) {
+      written = generation;
+      write(info, generation);
+    }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(settle, settleMs);
+  }
+
+  return {
+    /**
+     * esbuild options for the bundle called `name`.
+     * @param {string} name
+     */
+    options(name) {
+      return buildInfoOptions(() => {
+        serving.set(name, generation);
+        return info;
+      }, {
+        onStart() {
+          building.add(name);
+          serving.delete(name);
+          if (requested.delete(name)) return;
+          if (started.has(name) && watcherBuilds.size === 0) {
+            info = compute();
+            generation += 1;
+          }
+          started.add(name);
+          watcherBuilds.add(name);
+        },
+        onEnd(result) {
+          building.delete(name);
+          watcherBuilds.delete(name);
+          if (result.errors.length > 0) {
+            failed.add(name);
+          } else {
+            failed.delete(name);
+            served.set(name, serving.get(name) ?? generation);
+          }
+          schedule();
+        },
+      });
+    },
+    /**
+     * Registers the context created with `options(name)`, so the coordinator can rebuild it.
+     * @param {string} name
+     * @param {{ rebuild(): Promise<unknown> }} context
+     */
+    attach(name, context) {
+      contexts.set(name, context);
+    },
+    dispose() {
+      clearTimeout(timer);
+    },
+  };
 }

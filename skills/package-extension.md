@@ -97,8 +97,10 @@ file name. Each build is identified by its stamp instead:
 - [`scripts/build-info.mjs`](../scripts/build-info.mjs) records `version`, the short `commit`,
   `dirty` (uncommitted changes to tracked files), the `branch` of a dev build, `builtAt`, and
   `dev`, which is false only for a clean build of the `v<version>` tag.
-- `esbuild.mjs` injects the stamp into every bundle as `__AIC_BUILD_INFO__` (read through
-  [`src/core/build-info.ts`](../src/core/build-info.ts)) and writes `dist/build-info.json`.
+- `esbuild.mjs` gives every bundle the stamp as the global `__AIC_BUILD_INFO__` (read through
+  [`src/core/build-info.ts`](../src/core/build-info.ts)) and writes `dist/build-info.json`. A
+  plugin injects it as a virtual module, so `npm run watch` restamps after each change and brings
+  every bundle and `dist/build-info.json` up to the same stamp.
 
 To find out which build is installed, look at the bottom of the dashboard sidebar or the
 activity-bar view, the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log`
