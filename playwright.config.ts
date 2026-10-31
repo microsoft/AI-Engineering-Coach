@@ -1,5 +1,5 @@
 import { defineConfig } from '@playwright/test';
-import { e2ePort } from './tests/e2e/harness-url';
+import { E2E_HOST, e2ePort } from './tests/e2e/harness-url';
 
 // E2E_PORT (default 3999) sets the port this checkout is served on, so parallel checkouts can run
 // the suite side by side. A server already listening there fails the run unless E2E_REUSE=1, which
@@ -24,7 +24,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `npx serve . --listen tcp://127.0.0.1:${port} --no-clipboard`,
+    command: `npx serve . --listen tcp://${E2E_HOST}:${port} --no-clipboard`,
     port,
     reuseExistingServer: !process.env.CI && process.env.E2E_REUSE === '1',
   },
