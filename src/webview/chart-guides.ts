@@ -65,7 +65,7 @@ export interface GuideLayout {
   bands: { x: number; y: number; width: number; height: number; fill: string; stroke: string; label?: string; labelColor: string }[];
 }
 
-/** Past this many markers their labels overlap, so only the lines are drawn. */
+/** Past this many marker positions their labels overlap, so only the lines are drawn. */
 export const MAX_MARKER_LABELS = 12;
 /** Height of a band row in pixels, with room for its label. */
 export const BAND_ROW_PX = 11;
@@ -93,15 +93,30 @@ function layoutLines(lines: GuideLine[], pixel: GuidePixel, area: GuideArea): Gu
   return out;
 }
 
+/** One label for markers at the same position: the first one's, and how many more there are. */
+function groupLabel(group: GuideMarker[]): string | undefined {
+  const labels = group.map(marker => marker.label).filter((label): label is string => !!label);
+  if (labels.length === 0) return undefined;
+  return labels.length === 1 ? labels[0] : `${labels[0]} +${labels.length - 1}`;
+}
+
 function layoutMarkers(markers: GuideMarker[], pixel: GuidePixel, area: GuideArea): GuideLayout['markers'] {
-  const labelled = markers.length <= MAX_MARKER_LABELS;
-  const out: GuideLayout['markers'] = [];
+  const placed: { marker: GuideMarker; x: number }[] = [];
+  const atPosition = new Map<number, GuideMarker[]>();
   for (const marker of markers) {
     const x = pixel('x', marker.x);
     if (x == null || !within(x, area.left, area.right)) continue;
-    out.push({ x, color: marker.color, dash: marker.dash ?? [], label: labelled ? marker.label : undefined });
+    placed.push({ marker, x });
+    const group = atPosition.get(marker.x);
+    if (group) group.push(marker);
+    else atPosition.set(marker.x, [marker]);
   }
-  return out;
+  const labelled = atPosition.size <= MAX_MARKER_LABELS;
+  return placed.map(({ marker, x }) => {
+    const group = atPosition.get(marker.x) ?? [marker];
+    const label = labelled && group[0] === marker ? groupLabel(group) : undefined;
+    return { x, color: marker.color, dash: marker.dash ?? [], label };
+  });
 }
 
 function layoutBands(bands: GuideBand[], pixel: GuidePixel, area: GuideArea): GuideLayout['bands'] {
