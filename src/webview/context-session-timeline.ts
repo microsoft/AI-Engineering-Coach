@@ -5,13 +5,14 @@
 
 /* Context Management's drill-down for Copilot CLI and Copilot App sessions: the session's call timeline,
  * loaded lazily through `getSessionTimeline` and drawn with the shared layered chart (context, limit and
- * thresholds, turn ends, compactions, truncated calls; output and the cache split on demand), plus a
- * per-turn table as its text equivalent. Responses for a superseded load are dropped. */
+ * thresholds, turn ends, compactions, truncated calls; output and the cache split on demand), with two text
+ * equivalents: the chart's values per bar (the shared table) and a per-turn table. Responses for a superseded
+ * load are dropped. */
 
 import type { ContextVerdictThresholds, SessionContextDetail, SessionTimelineData } from '../core/types';
 import { destroyChartById, formatNum, rpc } from './shared';
 import { html, render, type ComponentChildren } from './render';
-import { renderCallTimelineChart, type CallTimelineLayer } from './call-timeline-chart';
+import { callTimelineTable, renderCallTimelineChart, type CallTimelineLayer } from './call-timeline-chart';
 import { cacheBreakLayer, cacheTokenLayer } from './prompt-cache-session';
 import { compactionLayer, contextLimitLayer, contextPeakLayer, outputLayer, truncationLayer, turnEndLayer } from './context-timeline-layers';
 
@@ -19,7 +20,23 @@ export const CONTEXT_TIMELINE_CHART_ID = 'ctxSessionTimelineChart';
 /** Most turns listed in the table. */
 const MAX_TABLE_TURNS = 300;
 
-let loadGeneration = 0;
+/** Where a session's context timeline opens: Context Management's workspace table, or Context Composition's session
+ *  list. Each place has its own chart, turn table and loads, so both can be open at once. */
+export type ContextTimelinePlace = 'workspace-table' | 'composition';
+
+const PLACE_IDS: Record<ContextTimelinePlace, { chart: string; turns: string }> = {
+  'workspace-table': { chart: CONTEXT_TIMELINE_CHART_ID, turns: 'ctxTlTurnTable' },
+  composition: { chart: 'ctxCompSessionTimelineChart', turns: 'ctxCompTlTurnTable' },
+};
+
+const loadGenerations = new Map<ContextTimelinePlace, number>();
+
+/** Start a load at a place, superseding the one before it there. */
+function nextLoad(place: ContextTimelinePlace): number {
+  const load = (loadGenerations.get(place) ?? 0) + 1;
+  loadGenerations.set(place, load);
+  return load;
+}
 
 /** Context layers first; the cache layers are off by default here (the Prompt Cache tab shows them). */
 export function contextTimelineLayers(data: SessionTimelineData, thresholds: ContextVerdictThresholds): CallTimelineLayer[] {
@@ -37,8 +54,10 @@ export function contextTimelineLayers(data: SessionTimelineData, thresholds: Con
 
 function describe(data: SessionTimelineData): string {
   const compactions = data.context?.compactions.length ?? 0;
-  return `Context size per model call against the reported limit${compactions > 0 ? `, with ${compactions} compaction${compactions === 1 ? '' : 's'} marked` : ''}. The table below lists each turn.`;
+  return `Context size per model call against the reported limit${compactions > 0 ? `, with ${compactions} compaction${compactions === 1 ? '' : 's'} marked` : ''}. Below the chart, show it as a table for the values of each bar, or the turns as a table for each turn.`;
 }
+
+const TABLE_CAPTION = 'Values of each bar of model calls: context, limit and thresholds, turn ends, output and reasoning per call, cache tokens, and markers';
 
 function cell(value: number | null | undefined, format: (n: number) => string = formatNum): string {
   return value == null ? '\u2014' : format(value);
@@ -81,15 +100,24 @@ function toggleControlled(event: Event): void {
   if (target) target.hidden = !open;
 }
 
-function renderPanel(panel: HTMLElement, s: SessionContextDetail, data: SessionTimelineData, thresholds: ContextVerdictThresholds): void {
+/** What a loaded timeline panel shows, and where. */
+interface TimelineView {
+  s: SessionContextDetail;
+  data: SessionTimelineData;
+  thresholds: ContextVerdictThresholds;
+  place: ContextTimelinePlace;
+}
+
+function renderPanel(panel: HTMLElement, { s, data, thresholds, place }: TimelineView): void {
   const timeline = data.timeline;
   if (!timeline) {
     render(html`<div class="ctx-comp-note">Nothing to plot for this session.</div>`, panel);
     return;
   }
+  const ids = PLACE_IDS[place];
   const layers = contextTimelineLayers(data, thresholds);
   const enabled = new Set(layers.filter(layer => layer.defaultOn).map(layer => layer.id));
-  const draw = () => renderCallTimelineChart(CONTEXT_TIMELINE_CHART_ID, timeline, layers, { unit: data.unit, yTitle: 'Prompt tokens', y1Title: 'Output tokens per call', enabled });
+  const draw = () => renderCallTimelineChart(ids.chart, timeline, layers, { unit: data.unit, yTitle: 'Prompt tokens', y1Title: 'Output tokens per call', enabled });
   const toggleLayer = (event: Event) => {
     const button = event.currentTarget as HTMLButtonElement;
     const id = button.dataset.layer ?? '';
@@ -103,26 +131,32 @@ function renderPanel(panel: HTMLElement, s: SessionContextDetail, data: SessionT
     <div class="ctx-cache-layers ctx-tl-layers" role="group" aria-label="Chart layers">
       ${layers.map(layer => html`<button type="button" class="ctx-cache-layer" data-layer=${layer.id} aria-pressed=${String(enabled.has(layer.id))} data-tip=${layer.help} onClick=${toggleLayer}>${layer.label}</button>`)}
     </div>
-    <div class="ctx-cache-timeline ctx-tl-chart"><canvas id=${CONTEXT_TIMELINE_CHART_ID} role="img" aria-label=${describe(data)}></canvas></div>
+    <div class="ctx-cache-timeline ctx-tl-chart"><canvas id=${ids.chart} role="img" aria-label=${describe(data)}></canvas></div>
+    ${callTimelineTable(timeline, layers, data.unit, TABLE_CAPTION)}
     <div class="ctx-tl-foot">
       ${timeline.bucketSize > 1 ? html`<span class="ctx-cache-muted">Each bar covers ${timeline.bucketSize} model calls of ${formatNum(timeline.calls)}.</span>` : null}
       ${omitted > 0 ? html`<span class="ctx-cache-muted">${omitted} more compactions are counted but not marked.</span>` : null}
-      <button type="button" class="ctx-tt-expand ctx-tl-turns-toggle" aria-expanded="false" aria-controls="ctxTlTurnTable" onClick=${toggleControlled}>Turns as a table</button>
+      <button type="button" class="ctx-tt-expand ctx-tl-turns-toggle" aria-expanded="false" aria-controls=${ids.turns} onClick=${toggleControlled}>Turns as a table</button>
     </div>
-    <div id="ctxTlTurnTable" hidden>${renderTurnTable(s)}</div>
+    <div id=${ids.turns} hidden>${renderTurnTable(s)}</div>
   </div>`, panel);
   draw();
 }
 
-/** Load and draw the session's call timeline into `panel`. */
-export function renderContextTimeline(panel: HTMLElement, s: SessionContextDetail, thresholds: ContextVerdictThresholds): void {
-  const load = ++loadGeneration;
+/** Load and draw the session's call timeline into `panel`, at one of the places it opens. */
+export function renderContextTimeline(
+  panel: HTMLElement,
+  s: SessionContextDetail,
+  thresholds: ContextVerdictThresholds,
+  place: ContextTimelinePlace = 'workspace-table',
+): void {
+  const load = nextLoad(place);
   render(html`<div class="ctx-comp-note">Loading the session timeline\u2026</div>`, panel);
-  const isCurrent = () => load === loadGeneration && panel.isConnected;
+  const isCurrent = () => load === loadGenerations.get(place) && panel.isConnected;
   void rpc<SessionTimelineData | null>('getSessionTimeline', { sessionId: s.sessionId })
     .then(data => {
       if (!isCurrent()) return;
-      if (data) renderPanel(panel, s, data, thresholds);
+      if (data) renderPanel(panel, { s, data, thresholds, place });
       else render(html`<div class="ctx-comp-note">This session is no longer loaded.</div>`, panel);
     })
     .catch(() => {
@@ -130,8 +164,8 @@ export function renderContextTimeline(panel: HTMLElement, s: SessionContextDetai
     });
 }
 
-/** Drop the drawn timeline (when the drill-down row closes). */
-export function closeContextTimeline(): void {
-  loadGeneration++;
-  destroyChartById(CONTEXT_TIMELINE_CHART_ID);
+/** Drop the timeline drawn at a place (when its drill-down closes). */
+export function closeContextTimeline(place: ContextTimelinePlace = 'workspace-table'): void {
+  nextLoad(place);
+  destroyChartById(PLACE_IDS[place].chart);
 }

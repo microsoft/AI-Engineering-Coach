@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionContextDetail, WorkspaceContextSessionsData } from '../core/types';
 import { attachCompositionDrilldown } from './context-composition-drilldown';
 
-const mocks = vi.hoisted(() => ({ rpc: vi.fn(), destroyChartById: vi.fn(), createChart: vi.fn() }));
+const mocks = vi.hoisted(() => ({ rpc: vi.fn(), destroyChartById: vi.fn(), createChart: vi.fn(), renderTimeline: vi.fn(), closeTimeline: vi.fn() }));
 vi.mock('./shared', () => ({
   rpc: mocks.rpc,
   destroyChartById: mocks.destroyChartById,
@@ -20,6 +20,7 @@ vi.mock('./shared', () => ({
   harnessColor: () => '#888888',
   COLORS: new Proxy({}, { get: () => '#888888' }),
 }));
+vi.mock('./context-session-timeline', () => ({ renderContextTimeline: mocks.renderTimeline, closeContextTimeline: mocks.closeTimeline }));
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void };
 
@@ -101,6 +102,8 @@ beforeEach(() => {
   mocks.rpc.mockReset();
   mocks.destroyChartById.mockReset();
   mocks.createChart.mockReset();
+  mocks.renderTimeline.mockReset();
+  mocks.closeTimeline.mockReset();
 });
 
 describe('composition workspace drill-down', () => {
@@ -142,20 +145,55 @@ describe('composition workspace drill-down', () => {
     expect(more()).toBeNull();
     expect(panel.textContent).not.toContain('most recent of');
   });
+});
 
-  it('points a session with a context timeline to the workspace table, when the table is shown', async () => {
+describe('composition workspace drill-down with context timelines', () => {
+  it('opens the context timeline of a session that has one, below its composition', async () => {
     for (const timelineInTable of [true, false]) {
-      mocks.rpc.mockResolvedValueOnce(response({ ...session('timeline'), hasCallTimeline: true }, session('older')));
+      mocks.renderTimeline.mockClear();
+      const data = response({ ...session('timeline'), hasCallTimeline: true }, session('older'));
+      mocks.rpc.mockResolvedValueOnce(data);
       const { toggle, panel } = setup(timelineInTable);
       toggle.click();
       await flush();
       listed(panel)[0].click();
+      const container = panel.querySelector<HTMLElement>('.ctx-comp-tl-panel');
+      expect(container?.closest('li')?.querySelector('.ctx-comp-ws-session')?.getAttribute('data-session-id')).toBe('timeline');
+      expect(mocks.renderTimeline).toHaveBeenCalledWith(container, expect.objectContaining({ sessionId: 'timeline' }), data.thresholds, 'composition');
+      // The note says the workspace table shows the same timeline with more, only when that table is shown.
       expect(panel.querySelectorAll('.ctx-comp-timeline-note')).toHaveLength(timelineInTable ? 1 : 0);
-      if (timelineInTable) expect(panel.textContent).toContain('under Per-Workspace Context Session Health: click this workspace there, then the session');
-      // A session without a timeline gets no pointer.
+      if (timelineInTable) expect(panel.textContent).toContain('Per-Workspace Context Session Health shows the same timeline');
+
+      // A session without a call timeline gets its composition only: no timeline, no empty chart.
       listed(panel)[1].click();
-      expect(panel.querySelectorAll('.ctx-comp-timeline-note')).toHaveLength(0);
+      expect(panel.querySelector('.ctx-comp-session')).not.toBeNull();
+      expect(panel.querySelector('.ctx-comp-tl')).toBeNull();
+      expect(mocks.renderTimeline).toHaveBeenCalledTimes(1);
+      expect(mocks.closeTimeline).toHaveBeenCalledWith('composition');
+
+      // Closing the workspace's sessions drops the timeline too.
+      mocks.closeTimeline.mockClear();
+      toggle.click();
+      expect(mocks.closeTimeline).toHaveBeenCalledWith('composition');
     }
+  });
+
+  it('keeps the open session\u2019s timeline when more sessions are shown', async () => {
+    mocks.renderTimeline.mockClear();
+    mocks.rpc.mockResolvedValueOnce(response({ ...session('s1'), hasCallTimeline: true }, ...Array.from({ length: 11 }, (_, i) => session(`s${i + 2}`))));
+    const { toggle, panel } = setup(true);
+    toggle.click();
+    await flush();
+    listed(panel)[0].click();
+    expect(mocks.renderTimeline).toHaveBeenCalledTimes(1);
+    panel.querySelector<HTMLButtonElement>('.ctx-comp-ws-more')?.click();
+    expect(listed(panel)).toHaveLength(12);
+    expect(listed(panel)[0].getAttribute('aria-expanded')).toBe('true');
+    // The list re-renders, so the timeline is drawn again into the open session's panel.
+    const container = panel.querySelector<HTMLElement>('.ctx-comp-tl-panel');
+    expect(container?.closest('li')?.querySelector('.ctx-comp-ws-session')?.getAttribute('data-session-id')).toBe('s1');
+    expect(mocks.renderTimeline).toHaveBeenCalledTimes(2);
+    expect(mocks.renderTimeline).toHaveBeenLastCalledWith(container, expect.objectContaining({ sessionId: 's1' }), expect.anything(), 'composition');
   });
 });
 

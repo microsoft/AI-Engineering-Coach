@@ -10,14 +10,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CallTimeline, ContextVerdictThresholds, SessionContextDetail, SessionTimelineData } from '../core/types';
 
-const mocks = vi.hoisted(() => ({ rpc: vi.fn(), destroyChartById: vi.fn(), renderChart: vi.fn() }));
+const mocks = vi.hoisted(() => ({ rpc: vi.fn(), destroyChartById: vi.fn(), renderChart: vi.fn(), table: vi.fn(() => 'values table') }));
 vi.mock('./shared', () => ({
   rpc: mocks.rpc,
   destroyChartById: mocks.destroyChartById,
   formatNum: (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)),
   COLORS: new Proxy({}, { get: (_t, key) => `#${String(key)}` }),
 }));
-vi.mock('./call-timeline-chart', () => ({ renderCallTimelineChart: mocks.renderChart }));
+vi.mock('./call-timeline-chart', () => ({ renderCallTimelineChart: mocks.renderChart, callTimelineTable: mocks.table }));
 
 import { compactionLayer, contextLimitLayer, contextPeakLayer, outputLayer, truncationLayer, turnEndBuckets, turnEndLayer } from './context-timeline-layers';
 import { closeContextTimeline, contextTimelineLayers, renderContextTimeline } from './context-session-timeline';
@@ -106,6 +106,8 @@ describe('Context Management session timeline panel', () => {
   beforeEach(() => {
     mocks.rpc.mockReset();
     mocks.renderChart.mockReset();
+    mocks.table.mockClear();
+    mocks.destroyChartById.mockClear();
     document.body.innerHTML = '';
   });
 
@@ -122,6 +124,10 @@ describe('Context Management session timeline panel', () => {
     expect([...enabled]).toEqual(['context', 'limit', 'turns', 'compactions', 'truncations']);
     expect(panel.querySelector('canvas')?.getAttribute('aria-label')).toContain('1 compaction marked');
     expect(panel.textContent).toContain('Each bar covers 2 model calls of 6');
+    // The chart's values as the shared table, with every layer.
+    expect(mocks.table).toHaveBeenCalledWith(TIMELINE, expect.any(Array), 'calls', expect.stringContaining('Values of each bar'));
+    expect((mocks.table.mock.calls[0] as unknown[])[1]).toHaveLength(8);
+    expect(panel.textContent).toContain('values table');
 
     const output = panel.querySelector<HTMLButtonElement>('[data-layer="output"]')!;
     output.click();
@@ -167,5 +173,36 @@ describe('Context Management session timeline panel', () => {
     document.body.append(panel);
     renderContextTimeline(panel, detail(), THRESHOLDS);
     await vi.waitFor(() => expect(panel.textContent).toContain('Could not load the session timeline.'));
+  });
+});
+
+describe('session timelines in the workspace table and in Context Composition', () => {
+  beforeEach(() => {
+    mocks.rpc.mockReset();
+    mocks.renderChart.mockReset();
+    mocks.destroyChartById.mockClear();
+    document.body.innerHTML = '';
+  });
+
+  it('keeps the two places apart, so both can be open', async () => {
+    let resolveTable: (value: SessionTimelineData) => void = () => {};
+    mocks.rpc.mockReturnValueOnce(new Promise(r => { resolveTable = r; })).mockResolvedValueOnce(DATA);
+    const table = document.createElement('div');
+    const composition = document.createElement('div');
+    document.body.append(table, composition);
+    renderContextTimeline(table, detail(), THRESHOLDS);
+    renderContextTimeline(composition, detail(), THRESHOLDS, 'composition');
+    await vi.waitFor(() => expect(mocks.renderChart).toHaveBeenCalledTimes(1));
+    expect(composition.querySelector('canvas')?.id).toBe('ctxCompSessionTimelineChart');
+    expect(composition.querySelector('.ctx-tl-turns-toggle')?.getAttribute('aria-controls')).toBe('ctxCompTlTurnTable');
+
+    // Closing one place neither drops the other's load nor destroys its chart.
+    closeContextTimeline('composition');
+    expect(mocks.destroyChartById).toHaveBeenCalledWith('ctxCompSessionTimelineChart');
+    expect(mocks.destroyChartById).not.toHaveBeenCalledWith('ctxSessionTimelineChart');
+    resolveTable(DATA);
+    await vi.waitFor(() => expect(mocks.renderChart).toHaveBeenCalledTimes(2));
+    expect(mocks.renderChart.mock.calls.map(call => String(call[0]))).toEqual(['ctxCompSessionTimelineChart', 'ctxSessionTimelineChart']);
+    expect(table.querySelector('canvas')?.id).toBe('ctxSessionTimelineChart');
   });
 });
