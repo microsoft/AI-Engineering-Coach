@@ -801,6 +801,7 @@ const rpcHandlers: TypedRpcHandlers = {
     const sessionId = isString(params?.sessionId) ? params.sessionId : '';
     return sessionId ? a.getSessionTimeline(sessionId) : null;
   },
+  getTokenTypes: (a, _p, params) => a.getTokenTypes(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
   getCalendarActivity: (a, _p, params) => a.getCalendarActivity(validateDateFilter(params)),
   getProjectOverview: (a, _p, params) => a.getProjectOverview(validateDateFilter(params)),
   getImageGallery: (a, _p, params) => a.getImageGallery(validateDateFilter(params)),

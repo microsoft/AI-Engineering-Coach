@@ -19,6 +19,8 @@ export interface TurnContextUsage {
   /** Context limit the harness reported for the turn's last call (Copilot CLI `maxPromptTokens`,
    *  Codex `model_context_window`); `null` when it wasn't reported. */
   contextLimit: number | null;
+  /** Main-agent model calls in the turn. */
+  calls: number;
 }
 
 /** Where a context-window size comes from: logged by the harness, or estimated from the largest
@@ -174,4 +176,26 @@ export interface TokenTypesData {
   harnesses: HarnessTokenTypes[];
   tips: string[];
   coverage: { requests: number; requestsWithData: number };
+}
+
+/** Token types of one session, for the strip in Context Management's session drill-down. A `null` field
+ *  means the harness doesn't log it. */
+export interface SessionTokenTypes {
+  /** Main-agent reasoning as a percent of main-agent output. */
+  reasoningPct: number | null;
+  /** Main-agent reasoning effort with the most calls. */
+  effort: ReasoningByEffort['effort'] | null;
+  subagentRuns: number;
+  subagentTokens: number;
+  /** Runs per sub-agent type, most runs first (at most 4). */
+  subagentTypes: { agentType: SubagentType; runs: number }[];
+  /** Compactions that logged the compaction call's own tokens, and those tokens (input + output). */
+  compactionCalls: number;
+  compactionTokens: number;
+  compactionTimeMs: number;
+  /** Calls that stopped at the output-token limit, of `calls`. */
+  truncatedCalls: number | null;
+  calls: number | null;
+  /** Median time to first token of the main agent's calls. */
+  ttftMedianMs: number | null;
 }

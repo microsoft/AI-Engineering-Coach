@@ -3,12 +3,16 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Output-side fields of one Copilot CLI or Copilot App model call (`session.usage_record`): output and
- * reasoning tokens, the reported context limit, why the call stopped, and its latency. Read in the same
- * pass as the other per-call fields (see cli-model-calls.ts) and summed per (stream, model) row. */
+/* Output-side fields of a model call: output and reasoning tokens, the reported context limit, why the call
+ * stopped, and its latency. Copilot CLI and Copilot App read them from `session.usage_record` in the same
+ * pass as the other per-call fields (see cli-model-calls.ts); Claude Code and OpenCode supply the subset
+ * they log. They are summed onto the shared per-request rows (`ModelCallRow`) by `RequestCacheBuilder`. */
+
+import type { ModelCallRow } from './types';
 
 export type CliFinishReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'other';
 
+/** Output-side fields of one Copilot CLI or Copilot App call. Its duration is `CliModelCall.durationMs`. */
 export interface CliCallOutputs {
   outputTokens: number;
   /** Reasoning tokens, part of `outputTokens`; `null` when not reported. */
@@ -20,23 +24,21 @@ export interface CliCallOutputs {
   contentFilter: boolean;
   /** Time until the model sent its first token (`timeToFirstTokenMs`). */
   ttftMs: number | null;
-  /** How long the call took (`duration`). */
+}
+
+/** What one call adds to its row. `null` means the harness doesn't log the value. */
+export interface CallOutputSample {
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  /** Stopped at the output-token limit. */
+  truncated: boolean | null;
+  /** Stopped or changed by the content filter. */
+  filtered: boolean | null;
+  ttftMs: number | null;
   durationMs: number | null;
 }
 
-/** Summed output-side fields of a (stream, model) row. Latency samples are kept per call. */
-export interface CallOutputTotals {
-  outputTokens: number;
-  /** `null` when no call reported reasoning tokens. */
-  reasoningTokens: number | null;
-  /** Calls that stopped at the output-token limit (`finishReason: length`). */
-  truncatedCalls: number;
-  filteredCalls: number;
-  ttftMs: number[];
-  durationMs: number[];
-}
-
-/** Most latency samples kept per row; longer series are thinned evenly. */
+/** Most latency samples kept per row and request; longer series are thinned evenly. */
 export const MAX_LATENCY_SAMPLES = 128;
 
 const FINISH_REASONS = new Set<string>(['stop', 'tool_calls', 'length', 'content_filter']);
@@ -59,21 +61,34 @@ export function readCallOutputs(usage: Record<string, unknown>): CliCallOutputs 
     finishReason: typeof finish === 'string' && finish ? (FINISH_REASONS.has(finish) ? finish as CliFinishReason : 'other') : null,
     contentFilter: usage.contentFilterTriggered === true || finish === 'content_filter',
     ttftMs: nonNegative(usage.timeToFirstTokenMs),
-    durationMs: nonNegative(usage.duration),
   };
 }
 
-export function emptyCallOutputs(): CallOutputTotals {
-  return { outputTokens: 0, reasoningTokens: null, truncatedCalls: 0, filteredCalls: 0, ttftMs: [], durationMs: [] };
+/** A Copilot CLI or Copilot App call's contribution to its row. */
+export function cliOutputSample(call: CliCallOutputs & { durationMs: number | null }): CallOutputSample {
+  return {
+    outputTokens: call.outputTokens,
+    reasoningTokens: call.reasoningTokens,
+    truncated: call.finishReason === 'length',
+    filtered: call.contentFilter,
+    ttftMs: call.ttftMs,
+    durationMs: call.durationMs,
+  };
 }
 
-export function addCallOutputs(totals: CallOutputTotals, call: CliCallOutputs): void {
-  totals.outputTokens += call.outputTokens;
-  if (call.reasoningTokens != null) totals.reasoningTokens = (totals.reasoningTokens ?? 0) + call.reasoningTokens;
-  if (call.finishReason === 'length') totals.truncatedCalls++;
-  if (call.contentFilter) totals.filteredCalls++;
-  if (call.ttftMs != null) totals.ttftMs.push(Math.round(call.ttftMs));
-  if (call.durationMs != null) totals.durationMs.push(Math.round(call.durationMs));
+/** A call of a harness that logs only why it stopped (Claude Code, OpenCode). */
+export function stopReasonSample(truncated: boolean): CallOutputSample {
+  return { outputTokens: null, reasoningTokens: null, truncated, filtered: null, ttftMs: null, durationMs: null };
+}
+
+/** Add one call's output-side fields to its row. A field stays absent until a call logs it. */
+export function addRowOutputs(row: ModelCallRow, sample: CallOutputSample): void {
+  if (sample.outputTokens != null) row.outputTokens = (row.outputTokens ?? 0) + sample.outputTokens;
+  if (sample.reasoningTokens != null) row.reasoningTokens = (row.reasoningTokens ?? 0) + sample.reasoningTokens;
+  if (sample.truncated != null) row.truncatedCalls = (row.truncatedCalls ?? 0) + (sample.truncated ? 1 : 0);
+  if (sample.filtered != null) row.filteredCalls = (row.filteredCalls ?? 0) + (sample.filtered ? 1 : 0);
+  if (sample.ttftMs != null) (row.ttftMs ??= []).push(Math.round(sample.ttftMs));
+  if (sample.durationMs != null) (row.durationMs ??= []).push(Math.round(sample.durationMs));
 }
 
 /** Keep at most `max` values, evenly spaced and including the first and last. */
@@ -84,7 +99,8 @@ export function thinSamples(values: number[], max = MAX_LATENCY_SAMPLES): number
   return Array.from({ length: max }, (_, i) => values[Math.round(i * step)]);
 }
 
-/** Thin the latency samples before the row is stored. */
-export function finishCallOutputs(totals: CallOutputTotals): CallOutputTotals {
-  return { ...totals, ttftMs: thinSamples(totals.ttftMs), durationMs: thinSamples(totals.durationMs) };
+/** Thin a row's latency samples before it is stored. */
+export function finishRowOutputs(row: ModelCallRow): void {
+  if (row.ttftMs) row.ttftMs = thinSamples(row.ttftMs);
+  if (row.durationMs) row.durationMs = thinSamples(row.durationMs);
 }

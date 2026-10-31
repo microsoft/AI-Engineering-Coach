@@ -35,6 +35,8 @@ import {
   sessionContextWindow,
   sessionUtilization,
 } from './context-window';
+import { cacheHitPct } from './prompt-cache-usage';
+import { sessionTokenTypes } from './analyzer-token-types';
 import {
   CONTEXT_OPTIMAL_UTILIZATION,
   CONTEXT_LIMITED_UTILIZATION,
@@ -58,6 +60,12 @@ function compactionLabel(compaction: CompactionEvent): string {
     return `Compaction ${formatTokensK(compaction.contextLengthBefore)}\u2192${formatTokensK(compaction.contextLengthAfter)}`;
   }
   return `Compaction (${compaction.mode})`;
+}
+
+/** The session's token-types strip, when its harness logs any. */
+function withTokenTypes(session: Session): Pick<SessionContextDetail, 'tokenTypes'> {
+  const tokenTypes = sessionTokenTypes(session);
+  return tokenTypes ? { tokenTypes } : {};
 }
 
 export class ContextAnalyzer extends AnalyzerBase {
@@ -687,6 +695,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
         hasPerRequestTokens: false,
         windowSource: 'estimated',
+        ...withTokenTypes(session),
         ...(composition ? { composition } : {}),
       };
     }
@@ -722,6 +731,8 @@ export class ContextAnalyzer extends AnalyzerBase {
       hasPerRequestTokens: true,
       windowSource: window.source,
       ...this.turnContextSeries(session),
+      ...withTokenTypes(session),
+      ...(session.callTimeline ? { hasCallTimeline: true } : {}),
       ...(composition ? { composition } : {}),
     };
   }
@@ -730,14 +741,16 @@ export class ContextAnalyzer extends AnalyzerBase {
     return session.requests.reduce((sum, request) => sum + requestCompactions(request).length, 0);
   }
 
-  /** Per-turn reported limits and peaks for the drill-down, when the harness logs them. */
-  private turnContextSeries(session: Session): Pick<SessionContextDetail, 'turnLimits' | 'turnPeaks'> {
-    const limits = session.requests.map(requestContextLimit);
-    const peaks = session.requests.map(request => request.contextUsage?.peakPromptTokens ?? null);
-    return {
-      ...(limits.some(limit => limit != null) ? { turnLimits: limits } : {}),
-      ...(peaks.some(peak => peak != null) ? { turnPeaks: peaks } : {}),
+  /** Per-turn reported limits, peaks, main-agent calls and cache hit ratios for the drill-down, when the
+   *  harness logs them. */
+  private turnContextSeries(session: Session): Pick<SessionContextDetail, 'turnLimits' | 'turnPeaks' | 'turnCalls' | 'turnCacheHitPct'> {
+    const series = {
+      turnLimits: session.requests.map(requestContextLimit),
+      turnPeaks: session.requests.map(request => request.contextUsage?.peakPromptTokens ?? null),
+      turnCalls: session.requests.map(request => request.contextUsage?.calls ?? null),
+      turnCacheHitPct: session.requests.map(request => (request.promptCache ? cacheHitPct(request.promptCache.rows) : null)),
     };
+    return Object.fromEntries(Object.entries(series).filter(([, values]) => values.some(value => value != null)));
   }
 
   private getSessionDisplayDate(session: Session): string {

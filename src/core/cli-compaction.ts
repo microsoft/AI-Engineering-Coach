@@ -14,6 +14,18 @@ import { MAX_TURN_COMPACTIONS } from './token-usage-schemas';
 
 const ENUM_RE = /^[A-Za-z][A-Za-z_-]{0,31}$/;
 
+/** Logged compaction triggers, lower-case: started by the harness at its threshold, or by you (`/compact`). */
+export const AUTO_COMPACTION_TRIGGERS: ReadonlySet<string> = new Set(['threshold', 'auto', 'automatic']);
+export const MANUAL_COMPACTION_TRIGGERS: ReadonlySet<string> = new Set(['manual', 'user', 'command', 'slash_command']);
+
+/** Who started a compaction: `other` for a logged trigger outside both sets, `null` when none was logged. */
+export function compactionKind(trigger: string | undefined): 'automatic' | 'manual' | 'other' | null {
+  if (!trigger) return null;
+  const value = trigger.toLowerCase();
+  if (AUTO_COMPACTION_TRIGGERS.has(value)) return 'automatic';
+  return MANUAL_COMPACTION_TRIGGERS.has(value) ? 'manual' : 'other';
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

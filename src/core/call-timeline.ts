@@ -25,6 +25,43 @@ export interface CallTimelineSample {
   cacheRead: number;
   cacheWrite: number;
   uncached: number;
+  /* Context and token types; omitted for request-level timelines. */
+  /** The call's prompt tokens, including cached tokens. */
+  promptTokens?: number;
+  contextLimit?: number | null;
+  outputTokens?: number | null;
+  reasoningTokens?: number | null;
+  truncated?: boolean;
+}
+
+/** Optional per-call fields of a one-call bucket; only the ones the call logged. */
+function contextFields(sample: CallTimelineSample): Partial<CallTimelineBucket> {
+  const out: Partial<CallTimelineBucket> = {};
+  if (sample.promptTokens != null && sample.promptTokens > 0) out.peakPrompt = sample.promptTokens;
+  if (sample.contextLimit != null && sample.contextLimit > 0) out.contextLimit = sample.contextLimit;
+  if (sample.outputTokens != null) out.output = sample.outputTokens;
+  if (sample.reasoningTokens != null) out.reasoning = sample.reasoningTokens;
+  // Only truncations are marked, so buckets without one leave the field out (it would be on every bucket).
+  if (sample.truncated) out.truncatedCalls = 1;
+  return out;
+}
+
+type Combine = (a: number, b: number) => number;
+type ContextKey = 'peakPrompt' | 'contextLimit' | 'output' | 'reasoning' | 'truncatedCalls';
+const sum: Combine = (a, b) => a + b;
+const MERGE_RULES: readonly [ContextKey, Combine][] = [
+  ['peakPrompt', Math.max], ['contextLimit', Math.max], ['output', sum], ['reasoning', sum], ['truncatedCalls', sum],
+];
+
+/** Optional fields of two merged buckets: sums add, peaks and limits take the larger value. */
+function mergeContextFields(a: CallTimelineBucket, b: CallTimelineBucket): Partial<CallTimelineBucket> {
+  const out: Partial<CallTimelineBucket> = {};
+  for (const [key, combine] of MERGE_RULES) {
+    const x = a[key];
+    const y = b[key];
+    if (x != null || y != null) out[key] = x == null ? y : y == null ? x : combine(x, y);
+  }
+  return out;
 }
 
 /** The bucket of a single call: the one place that maps a call onto bucket fields. */
@@ -41,6 +78,7 @@ export function singleCallBucket(callIndex: number, sample: CallTimelineSample):
     cacheRead: cache ? sample.cacheRead : 0,
     cacheWrite: cache ? sample.cacheWrite : 0,
     uncached: cache ? sample.uncached : 0,
+    ...contextFields(sample),
   };
 }
 
@@ -67,6 +105,7 @@ export function mergeBuckets(a: CallTimelineBucket, b: CallTimelineBucket): Call
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,
     uncached: a.uncached + b.uncached,
+    ...mergeContextFields(a, b),
   };
 }
 
