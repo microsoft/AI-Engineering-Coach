@@ -159,6 +159,20 @@ describe('announceUpdate', () => {
   });
 });
 
+describe('announceUpdate while a dashboard syncs', () => {
+  it('does not count stats that a dashboard writes while the version is being recorded', async () => {
+    const { context, extensionContext } = fakeContext();
+    let finishUpdate = () => {};
+    context.globalState.update.mockImplementationOnce(() => new Promise<void>(resolve => { finishUpdate = resolve; }));
+    const announcing = announceUpdate(extensionContext, '0.2.0');
+    mocks.stats = { harnesses: ['VS Code'], savedAt: 2 }; // A fresh install's first sync finishes meanwhile.
+    finishUpdate();
+    await announcing;
+    expect(context.globalState.update).toHaveBeenCalledWith(LAST_SEEN_VERSION_KEY, '0.2.0');
+    expect(mocks.showInformationMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe('registerWhatsNew', () => {
   it('registers the What\'s New command against the extension folder', async () => {
     const { context, extensionContext } = fakeContext('0.0.0');

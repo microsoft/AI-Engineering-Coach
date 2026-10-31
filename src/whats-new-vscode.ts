@@ -41,8 +41,9 @@ export async function showReleaseNotes(extensionUri: vscode.Uri): Promise<void> 
 export async function announceUpdate(context: vscode.ExtensionContext, version: string = BUILD_INFO.version): Promise<void> {
   const previous = context.globalState.get<string>(LAST_SEEN_VERSION_KEY);
   if (previous === version) return;
-  await context.globalState.update(LAST_SEEN_VERSION_KEY, version);
+  // Check for earlier use before awaiting: a dashboard opened now may write its stats meanwhile.
   const hasPriorUse = previous === undefined && loadSidebarStats() !== null;
+  await context.globalState.update(LAST_SEEN_VERSION_KEY, version);
   if (!shouldAnnounceUpdate(previous, version, hasPriorUse)) return;
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   if (!config.get<boolean>(SHOW_AFTER_UPDATE_SETTING, true)) return;
