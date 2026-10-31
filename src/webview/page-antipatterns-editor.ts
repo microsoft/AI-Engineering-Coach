@@ -98,6 +98,8 @@ const FORM_FIELDS = Object.keys(FIELD_INPUTS) as RuleFormField[];
 
 /** What the form was loaded from: the rule markdown, and the form's values then. */
 const loadedRules = new WeakMap<HTMLElement, { markdown: string; fields: RuleFormFields }>();
+/** Forms opened for a new rule: until a rule or draft is loaded, an empty Detection Logic gets the template's. */
+const newRuleForms = new WeakSet<HTMLElement>();
 
 function readForm(c: HTMLElement): RuleFormFields {
   const fields = {} as RuleFormFields;
@@ -114,6 +116,7 @@ export function markdownToForm(c: HTMLElement, markdown: string): void {
     if (input && value !== undefined) input.value = value;
   }
   loadedRules.set(c, { markdown, fields: readForm(c) });
+  newRuleForms.delete(c);
   const source = c.querySelector<HTMLTextAreaElement>('#rule-editor-raw');
   if (source) source.value = markdown;
 }
@@ -121,7 +124,8 @@ export function markdownToForm(c: HTMLElement, markdown: string): void {
 /**
  * Builds rule markdown from the form. A new rule gets the whole template; a loaded rule gets the fields changed
  * since it was loaded written into its Source text (or, without a Source view, into the markdown it was loaded
- * from), so everything the form doesn't show is kept.
+ * from), so everything the form doesn't show is kept. With its Source text deleted, a loaded rule is rebuilt from
+ * the form, without the template's detect logic.
  */
 export function formToMarkdown(c: HTMLElement): string {
   const loaded = loadedRules.get(c);
@@ -129,7 +133,7 @@ export function formToMarkdown(c: HTMLElement): string {
   const base = source.trim() ? source : '';
   const fields = readForm(c);
   const changed = FORM_FIELDS.filter(field => !base || fields[field] !== loaded?.fields[field]);
-  return mergeRuleMarkdown(base, fields, new Set(changed));
+  return mergeRuleMarkdown(base, fields, new Set(changed), newRuleForms.has(c));
 }
 
 export function openRuleEditor(container: HTMLElement, existingRuleId: string | null, markdown?: string): void {
@@ -153,6 +157,8 @@ export function openRuleEditor(container: HTMLElement, existingRuleId: string | 
   const testResults = container.querySelector<HTMLElement>('#rule-test-results');
   if (testResults) { testResults.style.display = 'none'; render(null, testResults); }
 
+  if (existingRuleId || markdown) newRuleForms.delete(container);
+  else newRuleForms.add(container);
   if (markdown) {
     markdownToForm(container, markdown);
   } else if (existingRuleId) {

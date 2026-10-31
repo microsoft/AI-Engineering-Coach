@@ -362,4 +362,20 @@ describe('Rule Editor drafts without detection logic', () => {
     await openRule(page, 'filter-rule', md);
     await expectRefused(page);
   });
+
+  it('won\'t test or save a rule rebuilt from the form after its Source was deleted and its logic cleared', async () => {
+    const page = await renderPage();
+    await openRule(page, 'lazy-prompting', toCrlf(builtIn('lazy-prompting')));
+    page.querySelector<HTMLElement>('.rule-editor-tab[data-editor-tab="source"]')!.click();
+    page.querySelector<HTMLTextAreaElement>('#rule-editor-raw')!.value = '';
+    page.querySelector<HTMLElement>('.rule-editor-tab[data-editor-tab="form"]')!.click();
+    input(page, 'rf-detect').value = '';
+    await expectRefused(page);
+  });
+
+  it('won\'t test or save a generated draft whose detection logic was cleared', async () => {
+    const page = await generateDraft(builtIn('lazy-prompting'));
+    input(page, 'rf-detect').value = '';
+    await expectRefused(page);
+  });
 });

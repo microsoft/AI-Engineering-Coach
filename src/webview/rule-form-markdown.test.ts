@@ -267,6 +267,49 @@ describe('mergeRuleMarkdown cleared detect logic', () => {
     const md = '---\nid: x\n---\n\n# Description\nText\n';
     expect(mergeRuleMarkdown(md, { ...fullFields(md), detect: '' }, new Set<RuleFormField>(['detect']))).toBe(md);
   });
+
+  it('rebuilds a rule from an empty base with the template\'s detect logic only when the rule is new', () => {
+    const fields: RuleFormFields = {
+      id: 'x', name: 'X', group: 'prompt-quality', severity: 'low', scope: 'requests', version: '1', tags: '', thresholds: '',
+      description: 'Text', whenTriggered: '', howToImprove: '', examples: '', detect: '',
+    };
+    const all = new Set(Object.keys(fields) as RuleFormField[]);
+    expect(mergeRuleMarkdown('', fields, all)).not.toContain('```detect');
+    expect(hasDetectionLogic(mergeRuleMarkdown('', fields, all, true))).toBe(true);
+  });
+});
+
+describe('mergeRuleMarkdown with the rule parser\'s sections and keys', () => {
+  const head = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\nscope: requests\n---\n';
+
+  it('reads a heading inside a code fence as a section, as the rule parser does, and edits it there', () => {
+    const md = `${head}\n# Description\nAn example:\n\`\`\`markdown\n# When Triggered\nFenced text.\n\`\`\`\n\n# When Triggered\nReal text.\n`;
+    const fields = fullFields(md);
+    expect(fields).toMatchObject({ description: 'An example:\n```markdown', whenTriggered: parseRule(md)!.descriptionTemplate });
+    const merged = mergeRuleMarkdown(md, { ...fields, whenTriggered: 'New text.' }, new Set<RuleFormField>(['whenTriggered']));
+    expect(parseRule(merged)!.descriptionTemplate).toBe('New text.');
+  });
+
+  it.each<[string, string[]]>([
+    ['a code line indented four spaces', ['Text', '    ```']],
+    ['a detect block opened mid-line', ['Text: ```detect', 'scan: requests', 'match: messageLength > 0', '```']],
+  ])('keeps the sections after %s', (_name, description) => {
+    const md = [head, '# Description', ...description, '', '# When Triggered', '{{count}} found.', '', '# How to Improve', 'Fix it.', ''].join('\n');
+    expect(readRuleFields(md)).toMatchObject({ whenTriggered: '{{count}} found.', howToImprove: 'Fix it.' });
+    const fields = { ...fullFields(md), description: 'New text', whenTriggered: 'Changed.' };
+    const merged = mergeRuleMarkdown(md, fields, new Set<RuleFormField>(['description', 'whenTriggered']));
+    expect(parseRule(merged)).toMatchObject({ descriptionTemplate: 'Changed.', suggestionTemplate: 'Fix it.' });
+    expect(merged.match(/^# When Triggered$/gm)).toHaveLength(1);
+  });
+
+  it('reads and rewrites the last occurrence of a front-matter key, which the rule parser uses', () => {
+    const md = `${head.replace('scope: requests\n', 'scope: requests\nscope: both\n')}\n# Description\nText\n`;
+    expect(readRuleFields(md).scope).toBe('both');
+    expect(parseRule(md)?.scope).toBe('both');
+    const merged = mergeRuleMarkdown(md, { ...fullFields(md), scope: 'sessions' }, new Set<RuleFormField>(['scope']));
+    expect(merged).toBe(md.replace('scope: both', 'scope: sessions'));
+    expect(parseRule(merged)?.scope).toBe('sessions');
+  });
 });
 
 describe('mergeRuleMarkdown additions', () => {
@@ -333,7 +376,7 @@ describe('mergeRuleMarkdown new rules', () => {
       id: '', name: 'Short prompts', group: 'prompt-quality', severity: 'medium', scope: 'both', version: '1',
       tags: 'custom', thresholds: 'minChars: 30', description: '', whenTriggered: '', howToImprove: '', examples: '', detect: '',
     };
-    const merged = mergeRuleMarkdown('', fields, new Set(Object.keys(fields) as RuleFormField[]));
+    const merged = mergeRuleMarkdown('', fields, new Set(Object.keys(fields) as RuleFormField[]), true);
     expect(merged).toBe([
       '---', 'id: my-custom-rule', 'name: Short prompts', 'group: prompt-quality', 'severity: medium', 'scope: both',
       'version: 1', 'tags: [custom]', 'thresholds:', '  minChars: 30', '---', '',

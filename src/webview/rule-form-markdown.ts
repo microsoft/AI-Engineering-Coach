@@ -93,27 +93,24 @@ function frontmatterBlocks(yaml: string): Block[] {
   return blocks;
 }
 
-/** Splits a rule body at headings outside code fences. The first block holds any text before the first heading. */
+/**
+ * Splits a rule body at its headings the way the rule parser finds them: every line that starts with `#` and
+ * whitespace, inside a code fence or not. The first block holds any text before the first heading.
+ */
 function sectionBlocks(body: string): Block[] {
   const blocks: Block[] = [{ key: '', lines: [] }];
-  let fence = '';
   for (const line of body.split('\n')) {
-    const marker = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence) {
-      // A fence closes on a line of the same character, at least as long, with nothing after it.
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = '';
-    } else if (marker) {
-      fence = marker[1];
-    } else {
-      const heading = /^#+\s+(.+?)\s*$/.exec(line);
-      if (heading) {
-        blocks.push({ key: heading[1].toLowerCase(), lines: [line] });
-        continue;
-      }
-    }
-    blocks[blocks.length - 1].lines.push(line);
+    const heading = /^#+(\s.*)?$/.exec(line);
+    if (heading) blocks.push({ key: (heading[1] ?? '').trim().toLowerCase(), lines: [line] });
+    else blocks[blocks.length - 1].lines.push(line);
   }
   return blocks;
+}
+
+/** The index of the last block for a key: like the rule parser, the last occurrence of a front-matter key wins. */
+function lastBlockIndex(blocks: Block[], key: string): number {
+  for (let at = blocks.length - 1; at >= 0; at--) if (blocks[at].key === key) return at;
+  return -1;
 }
 
 function joinBlocks(blocks: Block[]): string {
@@ -216,7 +213,10 @@ export function readRuleFields(markdown: string): Partial<RuleFormFields> {
     detect: DETECT_LOGIC_RE.exec(body)?.[2].trim() ?? '',
   };
   if (!frontmatter) return fields;
-  const entry = (field: FrontmatterField) => frontmatter.find(block => block.key === field);
+  const entry = (field: FrontmatterField): Block | undefined => {
+    const at = lastBlockIndex(frontmatter, field);
+    return at < 0 ? undefined : frontmatter[at];
+  };
   const value = (field: FrontmatterField) => {
     const line = entry(field)?.lines[0] ?? '';
     // Like the rule parser, read a quoted value without its quotes.
@@ -241,9 +241,10 @@ export function readRuleFields(markdown: string): Partial<RuleFormFields> {
  * Writes the changed form fields into rule markdown and keeps everything else as it was: front-matter keys and
  * sections the form has no field for (such as `# Tests`), text around the detect block, and their order. Fields
  * the markdown doesn't have yet are added. Markdown without front matter gets every front-matter field from the
- * form, so it becomes a rule; from an empty `base`, this builds a new rule.
+ * form, so it becomes a rule; from an empty `base`, this builds one. Empty fields get the template's defaults,
+ * but only a `newRule` gets its detect logic: cleared detection logic stays cleared.
  */
-export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed: ReadonlySet<RuleFormField>): string {
+export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed: ReadonlySet<RuleFormField>, newRule = false): string {
   const md = normalizeLineEndings(base);
   const { frontmatter, body } = splitFrontmatter(md);
   let head = md.slice(0, md.length - body.length);
@@ -252,7 +253,7 @@ export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed:
     const blocks = frontmatter ?? [];
     for (const field of frontmatterFields) {
       const lines = frontmatterLines(field, fields[field]);
-      const at = blocks.findIndex(block => block.key === field);
+      const at = lastBlockIndex(blocks, field);
       if (at < 0) {
         if (lines.length > 0) blocks.push({ key: field, lines });
       } else if (lines.length > 0) {
@@ -284,7 +285,6 @@ export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed:
     }
     text = joinBlocks(blocks);
   }
-  // Only a new rule gets the template's detect logic; cleared logic in a rule stays cleared.
-  if (changed.has('detect')) text = writeDetectLogic(text, fields.detect || (md.trim() ? '' : EMPTY_FIELD_DEFAULTS.detect ?? ''));
+  if (changed.has('detect')) text = writeDetectLogic(text, fields.detect || (newRule ? EMPTY_FIELD_DEFAULTS.detect ?? '' : ''));
   return head + text;
 }

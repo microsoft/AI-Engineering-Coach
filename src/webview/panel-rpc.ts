@@ -608,11 +608,13 @@ Output ONLY the raw markdown rule. No code fences around the whole output. No ex
 
 function cleanRuleMarkdown(raw: string): string {
   let md = raw.replaceAll(/\r\n?/g, '\n').trim();
-  // Strip an outer code fence. Only a fence opened before the front matter closes at the end of the reply; a rule
-  // without one ends with its detect block's closing fence.
+  // Strip an outer code fence: one still open where the rule starts, at its front matter (or, without front
+  // matter, its first heading). Only then is the reply's last fence its closing one; otherwise the last fence
+  // closes the rule's detect block.
   const fmStart = md.indexOf('---');
-  const outerFence = fmStart < 0 ? md.startsWith('```') : /^```/m.test(md.slice(0, fmStart));
-  if (outerFence) md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+  const ruleStart = fmStart >= 0 ? fmStart : Math.max(md.search(/^#/m), 0);
+  const fencesBefore = md.slice(0, ruleStart).split('\n').filter(line => line.startsWith('```')).length;
+  if (fencesBefore % 2 === 1) md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
   // Strip leading prose before the frontmatter
   const fmIdx = md.indexOf('---');
   if (fmIdx > 0) md = md.substring(fmIdx);

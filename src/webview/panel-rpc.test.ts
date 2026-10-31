@@ -174,10 +174,24 @@ describe('generateRuleMarkdown fences', () => {
     ['an outer fence', '```markdown\n', '\n```\n'],
     ['an outer fence without a language', '```\n', '\n```'],
     ['prose and an outer fence', 'Here is the rule:\n\n```md\n', '\n```'],
+    ['a closed example and an outer fence', 'For example:\n```\nscan: requests\n```\nThe rule:\n```markdown\n', '\n```'],
   ])('strips %s around the rule', async (_name, before, after) => {
     const ask = asker().mockResolvedValueOnce(`${before}${RULE_ENDING_WITH_DETECT}${after}`);
 
     await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+
+  it('keeps the closing fence of a rule after a closed example in the prose', async () => {
+    const ask = asker().mockResolvedValueOnce(`For example:\n\`\`\`\nscan: requests\n\`\`\`\n\n${RULE_ENDING_WITH_DETECT}`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+
+  it('strips an outer fence around a rule without front matter', async () => {
+    const body = RULE_ENDING_WITH_DETECT.slice(RULE_ENDING_WITH_DETECT.indexOf('# Description'));
+    const ask = asker().mockResolvedValue(`\`\`\`markdown\n${body}\n\`\`\``);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: body });
   });
 });
 
