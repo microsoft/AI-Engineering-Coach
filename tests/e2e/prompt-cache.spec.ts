@@ -24,7 +24,7 @@ test.describe('Prompt Cache tab', () => {
 
   test('sits next to Context Management and keeps each tab working', async ({ page }) => {
     const tabs = page.locator('.ctx-sub-tab');
-    await expect(tabs).toHaveText(['Context Quality', 'Context Management', 'Prompt Cache']);
+    await expect(tabs).toHaveText(['Context Quality', 'Context Management', 'Prompt Cache', 'Token Types']);
     await page.locator('[data-tab="context-mgmt"]').click();
     await expect(page.locator('#content')).toContainText('Context Score');
     await page.locator('[data-tab="prompt-cache"]').click();

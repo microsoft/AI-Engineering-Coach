@@ -20,6 +20,8 @@ import {
 } from './context-composition-view';
 import { attachCompositionDrilldown } from './context-composition-drilldown';
 import { turnTooltipLines, utilizationSeries, windowFootnote, windowNote, windowSourceHelp, windowTag } from './context-window-view';
+import { closeContextTimeline, renderContextTimeline } from './context-session-timeline';
+import { renderSessionStrip } from './token-types-view';
 
 const VERDICT_COLORS: Record<string, string> = {
   optimal: COLORS.green,
@@ -332,6 +334,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
   function collapseInlineSessions(): void {
     destroyChartById('ctxSessionTokenChart');
     destroyChartById(SESSION_COMPOSITION_CHART_ID);
+    closeContextTimeline();
     expandedSessionIdx = null;
     for (const el of tableWrap.querySelectorAll('.ctx-session-inline')) el.remove();
   }
@@ -418,6 +421,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         if (existingChart) {
           destroyChartById('ctxSessionTokenChart');
           destroyChartById(SESSION_COMPOSITION_CHART_ID);
+          closeContextTimeline();
           existingChart.remove();
         }
         for (const button of headerTr.querySelectorAll('.ctx-session-expand')) button.setAttribute('aria-expanded', 'false');
@@ -446,12 +450,18 @@ export async function renderContextManagement(container: HTMLElement, currentFil
             <span style="font-size:12px;font-weight:600;color:var(--text-primary,#c9d1d9);">${s.date} — ${s.harness}</span>
             <span style="font-size:11px;color:var(--text-muted);">${s.requestCount} reqs, ${s.compactionCount} compactions${todoEvents.length > 0 ? ', ' + todoEvents.length + ' todo events' : ''}${windowNote(s)}</span>
           </div>
-          ${s.hasPerRequestTokens ? html`<div style="position:relative;height:226px;"><${CanvasEl} id=${chartId} height=${180} /></div>` : null}
+          ${s.hasCallTimeline ? html`<div class="ctx-tl-panel"></div>`
+            : s.hasPerRequestTokens ? html`<div style="position:relative;height:226px;"><${CanvasEl} id=${chartId} height=${180} /></div>` : null}
+          ${renderSessionStrip(s.tokenTypes)}
           ${renderSessionCompositionPanel(s)}
         </td>`, chartRow);
         targetRow.after(chartRow);
 
-        if (expandedSessionData && s.hasPerRequestTokens) {
+        // Copilot CLI and Copilot App sessions load their per-call timeline; others chart per request.
+        const timelinePanel = chartRow.querySelector<HTMLElement>('.ctx-tl-panel');
+        if (timelinePanel && expandedSessionData) {
+          renderContextTimeline(timelinePanel, s, expandedSessionData.thresholds);
+        } else if (expandedSessionData && s.hasPerRequestTokens) {
           renderSessionTokenChart(chartId, s, expandedSessionData.estimatedContextWindow ?? 1, expandedSessionData.thresholds);
         }
         renderSessionCompositionChart(s);
