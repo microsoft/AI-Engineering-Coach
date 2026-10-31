@@ -5,9 +5,10 @@
 
 /* Patterns page renderer -- work hour heatmap + GitHub-style calendar */
 
-import { DateFilter, CalendarActivityData, ProjectOverviewData } from '../core/types';
+import { DateFilter, CalendarActivityData, ProjectOverviewData, TurnBasis } from '../core/types';
 import { rpc, createChart, formatNum, escapeHtml, el, COLORS, $$ } from './shared';
 import { html, render, CanvasEl, VNode } from './render';
+import { TurnBasisNote } from './turn-basis-note';
 
 interface WlbData {
   score: number;
@@ -24,6 +25,7 @@ interface WlbData {
 interface HeatmapDataLocal {
   heatmap: number[][];
   focusHeatmap: number[][];
+  turnBasis?: TurnBasis;
 }
 
 /* ── Flame color scale ────────────────────────────────────────────── */
@@ -124,11 +126,12 @@ export async function renderPatterns(container: HTMLElement, currentFilter: Date
 
     render(html`
       <div>
+        <${TurnBasisNote} basis=${heatmap.turnBasis} />
         <div class="heatmap-container" id="heatmapGrid"></div>
         ${wlb ? html`
         <div class="two-col" style="margin-top:12px;">
-          <div class="chart-wrap"><div class="chart-title">Hourly Activity <span class="info-icon" tabindex="0" role="button" aria-label="Hourly activity info">${'\u24d8'}<span class="info-popup">Compares your AI assistant usage by hour of the day on weekdays vs. weekends. Helps identify your most productive coding hours.</span></span></div><${CanvasEl} id="wlbHoursChart" height=${220} /></div>
-          <div class="chart-wrap"><div class="chart-title">Weekly Trend <span class="info-icon" tabindex="0" role="button" aria-label="Weekly trend info">${'\u24d8'}<span class="info-popup info-popup-right">Shows your weekly AI assistant request volume split by weekday and weekend. Useful for spotting changes in work cadence over time.</span></span></div><${CanvasEl} id="wlbWeeklyChart" height=${220} /></div>
+          <div class="chart-wrap"><div class="chart-title">Hourly Activity <span class="info-icon" tabindex="0" role="button" aria-label="Hourly activity info">${'\u24d8'}<span class="info-popup">Compares the prompts you typed by hour of the day on weekdays vs. weekends. Helps identify your most productive coding hours.</span></span></div><${CanvasEl} id="wlbHoursChart" height=${220} /></div>
+          <div class="chart-wrap"><div class="chart-title">Weekly Trend <span class="info-icon" tabindex="0" role="button" aria-label="Weekly trend info">${'\u24d8'}<span class="info-popup info-popup-right">Shows the prompts you typed each week, split by weekday and weekend. Useful for spotting changes in work cadence over time.</span></span></div><${CanvasEl} id="wlbWeeklyChart" height=${220} /></div>
         </div>` : null}
       </div>
     `, panel);
@@ -183,7 +186,10 @@ export async function renderPatterns(container: HTMLElement, currentFilter: Date
       rpc<HeatmapDataLocal>('getHeatmap', filter),
     ]);
 
-    render(html`<div class="calendar-heatmap-container" id="calendarGrid"></div>`, panel);
+    render(html`
+      <${TurnBasisNote} basis=${calendar.turnBasis} />
+      <div class="calendar-heatmap-container" id="calendarGrid"></div>
+    `, panel);
     renderCalendarHeatmap(calendar, heatmap.focusHeatmap);
   }
 
@@ -269,7 +275,7 @@ function renderWorkHoursHeatmap(heatmap: HeatmapDataLocal): void {
       const cell = el('div', 'heatmap-cell');
       cell.style.backgroundColor = flameColor(combined);
       cell.style.color = combined > 0.55 ? '#000' : '#fff';
-      cell.title = `${DAY_NAMES[d]} ${h}:00 — ${v} requests, ${focus}% focus`;
+      cell.title = `${DAY_NAMES[d]} ${h}:00 — ${v} prompts, ${focus}% focus`;
       cell.textContent = v > 0 ? String(v) : '';
       row.appendChild(cell);
     }
@@ -360,7 +366,7 @@ function renderCalendarHeatmap(calendar: CalendarActivityData, _focusHeatmap: nu
     if (dayData) {
       const reqIntensity = maxReqs > 0 ? dayData.requests / maxReqs : 0;
       intensity = reqIntensity * 0.6 + (dayData.focusScore / 100) * 0.4;
-      title = `${dateStr}: ${dayData.requests} requests, ${dayData.focusScore}% focus`;
+      title = `${dateStr}: ${dayData.requests} prompts, ${dayData.focusScore}% focus`;
     }
 
     const color = calendarFlameColor(intensity);
@@ -403,14 +409,16 @@ function langTag(lang: string): VNode {
 }
 
 function renderProjectOverview(panel: HTMLElement, overview: ProjectOverviewData): void {
+  const note = html`<${TurnBasisNote} basis=${overview.turnBasis} detail="Lines of code, languages and hot files include every turn." />`;
   if (overview.projects.length === 0) {
-    render(html`<p style="color:var(--text-muted);padding:16px;">No project data available.</p>`, panel);
+    render(html`${note}<p style="color:var(--text-muted);padding:16px;">No project data available.</p>`, panel);
     return;
   }
 
   const maxHours = Math.max(1, ...overview.projects.map(p => p.estimatedHours));
 
   render(html`
+    ${note}
     <div class="project-overview-list">
       ${overview.projects.map(proj => {
         const barWidth = Math.round((proj.estimatedHours / maxHours) * 100);
@@ -420,7 +428,7 @@ function renderProjectOverview(panel: HTMLElement, overview: ProjectOverviewData
               <div class="proj-name">${proj.workspaceName}</div>
               <div class="proj-meta">
                 <span class="proj-hours">${proj.estimatedHours}h</span>
-                <span class="proj-requests">${formatNum(proj.totalRequests)} reqs</span>
+                <span class="proj-requests">${formatNum(proj.totalRequests)} prompts</span>
                 ${proj.estimatedLoc > 0 ? html`<span class="proj-loc">${formatNum(proj.estimatedLoc)} LoC</span>` : null}
                 ${proj.gitPath ? html`<span class="proj-git" title=${proj.gitPath}>\uD83D\uDCC1 ${proj.gitPath.split('/').slice(-2).join('/')}</span>` : null}
               </div>
@@ -478,7 +486,7 @@ function renderExploreDetail(container: HTMLElement, wsId: string, wsName: strin
         <table class="data-table compact">
           <tbody>
             <tr><td>Estimated Hours</td><td><strong>${proj.estimatedHours}h</strong></td></tr>
-            <tr><td>Total Requests</td><td><strong>${formatNum(proj.totalRequests)}</strong></td></tr>
+            <tr><td>Prompts You Typed</td><td><strong>${formatNum(proj.totalRequests)}</strong></td></tr>
             <tr><td>Estimated LoC</td><td><strong>${formatNum(proj.estimatedLoc)}</strong></td></tr>
             <tr><td>Work Pattern</td><td><strong>${proj.timePattern}</strong></td></tr>
             ${proj.gitPath ? html`<tr><td>Path</td><td><code style="font-size:11px;">${proj.gitPath}</code></td></tr>` : null}

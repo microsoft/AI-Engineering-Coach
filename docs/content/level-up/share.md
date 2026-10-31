@@ -15,10 +15,10 @@ The Share page lets you generate a visual stat card summarizing your AI coding a
 The generated card includes:
 
 - **AI Lines of Code** -- Total estimated LoC
-- **Current Streak** -- Consecutive active days
-- **Flow Score** -- How well you maintain focused coding sessions
+- **Current Streak** -- Consecutive days, up to today, on which you typed a prompt
+- **Flow Score** -- How well you maintain focused coding sessions, from the prompts you typed
 - **Sessions** -- Total session count
-- **Best Streak** -- Your all-time longest streak
+- **Best Streak** -- Your all-time longest streak of days you typed a prompt
 - **Requests** -- Total requests sent
 - **Top Languages** -- Your most-used programming languages, shown as colored tags
 - **Active workspace** and **date** at the bottom

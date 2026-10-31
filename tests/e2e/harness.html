@@ -488,7 +488,8 @@ function getMockData(method, params) {
     getHeatmap: () => ({
       heatmap: Array.from({ length: 7 }, (day) => Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? Math.floor(Math.random() * 30) + 10 : Math.floor(Math.random() * 3))),
       byType: {},
-      focusHeatmap: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 50))
+      focusHeatmap: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 50)),
+      turnBasis: { humanTurns: 2841, automatedTurns: 1203, automatedByKind: { agent: 899, relayed: 180, autopilot: 94, system: 30 } }
     }),
 
     getWorkLifeBalance: () => ({
@@ -507,7 +508,8 @@ function getMockData(method, params) {
       avgSpanHours: 9,
       maxStreak: 12,
       maxBreak: 3,
-      activeDays: 22
+      activeDays: 22,
+      turnBasis: { humanTurns: 2841, automatedTurns: 1203, automatedByKind: { agent: 899, relayed: 180, autopilot: 94, system: 30 } }
     }),
 
     getAiCredits: () => ({
@@ -567,18 +569,18 @@ function getMockData(method, params) {
     }),
 
     getCalendarActivity: () => ({
-      days: genLabels(90).map(d => ({ date: d, requests: Math.floor(Math.random() * 120) + 10, sessions: Math.floor(Math.random() * 8) + 1 })),
-      maxRequests: 140
+      days: genLabels(90).map(d => ({ date: d, requests: Math.floor(Math.random() * 120) + 10, focusScore: 60, dow: new Date(d + 'T00:00:00').getDay() })),
+      maxRequests: 140,
+      turnBasis: { humanTurns: 2841, automatedTurns: 1203, automatedByKind: { agent: 899, relayed: 180, autopilot: 94, system: 30 } }
     }),
 
     getProjectOverview: () => ({
       projects: [
-        { name: 'my-api', sessions: 45, lastActive: '2026-05-03', requests: 980 },
-        { name: 'frontend-app', sessions: 32, lastActive: '2026-05-02', requests: 720 },
-        { name: 'data-pipeline', sessions: 22, lastActive: '2026-05-01', requests: 510 },
-        { name: 'mobile-sdk', sessions: 18, lastActive: '2026-04-30', requests: 401 },
-        { name: 'infra-tools', sessions: 10, lastActive: '2026-04-28', requests: 230 }
-      ]
+        { workspaceName: 'my-api', workspaceId: 'ws-1', totalRequests: 980, estimatedHours: 42.5, languages: ['typescript', 'json'], timePattern: 'mostly weekdays, mornings', topFiles: ['src/server.ts', 'src/routes.ts'], estimatedLoc: 12400, gitPath: '/home/user/my-api' },
+        { workspaceName: 'frontend-app', workspaceId: 'ws-2', totalRequests: 720, estimatedHours: 31.2, languages: ['typescript', 'css'], timePattern: 'weekends + weekdays', topFiles: ['src/App.tsx'], estimatedLoc: 8300, gitPath: '/home/user/frontend-app' },
+        { workspaceName: 'data-pipeline', workspaceId: 'ws-3', totalRequests: 510, estimatedHours: 18.4, languages: ['python'], timePattern: 'mostly weekdays, evenings', topFiles: ['etl/load.py'], estimatedLoc: 4100, gitPath: null }
+      ],
+      turnBasis: { humanTurns: 2210, automatedTurns: 1380, automatedByKind: { agent: 900, relayed: 280, autopilot: 200 } }
     }),
 
     getFlowState: () => ({ avgSessionLength: 28.5, avgRequestsPerSession: 22.4, focusScore: 78, interruptionRate: 0.12 }),
