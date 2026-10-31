@@ -576,19 +576,20 @@ describe('an update notification answered late', () => {
     mocks.showInformationMessage
       .mockImplementationOnce(() => new Promise<string | undefined>(resolve => { answer = resolve; }))
       .mockResolvedValueOnce(answerForV6);
-    const service = createService(fetch);
+    const store = sharedStore();
+    const service = createService(fetch, { store });
     service.start();
     const first = service.checkNow();
     await vi.waitFor(() => expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1));
     latest = '0.6.0';
     await service.checkNow();
-    return { service, clickUpdate: () => { answer('Update'); return first; } };
+    return { service, store, answerOld: (choice: string) => { answer(choice); return first; } };
   }
 
   it('offers the pending reload instead of installing an older release', async () => {
-    const { service, clickUpdate } = await leaveOpen('Update');
+    const { service, answerOld } = await leaveOpen('Update');
     expect(service.getStatus()).toEqual({ state: 'installed', latest: '0.6.0' });
-    await clickUpdate();
+    await answerOld('Update');
     expect(installCalls()).toHaveLength(1);
     expect(mocks.showErrorMessage).not.toHaveBeenCalled();
     expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
@@ -596,11 +597,17 @@ describe('an update notification answered late', () => {
   });
 
   it('installs the newest release this window knows about', async () => {
-    const { clickUpdate } = await leaveOpen(undefined);
-    await clickUpdate();
+    const { answerOld } = await leaveOpen(undefined);
+    await answerOld('Update');
     expect(installCalls()).toHaveLength(1);
     expect(mocks.showErrorMessage).not.toHaveBeenCalled();
     expect(path.basename((installCalls()[0][1] as { fsPath: string }).fsPath)).toMatch(/^ai-engineer-coach-0\.6\.0-/);
+  });
+
+  it('keeps skipping the newer version when the older notification is skipped too', async () => {
+    const { store, answerOld } = await leaveOpen('Skip This Version');
+    await answerOld('Skip This Version');
+    expect(store.get(UPDATE_STATE_KEY)).toMatchObject({ skippedVersion: '0.6.0' });
   });
 });
 

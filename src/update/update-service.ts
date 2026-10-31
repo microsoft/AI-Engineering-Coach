@@ -364,12 +364,15 @@ export class UpdateService implements vscode.Disposable {
       case OPEN_RELEASE_PAGE:
         await vscode.env.openExternal(vscode.Uri.parse(release.releaseUrl));
         return;
-      case SKIP:
-        await this.writeState({ skippedVersion: release.version });
+      case SKIP: {
+        // A late answer to an older notification must not undo skipping a newer version.
+        const skipped = this.readState().skippedVersion;
+        if (!skipped || !isNewerVersion(skipped, release.version)) await this.writeState({ skippedVersion: release.version });
         if (this.revealedVersion === release.version) this.revealedVersion = undefined;
         runtimeDebug('update', 'skip', `version=${release.version}`);
         this.refresh();
         return;
+      }
       default:
         return;
     }
