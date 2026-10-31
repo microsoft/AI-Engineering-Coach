@@ -61,7 +61,15 @@ function mergeContextFields(a: CallTimelineBucket, b: CallTimelineBucket): Parti
     const y = b[key];
     if (x != null || y != null) out[key] = x == null ? y : y == null ? x : combine(x, y);
   }
+  // Reasoning is averaged over the calls that logged it, so keep that count when it isn't every call.
+  const reasoningCalls = reasoningCallsOf(a) + reasoningCallsOf(b);
+  if (out.reasoning != null && reasoningCalls < b.lastCall - a.firstCall + 1) out.reasoningCalls = reasoningCalls;
   return out;
+}
+
+/** Calls in a bucket that logged reasoning tokens. */
+export function reasoningCallsOf(bucket: CallTimelineBucket): number {
+  return bucket.reasoning == null ? 0 : bucket.reasoningCalls ?? bucket.lastCall - bucket.firstCall + 1;
 }
 
 /** The bucket of a single call: the one place that maps a call onto bucket fields. */

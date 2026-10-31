@@ -87,7 +87,11 @@ describe('context timeline layers', () => {
     const output = outputLayer().datasets!(TIMELINE);
     expect(output.map(d => d.yAxisID)).toEqual(['y1', 'y1']);
     expect(output[0].data).toEqual([2_000, 20_000, null]);
+    expect(output[1].data).toEqual([1_000, 10_000, null]);
     expect(outputLayer().defaultOn).toBe(false);
+    // Reasoning per call counts only the calls that logged it.
+    const partial = outputLayer().datasets!({ ...TIMELINE, buckets: [{ ...TIMELINE.buckets[0], reasoningCalls: 1 }] });
+    expect(partial.map(d => d.data)).toEqual([[2_000], [2_000]]);
   });
 
   it('keeps the cache layers available but off in Context Management', () => {

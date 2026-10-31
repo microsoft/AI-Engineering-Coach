@@ -414,8 +414,8 @@ function tokenCount(value: unknown): number {
 }
 
 /** Cache usage of every model call of a request, and whether each stopped at the output-token limit
- *  (`finish: length`). OpenCode writes one assistant message per call, and its `tokens.input` excludes the
- *  cached tokens. */
+ *  (`finish: length`; unknown while a call has no `finish`). OpenCode writes one assistant message per call,
+ *  and its `tokens.input` excludes the cached tokens. */
 function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawMain: boolean }): RequestPromptCache | undefined {
   const builder = new RequestCacheBuilder();
   for (const message of assistantMessages) {
@@ -426,7 +426,8 @@ function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawM
     const cacheWrite = tokenCount(tokens.cache?.write);
     const sample = { input: tokenCount(tokens.input) + cacheRead + cacheWrite, cacheRead, cacheWrite };
     if (sample.input <= 0) continue;
-    builder.addCall('main', cacheModelName(message.modelID || message.model?.modelID), { ...sample, outputs: stopReasonSample(message.finish === 'length') });
+    const truncated = typeof message.finish === 'string' && message.finish ? message.finish === 'length' : null;
+    builder.addCall('main', cacheModelName(message.modelID || message.model?.modelID), { ...sample, outputs: stopReasonSample(truncated) });
     if (!cacheState.sawMain) {
       cacheState.sawMain = true;
       builder.addColdStart(missTokens(sample), undefined);

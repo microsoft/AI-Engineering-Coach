@@ -8,7 +8,7 @@
 
 import type { CacheStream, ModelCallRow, RequestPromptCache } from './types';
 import { normalizeModel } from './helpers';
-import { addRowOutputs, finishRowOutputs, type CallOutputSample } from './call-outputs';
+import { addRowOutputs, addStopReason, finishRowOutputs, type CallOutputSample } from './call-outputs';
 
 /** Prices a harness logged for one call: the input price per token, in the harness's price unit (one unit for
  *  every model, so costs add up across models with different prices), and the cache read and cache write
@@ -95,7 +95,7 @@ function addSample(row: ModelCallRow, sample: CacheCallSample): void {
   }
   if (sample.ttlSeconds != null && sample.ttlSeconds > 0) row.ttlSeconds = sample.ttlSeconds;
   if (sample.reasoningEffort) row.reasoningEffort = sample.reasoningEffort.slice(0, 16);
-  if (sample.outputs) addRowOutputs(row, sample.outputs);
+  if (sample.outputs) addRowOutputs(row, sample.outputs, sample.reasoningEffort);
 }
 
 function roundRow(row: ModelCallRow): ModelCallRow {
@@ -143,6 +143,11 @@ export class RequestCacheBuilder {
   addTruncated(stream: CacheStream, model: string): void {
     const row = this.row(stream, model);
     row.truncatedCalls = (row.truncatedCalls ?? 0) + 1;
+  }
+
+  /** A call already passed to `addCall` without a stop reason logged one on a later line (Claude Code). */
+  addStopReason(stream: CacheStream, model: string, truncated: boolean): void {
+    addStopReason(this.row(stream, model), truncated);
   }
 
   addColdStart(tokens: number, cost: number | undefined): void {

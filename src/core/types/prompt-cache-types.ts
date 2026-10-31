@@ -12,6 +12,14 @@
 /** Which model calls a row covers: the main agent, sub-agents, or compaction summaries. */
 export type CacheStream = 'main' | 'subagent' | 'compaction';
 
+/** Output and reasoning tokens of a row's calls at one reasoning effort. */
+export interface EffortReasoning {
+  effort: 'max' | 'high' | 'medium' | 'low' | 'unknown';
+  calls: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
 /** Sums over the model calls a request made on one stream with one model. Neutral: prompt-cache fields
  *  today; other per-call sums can be added. */
 export interface ModelCallRow {
@@ -45,9 +53,15 @@ export interface ModelCallRow {
   outputTokens?: number;
   /** Reasoning tokens, part of `outputTokens` (Copilot CLI and Copilot App). */
   reasoningTokens?: number;
+  /** Reasoning by effort over the calls that logged reasoning tokens. Only stored when the row-level fields
+   *  can't say it: the calls ran at more than one effort, or not every call logged reasoning. Otherwise it is
+   *  `reasoningEffort` with `calls`, `outputTokens` and `reasoningTokens`. */
+  reasoningByEffort?: EffortReasoning[];
   /** Calls that stopped at the output-token limit (Copilot CLI and Copilot App, Claude Code, OpenCode). */
   truncatedCalls?: number;
-  /** Calls the content filter stopped or changed (Copilot CLI and Copilot App). */
+  /** Calls that logged why they stopped: the denominator of `truncatedCalls`. Absent when it equals `calls`. */
+  stopCalls?: number;
+  /** Calls the content filter stopped or changed, of the calls that logged it (Copilot CLI and Copilot App). */
   filteredCalls?: number;
   /** Time to first token of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
   ttftMs?: number[];

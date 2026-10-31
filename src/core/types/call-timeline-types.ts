@@ -37,6 +37,9 @@ export interface CallTimelineBucket {
   output?: number;
   /** Reasoning tokens of the bucket's calls (part of `output`). */
   reasoning?: number;
+  /** Calls that logged reasoning tokens: the denominator of `reasoning`. Absent when every call in the bucket
+   *  logged them. */
+  reasoningCalls?: number;
   /** Calls that stopped at the output-token limit; absent when none did. */
   truncatedCalls?: number;
 }

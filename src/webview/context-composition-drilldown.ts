@@ -10,6 +10,7 @@ import type { DateFilter, SessionContextDetail, WorkspaceContextSessionsData } f
 import { destroyChartById, rpc } from './shared';
 import { html, render, unmount } from './render';
 import { compositionMiniBar, countText, renderSessionCompositionChart, renderSessionCompositionPanel } from './context-composition-view';
+import { timelineLocationNote } from './context-window-view';
 
 const WORKSPACE_SESSION_CHART_ID = 'ctxCompWsSessionChart';
 /** Sessions listed at first, and added by each "Show more". */
@@ -20,6 +21,13 @@ function hasSessionComposition(s: SessionContextDetail): boolean {
   return detail != null && (detail.breakdown != null || detail.systemSegments.length > 0 || detail.compactions.length > 0);
 }
 
+/** The sessions of one workspace's list. */
+interface SessionList {
+  sessions: SessionContextDetail[];
+  /** The workspace table below lists these sessions with their context timeline. */
+  timelineInTable: boolean;
+}
+
 /** How many sessions the list shows, which one is open, and which one gets focus after rendering. */
 interface SessionListState {
   shown: number;
@@ -28,13 +36,14 @@ interface SessionListState {
 }
 
 /** Lists the `shown` most recent sessions. "Show more" adds the next page and moves focus to its first session. */
-function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDetail[], state: SessionListState): void {
+function renderWorkspaceSessions(panel: HTMLElement, list: SessionList, state: SessionListState): void {
+  const { sessions } = list;
   const { shown, selected, focusId } = state;
   destroyChartById(WORKSPACE_SESSION_CHART_ID);
   const visible = sessions.slice(0, shown);
   const remaining = sessions.length - visible.length;
-  const select = (id: string) => renderWorkspaceSessions(panel, sessions, { shown, selected: id === selected ? null : id });
-  const showMore = () => renderWorkspaceSessions(panel, sessions, { shown: shown + DRILLDOWN_PAGE, selected, focusId: sessions[shown]?.sessionId });
+  const select = (id: string) => renderWorkspaceSessions(panel, list, { shown, selected: id === selected ? null : id });
+  const showMore = () => renderWorkspaceSessions(panel, list, { shown: shown + DRILLDOWN_PAGE, selected, focusId: sessions[shown]?.sessionId });
   render(sessions.length === 0
     ? html`<div class="ctx-comp-note">No session in this workspace has composition data in this range.</div>`
     : html`<ul class="ctx-comp-ws-session-list" aria-label="Sessions with composition data">
@@ -46,6 +55,7 @@ function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDet
           ${compositionMiniBar(s.composition, false)}
         </button>
         ${s.sessionId === selected ? renderSessionCompositionPanel(s, WORKSPACE_SESSION_CHART_ID) : null}
+        ${s.sessionId === selected && s.hasCallTimeline && list.timelineInTable ? timelineLocationNote() : null}
       </li>`)}
       ${remaining > 0 ? html`<li class="ctx-comp-ws-more-row">
         <span class="ctx-comp-note">Showing the ${visible.length} most recent of ${sessions.length} sessions.</span>
@@ -68,10 +78,11 @@ function closeWorkspacePanels(toggles: HTMLButtonElement[]): void {
   }
 }
 
-/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches
- *  Copilot CLI workspaces, which the utilization table omits because they lack per-request tokens.
- *  Sessions are matched like the card's requests: any session with a request in range counts. */
-export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter): void {
+/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches sessions of
+ *  older Copilot CLI builds, which the utilization table omits because they log no per-turn prompt size.
+ *  Sessions are matched like the card's requests: any session with a request in range counts.
+ *  `timelineInTable`: the workspace table is shown, so a session with a context timeline points to it. */
+export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter, timelineInTable = false): void {
   const toggles = [...root.querySelectorAll<HTMLButtonElement>('.ctx-comp-ws-toggle')];
   for (const toggle of toggles) {
     let generation = 0;
@@ -93,7 +104,7 @@ export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter
         .then(data => {
           if (!isCurrent()) return;
           const sessions = data.sessions.filter(s => hasSessionComposition(s) && (source == null || s.composition?.source === source));
-          renderWorkspaceSessions(panel, sessions, { shown: DRILLDOWN_PAGE, selected: null });
+          renderWorkspaceSessions(panel, { sessions, timelineInTable }, { shown: DRILLDOWN_PAGE, selected: null });
         })
         .catch(() => {
           if (isCurrent()) render(html`<div class="ctx-comp-note">Could not load sessions.</div>`, panel);

@@ -91,9 +91,9 @@ export class ContextAnalyzer extends AnalyzerBase {
       const sessionTokens = this.estimateSessionTokens(s).filter(t => t > 0);
       if (sessionTokens.length < CONTEXT_MIN_TOKEN_REQUESTS) continue;
       // Adaptive cutoffs compensate for the estimated window, which puts every session's peak near
-      // 100%. Sessions with reported limits are judged by these cutoffs but don't shift them.
+      // 100%. Sessions with reported limits, in full or in part, are judged by these cutoffs but don't shift them.
       const window = sessionContextWindow(s);
-      if (window.source === 'reported') continue;
+      if (window.source !== 'estimated') continue;
       const avgUtil = sessionTokens.reduce((a, b) => a + b, 0) / sessionTokens.length / window.window * 100;
       avgUtils.push(avgUtil);
     }
@@ -246,7 +246,7 @@ export class ContextAnalyzer extends AnalyzerBase {
   } | null {
     const effectiveTokens: number[] = [];
     const utilizationSamples: number[] = [];
-    const windowSources = new Set<ContextWindowSource>();
+    const windowSources = new Set<ContextWindowSource | 'mixed'>();
     let compactionCount = 0;
     let fullCompactions = 0;
     let simpleCompactions = 0;

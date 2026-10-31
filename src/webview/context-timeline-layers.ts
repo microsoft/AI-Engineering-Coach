@@ -9,7 +9,7 @@
  * get their own `stack`, because the chart stacks its bars. */
 
 import type { CallTimeline, ContextVerdictThresholds, SessionTimelineData, TimelineCompaction } from '../core/types';
-import { bucketOfCall } from '../core/call-timeline';
+import { bucketOfCall, reasoningCallsOf } from '../core/call-timeline';
 import type { CallTimelineLayer, CallTimelineMarker } from './call-timeline-chart';
 import { COLORS, formatNum } from './shared';
 
@@ -134,7 +134,8 @@ export function truncationLayer(): CallTimelineLayer {
   };
 }
 
-/** Output and reasoning tokens per call, on the right-hand axis (they are far smaller than the context). */
+/** Output and reasoning tokens per call, on the right-hand axis (they are far smaller than the context). Reasoning
+ *  is averaged over the calls that logged it. */
 export function outputLayer(): CallTimelineLayer {
   return {
     id: 'output',
@@ -147,7 +148,7 @@ export function outputLayer(): CallTimelineLayer {
       const calls = timeline.buckets.map(b => b.lastCall - b.firstCall + 1);
       return [
         line('Output per call', timeline.buckets.map((b, i) => perCall(b.output, calls[i])), COLORS.green, { yAxisID: 'y1' }),
-        line('Reasoning per call', timeline.buckets.map((b, i) => perCall(b.reasoning, calls[i])), COLORS.green, { yAxisID: 'y1', borderDash: [4, 3] }),
+        line('Reasoning per call', timeline.buckets.map(b => perCall(b.reasoning, reasoningCallsOf(b))), COLORS.green, { yAxisID: 'y1', borderDash: [4, 3] }),
       ];
     },
   };

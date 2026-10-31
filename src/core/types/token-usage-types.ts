@@ -131,10 +131,11 @@ export interface TokenTypesSubagents {
 }
 
 export interface TokenTypesTruncation {
+  /** Calls that logged why they stopped. */
   calls: number;
-  /** Calls that stopped at the output-token limit. */
+  /** Of those, calls that stopped at the output-token limit. */
   truncatedCalls: number;
-  /** Calls stopped by the content filter; `null` when not reported. */
+  /** Calls stopped or changed by the content filter, of the calls that logged it; `null` when none did. */
   filteredCalls: number | null;
 }
 
@@ -193,7 +194,7 @@ export interface SessionTokenTypes {
   compactionCalls: number;
   compactionTokens: number;
   compactionTimeMs: number;
-  /** Calls that stopped at the output-token limit, of `calls`. */
+  /** Calls that stopped at the output-token limit, of `calls`: the calls that logged why they stopped. */
   truncatedCalls: number | null;
   calls: number | null;
   /** Median time to first token of the main agent's calls. */
