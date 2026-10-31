@@ -25,6 +25,8 @@ const RELAY_ELEMENT = /^(?:cross_session_message|relayed_message)$/;
 const RELAY_ID_HEADER = /^(?:from|sender)(?:_project)?_(?:session|agent)_id[ \t]*[:=]/;
 /** An element tag: group 1 is `/` in a closing tag, group 2 the name, group 3 `/` in a self-closing tag. */
 const TAG = /<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>/g;
+/** A fenced-code delimiter: three or more backticks or tildes. */
+const FENCE = /^(`{3,}|~{3,})/;
 
 /**
  * What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
@@ -41,8 +43,21 @@ function harnessAddedText(data: Record<string, unknown> | undefined): string {
   return transformed.split('\n').filter(line => !typedLines.has(line.trim())).join('\n');
 }
 
-/** Where a scan of the text the harness added is: in fenced code, or in a quoted element that spans lines. */
-interface QuoteState { fenced: boolean; element?: string }
+/** Where a scan of the text the harness added is: in fenced code (its opening delimiter), or in a quoted element
+ *  that spans lines. */
+interface QuoteState { fence?: string; element?: string }
+
+/** True when a line opens, closes or sits in fenced code; updates `state.fence`. As in Markdown, only a fence of the
+ *  same character, at least as long and with nothing after it, closes the code. */
+function inFencedCode(line: string, state: QuoteState): boolean {
+  const fence = FENCE.exec(line)?.[1];
+  if (!state.fence) {
+    if (fence) state.fence = fence;
+    return fence !== undefined;
+  }
+  if (fence && fence[0] === state.fence[0] && fence.length >= state.fence.length && line === fence) state.fence = undefined;
+  return true;
+}
 
 /**
  * True when a line carries a relay marker outside quoted text. Every element other than the relay wrapper quotes
@@ -57,11 +72,7 @@ function lineIsRelayed(raw: string, state: QuoteState): boolean {
     line = line.slice(close + state.element.length + 3);
     state.element = undefined;
   } else {
-    if (line.startsWith('```')) {
-      state.fenced = !state.fenced;
-      return false;
-    }
-    if (state.fenced) return false;
+    if (inFencedCode(line, state)) return false;
     if (RELAY_ID_HEADER.test(line)) return true;
   }
   TAG.lastIndex = 0;
@@ -82,7 +93,7 @@ function lineIsRelayed(raw: string, state: QuoteState): boolean {
 /** True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
  *  sender ID header, outside the text it quotes. */
 function isRelayed(data: Record<string, unknown> | undefined): boolean {
-  const state: QuoteState = { fenced: false };
+  const state: QuoteState = {};
   return harnessAddedText(data).split('\n').some(line => lineIsRelayed(line, state));
 }
 

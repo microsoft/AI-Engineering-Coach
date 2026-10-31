@@ -74,6 +74,14 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
     content: 'from_session_id: abc\n\nWhy is this ID repeated?',
     transformedContent: '<current_datetime>2026</current_datetime>\nfrom_session_id: abc\nWhy is this ID repeated?',
   }, undefined],
+  ['a relay header in a four-backtick fence around a three-backtick line', {
+    content: 'Why?', transformedContent: '````\n```\nfrom_session_id: abc\n```\n````\nWhy?',
+  }, undefined],
+  ['a relay header after a line with an info string inside a fence', {
+    content: 'Why?', transformedContent: '```\n```ts\nfrom_session_id: abc\n```\nWhy?',
+  }, undefined],
+  ['a relay header in a tilde fence', { content: 'Why?', transformedContent: '~~~\nfrom_session_id: abc\n~~~\nWhy?' }, undefined],
+  ['a relay header after a tilde fence closes', { content: 'Run it.', transformedContent: '~~~\ncode\n~~~\nfrom_session_id: s1\nRun it.' }, 'relayed'],
   ['typed text the harness reworded', { content: 'from_date: 2026-01-01\n\nWhy is the total wrong?', transformedContent: 'from_date: 2026-01-01\nWhy is the total wrong?' }, undefined],
 ];
 
