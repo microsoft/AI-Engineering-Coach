@@ -96,6 +96,18 @@ rule's block through the detector pipeline as part of `npm test`:
   cases in a unit test.
 - Every line must parse. Strings use double or single quotes and can contain `:`.
 
+### Rules about the user's own time
+
+Harnesses also log "user" turns that the user didn't type: messages from another agent or session,
+autopilot continuations, prompts a parent agent gave a sub-agent, and text the harness wrote. Each
+parser records why in `nonHumanKind`, and request rows expose the result as the read-only boolean
+`humanTurn`. A rule about when the user works, such as
+[`late-night-coding.md`](../src/core/rules/late-night-coding.md), matches `humanTurn == true`. A
+ratio counts only typed prompts in its total too:
+[`weekend-overwork.md`](../src/core/rules/weekend-overwork.md) sets
+`emitTotal: typedReqs` with `typedReqs: countWhere(all, "humanTurn", "==", true)`. Rules about
+session size or context, such as `mega-sessions`, keep every turn.
+
 ## Anatomy of a metric
 
 Metrics are simpler than rules — they emit a single named value that rules and dashboards can
@@ -155,6 +167,7 @@ Before opening a pull request:
 - Built-in metrics: [`src/core/metrics/`](../src/core/metrics/)
 - A minimal rule with tests: [`src/core/rules/lazy-prompting.md`](../src/core/rules/lazy-prompting.md)
 - A rule that counts only the harnesses that log a field: [`src/core/rules/no-custom-instructions.md`](../src/core/rules/no-custom-instructions.md)
+- A ratio over the prompts the user typed: [`src/core/rules/weekend-overwork.md`](../src/core/rules/weekend-overwork.md)
 - A rule using a custom aggregator and `extra.*` fields: [`src/core/rules/yolo-mode.md`](../src/core/rules/yolo-mode.md)
 - A minimal metric: [`src/core/metrics/weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md)
 - Anti-Patterns overview: [content/improve/anti-patterns.md](content/improve/anti-patterns.md)

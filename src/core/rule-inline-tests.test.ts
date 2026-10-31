@@ -52,8 +52,8 @@ function failures(results: InlineTestResult[]): number[] {
 describe('built-in rule # Tests blocks', () => {
   it('finds every rule that ships a block', () => {
     expect(withTests.map(({ rule }) => rule.id)).toEqual(expect.arrayContaining([
-      'agent-mode-for-asks', 'context-engineering-gaps', 'frustration-signals', 'lazy-prompting',
-      'no-custom-instructions', 'no-plan-mode', 'verbose-output',
+      'agent-mode-for-asks', 'context-engineering-gaps', 'frustration-signals', 'late-night-coding', 'lazy-prompting',
+      'no-custom-instructions', 'no-plan-mode', 'verbose-output', 'weekend-overwork',
     ]));
   });
 

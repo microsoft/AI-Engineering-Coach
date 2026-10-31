@@ -5,6 +5,7 @@
 
 import type { SessionRequest, PracticeGroup, AntiPattern, WeeklyPatternObservation } from '../types';
 import { isoWeek } from '../helpers';
+import { isHumanTurn } from '../human-turns';
 
 export const SEVERITY_PENALTIES: Readonly<Record<AntiPattern['severity'], number>> = { high: 12, medium: 7, low: 3 };
 
@@ -18,7 +19,8 @@ function promptQualityPenalty(request: SessionRequest): number {
 function sessionHygienePenalty(request: SessionRequest): number {
   let penalty = 0;
   if (request.isCanceled) penalty += 1;
-  if (request.timestamp !== null) {
+  // Late-night and weekend penalties mirror their rules, which count only turns the user typed.
+  if (request.timestamp !== null && isHumanTurn(request)) {
     const when = new Date(request.timestamp);
     if (when.getHours() < 5) penalty += 0.3;
     const dayOfWeek = when.getDay();
@@ -61,9 +63,11 @@ export function computeWeeklyTrend(reqs: SessionRequest[], observations: WeeklyP
     if (r.isCanceled) count++;
     if (r.messageLength < 30 && r.messageLength > 0) count++;
     if (r.referencedFiles.length === 0 && !(r.variableKinds['file'] > 0) && r.editedFiles.length === 0) count++;
-    if (r.timestamp && new Date(r.timestamp).getHours() < 5) count++;
-    const dow = new Date(r.timestamp).getDay();
-    if (dow === 0 || dow === 6) count++;
+    if (isHumanTurn(r)) {
+      if (new Date(r.timestamp).getHours() < 5) count++;
+      const dow = new Date(r.timestamp).getDay();
+      if (dow === 0 || dow === 6) count++;
+    }
     if (count > 0) weekCounts.set(week, (weekCounts.get(week) || 0) + count);
   }
   for (const row of observations) {

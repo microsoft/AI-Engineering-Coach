@@ -12,6 +12,8 @@ import { evaluateExpression } from './dsl/index';
 import type { NonHumanKind, Session, SessionRequest, WorkType } from './types';
 
 const WEDNESDAY_NOON = new Date(2026, 0, 14, 12).getTime();
+const WEDNESDAY_2AM = new Date(2026, 0, 14, 2).getTime();
+const SATURDAY_NOON = new Date(2026, 0, 17, 12).getTime();
 
 let nextId = 0;
 function turns(count: number, start: number, stepMs: number, overrides: Partial<SessionRequest> = {}): SessionRequest[] {
@@ -44,6 +46,40 @@ function detect(sessions: Session[], ruleId: string) {
 function emission(sessions: Session[], ruleId: string) {
   return runEmitters(sessions.flatMap(s => s.requests), sessions, false).get(ruleId);
 }
+
+describe('late-night-coding', () => {
+  it('counts only the prompts the user typed at night', () => {
+    const sessions = [session([...turns(12, WEDNESDAY_2AM, 60_000), ...turns(300, WEDNESDAY_2AM, 1_000, automated('autopilot'))])];
+    expect(detect(sessions, 'late-night-coding')?.occurrences).toBe(12);
+    expect(emission(sessions, 'late-night-coding')).toMatchObject({ count: 12 });
+  });
+
+  it('stays quiet when only automated turns ran at night', () => {
+    const sessions = [session([...turns(5, WEDNESDAY_2AM, 60_000), ...turns(300, WEDNESDAY_2AM, 1_000, automated('agent'))])];
+    expect(detect(sessions, 'late-night-coding')).toBeUndefined();
+    expect(detect(allTyped(sessions), 'late-night-coding')?.occurrences).toBe(305);
+  });
+});
+
+describe('weekend-overwork', () => {
+  it('divides the typed weekend prompts by the typed prompts, not by every turn', () => {
+    const sessions = [session([
+      ...turns(30, SATURDAY_NOON, 60_000),
+      ...turns(50, WEDNESDAY_NOON, 60_000),
+      ...turns(500, WEDNESDAY_NOON, 1_000, automated('autopilot')),
+      ...turns(300, SATURDAY_NOON, 1_000, automated('agent')),
+    ])];
+    expect(emission(sessions, 'weekend-overwork')).toMatchObject({ count: 30, total: 80, extra: { weekendReqs: 30, weekdayReqs: 50 } });
+    expect(detect(sessions, 'weekend-overwork')?.description).toContain('30 prompts (38%)');
+  });
+
+  it('stays quiet when only automated turns ran on the weekend', () => {
+    const sessions = [session([...turns(50, WEDNESDAY_NOON, 60_000), ...turns(300, SATURDAY_NOON, 1_000, automated('relayed'))])];
+    expect(detect(sessions, 'weekend-overwork')).toBeUndefined();
+    expect(emission(sessions, 'weekend-overwork')).toMatchObject({ count: 0, total: 50 });
+    expect(detect(allTyped(sessions), 'weekend-overwork')).toBeDefined();
+  });
+});
 
 describe('broken-flow-state', () => {
   /** Four typed prompts 10 minutes apart; after each, autopilot works for about 100 s in 10 s turns. */

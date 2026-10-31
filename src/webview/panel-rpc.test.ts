@@ -243,4 +243,9 @@ describe('humanTurn on request rows', () => {
     const { fields } = call('getDataExplorerFields', {}) as { fields: Array<{ name: string; type: string; fillRate: number; total: number }> };
     expect(fields.find(field => field.name === 'humanTurn')).toMatchObject({ type: 'boolean', fillRate: 100, total: 5 });
   });
+
+  it("runs the updated rules' inline # Tests", () => {
+    expect(call('runRuleTests', { ruleId: 'late-night-coding' })).toMatchObject({ passed: 7, total: 7 });
+    expect(call('runRuleTests', { ruleId: 'weekend-overwork' })).toMatchObject({ passed: 5, total: 5 });
+  });
 });
