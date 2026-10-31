@@ -8,7 +8,7 @@ import { Analyzer } from '../core/analyzer';
 import { createSession, createRequest } from '../core/parser-shared';
 import { detectCuriosity } from '../core/curiosity';
 import type { ParseResult } from '../core/cache';
-import type { PromptCacheData, PromptCacheSessionsData, SessionTimelineData, WorkspaceContextSessionsData } from '../core/types';
+import type { PromptCacheData, PromptCacheSessionsData, SessionTimelineData, TokenTypesData, WorkspaceContextSessionsData } from '../core/types';
 import { loadSessionImages } from '../core/session-image-loader';
 import { generateRuleMarkdown, getRpcHandler, validateDateFilter, type RuleFeedback } from './panel-rpc';
 
@@ -55,6 +55,26 @@ describe('panel-rpc', () => {
     expect((call('getSessionTimeline', { sessionId: 'app' }) as SessionTimelineData).unit).toBe('requests');
     expect(call('getSessionTimeline', { sessionId: 42 })).toBeNull();
     expect(call('getSessionTimeline', { sessionId: 'missing' })).toBeNull();
+  });
+
+  it('serves Token Types for the requested range, with Copilot App row data and its sub-agents', () => {
+    const promptCache = { rows: [{ stream: 'main' as const, model: 'claude-opus-5.5', calls: 4, reasoningEffort: 'high', input: 400_000, cacheRead: 380_000, cacheWrite: 20_000, outputTokens: 8_000, reasoningTokens: 4_800, truncatedCalls: 1, filteredCalls: 0, ttftMs: [3_000, 3_400], durationMs: [8_000, 9_000] }] };
+    const subagentRuns = [{ agentType: 'research' as const, model: 'claude-sonnet-5', mode: 'background' as const, totalTokens: 100_000, toolCalls: 12, durationMs: 60_000, cancelled: false }];
+    const session = createSession({
+      sessionId: 'app', workspaceId: 'ws', workspaceName: 'Project', harness: 'GitHub Copilot App',
+      requests: [createRequest({ timestamp: new Date(2026, 9, 1, 12).getTime(), messageText: 'Fix it', responseText: 'Done', promptCache, subagentRuns })],
+    });
+    const analyzer = new Analyzer([session], new Map());
+    const parsed: ParseResult = { sessions: [session], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    expect(getRpcHandler('getTokenTypes')).toBeTypeOf('function');
+    const call = (params: unknown) => getRpcHandler('getTokenTypes')!(analyzer, parsed, params as never) as TokenTypesData;
+
+    const [source] = call({ filter: { fromDate: '2026-10-01', toDate: '2026-10-01' } }).sources;
+    expect(source).toMatchObject({ source: 'copilot-cli', label: 'Copilot App', requests: 1 });
+    expect(source.reasoning?.main?.sharePct).toBe(60);
+    expect(source.truncation).toEqual({ calls: 4, truncatedCalls: 1, filteredCalls: 0 });
+    expect(source.subagents?.shareOfAllTokensPct).toBe(19.7);
+    expect(call({ filter: { fromDate: '2026-10-02' } }).sources).toEqual([]);
   });
 
   it('matches workspace sessions by request overlap only when the caller asks for it', () => {

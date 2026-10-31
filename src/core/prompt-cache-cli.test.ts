@@ -152,7 +152,7 @@ describe('Copilot CLI prompt-cache usage per request', () => {
     ]);
     const [first, second] = session.requests;
     expect(first.promptCache).toEqual({
-      rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 2, reasoningEffort: 'high', input: 210_000, cacheRead: 100_000, cacheWrite: 110_000, cost: 147_500, missCost: 137_500, baselineCost: 210_000, ratedInput: 210_000, ttlSeconds: 300 }],
+      rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 2, reasoningEffort: 'high', input: 210_000, cacheRead: 100_000, cacheWrite: 110_000, cost: 147_500, missCost: 137_500, baselineCost: 210_000, ratedInput: 210_000, ttlSeconds: 300, outputTokens: 1_000 }],
       coldStart: 100_000,
       coldStartCost: 125_000,
     });

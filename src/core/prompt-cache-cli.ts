@@ -13,6 +13,8 @@
 import type { CacheBreak, CacheBreakCause, RequestPromptCache, SessionPromptCache } from './types';
 import type { CliModelCall } from './cli-model-calls';
 import { relativeRates } from './cli-model-calls';
+import { cliOutputSample } from './call-outputs';
+import { AUTO_COMPACTION_TRIGGERS, MANUAL_COMPACTION_TRIGGERS } from './cli-compaction';
 import { RequestCacheBuilder, cacheModelName, callCost, missTokens, type CacheCallSample } from './prompt-cache-usage';
 import {
   CACHE_BREAK_MIN_LOST,
@@ -31,8 +33,6 @@ type Signal = 'compaction' | 'mode-change' | 'resume';
 
 const MAX_SEGMENTS = 6;
 const SEGMENT_NAME_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
-const AUTO_TRIGGERS = new Set(['threshold', 'auto', 'automatic']);
-const MANUAL_TRIGGERS = new Set(['manual', 'user', 'command', 'slash_command']);
 
 interface PendingBreak {
   brk: CacheBreak;
@@ -107,8 +107,8 @@ function differs(a: number | null, b: number | null): boolean {
 function compactionTrigger(value: unknown): CacheBreak['compactionTrigger'] {
   if (typeof value !== 'string') return undefined;
   const trigger = value.toLowerCase();
-  if (AUTO_TRIGGERS.has(trigger)) return 'auto';
-  return MANUAL_TRIGGERS.has(trigger) ? 'manual' : undefined;
+  if (AUTO_COMPACTION_TRIGGERS.has(trigger)) return 'auto';
+  return MANUAL_COMPACTION_TRIGGERS.has(trigger) ? 'manual' : undefined;
 }
 
 function sampleOf(call: CliModelCall): CacheCallSample {
@@ -119,6 +119,7 @@ function sampleOf(call: CliModelCall): CacheCallSample {
     rates: call.rates,
     ttlSeconds: call.cacheTtlSeconds,
     reasoningEffort: call.reasoningEffort,
+    outputs: cliOutputSample(call),
   };
 }
 

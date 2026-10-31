@@ -32,6 +32,7 @@ import {
 import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromContent, type ImageReference, type ImageRequestMatch } from './image-data';
 import { RequestCacheBuilder, cacheModelName, missTokens } from './prompt-cache-usage';
+import { stopReasonSample } from './call-outputs';
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
 
@@ -123,6 +124,9 @@ interface ClaudeAssistantData {
   /** Prompt-cache usage per API response (counted once per `message.id`). */
   cache: RequestCacheBuilder;
   responseIds: Set<string>;
+  /** Responses passed to `cache`, and whether each stopped at the output-token limit (`stop_reason: max_tokens`),
+   *  as known so far: `null` until one of the response's lines logs a stop reason. */
+  truncation: Map<string, boolean | null>;
 }
 
 /** Session-wide prompt-cache state across Claude requests. */
@@ -389,21 +393,50 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
-/** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain). */
+/** Whether a line's response stopped at the output-token limit; `null` when the line logs no stop reason. */
+function claudeTruncated(line: ClaudeLine): boolean | null {
+  const stopReason = line.message?.stop_reason;
+  return typeof stopReason === 'string' && stopReason ? stopReason === 'max_tokens' : null;
+}
+
+/** A later line of a response already counted can still log why it stopped. Claude Code logs the stop reason on
+ *  some of a response's lines only, so a response counts toward truncation once any line logs one. */
+function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, responseId: string): void {
+  const truncated = claudeTruncated(line);
+  const seen = data.truncation.get(responseId);
+  const stream = line.isSidechain ? 'subagent' : 'main';
+  if (truncated != null && seen === null) {
+    data.truncation.set(responseId, truncated);
+    data.cache.addStopReason(stream, cacheModelName(line.message?.model), truncated);
+  } else if (truncated === true && seen === false) {
+    data.truncation.set(responseId, true);
+    data.cache.addTruncated(stream, cacheModelName(line.message?.model));
+  }
+}
+
+/** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain), and whether it
+ *  stopped at the output-token limit. */
 function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
+  const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
+  if (responseId && data.responseIds.has(responseId)) {
+    addClaudeStopReason(data, line, responseId);
+    return;
+  }
   const usage = line.message?.usage;
   // Usage without cache fields didn't report cache usage; don't count the response as uncached.
   if (!usage || !reportsCacheUsage(usage)) return;
-  const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
-  if (responseId && data.responseIds.has(responseId)) return;
   const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
   const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
   if (sample.input <= 0) return;
+  const truncated = claudeTruncated(line);
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
-  if (responseId) data.responseIds.add(responseId);
+  if (responseId) {
+    data.responseIds.add(responseId);
+    data.truncation.set(responseId, truncated);
+  }
   const stream = line.isSidechain ? 'subagent' : 'main';
-  data.cache.addCall(stream, cacheModelName(line.message?.model), sample);
+  data.cache.addCall(stream, cacheModelName(line.message?.model), { ...sample, outputs: stopReasonSample(truncated) });
   if (stream === 'main' && !cacheState.sawMain) {
     cacheState.sawMain = true;
     data.cache.addColdStart(missTokens(sample), undefined);
@@ -432,6 +465,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
     webDomains: [],
     cache: new RequestCacheBuilder(),
     responseIds: new Set(),
+    truncation: new Map(),
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);

@@ -82,6 +82,144 @@ test.describe('Context Management', () => {
   });
 });
 
+test.describe('Context Management with reported context limits', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => { (window as Window & { mockReportedLimits?: boolean }).mockReportedLimits = true; });
+    await navigateToContextHealth(page);
+  });
+
+  test('labels utilization measured against reported limits and explains the difference', async ({ page }) => {
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-1"] .ctx-window-tag')).toHaveText('mixed limits');
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-2"] .ctx-window-tag')).toHaveCount(0);
+    await expect(page.locator('.ctx-window-note')).toContainText('Copilot CLI, Copilot App and Codex report their context limit');
+    // A Copilot App workspace is listed, so the table says how to reach its sessions' context timeline.
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-6"] .ctx-window-tag')).toHaveText('reported limit');
+    await expect(page.locator('.ctx-timeline-hint')).toContainText('context timeline, with every model call, the context limit and each compaction, click its workspace, then the session');
+  });
+
+  test('opens the Copilot App context timeline from the Context Composition session list, from the keyboard', async ({ page }) => {
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    await workspace.locator('.ctx-comp-ws-toggle').focus();
+    await page.keyboard.press('Enter');
+    const app = workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot App' });
+    await app.focus();
+    await page.keyboard.press('Enter');
+    await expect(app).toHaveAttribute('aria-expanded', 'true');
+    const timeline = workspace.locator('.ctx-comp-tl .ctx-tl');
+    await expect(timeline).toBeVisible();
+    await expect(page.locator('#ctxCompSessionTimelineChart')).toHaveAttribute('aria-label', /with 1 compaction marked/);
+    await expect(timeline.locator('.ctx-cache-layer')).toHaveCount(8);
+    const output = timeline.locator('[data-layer="output"]');
+    await output.focus();
+    await page.keyboard.press('Enter');
+    await expect(output).toHaveAttribute('aria-pressed', 'true');
+    await timeline.locator('.ctx-tl-turns-toggle').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#ctxCompTlTurnTable tbody tr')).toHaveCount(11);
+    await expect(workspace.locator('.ctx-comp-timeline-note')).toContainText('Per-Workspace Context Session Health shows the same timeline');
+
+    // An older Copilot CLI session without a call timeline shows its composition, but no timeline or empty chart.
+    const older = workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot CLI' });
+    await older.focus();
+    await page.keyboard.press('Enter');
+    await expect(older).toHaveAttribute('aria-expanded', 'true');
+    await expect(workspace.locator('.ctx-comp-session').first()).toBeVisible();
+    await expect(workspace.locator('.ctx-comp-tl')).toHaveCount(0);
+    await expect(page.locator('#ctxCompSessionTimelineChart')).toHaveCount(0);
+  });
+
+  test('keeps a timeline open in the workspace table and in Context Composition at once', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    await expect(page.locator('#ctxSessionTimelineChart')).toBeVisible();
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    await workspace.locator('.ctx-comp-ws-toggle').click();
+    await workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot App' }).click();
+    await expect(page.locator('#ctxCompSessionTimelineChart')).toBeVisible();
+    await expect(page.locator('#ctxSessionTimelineChart')).toBeVisible();
+    expect(await page.evaluate(() => (window as Window & { promptCacheRequests?: { method: string; params: { sessionId?: string } }[] }).promptCacheRequests
+      ?.filter(r => r.method === 'getSessionTimeline').map(r => r.params.sessionId))).toEqual(['s5', 's5']);
+  });
+
+  test('shows a Copilot App session against the limit it reported', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(5);
+    const appRow = page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' });
+    await expect(appRow.locator('.ctx-window-tag')).toHaveText('reported limit');
+    await expect(appRow).toContainText('19.2%');
+    expect(await appRow.locator('svg').count()).toBeGreaterThan(0);
+
+    await appRow.locator('td').first().click();
+    const detail = page.locator('.ctx-session-chart-row');
+    await expect(detail).toContainText('context limit 968.0K (reported)');
+    await expect(page.locator('#ctxSessionTimelineChart')).toBeVisible();
+    await expect(page.locator('#ctxSessionTokenChart')).toHaveCount(0);
+  });
+
+  test('draws the Copilot App session on its call timeline with context layers', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    const panel = page.locator('.ctx-tl');
+    await expect(panel).toBeVisible();
+    const layers = panel.locator('.ctx-cache-layer');
+    await expect(layers).toHaveText(['Context', 'Limit and thresholds', 'Turn ends', 'Compactions', 'Truncated calls', 'Output and reasoning', 'Cache tokens', 'Cache breaks']);
+    expect(await layers.evaluateAll(buttons => buttons.map(b => b.getAttribute('aria-pressed')))).toEqual(['true', 'true', 'true', 'true', 'true', 'false', 'false', 'false']);
+    await expect(page.locator('#ctxSessionTimelineChart')).toHaveAttribute('aria-label', /with 1 compaction marked/);
+    expect(await page.evaluate(() => (window as Window & { promptCacheRequests?: { method: string; params: { sessionId?: string } }[] }).promptCacheRequests
+      ?.filter(r => r.method === 'getSessionTimeline').map(r => r.params.sessionId))).toEqual(['s5']);
+
+    const output = panel.locator('[data-layer="output"]');
+    await output.click();
+    await expect(output).toHaveAttribute('aria-pressed', 'true');
+    await panel.locator('[data-layer="compactions"]').focus();
+    await page.keyboard.press('Enter');
+    await expect(panel.locator('[data-layer="compactions"]')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('lists the chart values of every bar in the shared table, from the keyboard', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    const data = page.locator('.ctx-tl details.call-timeline-data');
+    await expect(data.locator('summary')).toHaveText('Show the chart as a table');
+    await data.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await expect(data).toHaveAttribute('open', '');
+    await expect(data.locator('thead th')).toHaveText([
+      'Model calls', 'Time', 'Context (largest prompt)', 'Context limit (reported)', 'Limited from 80%', 'Degraded from 45%',
+      'Context at turn end', 'Output per call', 'Reasoning per call', 'Read from cache', 'Written to cache', 'Uncached', 'Markers',
+    ]);
+    const rows = data.locator('tbody tr');
+    await expect(rows).toHaveCount(44);
+    await expect(rows.nth(26)).toContainText('Automatic compaction: Copilot logged 780.0K tokens before');
+    await expect(rows.nth(35)).toContainText('1 call stopped at the output-token limit.');
+  });
+
+  test('lists each turn in a table and sums up the session token types', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    const toggle = page.locator('.ctx-tl-turns-toggle');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('#ctxTlTurnTable')).toBeHidden();
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const rows = page.locator('#ctxTlTurnTable tbody tr');
+    await expect(rows).toHaveCount(11);
+    await expect(rows.nth(6)).toContainText('780.0K');
+    await expect(rows.nth(6)).toContainText('71.5%');
+    await expect(page.locator('.ctx-tt-strip')).toContainText('reasoning 58% of output (high effort)');
+    await expect(page.locator('.ctx-tt-strip')).toContainText('3 sub-agent runs');
+    await expect(page.locator('.ctx-tt-strip')).toContainText('1 of 44 model calls truncated');
+  });
+
+  test('keeps older Copilot CLI builds without per-turn data on a dash', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    const olderRow = page.locator('.ctx-session-row', { hasText: 'GitHub Copilot CLI' });
+    await expect(olderRow.locator('.ctx-window-tag')).toHaveCount(0);
+    await expect(olderRow).toContainText('\u2014');
+  });
+});
+
 type CompositionMode = 'empty' | 'boundary' | 'boundary-empty' | false;
 type CompositionWindow = Window & { mockCompositionMode?: CompositionMode; workspaceSessionsRequests?: Record<string, unknown>[] };
 

@@ -35,6 +35,7 @@ import { recordedToolFiles, recordedInvestigation, recordedWebDomains } from './
 import { imageReferencesFromCodex, imageRequestIndex, mergeImageReferences, type ImageReference, type ImageRequestMatch } from './image-data';
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
+import { TurnContextAccumulator } from './cli-turn-context';
 
 interface CodexLine {
   type: string;
@@ -90,7 +91,13 @@ interface CodexParseState {
   curTotalInput: number;
   curTotalOutput: number;
   curTotalCachedInput: number;
+  /** Cumulative reasoning tokens (`reasoning_output_tokens`); `null` until a build reports them. */
+  curTotalReasoning: number | null;
+  /** Cumulative `total_tokens`; a model call is counted only when it grows. */
+  curTotalTokens: number;
   hasTokenData: boolean;
+  /** Main-agent context of the current turn, from `last_token_usage` and `model_context_window`. */
+  turnContext: TurnContextAccumulator;
   sessionId: string;
   currentEditLocs: FileEditLocMap;
   editLocIndex?: EditLocIndex;
@@ -182,7 +189,10 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     curTotalInput: 0,
     curTotalOutput: 0,
     curTotalCachedInput: 0,
+    curTotalReasoning: null,
+    curTotalTokens: 0,
     hasTokenData: false,
+    turnContext: new TurnContextAccumulator(),
     sessionId: '',
     currentEditLocs: new Map(),
     editLocIndex,
@@ -200,6 +210,7 @@ function computeModelUsage(state: CodexParseState, model: string): Record<string
       outputTokens: state.curTotalOutput,
       cacheReadTokens: state.curTotalCachedInput,
       cacheWriteTokens: 0,
+      ...(state.curTotalReasoning == null ? {} : { reasoningTokens: Math.min(state.curTotalReasoning, state.curTotalOutput) }),
     },
   };
 }
@@ -253,6 +264,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
   }
 
   const responseText = state.currentAssistantTexts.join('\n');
+  const contextUsage = state.turnContext.result();
   const reqPromptTokens = state.hasTokenData && state.curTotalInput > state.prevTotalInput
     ? state.curTotalInput - state.prevTotalInput
     : null;
@@ -284,6 +296,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     promptTokens: reqPromptTokens,
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
+    ...(contextUsage ? { contextUsage } : {}),
   }));
   mergeRequestEditLoc(state.editLocIndex, requestId, state.currentEditLocs);
 
@@ -305,6 +318,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
   state.turnCanceled = false;
+  state.turnContext = new TurnContextAccumulator();
   state.currentEditLocs = new Map();
   state.answerEvidence = 'missing';
   if (state.imageScan) {
@@ -488,15 +502,33 @@ function handleAssistantMessageEvent(payload: Record<string, unknown>, state: Co
   }
 }
 
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexParseState): void {
   const info = recordValue(payload.info);
   const totalUsage = recordValue(info?.total_token_usage);
   if (!totalUsage) return;
 
-  state.curTotalInput = typeof totalUsage.input_tokens === 'number' ? totalUsage.input_tokens : 0;
-  state.curTotalOutput = typeof totalUsage.output_tokens === 'number' ? totalUsage.output_tokens : 0;
-  state.curTotalCachedInput = typeof totalUsage.cached_input_tokens === 'number' ? totalUsage.cached_input_tokens : 0;
+  const input = tokenCount(totalUsage.input_tokens) ?? 0;
+  const output = tokenCount(totalUsage.output_tokens) ?? 0;
+  const total = tokenCount(totalUsage.total_tokens) ?? input + output;
+  // Codex repeats a token_count without a new model call (for example after a rate-limit update),
+  // so a call is counted only when the cumulative total changes.
+  const newCall = total > 0 && total !== state.curTotalTokens;
+  state.curTotalInput = input;
+  state.curTotalOutput = output;
+  state.curTotalCachedInput = tokenCount(totalUsage.cached_input_tokens) ?? 0;
+  state.curTotalReasoning = tokenCount(totalUsage.reasoning_output_tokens) ?? state.curTotalReasoning;
+  state.curTotalTokens = total;
   state.hasTokenData = true;
+
+  const last = recordValue(info?.last_token_usage);
+  const lastInput = tokenCount(last?.input_tokens);
+  if (newCall && lastInput != null) {
+    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window) });
+  }
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {

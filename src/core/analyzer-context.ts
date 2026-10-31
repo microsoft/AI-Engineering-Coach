@@ -10,10 +10,13 @@ import { AnalyzerBase } from './analyzer-base';
 import {
   DateFilter,
   Session,
+  SessionRequest,
+  CompactionEvent,
   AntiPattern,
   OccurrenceDetail,
   ContextManagementData,
   ContextVerdictThresholds,
+  ContextWindowSource,
   WorkspaceContextScore,
   ContextTrend,
   WorkspaceTrendSeries,
@@ -25,7 +28,16 @@ import {
 import { toDateStr } from './helpers';
 import { analyzeComposition, buildSessionCompositionDetail } from './analyzer-composition';
 import {
-  CONTEXT_WINDOW_DEFAULT,
+  estimateContextWindow,
+  requestCompactions,
+  requestContextLimit,
+  requestContextTokens,
+  sessionContextWindow,
+  sessionUtilization,
+} from './context-window';
+import { cacheHitPct } from './prompt-cache-usage';
+import { sessionTokenTypes } from './analyzer-token-types';
+import {
   CONTEXT_OPTIMAL_UTILIZATION,
   CONTEXT_LIMITED_UTILIZATION,
   CONTEXT_SATURATION_THRESHOLD,
@@ -36,6 +48,25 @@ import {
 } from './constants';
 
 const ADAPTIVE_CONTEXT_THRESHOLD_MIN_SAMPLES = 20;
+
+function formatTokensK(tokens: number): string {
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(Math.round(tokens));
+}
+
+/** Short chart label: the context size before and after when logged (Copilot CLI), otherwise the mode. */
+function compactionLabel(compaction: CompactionEvent): string {
+  if (compaction.outcome === 'failed') return 'Compaction failed';
+  if (compaction.contextLengthAfter != null && compaction.contextLengthBefore > 0) {
+    return `Compaction ${formatTokensK(compaction.contextLengthBefore)}\u2192${formatTokensK(compaction.contextLengthAfter)}`;
+  }
+  return `Compaction (${compaction.mode})`;
+}
+
+/** The session's token-types strip, when its harness logs any. */
+function withTokenTypes(session: Session): Pick<SessionContextDetail, 'tokenTypes'> {
+  const tokenTypes = sessionTokenTypes(session);
+  return tokenTypes ? { tokenTypes } : {};
+}
 
 export class ContextAnalyzer extends AnalyzerBase {
   private percentile(values: number[], p: number): number {
@@ -59,8 +90,11 @@ export class ContextAnalyzer extends AnalyzerBase {
     for (const s of sessions) {
       const sessionTokens = this.estimateSessionTokens(s).filter(t => t > 0);
       if (sessionTokens.length < CONTEXT_MIN_TOKEN_REQUESTS) continue;
-      const sessionCtx = this.estimateSessionContextWindow(s);
-      const avgUtil = sessionTokens.reduce((a, b) => a + b, 0) / sessionTokens.length / sessionCtx * 100;
+      // Adaptive cutoffs compensate for the estimated window, which puts every session's peak near
+      // 100%. Sessions with reported limits, in full or in part, are judged by these cutoffs but don't shift them.
+      const window = sessionContextWindow(s);
+      if (window.source !== 'estimated') continue;
+      const avgUtil = sessionTokens.reduce((a, b) => a + b, 0) / sessionTokens.length / window.window * 100;
       avgUtils.push(avgUtil);
     }
 
@@ -127,39 +161,12 @@ export class ContextAnalyzer extends AnalyzerBase {
   }
 
   /**
-   * Infer the model's context window for a session from the largest native
-   * `promptTokens` value observed, rounded up to the nearest 32K bucket.
-   * Falls back to `CONTEXT_WINDOW_DEFAULT` when no native data exists.
-   * (This is *not* token approximation — it's a model-window heuristic
-   * derived from real harness data.)
-   */
-  private estimateSessionContextWindow(session: Session): number {
-    let maxNative = 0;
-    for (const r of session.requests) {
-      if (r.promptTokens != null && r.promptTokens > maxNative) maxNative = r.promptTokens;
-    }
-    return maxNative > 0
-      ? Math.max(CONTEXT_WINDOW_DEFAULT, Math.ceil(maxNative / 32_000) * 32_000)
-      : CONTEXT_WINDOW_DEFAULT;
-  }
-
-  /**
-   * Per-request prompt-token series for a session.
-   *
-   * Returns *only* native promptTokens reported by the harness — `0` for any
-   * request without native data. (Token approximation has been removed; see
-   * helpers.ts for rationale.)
-   *
-   * Compaction events still reset accumulators conceptually, but since this
-   * function no longer accumulates anything beyond reading the per-request
-   * native value, the reset is a no-op.
+   * Per-request context-size series for a session: the prompt of each request's last model call
+   * (Copilot CLI and Codex: `contextUsage`; other harnesses: native `promptTokens`), `0` for a request
+   * without native data. No token approximation (see helpers.ts).
    */
   private estimateSessionTokens(session: Session): number[] {
-    const out: number[] = [];
-    for (const r of session.requests) {
-      out.push(r.promptTokens != null && r.promptTokens > 0 ? r.promptTokens : 0);
-    }
-    return out;
+    return session.requests.map(requestContextTokens);
   }
 
   getContextManagement(f?: DateFilter): ContextManagementData {
@@ -207,14 +214,13 @@ export class ContextAnalyzer extends AnalyzerBase {
     };
   }
 
-  private estimateContextWindowFromRequests(requests: Array<{ promptTokens: number | null }>): number {
+  /** Window estimate over the requests without a reported limit (those with one use it instead). */
+  private estimateContextWindowFromRequests(requests: SessionRequest[]): number {
     let maxObserved = 0;
     for (const request of requests) {
-      if (request.promptTokens != null && request.promptTokens > maxObserved) maxObserved = request.promptTokens;
+      if (requestContextLimit(request) == null) maxObserved = Math.max(maxObserved, requestContextTokens(request));
     }
-    return maxObserved > 0
-      ? Math.max(CONTEXT_WINDOW_DEFAULT, Math.ceil(maxObserved / 32_000) * 32_000)
-      : CONTEXT_WINDOW_DEFAULT;
+    return estimateContextWindow(maxObserved);
   }
 
   private groupSessionsByWorkspace(sessions: Session[]): Map<string, { ws: Session; sessions: Session[] }> {
@@ -240,6 +246,7 @@ export class ContextAnalyzer extends AnalyzerBase {
   } | null {
     const effectiveTokens: number[] = [];
     const utilizationSamples: number[] = [];
+    const windowSources = new Set<ContextWindowSource | 'mixed'>();
     let compactionCount = 0;
     let fullCompactions = 0;
     let simpleCompactions = 0;
@@ -260,18 +267,19 @@ export class ContextAnalyzer extends AnalyzerBase {
       }
 
       sessionCount++;
-      const sessionCtx = this.estimateSessionContextWindow(session);
+      const window = sessionContextWindow(session);
+      windowSources.add(window.source);
       for (let i = 0; i < session.requests.length; i++) {
         const tokens = sessionTokens[i];
         if (tokens > 0) {
           effectiveTokens.push(tokens);
-          utilizationSamples.push((tokens / sessionCtx) * 100);
+          utilizationSamples.push((tokens / window.perRequest[i]) * 100);
         }
-        const compaction = session.requests[i].compaction;
-        if (!compaction) continue;
-        compactionCount++;
-        if (compaction.mode === 'full') fullCompactions++;
-        else simpleCompactions++;
+        for (const compaction of requestCompactions(session.requests[i])) {
+          compactionCount++;
+          if (compaction.mode === 'full') fullCompactions++;
+          else simpleCompactions++;
+        }
       }
     }
 
@@ -301,6 +309,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         costEfficiency: null,
         score: this.computeContextScore(avgUtil, saturation, fullCompactions, simpleCompactions, thresholds),
         verdict,
+        windowSource: windowSources.size > 1 ? 'mixed' : windowSources.values().next().value ?? 'estimated',
       },
       sessionCount,
       compactionCount,
@@ -363,7 +372,7 @@ export class ContextAnalyzer extends AnalyzerBase {
 
     for (const s of sessions) {
       const sessionTokens = this.estimateSessionTokens(s);
-      const sessionCtx = this.estimateSessionContextWindow(s);
+      const window = sessionContextWindow(s);
       // Skip wholly-tokenless sessions — Context Management hides them so
       // they must not contribute to the trend chart either.
       let sessionHasTokens = false;
@@ -386,11 +395,11 @@ export class ContextAnalyzer extends AnalyzerBase {
 
         const tokens = sessionTokens[i];
         if (tokens > 0) {
-          const util = (tokens / sessionCtx) * 100;
+          const util = (tokens / window.perRequest[i]) * 100;
           week.utils.push(util);
           if (util > thresholds.limitedUtilization) week.overThreshold++;
         }
-        if (r.compaction) week.compactions++;
+        week.compactions += requestCompactions(r).length;
       }
     }
 
@@ -444,7 +453,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       if (!topNames.has(s.workspaceName)) continue;
       const utilMap = wsWeekUtils.get(s.workspaceName)!;
       const sessionTokens = this.estimateSessionTokens(s);
-      const sessionCtx = this.estimateSessionContextWindow(s);
+      const window = sessionContextWindow(s);
 
       for (let i = 0; i < s.requests.length; i++) {
         const r = s.requests[i];
@@ -460,7 +469,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         const tokens = sessionTokens[i];
         if (tokens > 0) {
           if (!utilMap.has(idx)) utilMap.set(idx, []);
-          utilMap.get(idx)!.push((tokens / sessionCtx) * 100);
+          utilMap.get(idx)!.push((tokens / window.perRequest[i]) * 100);
         }
       }
     }
@@ -475,6 +484,24 @@ export class ContextAnalyzer extends AnalyzerBase {
     });
   }
 
+  /** Compactions that started above 85% of the window. A reported limit (Copilot CLI compacts
+   *  automatically at about 80% of it) is used when logged, else the session's window. */
+  private findAmnesiaEvents(sessions: Session[]): { session: Session; tokensBefore: number }[] {
+    const events: { session: Session; tokensBefore: number }[] = [];
+    for (const s of sessions) {
+      const window = sessionContextWindow(s);
+      for (let i = 0; i < s.requests.length; i++) {
+        for (const compaction of requestCompactions(s.requests[i])) {
+          const limit = compaction.tokenLimit ?? window.perRequest[i];
+          if (compaction.contextLengthBefore > 0 && (compaction.contextLengthBefore / limit) * 100 > 85) {
+            events.push({ session: s, tokensBefore: compaction.contextLengthBefore });
+          }
+        }
+      }
+    }
+    return events;
+  }
+
   private detectContextAntiPatterns(sessions: Session[], thresholds: ContextVerdictThresholds): AntiPattern[] {
     const patterns: AntiPattern[] = [];
 
@@ -483,8 +510,8 @@ export class ContextAnalyzer extends AnalyzerBase {
     for (const s of sessions) {
       const sessionTokens = this.estimateSessionTokens(s);
       if (sessionTokens.length < CONTEXT_MIN_TOKEN_REQUESTS) continue;
-      const sessionCtx = this.estimateSessionContextWindow(s);
-      const avgUtil = sessionTokens.reduce((a, b) => a + b, 0) / sessionTokens.length / sessionCtx * 100;
+      // Requests without token data count as 0, as before reported windows were supported.
+      const avgUtil = sessionUtilization(s).reduce<number>((sum, util) => sum + (util ?? 0), 0) / sessionTokens.length;
       if (avgUtil > thresholds.limitedUtilization) {
         bloatedSessions.push({ name: s.workspaceName, session: s, avgUtil });
       }
@@ -516,7 +543,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     // 2. Compaction Storm — sessions with frequent compaction events
     const compactionStormSessions: { session: Session; compactions: number }[] = [];
     for (const s of sessions) {
-      const compactions = s.requests.filter(r => r.compaction != null).length;
+      const compactions = s.requests.reduce((sum, r) => sum + requestCompactions(r).length, 0);
       if (compactions >= CONTEXT_COMPACTION_STORM_MIN) {
         compactionStormSessions.push({ session: s, compactions });
       }
@@ -545,19 +572,8 @@ export class ContextAnalyzer extends AnalyzerBase {
       });
     }
 
-    // 3. Context Amnesia — sessions where compaction caused a large context drop (>80% loss)
-    const amnesiaEvents: { session: Session; tokensBefore: number }[] = [];
-    for (const s of sessions) {
-      for (const r of s.requests) {
-        if (r.compaction && r.compaction.contextLengthBefore > 0) {
-          const sessionCtx = this.estimateSessionContextWindow(s);
-          const beforeUtil = (r.compaction.contextLengthBefore / sessionCtx) * 100;
-          if (beforeUtil > 85) {
-            amnesiaEvents.push({ session: s, tokensBefore: r.compaction.contextLengthBefore });
-          }
-        }
-      }
-    }
+    // 3. Context Amnesia — compaction that started above 85% of the window.
+    const amnesiaEvents = this.findAmnesiaEvents(sessions);
     if (amnesiaEvents.length > 0) {
       const details: OccurrenceDetail[] = amnesiaEvents.slice(0, 200).map(a => ({
         timestamp: a.session.creationDate ?? 0,
@@ -657,7 +673,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       const avgFromUsage = this.getSessionLevelAvgTokens(session);
       if (avgFromUsage === 0 && !composition) return null;
 
-      const compactionCount = session.requests.filter(r => r.compaction != null).length;
+      const compactionCount = this.countCompactions(session);
 
       return {
         sessionId: session.sessionId,
@@ -678,18 +694,21 @@ export class ContextAnalyzer extends AnalyzerBase {
         events: this.buildSessionTimelineEvents(session),
         requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
         hasPerRequestTokens: false,
+        windowSource: 'estimated',
+        ...withTokenTypes(session),
         ...(composition ? { composition } : {}),
       };
     }
 
-    const sessionCtx = this.estimateSessionContextWindow(session);
+    const window = sessionContextWindow(session);
+    const utils = sessionUtilization(session, window).filter((util): util is number => util != null);
     const avg = tokensWithData.reduce((a, b) => a + b, 0) / tokensWithData.length;
     const max = Math.max(...tokensWithData);
-    const avgUtil = (avg / sessionCtx) * 100;
-    const peakUtil = (max / sessionCtx) * 100;
-    const compactionCount = session.requests.filter(r => r.compaction != null).length;
-    const saturatedCount = tokensWithData.filter(t => (t / sessionCtx) * 100 >= CONTEXT_SATURATION_THRESHOLD).length;
-    const saturation = Math.round((saturatedCount / tokensWithData.length) * 1000) / 10;
+    const avgUtil = utils.reduce((a, b) => a + b, 0) / utils.length;
+    const peakUtil = Math.max(...utils);
+    const compactionCount = this.countCompactions(session);
+    const saturatedCount = utils.filter(util => util >= CONTEXT_SATURATION_THRESHOLD).length;
+    const saturation = Math.round((saturatedCount / utils.length) * 1000) / 10;
 
     return {
       sessionId: session.sessionId,
@@ -701,7 +720,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       maxPromptTokens: max,
       avgUtilization: Math.round(avgUtil * 10) / 10,
       peakUtilization: Math.round(peakUtil * 10) / 10,
-      contextWindow: sessionCtx,
+      contextWindow: window.window,
       compactionCount,
       tokenCurve: sessionTokens.map(t => t > 0 ? t : null),
       saturation,
@@ -710,8 +729,28 @@ export class ContextAnalyzer extends AnalyzerBase {
       events: this.buildSessionTimelineEvents(session),
       requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
       hasPerRequestTokens: true,
+      windowSource: window.source,
+      ...this.turnContextSeries(session),
+      ...withTokenTypes(session),
+      ...(session.callTimeline ? { hasCallTimeline: true } : {}),
       ...(composition ? { composition } : {}),
     };
+  }
+
+  private countCompactions(session: Session): number {
+    return session.requests.reduce((sum, request) => sum + requestCompactions(request).length, 0);
+  }
+
+  /** Per-turn reported limits, peaks, main-agent calls and cache hit ratios for the drill-down, when the
+   *  harness logs them. */
+  private turnContextSeries(session: Session): Pick<SessionContextDetail, 'turnLimits' | 'turnPeaks' | 'turnCalls' | 'turnCacheHitPct'> {
+    const series = {
+      turnLimits: session.requests.map(requestContextLimit),
+      turnPeaks: session.requests.map(request => request.contextUsage?.peakPromptTokens ?? null),
+      turnCalls: session.requests.map(request => request.contextUsage?.calls ?? null),
+      turnCacheHitPct: session.requests.map(request => (request.promptCache ? cacheHitPct(request.promptCache.rows) : null)),
+    };
+    return Object.fromEntries(Object.entries(series).filter(([, values]) => values.some(value => value != null)));
   }
 
   private getSessionDisplayDate(session: Session): string {
@@ -733,8 +772,8 @@ export class ContextAnalyzer extends AnalyzerBase {
 
     for (let i = 0; i < session.requests.length; i++) {
       const request = session.requests[i];
-      if (request.compaction != null) {
-        events.push({ requestIndex: i, type: 'compaction', label: `Compaction (${request.compaction.mode})` });
+      for (const compaction of requestCompactions(request)) {
+        events.push({ requestIndex: i, type: 'compaction', label: compactionLabel(compaction) });
       }
       if (request.todoSnapshot && request.todoSnapshot.length > 0) {
         prevSnapshot = this.addTodoSnapshotEvents(events, request.todoSnapshot, prevSnapshot, i);
@@ -855,7 +894,7 @@ export class ContextAnalyzer extends AnalyzerBase {
    *
    * Also returns diagnostic info so the UI can explain *why* there is no
    * data when a filter combination yields an empty result. This matters
-   * because some harnesses (e.g. GitHub Copilot CLI) only emit
+   * because some sessions (older Copilot CLI builds) only emit
    * session-aggregated tokens — they have data but not the per-request
    * granularity that Context Management requires.
    */
@@ -882,7 +921,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       let sessionHasReqTokens = false;
       for (const r of s.requests) {
         if (r.timestamp == null) continue;
-        if (r.promptTokens == null || r.promptTokens <= 0) continue;
+        if (requestContextTokens(r) <= 0) continue;
         timestamps.push(r.timestamp);
         sessionHasReqTokens = true;
       }

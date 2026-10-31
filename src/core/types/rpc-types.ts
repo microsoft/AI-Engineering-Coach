@@ -53,6 +53,7 @@ import type { InsightsData } from './insights-types';
 import type { ContextManagementData, FlowStateData, SessionRangeMatch, WorkspaceContextSessionsData } from './context-types';
 import type { PromptCacheData, PromptCacheSessionsData } from './prompt-cache-types';
 import type { SessionTimelineData } from './session-timeline-types';
+import type { TokenTypesData } from './token-usage-types';
 import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
 import type { CuriosityData, CuriosityFilter } from './curiosity-types';
@@ -94,6 +95,7 @@ export interface RpcMethodMap {
   getPromptCache: { params: { filter?: DateFilter } | undefined; result: PromptCacheData };
   getPromptCacheSessions: { params: { workspaceId: string; harness?: string; filter?: DateFilter }; result: PromptCacheSessionsData };
   getSessionTimeline: { params: { sessionId: string }; result: SessionTimelineData | null };
+  getTokenTypes: { params: { filter?: DateFilter } | undefined; result: TokenTypesData };
   getCalendarActivity: { params: DateFilter | undefined; result: CalendarActivityData };
   getProjectOverview: { params: DateFilter | undefined; result: ProjectOverviewData };
   getImageGallery: { params: DateFilter | undefined; result: ImageGalleryData };

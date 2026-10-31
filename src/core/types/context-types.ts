@@ -5,6 +5,7 @@
 
 import type { AntiPattern } from './analytics-types';
 import type { CompositionSource, ContextCategory, SystemPromptSegment } from './session-types';
+import type { ContextWindowSource, SessionTokenTypes } from './token-usage-types';
 
 /* ---- Context Composition (what fills the prompt) ---- */
 
@@ -168,6 +169,9 @@ export interface WorkspaceContextScore {
   /** Composite score 0-100 — higher is better context hygiene */
   score: number;
   verdict: 'optimal' | 'degraded' | 'limited';
+  /** Whether utilization uses context limits the harness reported (Copilot CLI and Copilot App, Codex),
+   *  the estimate from the largest prompt seen, or both across or within the workspace's sessions. */
+  windowSource: ContextWindowSource | 'mixed';
 }
 
 export interface ContextTrend {
@@ -220,8 +224,23 @@ export interface SessionContextDetail {
   /** Truncated user query per request (aligned with tokenCurve) for tooltip display */
   requestQueries: string[];
   /** True when per-request token data is available (enables token curve chart).
-   *  False for harnesses that only report session-aggregated tokens (e.g. Copilot CLI). */
+   *  False for sessions that only report session-aggregated tokens (older Copilot CLI builds). */
   hasPerRequestTokens: boolean;
+  /** Where `contextWindow` comes from. `reported`: the turns' own limits (`turnLimits`). `mixed`: some turns
+   *  reported their limit; `contextWindow` is the estimate used for the others. */
+  windowSource: ContextWindowSource | 'mixed';
+  /** Context limit each turn reported, aligned with `tokenCurve`; absent when no turn reported one. */
+  turnLimits?: (number | null)[];
+  /** Largest prompt within each turn, aligned with `tokenCurve`; absent when not reported. */
+  turnPeaks?: (number | null)[];
+  /** Main-agent model calls in each turn, aligned with `tokenCurve`; absent when not reported. */
+  turnCalls?: (number | null)[];
+  /** Main-agent cache hit ratio of each turn (shared `cacheHitPct`), aligned with `tokenCurve`. */
+  turnCacheHitPct?: (number | null)[];
+  /** Token types beyond input and output in this session; absent when the harness logs none. */
+  tokenTypes?: SessionTokenTypes;
+  /** The session has a per-call timeline (Copilot CLI and Copilot App); load it with `getSessionTimeline`. */
+  hasCallTimeline?: boolean;
   /** What filled this session's prompts; absent when the harness doesn't report it. */
   composition?: SessionCompositionDetail;
 }

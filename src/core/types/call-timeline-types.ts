@@ -28,6 +28,20 @@ export interface CallTimelineBucket {
   cacheWrite: number;
   /** Prompt tokens neither read from nor written to the cache. */
   uncached: number;
+  /* Context and token types (Copilot CLI and Copilot App). Absent when no call in the bucket logged them. */
+  /** Largest prompt of a call in the bucket, including cached tokens: the context size. */
+  peakPrompt?: number;
+  /** Largest context limit the bucket's calls reported (`maxPromptTokens`). */
+  contextLimit?: number;
+  /** Output tokens of the bucket's calls, including reasoning. */
+  output?: number;
+  /** Reasoning tokens of the bucket's calls (part of `output`). */
+  reasoning?: number;
+  /** Calls that logged reasoning tokens: the denominator of `reasoning`. Absent when every call in the bucket
+   *  logged them. */
+  reasoningCalls?: number;
+  /** Calls that stopped at the output-token limit; absent when none did. */
+  truncatedCalls?: number;
 }
 
 /** A session's main-agent calls in order, grouped into at most `MAX_TIMELINE_BUCKETS` buckets

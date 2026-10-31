@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionContextDetail, WorkspaceContextSessionsData } from '../core/types';
 import { attachCompositionDrilldown } from './context-composition-drilldown';
 
-const mocks = vi.hoisted(() => ({ rpc: vi.fn(), destroyChartById: vi.fn(), createChart: vi.fn() }));
+const mocks = vi.hoisted(() => ({ rpc: vi.fn(), destroyChartById: vi.fn(), createChart: vi.fn(), renderTimeline: vi.fn(), closeTimeline: vi.fn() }));
 vi.mock('./shared', () => ({
   rpc: mocks.rpc,
   destroyChartById: mocks.destroyChartById,
@@ -20,6 +20,7 @@ vi.mock('./shared', () => ({
   harnessColor: () => '#888888',
   COLORS: new Proxy({}, { get: () => '#888888' }),
 }));
+vi.mock('./context-session-timeline', () => ({ renderContextTimeline: mocks.renderTimeline, closeContextTimeline: mocks.closeTimeline }));
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void };
 
@@ -54,6 +55,7 @@ function session(sessionId: string, source: 'copilot-cli' | 'vscode' = 'copilot-
     events: [],
     requestQueries: ['first', 'second'],
     hasPerRequestTokens: false,
+    windowSource: 'estimated',
     composition: {
       source,
       breakdown: { slices: [{ category: 'toolDefinitions', pct: 10, tokens: 30_000 }, { category: 'conversation', pct: 90, tokens: 270_000 }], weighting: 'tokens', samples: 2, avgPromptTokens: 300_000 },
@@ -71,14 +73,14 @@ function response(...sessions: SessionContextDetail[]): WorkspaceContextSessions
 }
 
 /** One workspace row as the composition card renders it, wired to the drill-down. */
-function setup(): { toggle: HTMLButtonElement; panel: HTMLElement } {
+function setup(timelineInTable = false): { toggle: HTMLButtonElement; panel: HTMLElement } {
   const root = document.createElement('section');
   root.innerHTML = `<div class="ctx-comp-ws" data-workspace="infra" data-source="copilot-cli">
     <button type="button" class="ctx-comp-ws-toggle" aria-expanded="false">Sessions</button>
     <div class="ctx-comp-ws-sessions" hidden></div>
   </div>`;
   document.body.replaceChildren(root);
-  attachCompositionDrilldown(root, { fromDate: '2026-09-01' });
+  attachCompositionDrilldown(root, { fromDate: '2026-09-01' }, timelineInTable);
   return { toggle: root.querySelector<HTMLButtonElement>('.ctx-comp-ws-toggle')!, panel: root.querySelector<HTMLElement>('.ctx-comp-ws-sessions')! };
 }
 
@@ -100,6 +102,8 @@ beforeEach(() => {
   mocks.rpc.mockReset();
   mocks.destroyChartById.mockReset();
   mocks.createChart.mockReset();
+  mocks.renderTimeline.mockReset();
+  mocks.closeTimeline.mockReset();
 });
 
 describe('composition workspace drill-down', () => {
@@ -118,6 +122,36 @@ describe('composition workspace drill-down', () => {
     toggle.click();
     await flush();
     expect(panel.textContent).toContain('Could not load sessions.');
+  });
+
+  it('opens the context timeline of a session that has one, below its composition', async () => {
+    for (const timelineInTable of [true, false]) {
+      mocks.renderTimeline.mockClear();
+      const data = response({ ...session('timeline'), hasCallTimeline: true }, session('older'));
+      mocks.rpc.mockResolvedValueOnce(data);
+      const { toggle, panel } = setup(timelineInTable);
+      toggle.click();
+      await flush();
+      listed(panel)[0].click();
+      const container = panel.querySelector<HTMLElement>('.ctx-comp-tl-panel');
+      expect(container?.closest('li')?.querySelector('.ctx-comp-ws-session')?.getAttribute('data-session-id')).toBe('timeline');
+      expect(mocks.renderTimeline).toHaveBeenCalledWith(container, expect.objectContaining({ sessionId: 'timeline' }), data.thresholds, 'composition');
+      // The note says the workspace table shows the same timeline with more, only when that table is shown.
+      expect(panel.querySelectorAll('.ctx-comp-timeline-note')).toHaveLength(timelineInTable ? 1 : 0);
+      if (timelineInTable) expect(panel.textContent).toContain('Per-Workspace Context Session Health shows the same timeline');
+
+      // A session without a call timeline gets its composition only: no timeline, no empty chart.
+      listed(panel)[1].click();
+      expect(panel.querySelector('.ctx-comp-session')).not.toBeNull();
+      expect(panel.querySelector('.ctx-comp-tl')).toBeNull();
+      expect(mocks.renderTimeline).toHaveBeenCalledTimes(1);
+      expect(mocks.closeTimeline).toHaveBeenCalledWith('composition');
+
+      // Closing the workspace's sessions drops the timeline too.
+      mocks.closeTimeline.mockClear();
+      toggle.click();
+      expect(mocks.closeTimeline).toHaveBeenCalledWith('composition');
+    }
   });
 });
 
