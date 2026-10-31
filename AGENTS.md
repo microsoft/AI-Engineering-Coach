@@ -71,6 +71,10 @@ AI-Engineering-Coach/
 CI runs `npm run check` (typecheck + lint + spellcheck + knip + test) plus the size check on
 every PR. Run those locally before pushing.
 
+Unit tests run with HOME/USERPROFILE pointed at a temp dir
+([`src/test/hermetic-home.ts`](src/test/hermetic-home.ts)), so they never touch your real
+`~/.copilot-analytics-cache`. Resolve per-user paths when they are used, not at module load.
+
 ## Skills
 
 Repo-specific instructions for recurring tasks live in [`skills/`](skills/). They are symlinked
@@ -101,8 +105,10 @@ Rules ship with inline `# Tests` blocks that run as part of `npm test`.
 Heavy lifting happens off the extension host thread:
 
 - [`src/core/parse-worker.ts`](src/core/parse-worker.ts) — `logsDirs` → `progress` + `result`/`error`.
+  Its host kills it as soon as it posts `done`, so it first awaits `flushCacheWrites()`.
 - [`src/core/warm-up-worker.ts`](src/core/warm-up-worker.ts) — `sessions` → `antiPatterns` + `configHealth`.
-- [`src/core/cache-write-worker.ts`](src/core/cache-write-worker.ts) — persists the cache payload.
+- [`src/core/cache-write-worker.ts`](src/core/cache-write-worker.ts) — persists the cache payload
+  crash-safely (temp file + rename, data file before meta; see `src/core/cache-write.ts`).
 
 The warm-up host manages thread and fork lifecycles in
 [`src/core/warm-up-worker-host.ts`](src/core/warm-up-worker-host.ts), using the shared

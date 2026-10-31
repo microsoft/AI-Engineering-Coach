@@ -8,6 +8,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'tests/vscode/**/*.test.ts'],
+    // Point HOME/USERPROFILE at a temp dir so tests never touch the real ~/.copilot-analytics-cache.
+    setupFiles: ['src/test/hermetic-home.ts'],
     environment: 'node',
     testTimeout: 15_000,
     coverage: {

@@ -5,6 +5,7 @@
 
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { after, before, describe, it } from 'mocha';
 import { VSBrowser } from 'vscode-extension-tester';
 import { Dashboard } from '../dashboard';
@@ -29,6 +30,13 @@ describe('Packaged VSIX with synthetic sessions', () => {
     assert.match(runtime, /\[panel\] parse-complete/);
     assert.match(runtime, /\[panel\] warmUp-done/);
     assert.doesNotMatch(runtime, /uncaught-exception|unhandled-rejection|loadData-error|rules-load-error|metrics-load-error/);
+    // The extension kills the parse worker as soon as it reports done, so the parse cache must
+    // already be on disk by then; otherwise every launch parses all logs again.
+    assert.match(runtime, /\[parse-worker\] cache-write-wait[^\n]*settled=true/);
+    const cacheDir = path.dirname(fixturePaths(root).runtimeLog);
+    for (const file of ['parsed.json', 'meta.json']) {
+      assert.ok((await fs.stat(path.join(cacheDir, file))).size > 0, `${file} was not persisted`);
+    }
   });
 
   it('activates the installed extension and renders real worker results', async () => {

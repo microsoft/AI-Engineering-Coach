@@ -22,6 +22,8 @@ import {
 } from './cache';
 import { Session } from './types';
 import { createRequest, createSession, stripSingleSession } from './parser-shared';
+import { getCacheDir } from './cache-paths';
+import { getRuntimeDebugLogPath } from './runtime-debug';
 
 const tempDirs: string[] = [];
 
@@ -256,6 +258,40 @@ describe('findStaleDirs', () => {
 
     const { stale } = findStaleDirs(current, cached);
     expect(stale.has('/ws-new')).toBe(true);
+  });
+});
+
+describe('test isolation', () => {
+  /** Canonical spelling of a path: resolves Windows 8.3 short names and casing. */
+  function canonical(p: string): string {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  }
+
+  function isInside(child: string, parent: string): boolean {
+    const relative = path.relative(parent, child);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  }
+
+  it('keeps the cache dir and runtime log out of the real home directory', () => {
+    // Guards src/test/hermetic-home.ts: clearCache() and the sidebar stats tests in this file
+    // would otherwise delete or overwrite the developer's real ~/.copilot-analytics-cache.
+    const cacheDir = getCacheDir();
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const resolved = canonical(cacheDir);
+    let realHome: string | undefined;
+    try {
+      realHome = os.userInfo().homedir;
+    } catch {
+      // Some containers have no passwd entry; the temp-dir check below still applies.
+    }
+
+    if (realHome) expect(resolved).not.toBe(path.join(canonical(realHome), '.copilot-analytics-cache'));
+    expect(isInside(resolved, canonical(os.tmpdir()))).toBe(true);
+    expect(canonical(path.dirname(getRuntimeDebugLogPath()))).toBe(resolved);
   });
 });
 

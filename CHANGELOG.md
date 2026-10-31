@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix VS Code re-parsing every log on each launch: the parse worker is stopped as soon as it
+  reports its result, which also killed the parse-cache write still in progress, so the cache was
+  never saved. The worker now waits (up to 30 seconds) for the write to finish first, and the
+  cache files are replaced atomically (temp file + rename), so an interrupted write never leaves a
+  broken cache. Unit tests now run against a temporary home directory and no longer delete the
+  developer's real `~/.copilot-analytics-cache`
 - Fix the anti-pattern **Why?** explanation getting stuck on "Asking AI for an explanation…" (#278):
   every explanation state now renders through Preact, empty or failed responses show an error,
   and timeouts, denied access, and quota errors fail fast instead of retrying for minutes

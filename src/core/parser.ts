@@ -375,6 +375,7 @@ async function tryDiskCache(
   await collectVolatileHarnesses(logsDirs, cached.result, onProgress);
   await collectExternalHarnesses(cached.result.workspaces, cached.result.sessions, cached.result.editLocIndex, onProgress, cached.result.sessionSourceIndex);
   setMemoryCache(cached.result, currentMetas);
+  runtimeDebug('parser', 'disk-cache-hit', `sessions=${cached.result.sessions.length}`);
   report({
     phase: 1, detail: 'Loaded from cache', pct: pct(1, 1),
     sessions: cached.result.sessions.length,
@@ -744,7 +745,8 @@ export async function parseAllLogsAsyncDetailed(
     const result: ParseResult = { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex };
     stripSessionsForMemory(result.sessions);
     setMemoryCache(result, currentMetas);
-    saveCacheData(result, currentMetas);
+    // Written in the background; parse-worker.ts flushes it before reporting `done`.
+    void saveCacheData(result, currentMetas);
     logParseBreakdown('incremental');
     return { result, dirMetas: currentMetas };
   }
@@ -767,7 +769,8 @@ export async function parseAllLogsAsyncDetailed(
   const result: ParseResult = { workspaces, sessions, editLocIndex, sessionSourceIndex };
   stripSessionsForMemory(result.sessions);
   setMemoryCache(result, currentMetas);
-  saveCacheData(result, currentMetas);
+  // Written in the background; parse-worker.ts flushes it before reporting `done`.
+  void saveCacheData(result, currentMetas);
   logParseBreakdown('cold');
   return { result, dirMetas: currentMetas };
 }
