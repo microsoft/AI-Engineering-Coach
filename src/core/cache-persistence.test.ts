@@ -14,8 +14,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { Worker } from 'worker_threads';
-import { build } from 'esbuild';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { bundleParseWorkers } from '../test/parse-worker-bundle';
 import { clearCache, flushCacheWrites, loadCacheData, saveCacheData, type DirMetas, type ParseResult } from './cache';
 import { getCacheDir } from './cache-paths';
 import { removeStaleTempFiles, writeCacheFilesSync } from './cache-write';
@@ -27,15 +27,7 @@ let home: string;
 let previousHome: { HOME?: string; USERPROFILE?: string };
 
 beforeAll(async () => {
-  // Bundle both workers side by side, as in dist/, so the parse worker finds cache-write-worker.js.
-  bundleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-cache-bundle-'));
-  await build({
-    entryPoints: {
-      'parse-worker': path.resolve('src', 'core', 'parse-worker.ts'),
-      'cache-write-worker': path.resolve('src', 'core', 'cache-write-worker.ts'),
-    },
-    outdir: bundleDir, bundle: true, platform: 'node', format: 'cjs', target: 'es2022', logLevel: 'silent',
-  });
+  bundleDir = await bundleParseWorkers();
 }, 60_000);
 
 afterAll(() => {
