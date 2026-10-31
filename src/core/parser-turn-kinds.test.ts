@@ -12,25 +12,57 @@ import {
 } from './parser-turn-kinds';
 import type { NonHumanKind } from './types';
 
+const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKind | undefined]> = [
+  ['a typed prompt', { content: 'Why does the build fail?' }, undefined],
+  ['a typed prompt with the harness wrapper', { content: 'Why?', transformedContent: '<current_datetime>2026-09-30</current_datetime>\nWhy?' }, undefined],
+  ['typed text that reads like a sender header', { content: 'from_date: today\nWhy?', transformedContent: '<now>today</now>\nfrom_date: today\nWhy?' }, undefined],
+  ['an autopilot flag without a source', { content: 'Continue.', isAutopilotContinuation: true }, undefined],
+  ['an unknown source', { content: 'Why?', source: 'agentic' }, undefined],
+  ['no data', undefined, undefined],
+  ['an agent', { content: 'Summarize.', source: 'agent-42' }, 'agent'],
+  ['a bare agent source', { content: 'Summarize.', source: 'agent' }, 'agent'],
+  ['a skill', { content: 'Skill instructions.', source: 'skill-pdf' }, 'skill'],
+  ['the harness', { content: 'A background task finished.', source: 'system' }, 'system'],
+  ['an autopilot continuation sent as system', { content: 'Continue.', source: 'system', isAutopilotContinuation: true }, 'autopilot'],
+  ['autopilot', { content: 'Continue.', source: 'autopilot', isAutopilotContinuation: true }, 'autopilot'],
+  ['a relayed message', { content: 'Run it.', transformedContent: '<relayed_message>\nfrom_session_id: s1\n</relayed_message>\nRun it.' }, 'relayed'],
+  ['a sender header with =', { content: 'Run it.', transformedContent: 'sender_agent_id = a1\nRun it.' }, 'relayed'],
+  ['an agent message relayed from another session', { content: 'Run it.', source: 'agent-1', transformedContent: 'from_agent_id: a1\nRun it.' }, 'relayed'],
+  ['a harness message that carries a sender header', { content: 'Run it.', source: 'system', transformedContent: 'from_session_id: s1\nRun it.' }, 'system'],
+  ['the relay wrapper the harness writes', {
+    content: 'Run the tests.',
+    transformedContent: '<cross_session_message>\nfrom_project_session_id: p1\nfrom_session_id: s1\nsource_tool_call_id: t1\n</cross_session_message>\n\nRun the tests.',
+  }, 'relayed'],
+  ['the relay wrapper after other text on its line', {
+    content: 'Run the tests.', source: 'agent-3',
+    transformedContent: 'Kickoff: <cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>\nRun the tests.',
+  }, 'relayed'],
+  ['an IDE selection with a from_ assignment', {
+    content: 'Why does this send twice?',
+    transformedContent: '<ide_selection path="app/mail.py">\n    from_email=settings.DEFAULT_FROM_EMAIL,\n</ide_selection>\nWhy does this send twice?',
+  }, undefined],
+  ['an IDE selection with a from_ key', {
+    content: 'Is this config valid?',
+    transformedContent: '<ide_selection>\n  from_address: noreply@example.test\n</ide_selection>\nIs this config valid?',
+  }, undefined],
+  ['an IDE selection quoting a relay header and wrapper', {
+    content: 'Why does this test fail?',
+    transformedContent: '<ide_selection>\nfrom_session_id: abc\n<cross_session_message>\n</ide_selection>\nWhy does this test fail?',
+  }, undefined],
+  ['fenced code the harness added', { content: 'Why?', transformedContent: '```\nfrom_session_id: abc\n```\nWhy?' }, undefined],
+  ['typed header-like text the harness trimmed', {
+    content: 'Why does this log line repeat?\nfrom_session_id: abc\n',
+    transformedContent: '<current_datetime>2026</current_datetime>\nWhy does this log line repeat?\nfrom_session_id: abc',
+  }, undefined],
+  ['typed header-like text the harness stored with LF endings', {
+    content: 'from_session_id: abc\r\nWhy does this log line repeat?',
+    transformedContent: '<current_datetime>2026</current_datetime>\nfrom_session_id: abc\nWhy does this log line repeat?',
+  }, undefined],
+  ['typed text the harness reworded', { content: 'from_date: 2026-01-01\n\nWhy is the total wrong?', transformedContent: 'from_date: 2026-01-01\nWhy is the total wrong?' }, undefined],
+];
+
 describe('cliNonHumanKind', () => {
-  it.each<[string, Record<string, unknown> | undefined, NonHumanKind | undefined]>([
-    ['a typed prompt', { content: 'Why does the build fail?' }, undefined],
-    ['a typed prompt with the harness wrapper', { content: 'Why?', transformedContent: '<current_datetime>2026-09-30</current_datetime>\nWhy?' }, undefined],
-    ['typed text that reads like a sender header', { content: 'from_date: today\nWhy?', transformedContent: '<now>today</now>\nfrom_date: today\nWhy?' }, undefined],
-    ['an autopilot flag without a source', { content: 'Continue.', isAutopilotContinuation: true }, undefined],
-    ['an unknown source', { content: 'Why?', source: 'agentic' }, undefined],
-    ['no data', undefined, undefined],
-    ['an agent', { content: 'Summarize.', source: 'agent-42' }, 'agent'],
-    ['a bare agent source', { content: 'Summarize.', source: 'agent' }, 'agent'],
-    ['a skill', { content: 'Skill instructions.', source: 'skill-pdf' }, 'skill'],
-    ['the harness', { content: 'A background task finished.', source: 'system' }, 'system'],
-    ['an autopilot continuation sent as system', { content: 'Continue.', source: 'system', isAutopilotContinuation: true }, 'autopilot'],
-    ['autopilot', { content: 'Continue.', source: 'autopilot', isAutopilotContinuation: true }, 'autopilot'],
-    ['a relayed message', { content: 'Run it.', transformedContent: '<relayed_message>\nfrom_session_id: s1\n</relayed_message>\nRun it.' }, 'relayed'],
-    ['a sender header with =', { content: 'Run it.', transformedContent: 'sender_agent_id = a1\nRun it.' }, 'relayed'],
-    ['an agent message relayed from another session', { content: 'Run it.', source: 'agent-1', transformedContent: 'from_agent_id: a1\nRun it.' }, 'relayed'],
-    ['a harness message that carries a sender header', { content: 'Run it.', source: 'system', transformedContent: 'from_session_id: s1\nRun it.' }, 'system'],
-  ])('%s', (_label, data, expected) => {
+  it.each(CLI_CASES)('%s', (_label, data, expected) => {
     expect(cliNonHumanKind(data)).toBe(expected);
   });
 });

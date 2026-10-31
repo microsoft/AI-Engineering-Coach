@@ -19,21 +19,60 @@ function text(value: unknown): string {
 
 /* ---- Copilot CLI and Copilot App (`user.message` events) ---- */
 
-/** Relayed turns name their sender in harness-added text, for example `from_session_id:`. */
-const SENDER_HEADER = /^[ \t]*(?:from|sender)(?:_[a-z]+)+[ \t]*[:=]/im;
+/** The element the harness wraps a message from another session in, anywhere on a line. */
+const RELAY_WRAPPER = /<(?:cross_session_message|relayed_message)\b/;
+/** A sender ID header the harness adds to a message from another session, for example `from_session_id:`. */
+const RELAY_ID_HEADER = /^(?:from|sender)(?:_project)?_(?:session|agent)_id[ \t]*[:=]/;
+/** A line that opens a block the harness adds around text it quotes, such as `<ide_selection>`; group 1 is the tag. */
+const BLOCK_START = /^<([a-z][\w-]*)\b[^>]*>/;
+
+/** What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
+ *  endings or surrounding whitespace, which the harness may change. */
+function harnessAddedText(data: Record<string, unknown> | undefined): string {
+  const transformed = text(data?.transformedContent).replaceAll('\r\n', '\n');
+  const typed = text(data?.content).replaceAll('\r\n', '\n').trim();
+  const at = typed ? transformed.lastIndexOf(typed) : -1;
+  return at < 0 ? transformed : transformed.slice(0, at) + transformed.slice(at + typed.length);
+}
+
+/**
+ * True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
+ * sender ID header. Blocks it adds around quoted text (an IDE selection, a file) and fenced code hold the user's
+ * own text, so nothing inside them counts.
+ */
+function isRelayed(data: Record<string, unknown> | undefined): boolean {
+  let block: string | undefined;
+  let fenced = false;
+  for (const raw of harnessAddedText(data).split('\n')) {
+    const line = raw.trim();
+    if (block) {
+      if (line.includes(`</${block}>`)) block = undefined;
+      continue;
+    }
+    if (line.startsWith('```')) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    if (RELAY_WRAPPER.test(line) || RELAY_ID_HEADER.test(line)) return true;
+    const start = BLOCK_START.exec(line);
+    if (start && !line.includes(`</${start[1]}>`)) block = start[1];
+  }
+  return false;
+}
 
 /**
  * `data.source` names the sender of a message the user didn't type: `agent-*`, `skill-*`, `system` or `autopilot`
- * (autopilot continuations also carry `isAutopilotContinuation`). Messages from other sessions add sender headers
- * to `transformedContent`. A message with neither is the user's.
+ * (autopilot continuations also carry `isAutopilotContinuation`). A message from another session carries the relay
+ * wrapper or a sender ID header in the text the harness added to `transformedContent`. A message with neither is
+ * the user's.
  */
 export function cliNonHumanKind(data: Record<string, unknown> | undefined): NonHumanKind | undefined {
   const source = text(data?.source);
-  const injected = text(data?.transformedContent).replace(text(data?.content), '');
   if (/^autopilot$/i.test(source) || (/^system$/i.test(source) && data?.isAutopilotContinuation === true)) return 'autopilot';
   if (/^system$/i.test(source)) return 'system';
   if (/^skill(?:-|$)/i.test(source)) return 'skill';
-  if (SENDER_HEADER.test(injected)) return 'relayed';
+  if (isRelayed(data)) return 'relayed';
   if (/^agent(?:-|$)/i.test(source)) return 'agent';
   return undefined;
 }

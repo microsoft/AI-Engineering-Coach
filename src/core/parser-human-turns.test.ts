@@ -61,12 +61,13 @@ describe('Copilot CLI and Copilot App', () => {
     ['slash command', { content: '/review Why does the build fail?' }, undefined, 'analyzed'],
     ['harness wrapper around a typed prompt', { content: 'Why?', transformedContent: '<current_datetime>2026-09-30T12:00:00Z</current_datetime>\n\nWhy?' }, undefined, 'analyzed'],
     ['typed text that reads like a sender header', { content: 'from_date: today\nWhy?', transformedContent: '<now>today</now>\nfrom_date: today\nWhy?' }, undefined, 'analyzed'],
+    ['IDE selection with a from_ assignment', { content: 'Why does this send twice?', transformedContent: '<ide_selection path="app/mail.py">\n    from_email=settings.DEFAULT_FROM_EMAIL,\n</ide_selection>\nWhy does this send twice?' }, undefined, 'analyzed'],
     ['agent', { content: 'Why does it fail?', source: 'agent-7' }, 'agent', 'excluded'],
     ['skill', { content: 'Why use this skill?', source: 'skill-pdf' }, 'skill', 'excluded'],
     ['system', { content: 'Why did the task stop?', source: 'system' }, 'system', 'excluded'],
     ['autopilot sent as system', { content: 'Continue. Why stop?', source: 'system', isAutopilotContinuation: true }, 'autopilot', 'excluded'],
     ['autopilot', { content: 'Continue. Why stop?', source: 'autopilot', isAutopilotContinuation: true }, 'autopilot', 'excluded'],
-    ['relayed', { content: 'Why does it fail?', transformedContent: '<relayed_message>\nfrom_session_id: s-1\n</relayed_message>\nWhy does it fail?' }, 'relayed', 'excluded'],
+    ['relayed', { content: 'Why does it fail?', transformedContent: '<cross_session_message>\nfrom_project_session_id: p-1\nfrom_session_id: s-1\n</cross_session_message>\n\nWhy does it fail?' }, 'relayed', 'excluded'],
   ];
 
   it('marks only the messages another sender wrote, through both parser paths', async () => {

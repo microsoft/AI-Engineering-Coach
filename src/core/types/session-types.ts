@@ -57,7 +57,7 @@ export type CuriositySignal =
  * Why a turn the harness logged as a user message wasn't typed by the user. Parsers set it only
  * from what the harness recorded about the sender; a turn without it is a turn the user typed.
  *   agent      — sent by another agent (Copilot CLI/App `source: agent-*`)
- *   relayed    — relayed from another session (sender headers; VS Code delegation origin)
+ *   relayed    — relayed from another session (the harness's relay wrapper or sender ID header; VS Code delegation)
  *   subagent   — prompt a parent agent gave a sub-agent (Claude sidechain, Codex and OpenCode child sessions)
  *   skill      — skill context delivered as a message (Copilot CLI/App)
  *   system     — sent by the harness: notifications, scheduled tasks, synthetic messages
