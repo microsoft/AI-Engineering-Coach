@@ -47,11 +47,13 @@ beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-cache-home-'));
   process.env.HOME = home;
   process.env.USERPROFILE = home;
+  // clearCache() and loadCacheData() log a debug line for every missing or unreadable file.
+  vi.spyOn(console, 'debug').mockImplementation(() => {});
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
   clearCache();
+  vi.restoreAllMocks();
   process.env.HOME = previousHome.HOME;
   process.env.USERPROFILE = previousHome.USERPROFILE;
   fs.rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -235,7 +237,6 @@ describe('crash-safe cache commits', () => {
 
 describe('recovering from damaged or abandoned cache files', () => {
   it('treats a torn data file as a cache miss', async () => {
-    vi.spyOn(console, 'debug').mockImplementation(() => {});
     await saveCacheData(parseResultWith('session-old'), {});
     const file = path.join(getCacheDir(), 'parsed.json');
     const json = fs.readFileSync(file, 'utf-8');
