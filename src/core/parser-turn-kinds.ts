@@ -28,24 +28,27 @@ const TAG = /<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>/g;
 /** A fenced-code delimiter: three or more backticks or tildes. */
 const FENCE = /^(`{3,}|~{3,})/;
 
+/** The text the harness added to a message, and the typed lines it couldn't take out of it. */
+interface HarnessText { text: string; typedLines: ReadonlySet<string> }
+
 /**
  * What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
  * endings or surrounding whitespace, which the harness may change. When the harness reflowed the typed text, so it
- * can't be found whole, every line of the typed text is left out instead.
+ * can't be found whole, the text stays as it is, keeping the quoted elements and fences around the typed lines, and
+ * the typed lines come back so that markers on them don't count.
  */
-function harnessAddedText(data: Record<string, unknown> | undefined): string {
+function harnessAddedText(data: Record<string, unknown> | undefined): HarnessText {
   const transformed = text(data?.transformedContent).replaceAll('\r\n', '\n');
   const typed = text(data?.content).replaceAll('\r\n', '\n').trim();
-  if (!typed) return transformed;
+  if (!typed) return { text: transformed, typedLines: new Set() };
   const at = transformed.lastIndexOf(typed);
-  if (at >= 0) return transformed.slice(0, at) + transformed.slice(at + typed.length);
-  const typedLines = new Set(typed.split('\n').map(line => line.trim()).filter(Boolean));
-  return transformed.split('\n').filter(line => !typedLines.has(line.trim())).join('\n');
+  if (at >= 0) return { text: transformed.slice(0, at) + transformed.slice(at + typed.length), typedLines: new Set() };
+  return { text: transformed, typedLines: new Set(typed.split('\n').map(line => line.trim()).filter(Boolean)) };
 }
 
 /** Where a scan of the text the harness added is: in fenced code (its opening delimiter), or in a quoted element
- *  that spans lines. */
-interface QuoteState { fence?: string; element?: string }
+ *  (its name, and how deep elements of that name nest inside it). */
+interface QuoteState { fence?: string; element?: string; depth: number }
 
 /** True when a line opens, closes or sits in fenced code; updates `state.fence`. As in Markdown, only a fence of the
  *  same character, at least as long and with nothing after it, closes the code. */
@@ -60,41 +63,49 @@ function inFencedCode(line: string, state: QuoteState): boolean {
 }
 
 /**
- * True when a line carries a relay marker outside quoted text. Every element other than the relay wrapper quotes
- * text (an IDE selection, a file, a notification), whether it closes on the same line or a later one, and so does
- * fenced code; markers after a quoted element closes still count. Updates `state` for the next line.
+ * Walks the element tags on a line; true at a relay element outside quoted text when `markers` is set. Every
+ * element other than the relay wrapper quotes text (an IDE selection, a file, a notification) until its own closing
+ * tag, on the same line or a later one, and elements of the same name nest inside it. Updates `state`.
  */
-function lineIsRelayed(raw: string, state: QuoteState): boolean {
-  let line = raw.trim();
-  if (state.element) {
-    const close = line.indexOf(`</${state.element}>`);
-    if (close < 0) return false;
-    line = line.slice(close + state.element.length + 3);
-    state.element = undefined;
-  } else {
-    if (inFencedCode(line, state)) return false;
-    if (RELAY_ID_HEADER.test(line)) return true;
-  }
+function relayElementOnLine(line: string, state: QuoteState, markers: boolean): boolean {
   TAG.lastIndex = 0;
   for (let tag = TAG.exec(line); tag; tag = TAG.exec(line)) {
     const [, closing, name, selfClosing] = tag;
-    if (closing || selfClosing) continue;
-    if (RELAY_ELEMENT.test(name)) return true;
-    const close = line.indexOf(`</${name}>`, TAG.lastIndex);
-    if (close < 0) {
-      state.element = name;
-      return false;
+    if (selfClosing) continue;
+    if (state.element) {
+      if (name === state.element) state.depth += closing ? -1 : 1;
+      if (state.depth === 0) state.element = undefined;
+      continue;
     }
-    TAG.lastIndex = close + name.length + 3;
+    if (closing) continue;
+    if (!RELAY_ELEMENT.test(name)) {
+      state.element = name;
+      state.depth = 1;
+    } else if (markers) {
+      return true;
+    }
   }
   return false;
+}
+
+/** True when a line the user didn't type carries a relay marker outside quoted text and fenced code. Markers after
+ *  a quoted element closes still count. Updates `state` for the next line. */
+function lineIsRelayed(raw: string, state: QuoteState, typedLines: ReadonlySet<string>): boolean {
+  const line = raw.trim();
+  const markers = !typedLines.has(line);
+  if (!state.element) {
+    if (inFencedCode(line, state)) return false;
+    if (markers && RELAY_ID_HEADER.test(line)) return true;
+  }
+  return relayElementOnLine(line, state, markers);
 }
 
 /** True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
  *  sender ID header, outside the text it quotes. */
 function isRelayed(data: Record<string, unknown> | undefined): boolean {
-  const state: QuoteState = {};
-  return harnessAddedText(data).split('\n').some(line => lineIsRelayed(line, state));
+  const { text: added, typedLines } = harnessAddedText(data);
+  const state: QuoteState = { depth: 0 };
+  return added.split('\n').some(line => lineIsRelayed(line, state, typedLines));
 }
 
 /**

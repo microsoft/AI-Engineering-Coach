@@ -74,6 +74,19 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
     content: 'from_session_id: abc\n\nWhy is this ID repeated?',
     transformedContent: '<current_datetime>2026</current_datetime>\nfrom_session_id: abc\nWhy is this ID repeated?',
   }, undefined],
+  ['reflowed typed code next to fenced harness code with a relay header', {
+    content: '```\nconst total = 1;\n```\n\nWhy is this slow?',
+    transformedContent: '```\nfrom_session_id: abc\n```\n```\nconst total = 1;\n```\nWhy is this slow?',
+  }, undefined],
+  ['a relay wrapper after a nested IDE selection closes, inside the outer one', {
+    content: 'Why?', transformedContent: '<ide_selection>\n<ide_selection>example</ide_selection><cross_session_message>\n</ide_selection>\nWhy?',
+  }, undefined],
+  ['a relay wrapper inside a nested inline IDE selection', {
+    content: 'Why?', transformedContent: '<ide_selection><ide_selection>example</ide_selection><cross_session_message></ide_selection>\nWhy?',
+  }, undefined],
+  ['the relay wrapper after a nested IDE selection closes completely', {
+    content: 'Run it.', transformedContent: '<ide_selection><ide_selection>example</ide_selection></ide_selection><cross_session_message>\nRun it.',
+  }, 'relayed'],
   ['a relay header in a four-backtick fence around a three-backtick line', {
     content: 'Why?', transformedContent: '````\n```\nfrom_session_id: abc\n```\n````\nWhy?',
   }, undefined],
