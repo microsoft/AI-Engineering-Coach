@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { By, EditorView, error, until, VSBrowser, WebView, Workbench } from 'vscode-extension-tester';
+import { ActivityBar, By, EditorView, error, until, VSBrowser, WebView, WebviewView, Workbench } from 'vscode-extension-tester';
 import { saveSnapshot } from './snapshots';
 
 const READY_TIMEOUT = 60_000;
@@ -85,6 +85,34 @@ export class Dashboard {
     const editors = new EditorView();
     await editors.closeEditor(title);
     await driver.wait(async () => !(await editors.getOpenEditorTitles()).includes(title), READY_TIMEOUT);
+  }
+
+  /**
+   * Opens the AI Engineer Coach activity-bar view, then runs `action` inside its webview and
+   * returns to the workbench. Retries while the view's frame is still loading.
+   */
+  async inActivityBarView<T>(action: (view: WebviewView) => Promise<T>): Promise<T> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const control = await new ActivityBar().getViewControl('AI Engineer Coach');
+    if (!control) throw new Error('The AI Engineer Coach activity-bar container is missing');
+    const view = new WebviewView(await control.openView());
+    let result: { value: T } | undefined;
+    await driver.wait(async () => {
+      try {
+        await view.switchToFrame(READY_TIMEOUT);
+        result = { value: await action(view) };
+        return true;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError
+          || err instanceof error.NoSuchFrameError) return false;
+        throw err;
+      } finally {
+        await driver.switchTo().defaultContent();
+      }
+    }, READY_TIMEOUT, 'Waiting for the AI Engineer Coach activity-bar view');
+    if (!result) throw new Error('The AI Engineer Coach activity-bar view did not load');
+    return result.value;
   }
 
   async snapshot(name: string, title: string): Promise<void> {

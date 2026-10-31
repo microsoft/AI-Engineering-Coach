@@ -14,6 +14,8 @@ import {
   nextVersion,
   releaseUnreleased,
   repositoryUrl,
+  setLockfileVersion,
+  setManifestVersion,
 } from './changelog.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -159,6 +161,44 @@ describe('extractReleaseNotes', () => {
     expect(() => extractReleaseNotes(RELEASED, '0.3.0')).toThrow('no "## [0.3.0]" section');
     expect(() => extractReleaseNotes('## [0.3.0] - 2026-12-01\n\n### Added\n', '0.3.0')).toThrow('has no entries');
     expect(() => extractReleaseNotes(RELEASED, 'v0.2.0')).toThrow('major.minor.patch');
+  });
+});
+
+describe('package version files', () => {
+  /** Pairs of [before, after] for each line that differs; both texts must have the same line count. */
+  function changedLines(before, after) {
+    const a = before.split(/\r?\n/);
+    const b = after.split(/\r?\n/);
+    expect(b).toHaveLength(a.length);
+    return a.flatMap((line, i) => (line === b[i] ? [] : [[line, b[i]]]));
+  }
+
+  it('changes only the top-level version line of this repository\'s package.json', () => {
+    const text = readFileSync(join(ROOT, 'package.json'), 'utf8');
+    const { version } = JSON.parse(text);
+    const next = nextVersion(version, 'minor');
+    expect(changedLines(text, setManifestVersion(text, version, next)))
+      .toEqual([[`  "version": "${version}",`, `  "version": "${next}",`]]);
+  });
+
+  it('changes only the two root versions of this repository\'s package-lock.json', () => {
+    const text = readFileSync(join(ROOT, 'package-lock.json'), 'utf8');
+    const { version } = JSON.parse(text);
+    const changes = changedLines(text, setLockfileVersion(text, version, '9.9.9'));
+    expect(changes).toEqual([[`  "version": "${version}",`, '  "version": "9.9.9",'], [`      "version": "${version}",`, '      "version": "9.9.9",']]);
+  });
+
+  it('keeps Windows line endings in package-lock.json', () => {
+    const lock = '{\r\n  "name": "x",\r\n  "version": "0.1.0",\r\n  "packages": {\r\n    "": {\r\n      "version": "0.1.0"\r\n    }\r\n  }\r\n}\r\n';
+    expect(setLockfileVersion(lock, '0.1.0', '0.2.0')).toBe(lock.replaceAll('0.1.0', '0.2.0'));
+  });
+
+  it('refuses unexpected versions and nested version keys', () => {
+    expect(() => setManifestVersion('{ "version": "0.3.0" }', '0.1.0', '0.2.0')).toThrow('package.json version is 0.3.0');
+    expect(() => setLockfileVersion('{ "version": "0.1.0", "packages": {} }', '0.1.0', '0.2.0')).toThrow('package-lock.json version is not 0.1.0');
+    const nested = '{\n  "name": "x",\n  "engines": {\n    "version": "0.1.0"\n  },\n  "version": "0.1.0"\n}\n';
+    expect(() => setManifestVersion(nested, '0.1.0', '0.2.0')).toThrow('Could not change only the top-level version');
+    expect(() => setManifestVersion('{ "version": "0.1.0" }', '0.1.0', '0.2.0-beta')).toThrow('major.minor.patch');
   });
 });
 

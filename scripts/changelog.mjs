@@ -3,9 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Pure helpers for CHANGELOG.md in Keep a Changelog 2.0.0 format: compute the next version,
- * move the [Unreleased] notes into a dated release section, and extract one release's notes.
- * scripts/release.mjs does the file and git I/O. */
+/* Pure release helpers: version math, CHANGELOG.md in Keep a Changelog 2.0.0 format (move the
+ * [Unreleased] notes into a dated release section, extract one release's notes), and the version
+ * fields of package.json and package-lock.json. scripts/release.mjs does the file and git I/O. */
 
 const VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -191,4 +191,39 @@ export function repositoryUrl(pkg) {
   const raw = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url;
   if (!raw) throw new Error('package.json has no repository URL');
   return raw.replace(/^git\+/, '').replace(/\.git$/, '').replace(/\/+$/, '');
+}
+
+/**
+ * Changes only the top-level "version" in package.json text. `npm version` would rewrite the
+ * whole file and expand its compact one-line objects and arrays.
+ * @param {string} text package.json contents
+ * @param {string} from expected current version
+ * @param {string} to
+ */
+export function setManifestVersion(text, from, to) {
+  parseVersion(to);
+  const manifest = JSON.parse(text);
+  if (manifest.version !== from) throw new Error(`package.json version is ${manifest.version}, expected ${from}`);
+  const updated = text.replace(/^(\s*"version"\s*:\s*")([^"]*)(")/m, `$1${to}$3`);
+  if (JSON.stringify(JSON.parse(updated)) !== JSON.stringify({ ...manifest, version: to })) {
+    throw new Error('Could not change only the top-level version in package.json');
+  }
+  return updated;
+}
+
+/**
+ * Changes the root package's two version fields in package-lock.json, keeping npm's formatting.
+ * @param {string} text package-lock.json contents
+ * @param {string} from expected current version
+ * @param {string} to
+ */
+export function setLockfileVersion(text, from, to) {
+  parseVersion(to);
+  const lock = JSON.parse(text);
+  const root = lock.packages?.[''];
+  if (lock.version !== from || root?.version !== from) throw new Error(`package-lock.json version is not ${from}`);
+  lock.version = to;
+  root.version = to;
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  return `${JSON.stringify(lock, null, 2)}\n`.replaceAll('\n', eol);
 }

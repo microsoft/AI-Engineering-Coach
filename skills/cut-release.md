@@ -115,7 +115,7 @@ release notes in the run summary.
 - Don't create the release in the GitHub UI, and don't push tags from a workflow using
   `GITHUB_TOKEN`: tags pushed with `GITHUB_TOKEN` don't start `release.yml`.
 - Don't bump `version` in feature pull requests, and don't use `vsce package <version>`,
-  `vsce publish minor`, or plain `npm version`: they skip the changelog, and in a git repository
-  `vsce` and `npm version` also create a commit and tag.
+  `vsce publish minor`, or plain `npm version`: they skip the changelog, `npm version` rewrites
+  the whole of `package.json`, and in a git repository both create a commit and tag.
 - Don't move or delete a published tag. Fix forward with a patch release.
 - Don't paste `git log` output into the changelog.

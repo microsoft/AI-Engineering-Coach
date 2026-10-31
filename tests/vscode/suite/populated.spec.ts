@@ -6,7 +6,7 @@
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { after, before, describe, it } from 'mocha';
-import { VSBrowser } from 'vscode-extension-tester';
+import { By, VSBrowser } from 'vscode-extension-tester';
 import { Dashboard } from '../dashboard';
 import {
   activateLinePattern, addReloadFixture, assertFixturesUnchanged, FIRST_PROMPT, fixturePaths,
@@ -138,15 +138,27 @@ describe('Packaged VSIX without GitHub Copilot', () => {
 
 describe('Packaged VSIX release notes', () => {
   const dashboard = new Dashboard();
+  const { root } = scenarioContext();
 
-  it('opens the packaged changelog from What\'s New', async () => {
-    await dashboard.runCommand("What's New");
-    // vsce packages CHANGELOG.md as changelog.md; the command opens it in the Markdown preview.
+  it('shows the build stamp in the activity-bar view and opens What\'s New from its link', async () => {
+    const build = await readInstalledBuild(root);
+    const line = await dashboard.inActivityBarView(async view =>
+      (await view.findWebElement(By.css('#build-info'))).getText());
+    const version = build.version.replaceAll('.', String.raw`\.`);
+    assert.match(line, new RegExp(`^v${version}${build.dev ? String.raw` \(dev\)` : ''} · ${build.commit}${build.dirty ? '-dirty' : ''} · `));
+    await dashboard.inActivityBarView(async view => (await view.findWebElement(By.css('#whatsNew'))).click());
+    // vsce packages CHANGELOG.md as changelog.md; What's New opens it in the Markdown preview.
     const preview = await dashboard.waitForEditor(/^Preview changelog\.md$/i);
-    await dashboard.snapshot('09-whats-new', "What's New: the packaged changelog in VS Code's Markdown preview");
+    await dashboard.snapshot('09-whats-new',
+      `What's New: the packaged changelog, and the activity-bar view showing ${line}`);
     await dashboard.closeEditor(preview);
-    const runtime = await fs.readFile(fixturePaths(scenarioContext().root).runtimeLog, 'utf8');
-    assert.match(runtime, /\[extension\] command-whats-new/);
+  });
+
+  it('opens What\'s New from the command palette', async () => {
+    await dashboard.runCommand("What's New");
+    await dashboard.closeEditor(await dashboard.waitForEditor(/^Preview changelog\.md$/i));
+    const runtime = await fs.readFile(fixturePaths(root).runtimeLog, 'utf8');
+    assert.equal(runtime.match(/\[extension\] command-whats-new/g)?.length, 2, 'Both entry points should run the command');
     assert.doesNotMatch(runtime, /whats-new-preview-unavailable|whats-new-error/);
   });
 });

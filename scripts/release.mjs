@@ -5,19 +5,22 @@
 
 /* Release helper (see skills/cut-release.md):
  *   npm run release:prepare -- <patch|minor|major|X.Y.Z> [--date YYYY-MM-DD]
- *     moves the [Unreleased] notes into a dated section and bumps package.json and
- *     package-lock.json with `npm version --no-git-tag-version`. Committing, tagging, and
- *     publishing stay manual.
+ *     moves the [Unreleased] notes into a dated section and sets the new version in
+ *     package.json and package-lock.json. Committing, tagging, and publishing stay manual.
  *   npm run release:notes -- <X.Y.Z>
  *     prints one version's notes; .github/workflows/release.yml uses them as the release body. */
 
 import { execFileSync } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { extractReleaseNotes, isPreRelease, nextVersion, releaseUnreleased, repositoryUrl } from './changelog.mjs';
+import {
+  extractReleaseNotes, isPreRelease, nextVersion, releaseUnreleased, repositoryUrl, setLockfileVersion, setManifestVersion,
+} from './changelog.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const CHANGELOG = join(ROOT, 'CHANGELOG.md');
+const MANIFEST = join(ROOT, 'package.json');
+const LOCKFILE = join(ROOT, 'package-lock.json');
 const USAGE = [
   'Usage: npm run release:prepare -- <patch|minor|major|X.Y.Z> [--date YYYY-MM-DD]',
   '       npm run release:notes -- <X.Y.Z>',
@@ -44,14 +47,6 @@ function today() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-/** @param {string} version */
-function bumpPackageVersion(version) {
-  const args = ['version', version, '--no-git-tag-version'];
-  const npmCli = process.env.npm_execpath;
-  if (npmCli) execFileSync(process.execPath, [npmCli, ...args], { cwd: ROOT, stdio: 'inherit' });
-  else execFileSync('npm', args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' });
-}
-
 /** @param {string[]} args */
 function prepare(args) {
   const [bump, ...options] = args;
@@ -64,11 +59,15 @@ function prepare(args) {
   if (git(['status', '--porcelain', '--untracked-files=no'])) {
     throw new Error('Commit or stash your changes first: release:prepare needs a clean working tree.');
   }
-  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  const manifestText = readFileSync(MANIFEST, 'utf8');
+  const pkg = JSON.parse(manifestText);
   const version = nextVersion(pkg.version, bump);
-  // Validate the changelog before touching package.json, so a failure leaves nothing half-done.
+  // Compute every file before writing any, so a failure leaves nothing half-done.
   const changelog = releaseUnreleased(readFileSync(CHANGELOG, 'utf8'), { version, date, repoUrl: repositoryUrl(pkg), hasTag });
-  bumpPackageVersion(version);
+  const manifest = setManifestVersion(manifestText, pkg.version, version);
+  const lockfile = setLockfileVersion(readFileSync(LOCKFILE, 'utf8'), pkg.version, version);
+  writeFileSync(MANIFEST, manifest);
+  writeFileSync(LOCKFILE, lockfile);
   writeFileSync(CHANGELOG, changelog);
   console.log([
     '',
