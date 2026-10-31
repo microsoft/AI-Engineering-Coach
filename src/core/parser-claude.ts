@@ -130,6 +130,9 @@ interface ClaudeAssistantData {
   webDomains: string[];
   /** Prompt-cache usage per API response (counted once per `message.id`). */
   cache: RequestCacheBuilder;
+  /** Responses that reported cache usage, in order: passed to `cache` with their final usage once every line of
+   *  the request is read, so the rows agree with the request's token totals. */
+  cacheCalls: { stream: 'main' | 'subagent'; model: string; response: number; truncated: boolean | null }[];
   responseIds: Set<string>;
   /** Responses passed to `cache`, and whether each stopped at the output-token limit (`stop_reason: max_tokens`),
    *  as known so far: `null` until one of the response's lines logs a stop reason. */
@@ -433,8 +436,8 @@ function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, respon
 }
 
 /** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain), and whether it
- *  stopped at the output-token limit. */
-function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
+ *  stopped at the output-token limit. `response` is the response's index in `responseUsage`. */
+function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, response: number): void {
   const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
   if (responseId && data.responseIds.has(responseId)) {
     addClaudeStopReason(data, line, responseId);
@@ -442,31 +445,39 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
   }
   const usage = line.message?.usage;
   // Usage without cache fields didn't report cache usage; don't count the response as uncached.
-  if (!usage || !reportsCacheUsage(usage)) return;
+  if (!usage || !reportsCacheUsage(usage) || response < 0) return;
   const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
-  const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
-  if (sample.input <= 0) return;
+  if (getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite <= 0) return;
   const truncated = claudeTruncated(line);
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
   if (responseId) {
     data.responseIds.add(responseId);
     data.truncation.set(responseId, truncated);
   }
-  const stream = line.isSidechain ? 'subagent' : 'main';
-  data.cache.addCall(stream, cacheModelName(line.message?.model), { ...sample, outputs: stopReasonSample(truncated) });
-  if (stream === 'main' && !cacheState.sawMain) {
-    cacheState.sawMain = true;
-    data.cache.addColdStart(missTokens(sample), undefined);
+  data.cacheCalls.push({ stream: line.isSidechain ? 'subagent' : 'main', model: cacheModelName(line.message?.model), response, truncated });
+}
+
+/** Pass the request's responses to `cache` with their final usage, and count the session's first main-agent
+ *  call as its cold start. */
+function finishClaudeCache(data: ClaudeAssistantData, cacheState: ClaudeCacheState): void {
+  for (const call of data.cacheCalls) {
+    const usage = data.responseUsage[call.response];
+    const sample = { input: usage.uncached + usage.cacheRead + usage.cacheWrite, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite };
+    data.cache.addCall(call.stream, call.model, { ...sample, outputs: stopReasonSample(call.truncated) });
+    if (call.stream === 'main' && !cacheState.sawMain) {
+      cacheState.sawMain = true;
+      data.cache.addColdStart(missTokens(sample), undefined);
+    }
   }
 }
 
 /** Record a line's usage under its API response: the first line of a `message.id` adds the response, later lines
  *  of it keep the largest value of each field (a response's lines normally repeat the same usage). A line
- *  without an id counts as its own response. */
-function addClaudeResponseUsage(data: ClaudeAssistantData, line: ClaudeLine, requestSidechain: boolean): void {
+ *  without an id counts as its own response. Returns the response's index, or -1 when the line has no usage. */
+function addClaudeResponseUsage(data: ClaudeAssistantData, line: ClaudeLine, requestSidechain: boolean): number {
   const usage = line.message?.usage;
-  if (!usage) return;
+  if (!usage) return -1;
   const sample: ClaudeResponseUsage = {
     uncached: getNumberField(usage, 'input_tokens'),
     cacheRead: getNumberField(usage, 'cache_read_input_tokens'),
@@ -479,13 +490,14 @@ function addClaudeResponseUsage(data: ClaudeAssistantData, line: ClaudeLine, req
   if (index === undefined) {
     if (responseId) data.responseUsageIndex.set(responseId, data.responseUsage.length);
     data.responseUsage.push(sample);
-    return;
+    return data.responseUsage.length - 1;
   }
   const seen = data.responseUsage[index];
   seen.uncached = Math.max(seen.uncached, sample.uncached);
   seen.cacheRead = Math.max(seen.cacheRead, sample.cacheRead);
   seen.cacheWrite = Math.max(seen.cacheWrite, sample.cacheWrite);
   seen.output = Math.max(seen.output, sample.output);
+  return index;
 }
 
 /** The request's token totals over its responses, and its context from the calls on its own chain. */
@@ -536,6 +548,7 @@ function collectClaudeAssistantData(
     investigationDelegations: [],
     webDomains: [],
     cache: new RequestCacheBuilder(),
+    cacheCalls: [],
     responseIds: new Set(),
     truncation: new Map(),
   };
@@ -556,8 +569,8 @@ function collectClaudeAssistantData(
       if (!data.model && next.message?.model) data.model = next.message.model;
 
       if (reportsCacheUsage(next.message?.usage)) data.cacheUsageReported = true;
-      addClaudeResponseUsage(data, next, requestSidechain);
-      addClaudeCacheUsage(data, next, cacheState);
+      const response = addClaudeResponseUsage(data, next, requestSidechain);
+      addClaudeCacheUsage(data, next, response);
 
       for (const block of toContentArray(next.message?.content)) {
         if (block.type === 'text' && block.text) {
@@ -587,6 +600,7 @@ function collectClaudeAssistantData(
 
   data.nextIndex = i;
   finishClaudeUsage(data);
+  finishClaudeCache(data, cacheState);
   return data;
 }
 
