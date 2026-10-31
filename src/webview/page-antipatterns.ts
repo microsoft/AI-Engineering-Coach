@@ -399,6 +399,7 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
               <select id="rf-scope">
                 <option value="requests">Requests</option>
                 <option value="sessions">Sessions</option>
+                <option value="both">Both</option>
               </select>
             </div>
             <div class="rule-form-field">
@@ -434,9 +435,6 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
             <label>Detection Logic <span class="muted">(DSL)</span></label>
             <textarea id="rf-detect" rows="8" class="rule-mono" spellcheck="false" placeholder=${"scan: requests\nmatch: messageLength > 0\naggregate: count\ncheck: count >= thresholds.myThreshold\nexamples: \"{{messageText | truncate:60}}\""}></textarea>
           </div>
-          <textarea id="rf-patterns" style="display:none"></textarea>
-          <textarea id="rf-filetypes" style="display:none"></textarea>
-          <textarea id="rf-extra-fm" style="display:none"></textarea>
         </div>
 
         <!-- Source view -->

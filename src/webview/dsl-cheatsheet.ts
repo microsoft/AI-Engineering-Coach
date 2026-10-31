@@ -16,7 +16,7 @@ id: rule-id
 name: Human-Readable Name
 group: prompt-quality | session-hygiene | code-review | tool-mastery | context-management
 severity: low | medium | high
-scope: requests | sessions
+scope: requests | sessions | both
 version: 1
 tags: [tag1, tag2]
 thresholds:
