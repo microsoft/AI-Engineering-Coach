@@ -39,7 +39,7 @@ const NEUTRAL_TOOLS = new Set([
   'list_bash', 'list_powershell', 'task_complete',
 ]);
 const CLARIFICATION_TOOLS = new Set(['ask_user', 'askuserquestion', 'vscode_askquestions']);
-const INVESTIGATION_TOOLS = new Set(['task', 'agent', 'spawn_agent']);
+const INVESTIGATION_TOOLS = new Set(['task', 'agent', 'spawn_agent', 'subagent']);
 
 export function toolIdentity(name: string): string {
   return name.slice(name.lastIndexOf('.') + 1).toLowerCase();
@@ -88,7 +88,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 export function recordedInvestigation(name: string, args: unknown): 'research' | 'explore' | undefined {
   if (!INVESTIGATION_TOOLS.has(toolIdentity(name))) return undefined;
   const data = record(args);
-  const role = data?.agent_type ?? data?.subagent_type;
+  const role = data?.agent_type ?? data?.subagent_type ?? data?.agent;
   if (typeof role !== 'string') return undefined;
   const normalized = role.toLowerCase();
   return normalized === 'research' || normalized === 'explore' ? normalized : undefined;

@@ -14,7 +14,7 @@ import { collectExternalHarnessesAsync } from './parser-harnesses';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { parseClaudeSessions } from './parser-claude';
 import { parseCodexSessions } from './parser-codex';
-import { parseOpenCodeSessions } from './parser-opencode';
+import { parseOpenCodeSessions, readOpenCodeImageReferences, findOpenCodeDirs } from './parser-opencode';
 import { parseSessionFile, processWorkspaceEntryAsync } from './parser-vscode';
 import { extractSourceImages, loadSourceSession } from './session-images';
 import { Analyzer } from './analyzer';
@@ -457,8 +457,77 @@ describe('harness-aware image loading', () => {
     expect(extractSourceImages(source, 'oc-db', "' OR 1=1 --")).toEqual([]);
     const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
     expect(loadSourceSession(source, 'oc-db')?.requests[0].variableKinds.image).toBe(1);
-    expect(prepare.mock.calls.map(([sql]) => sql)).toHaveLength(3);
-    expect(prepare.mock.calls.every(([sql]) => / WHERE (?:id|session_id) = \?/.test(sql))).toBe(true);
+    const dataQueries = prepare.mock.calls.map(([sql]) => sql).filter(sql => !sql.includes('sqlite_master'));
+    expect(dataQueries).toHaveLength(3);
+    expect(dataQueries.every(sql => / WHERE (?:id|session_id) = \?/.test(sql))).toBe(true);
+  });
+
+  it('counts and loads V2 inline file attachments with targeted, user-only reads', () => {
+    const file = path.join(root, 'opencode.db');
+    const database = new DatabaseSync(file);
+    database.exec(`
+      CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, path TEXT, title TEXT, slug TEXT,
+        agent TEXT, model TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+        time_created INTEGER, time_updated INTEGER, data TEXT);
+      INSERT INTO session_v2 VALUES ('oc-v2', 'project', '', NULL, 'Project', 'project', 'build', NULL, 1, 2);
+    `);
+    const attachment = { mime: 'image/png', data: base64, source: { type: 'inline' } };
+    const localImage = path.join(root, 'screenshot.png');
+    fs.writeFileSync(localImage, Buffer.from(alternateBase64, 'base64'));
+    const localAttachment = { mime: 'image/png', data: '', source: { type: 'uri', uri: pathToFileURL(localImage).href } };
+    const insert = database.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, 1, 1, ?)');
+    insert.run('user', 'oc-v2', 'user', 1, JSON.stringify({ text: 'Screenshot', files: [attachment, localAttachment] }));
+    insert.run('assistant', 'oc-v2', 'assistant', 2, JSON.stringify({ files: [attachment] }));
+    insert.run('other-user', 'other-session', 'user', 1, JSON.stringify({ files: [attachment] }));
+    database.close();
+    const session = parseOpenCodeSessions(file, undefined, sources)[0];
+    expect(session.requests[0].variableKinds.image).toBe(2);
+    const source = sources.get('oc-v2')!;
+    expect(extractSourceImages(source, 'oc-v2', 'user')).toEqual([image, alternateImage]);
+    expect(extractSourceImages(source, 'oc-v2', 'assistant')).toEqual([]);
+    expect(extractSourceImages(source, 'wrong-session', 'user')).toEqual([]);
+    expect(extractSourceImages(source, 'oc-v2', "' OR 1=1 --")).toEqual([]);
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    expect(loadSourceSession(source, 'oc-v2')?.requests[0].variableKinds.image).toBe(2);
+    const dataQueries = prepare.mock.calls.map(([sql]) => sql).filter(sql => !sql.includes('sqlite_master'));
+    expect(dataQueries).toHaveLength(2);
+    expect(dataQueries.every(sql => / WHERE (?:id|session_id) = \?/.test(sql))).toBe(true);
+    expect(JSON.stringify([...sources])).not.toContain(base64);
+  });
+
+  it('reads V2 inline image attachments directly via readOpenCodeImageReferences', () => {
+    const file = path.join(root, 'opencode-v2.db');
+    const database = new DatabaseSync(file);
+    database.exec(`
+      CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, path TEXT, title TEXT, slug TEXT,
+        agent TEXT, model TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+        time_created INTEGER, time_updated INTEGER, data TEXT);
+      INSERT INTO session_v2 VALUES ('v2-direct', 'project', '', NULL, 'Direct', 'direct', 'build', NULL, 1, 2);
+    `);
+    const insert = database.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, 1, 1, ?)');
+    const inlineAttachment = { mime: 'image/png', data: base64, source: { type: 'inline' } };
+    insert.run('v2-user', 'v2-direct', 'user', 1, JSON.stringify({ text: 'Direct V2 image', files: [inlineAttachment] }));
+    insert.run('v2-assistant', 'v2-direct', 'assistant', 2, JSON.stringify({ text: 'Reply' }));
+    insert.run('other-session', 'other-v2', 'user', 1, JSON.stringify({ text: 'Wrong session', files: [inlineAttachment] }));
+    database.close();
+    const references = readOpenCodeImageReferences(file, 'v2-direct', 'v2-user');
+    expect(references).toHaveLength(1);
+    expect(references[0].data).toBe(base64);
+    expect(readOpenCodeImageReferences(file, 'v2-direct', 'v2-assistant')).toEqual([]);
+    expect(readOpenCodeImageReferences(file, 'nonexistent', 'v2-user')).toEqual([]);
+    expect(readOpenCodeImageReferences(file, 'v2-direct', "' OR 1=1 --")).toEqual([]);
+  });
+
+  it('returns empty array from findOpenCodeDirs when HOME and XDG_DATA_HOME point to empty directories', () => {
+    const emptyDir = path.join(root, 'empty-data');
+    fs.mkdirSync(emptyDir, { recursive: true });
+    vi.stubEnv('HOME', emptyDir);
+    vi.stubEnv('USERPROFILE', emptyDir);
+    vi.stubEnv('XDG_DATA_HOME', emptyDir);
+    vi.stubEnv('LOCALAPPDATA', emptyDir);
+    expect(findOpenCodeDirs()).toEqual([]);
   });
 
   it('registers loadable external sources during cold parsing and asynchronous refresh', async () => {
