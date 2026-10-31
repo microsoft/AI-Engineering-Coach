@@ -503,13 +503,15 @@ function finishClaudeUsage(data: ClaudeAssistantData): void {
   if (contextUsage) data.contextUsage = contextUsage;
 }
 
+/** Assistant data of the request whose prompt is the user line at `userIndex`. */
 function collectClaudeAssistantData(
   lines: ClaudeLine[],
-  startIndex: number,
+  userIndex: number,
   lastTs: number | null,
   cacheState: ClaudeCacheState,
-  requestSidechain: boolean,
 ): ClaudeAssistantData {
+  const startIndex = userIndex + 1;
+  const requestSidechain = lines[userIndex]?.isSidechain === true;
   const data: ClaudeAssistantData = {
     nextIndex: startIndex,
     lastTs,
@@ -977,7 +979,7 @@ export function parseClaudeSessionFile(
     const userTs = getTimestamp(line.timestamp);
     ({ firstTs, lastTs } = updateClaudeTimestampRange(userTs, firstTs, lastTs));
 
-    const assistantData = collectClaudeAssistantData(lines, i + 1, lastTs, cacheState, line.isSidechain === true);
+    const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState);
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);

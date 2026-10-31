@@ -36,7 +36,7 @@ describe('VS Code custom instructions', () => {
       { external: uri('.github/prompts/fix.prompt.md') },
       { external: uri('.github/agents/reviewer.agent.md') },
       { external: uri('docs/subagents.md') },
-      { external: uri('notes/myclaude.md') },
+      { external: uri('notes/my-claude.md') },
       { external: uri('GEMINI.md') },
       { external: uri('.claude/settings.json') },
       { external: uri('src/app.ts') },
