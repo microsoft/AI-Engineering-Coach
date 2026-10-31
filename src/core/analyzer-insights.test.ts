@@ -355,6 +355,21 @@ describe('InsightsAnalyzer', () => {
       expect(result.weeklyTrend.lateNightReqs.some(v => v > 0)).toBe(true);
       expect(result.weeklyTrend.weekendReqs.some(v => v > 0)).toBe(true);
     });
+
+    it('counts late nights, weekends and totals from typed prompts, and session length from every turn', () => {
+      const wednesday = new Date('2024-03-13T10:00:00').getTime();
+      const session = makeSession({
+        requests: [
+          makeRequest({ timestamp: wednesday }),
+          makeRequest({ timestamp: new Date('2024-03-13T23:00:00').getTime(), nonHumanKind: 'autopilot' }),
+          makeRequest({ timestamp: new Date('2024-03-16T10:00:00').getTime(), nonHumanKind: 'agent' }),
+        ],
+        lastMessageDate: new Date('2024-03-16T10:00:00').getTime(),
+      });
+      const result = createAnalyzer([session]).getInsights().sustainablePace;
+      expect(result.weeklyTrend).toMatchObject({ lateNightReqs: [0], weekendReqs: [0], totalReqs: [1], avgSessionLength: [3] });
+      expect(result.alerts).toHaveLength(0);
+    });
   });
 
   describe('promptMaturity', () => {

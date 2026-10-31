@@ -74,6 +74,7 @@ const workLifeBalance: WorkLifeBalanceResult = {
   maxBreak: 2,
   activeDays: 12,
   weeklyTrend: { labels: [], weekday: [], weekend: [] },
+  turnBasis: { humanTurns: 42, automatedTurns: 0, automatedByKind: {} },
 };
 
 const flowState: FlowStateData = {

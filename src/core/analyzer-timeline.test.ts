@@ -337,5 +337,35 @@ describe('TimelineAnalyzer', () => {
       expect(result!.timeDistribution.lateNight).toBe(1);
       expect(result!.timeDistribution.workHours).toBe(1);
     });
+
+    it('measures only the prompts the user typed, and reports the turns it left out', () => {
+      const wednesday10am = new Date('2024-03-13T10:00:00').getTime();
+      const wednesday2am = new Date('2024-03-13T02:00:00').getTime();
+      const saturday = new Date('2024-03-16T10:00:00').getTime();
+      const sunday = new Date('2024-03-17T10:00:00').getTime();
+      const sessions = [makeSession({
+        requests: [
+          makeRequest({ timestamp: wednesday2am, nonHumanKind: 'autopilot' }),
+          makeRequest({ timestamp: wednesday10am }),
+          makeRequest({ timestamp: wednesday10am + 60_000, nonHumanKind: 'subagent' }),
+          makeRequest({ timestamp: saturday, nonHumanKind: 'relayed' }),
+          makeRequest({ timestamp: sunday, nonHumanKind: 'agent' }),
+        ],
+        lastMessageDate: sunday,
+      })];
+      const result = createAnalyzer(sessions).getWorkLifeBalance();
+      expect(result).toMatchObject({
+        totalRequests: 1, weekdayReqs: 1, weekendReqs: 0, weekendRatio: 0, activeDays: 1, maxStreak: 1,
+        timeDistribution: { lateNight: 0, earlyMorning: 0, workHours: 1, evening: 0 },
+        turnBasis: { humanTurns: 1, automatedTurns: 4, automatedByKind: { autopilot: 1, subagent: 1, relayed: 1, agent: 1 } },
+      });
+      expect(result!.weeklyTrend.weekend.reduce((a, b) => a + b, 0)).toBe(0);
+    });
+
+    it('returns null when every turn in range is automated', () => {
+      const ts = new Date('2024-03-13T02:00:00').getTime();
+      const sessions = [makeSession({ requests: [makeRequest({ timestamp: ts, nonHumanKind: 'autopilot' })], lastMessageDate: ts })];
+      expect(createAnalyzer(sessions).getWorkLifeBalance()).toBeNull();
+    });
   });
 });

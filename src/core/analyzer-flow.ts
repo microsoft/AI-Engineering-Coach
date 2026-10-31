@@ -5,8 +5,9 @@
 
 /* Flow State analyzer -- measures developer flow depth per session and per day */
 
-import { DateFilter, Session, FlowSession, FlowDay, FlowStateData } from './types';
+import { DateFilter, Session, SessionRequest, FlowSession, FlowDay, FlowStateData } from './types';
 import { toDateStr, isoWeek } from './helpers';
+import { humanFollowUpGaps, isHumanTurn } from './human-turns';
 import {
   FLOW_RAPID_FOLLOWUP_SEC, FLOW_SESSION_MIN_REQS,
   FLOW_BLOCK_GAP_MIN, FLOW_DEEP_SCORE, FLOW_MODERATE_SCORE,
@@ -102,19 +103,21 @@ export class FlowAnalyzer extends AnalyzerBase {
 
   private buildFlowSession(session: Session, f?: DateFilter): FlowSession | null {
     const timedReqs = session.requests.filter(r => r.timestamp != null);
-    if (timedReqs.length < FLOW_SESSION_MIN_REQS) return null;
-    if (!this.matchesDateRange(timedReqs, f)) return null;
-
     timedReqs.sort((a, b) => a.timestamp! - b.timestamp!);
-    const startTs = timedReqs[0].timestamp!;
-    const endTs = timedReqs[timedReqs.length - 1].timestamp!;
+    // Flow is the user's: count the prompts they typed. Automated turns only extend the assistant's work.
+    const typed = timedReqs.filter(isHumanTurn);
+    if (typed.length < FLOW_SESSION_MIN_REQS) return null;
+    if (!this.matchesDateRange(typed, f)) return null;
+
+    const startTs = typed[0].timestamp!;
+    const endTs = typed[typed.length - 1].timestamp!;
     const durationMin = (endTs - startTs) / 60_000;
     const followUpGaps = this.getFollowUpGaps(timedReqs);
     const medianFollowUpSec = median(followUpGaps);
     const rapidFollowUpRate = followUpGaps.length > 0
       ? followUpGaps.filter(g => g <= FLOW_RAPID_FOLLOWUP_SEC).length / followUpGaps.length
       : 0;
-    const flowScore = computeSessionFlowScore(followUpGaps, durationMin, timedReqs.length);
+    const flowScore = computeSessionFlowScore(followUpGaps, durationMin, typed.length);
 
     return {
       sessionId: session.sessionId,
@@ -124,7 +127,7 @@ export class FlowAnalyzer extends AnalyzerBase {
       startTs,
       endTs,
       durationMin: Math.round(durationMin * 10) / 10,
-      requestCount: timedReqs.length,
+      requestCount: typed.length,
       medianFollowUpSec: Math.round(medianFollowUpSec),
       rapidFollowUpRate: Math.round(rapidFollowUpRate * 100) / 100,
       flowScore,
@@ -138,16 +141,11 @@ export class FlowAnalyzer extends AnalyzerBase {
     return true;
   }
 
-  private getFollowUpGaps(timedReqs: Array<{ timestamp: number | null; totalElapsed: number | null }>): number[] {
-    const followUpGaps: number[] = [];
-    for (let i = 0; i < timedReqs.length - 1; i++) {
-      const cur = timedReqs[i];
-      const next = timedReqs[i + 1];
-      const responseEnd = cur.timestamp! + (cur.totalElapsed || 0);
-      const gapSec = (next.timestamp! - responseEnd) / 1000;
-      if (gapSec >= 0) followUpGaps.push(gapSec);
-    }
-    return followUpGaps;
+  /** Seconds from the end of the assistant's work to each prompt the user typed (see humanFollowUpGaps). */
+  private getFollowUpGaps(timedReqs: SessionRequest[]): number[] {
+    return humanFollowUpGaps(timedReqs, r => r.timestamp!, r => r.timestamp! + (r.totalElapsed || 0), isHumanTurn)
+      .map(gapMs => gapMs / 1000)
+      .filter(gapSec => gapSec >= 0);
   }
 
   private buildFlowDays(flowSessions: FlowSession[]): FlowDay[] {

@@ -5,7 +5,7 @@
 
 /* Which logged "user" turns the user typed, for the measures that count only those turns. */
 
-import type { NonHumanKind, SessionRequest } from './types';
+import type { NonHumanKind, SessionRequest, TurnBasis } from './types';
 
 /** Every NonHumanKind, in the order the dashboard lists them. */
 export const NON_HUMAN_KINDS = [
@@ -21,4 +21,42 @@ export function isHumanTurn(request: { nonHumanKind?: unknown }): boolean {
 export function markNonHuman(request: SessionRequest, kind: NonHumanKind): void {
   request.nonHumanKind = kind;
   request.curiosity = { kind: 'excluded', excerpts: [] };
+}
+
+/** The turns the user typed, and how many other turns were left out, by kind. */
+export function splitHumanTurns<T extends { nonHumanKind?: NonHumanKind }>(requests: readonly T[]): { human: T[]; basis: TurnBasis } {
+  const human: T[] = [];
+  const automatedByKind: TurnBasis['automatedByKind'] = {};
+  for (const request of requests) {
+    if (isHumanTurn(request)) human.push(request);
+    else if (request.nonHumanKind) automatedByKind[request.nonHumanKind] = (automatedByKind[request.nonHumanKind] ?? 0) + 1;
+  }
+  return { human, basis: { humanTurns: human.length, automatedTurns: requests.length - human.length, automatedByKind } };
+}
+
+/**
+ * Follow-up gaps (ms) before the turns the user typed, for `turns` in time order. A gap runs from the end of the
+ * assistant's work to the typed turn: the latest end of any turn since the previous typed turn, so automated turns
+ * extend that work but never start a gap. A typed turn has no gap when nothing came before it. When every turn is
+ * typed, these are the gaps between consecutive turns. A gap is negative when the turn started before that work
+ * ended; callers decide how to treat it.
+ */
+export function humanFollowUpGaps<T>(
+  turns: readonly T[],
+  startOf: (turn: T) => number,
+  endOf: (turn: T) => number,
+  isHuman: (turn: T) => boolean,
+): number[] {
+  const gaps: number[] = [];
+  let workEnd: number | null = null;
+  for (const turn of turns) {
+    const end = endOf(turn);
+    if (isHuman(turn)) {
+      if (workEnd !== null) gaps.push(startOf(turn) - workEnd);
+      workEnd = end;
+    } else {
+      workEnd = workEnd === null ? end : Math.max(workEnd, end);
+    }
+  }
+  return gaps;
 }

@@ -90,8 +90,8 @@ creationDate, lastMessageDate
 - profanityMatches(reqs) -> {count, total, flaggedWords}
 - contextGapCount(reqs) -> {gapCount, gaps[], reqCount}
 - modelStats(reqs) -> {topModel, topCount, topShare, modelCount, total}
-- flowScoreStats(sessions, minReqs, rapidMs) -> {fragmentedDays, totalDays, avgScore, lowScoreRate}
-- adjacentPairCount(sessions, minLoc, maxGapMs) -> {count, avgLoc, avgGap}
+- flowScoreStats(sessions, minReqs, rapidMs) -> {fragmentedDays, totalDays, avgScore, lowScoreRate} (turns the user typed; a gap runs from the end of the assistant's work)
+- adjacentPairCount(sessions, minLoc, maxGapMs) -> {count, avgLoc, avgGap} (the next turn must be one the user typed)
 - mdRatioByWorkspace(sessions, minLoc, docLangs) -> {lowCount, totalWorkspaces, overallRatio, workspaces[]}
 - devcontainerStats(sessions, reqs) -> {terminalReqs, vscodeReqs, sandboxedTerminalReqs, totalTerminalReqs, terminalRate}
 - langExplorationWeeks(reqs) -> {weeksSinceNew, totalLangs, recentNew, totalWeeks}
