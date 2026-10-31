@@ -15,8 +15,9 @@ GitHub Release. Nothing is published to the VS Code Marketplace.
 
 ## Version policy
 
-- `major.minor.patch` only. The Marketplace and `vsce publish` reject pre-release suffixes such as
-  `-beta`, and the commit SHA belongs in the build stamp, not the version.
+- `major.minor.patch` only, without leading zeros (`0.10.0`, not `0.010.0`). The Marketplace and
+  `vsce publish` reject pre-release suffixes such as `-beta`, and the commit SHA belongs in the
+  build stamp, not the version.
 - Stay on `0.x` until the extension is published to the Marketplace. In `0.x`, bump the **minor**
   version for new features or behavior changes (including breaking ones) and the **patch** version
   for fix-only releases.

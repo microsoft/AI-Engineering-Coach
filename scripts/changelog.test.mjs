@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -95,6 +95,16 @@ describe('nextVersion', () => {
     expect(() => nextVersion('0.1.0', '0.2.0-beta.1')).toThrow('Expected patch, minor, major');
     expect(() => nextVersion('0.1.0', 'Minor')).toThrow('Expected patch, minor, major');
     expect(() => nextVersion('0.1.0-dev', 'minor')).toThrow('Expected a major.minor.patch version');
+  });
+
+  it('rejects versions with leading zeros, which are not Semantic Versioning and vsce refuses', () => {
+    for (const padded of ['0.02.0', '01.0.0', '0.1.00', '00.1.0']) {
+      expect(() => nextVersion('0.1.0', padded)).toThrow(`without leading zeros, got "${padded}"`);
+    }
+    expect(() => nextVersion('0.01.0', 'minor')).toThrow('without leading zeros, got "0.01.0"');
+    expect(() => isPreRelease('0.03.0')).toThrow('without leading zeros');
+    expect(nextVersion('9.0.0', '10.0.0')).toBe('10.0.0');
+    expect(nextVersion('0.9.9', '0.10.0')).toBe('0.10.0');
   });
 });
 
@@ -199,6 +209,7 @@ describe('package version files', () => {
     const nested = '{\n  "name": "x",\n  "engines": {\n    "version": "0.1.0"\n  },\n  "version": "0.1.0"\n}\n';
     expect(() => setManifestVersion(nested, '0.1.0', '0.2.0')).toThrow('Could not change only the top-level version');
     expect(() => setManifestVersion('{ "version": "0.1.0" }', '0.1.0', '0.2.0-beta')).toThrow('major.minor.patch');
+    expect(() => setManifestVersion('{ "version": "0.1.0" }', '0.1.0', '0.02.0')).toThrow('without leading zeros');
   });
 });
 
@@ -207,7 +218,7 @@ describe('this repository', () => {
   const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
 
   it('uses a Marketplace-compatible major.minor.patch version', () => {
-    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg.version).toMatch(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
   });
 
   it('documents the packaged version and keeps an Unreleased section', () => {
@@ -218,5 +229,24 @@ describe('this repository', () => {
   it('prints the release notes for the packaged version from the CLI', () => {
     const output = execFileSync(process.execPath, [join(ROOT, 'scripts', 'release.mjs'), 'notes', pkg.version], { encoding: 'utf8' });
     expect(output).toBe(`${extractReleaseNotes(changelog, pkg.version)}\n`);
+  });
+
+  it('refuses an invalid release version before changing any file', () => {
+    const files = ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(name => join(ROOT, name));
+    const before = files.map(file => readFileSync(file));
+    try {
+      let failure;
+      try {
+        execFileSync(process.execPath, [join(ROOT, 'scripts', 'release.mjs'), 'prepare', '0.02.0'], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        failure = err;
+      }
+      expect(failure?.status).toBe(1);
+      expect(failure?.stderr).toContain('without leading zeros, got "0.02.0"');
+      files.forEach((file, i) => expect(readFileSync(file).equals(before[i]), `${file} changed`).toBe(true));
+    } finally {
+      // Restore the files if a regression ever lets the command write them.
+      files.forEach((file, i) => { if (!readFileSync(file).equals(before[i])) writeFileSync(file, before[i]); });
+    }
   });
 });

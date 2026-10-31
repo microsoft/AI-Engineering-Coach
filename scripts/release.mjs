@@ -56,16 +56,17 @@ function prepare(args) {
     if (options[i] === '--date' && options[i + 1]) date = options[++i];
     else throw new Error(`Unknown option "${options[i]}"\n${USAGE}`);
   }
-  if (git(['status', '--porcelain', '--untracked-files=no'])) {
-    throw new Error('Commit or stash your changes first: release:prepare needs a clean working tree.');
-  }
   const manifestText = readFileSync(MANIFEST, 'utf8');
   const pkg = JSON.parse(manifestText);
+  // Validate everything and compute every file before writing any, so bad input or a failure
+  // leaves nothing half-done.
   const version = nextVersion(pkg.version, bump);
-  // Compute every file before writing any, so a failure leaves nothing half-done.
   const changelog = releaseUnreleased(readFileSync(CHANGELOG, 'utf8'), { version, date, repoUrl: repositoryUrl(pkg), hasTag });
   const manifest = setManifestVersion(manifestText, pkg.version, version);
   const lockfile = setLockfileVersion(readFileSync(LOCKFILE, 'utf8'), pkg.version, version);
+  if (git(['status', '--porcelain', '--untracked-files=no'])) {
+    throw new Error('Commit or stash your changes first: release:prepare needs a clean working tree.');
+  }
   writeFileSync(MANIFEST, manifest);
   writeFileSync(LOCKFILE, lockfile);
   writeFileSync(CHANGELOG, changelog);

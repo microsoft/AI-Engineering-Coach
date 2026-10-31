@@ -7,7 +7,8 @@
  * [Unreleased] notes into a dated release section, extract one release's notes), and the version
  * fields of package.json and package-lock.json. scripts/release.mjs does the file and git I/O. */
 
-const VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
+// Semantic Versioning major.minor.patch: numbers without leading zeros, which vsce requires.
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_REFERENCE = /^\[([^\]]+)\]:\s*\S/;
 
@@ -17,7 +18,7 @@ const LINK_REFERENCE = /^\[([^\]]+)\]:\s*\S/;
  */
 function parseVersion(version) {
   const match = VERSION.exec(version);
-  if (!match) throw new Error(`Expected a major.minor.patch version, got "${version}"`);
+  if (!match) throw new Error(`Expected a major.minor.patch version without leading zeros, got "${version}"`);
   return match.slice(1).map(Number);
 }
 
@@ -48,7 +49,7 @@ export function nextVersion(current, bump) {
   else if (bump === 'minor') next = `${major}.${minor + 1}.0`;
   else if (bump === 'patch') next = `${major}.${minor}.${patch + 1}`;
   else if (VERSION.test(bump)) next = bump;
-  else throw new Error(`Expected patch, minor, major, or a major.minor.patch version, got "${bump}"`);
+  else throw new Error(`Expected patch, minor, major, or a major.minor.patch version without leading zeros, got "${bump}"`);
   if (compareVersions(next, current) <= 0) throw new Error(`The new version ${next} must be greater than ${current}`);
   return next;
 }
