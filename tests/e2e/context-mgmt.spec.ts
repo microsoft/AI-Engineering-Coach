@@ -82,6 +82,40 @@ test.describe('Context Management', () => {
   });
 });
 
+test.describe('Context Management with reported context limits', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => { (window as Window & { mockReportedLimits?: boolean }).mockReportedLimits = true; });
+    await navigateToContextHealth(page);
+  });
+
+  test('labels utilization measured against reported limits and explains the difference', async ({ page }) => {
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-1"] .ctx-window-tag')).toHaveText('mixed limits');
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-2"] .ctx-window-tag')).toHaveCount(0);
+    await expect(page.locator('.ctx-window-note')).toContainText('Copilot CLI, Copilot App and Codex report their context limit');
+  });
+
+  test('shows a Copilot App session against the limit it reported', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(5);
+    const appRow = page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' });
+    await expect(appRow.locator('.ctx-window-tag')).toHaveText('reported limit');
+    await expect(appRow).toContainText('19.2%');
+    expect(await appRow.locator('svg').count()).toBeGreaterThan(0);
+
+    await appRow.locator('td').first().click();
+    const detail = page.locator('.ctx-session-chart-row');
+    await expect(detail).toContainText('context limit 968.0K (reported)');
+    await expect(page.locator('#ctxSessionTokenChart')).toBeVisible();
+  });
+
+  test('keeps older Copilot CLI builds without per-turn data on a dash', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    const olderRow = page.locator('.ctx-session-row', { hasText: 'GitHub Copilot CLI' });
+    await expect(olderRow.locator('.ctx-window-tag')).toHaveCount(0);
+    await expect(olderRow).toContainText('\u2014');
+  });
+});
+
 type CompositionMode = 'empty' | 'boundary' | 'boundary-empty' | false;
 type CompositionWindow = Window & { mockCompositionMode?: CompositionMode; workspaceSessionsRequests?: Record<string, unknown>[] };
 

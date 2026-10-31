@@ -502,6 +502,23 @@ function mockSessionTimeline(sessionId) {
   return { sessionId, harness: 'GitHub Copilot App', unit: 'calls', timeline: { calls: 120, bucketSize: 2, buckets }, cache: { reporting: 'per-call', main: cacheTotals(120, 9000000, 94.1, 5.8), subagents: cacheTotals(22, 900000, 95, 5), compaction: cacheTotals(1, 300000, 80, 2), breaks, omittedBreaks: 0 } };
 }
 
+/* A Copilot App session whose turns report their context limit (968K), with a compaction mid-session.
+ * Shown only when a test sets window.mockReportedLimits = true. */
+function mockReportedCliSession() {
+  const prompts = [42000, 96800, 151000, 230000, 310000, 420000, 70000, 118000, 165000, null, 205000, 248000];
+  const peaks = prompts.map((p, i) => (i === 6 ? 780000 : p));
+  const limits = prompts.map(p => (p == null ? null : 968000));
+  return {
+    sessionId: 's5', date: '2026-05-02', harness: 'GitHub Copilot App', requestCount: 12, requestsWithTokens: 11,
+    avgPromptTokens: 186000, maxPromptTokens: 420000, avgUtilization: 19.2, peakUtilization: 43.4, contextWindow: 968000,
+    compactionCount: 1, tokenCurve: prompts, saturation: 0, costEfficiency: null, verdict: 'degraded',
+    events: [{ type: 'compaction', requestIndex: 6, label: 'Compaction 780K\u219270K' }],
+    requestQueries: Array.from({ length: 12 }, (_, i) => `Turn ${i + 1}`),
+    hasPerRequestTokens: true, windowSource: 'reported', turnLimits: limits, turnPeaks: peaks,
+    composition: mockSessionCompositionCli(12),
+  };
+}
+
 function getMockData(method, params) {
   const labels30 = genLabels(30);
 
@@ -660,15 +677,17 @@ function getMockData(method, params) {
       const mode = window.mockCompositionMode;
       // 'boundary*': the only sessions in range continue past it, so utilization (keyed on last activity) is empty.
       const noSessions = mode === 'boundary' || mode === 'boundary-empty';
+      // Opt-in: a Copilot App session measured against the limit it reported (see mockReportedCliSession).
+      const reported = window.mockReportedLimits === true;
       const compositionTip = 'Tool definitions take 38% of your VS Code prompts and at least half of the prompt in 26% of requests. Turn off MCP servers and tools you don\u2019t need, or pick a smaller tool set, before you start a chat (changing them mid-session breaks the prompt cache).';
       return {
         overallScore: noSessions ? 0 : 74,
         estimatedContextWindow: 128000,
         thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
         workspaces: noSessions ? [] : [
-          { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null },
-          { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null },
-          { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null }
+          { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null, windowSource: reported ? 'mixed' : 'estimated' },
+          { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null, windowSource: 'estimated' },
+          { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null, windowSource: 'estimated' }
         ],
         trend: noSessions ? [] : [
           { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
@@ -696,7 +715,8 @@ function getMockData(method, params) {
         { sessionId: 's1', date: '2026-05-03', harness: 'Local Agent', requestCount: 28, requestsWithTokens: 28, avgPromptTokens: 38000, maxPromptTokens: 72000, avgUtilization: 30, peakUtilization: 56, contextWindow: 128000, compactionCount: 1, tokenCurve: Array.from({ length: 28 }, (_, i) => 2000 + i * 2500), saturation: 8, costEfficiency: null, verdict: 'optimal', events: [{ type: 'compaction', requestIndex: 12, label: 'Compaction (full)' }], requestQueries: Array.from({ length: 28 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true, composition: mockSessionCompositionVsCode(28) },
         { sessionId: 's2', date: '2026-05-03', harness: 'GitHub Copilot CLI', requestCount: 15, requestsWithTokens: 0, avgPromptTokens: 45000, maxPromptTokens: 60000, avgUtilization: 35, peakUtilization: 47, contextWindow: 128000, compactionCount: 0, tokenCurve: [], saturation: 0, costEfficiency: null, verdict: 'optimal', events: [], requestQueries: Array.from({ length: 15 }, (_, i) => `Turn ${i + 1}`), hasPerRequestTokens: false, composition: mockSessionCompositionCli(15) },
         { sessionId: 's3', date: '2026-05-03', harness: 'Local Agent', requestCount: 35, requestsWithTokens: 35, avgPromptTokens: 52000, maxPromptTokens: 108000, avgUtilization: 41, peakUtilization: 84, contextWindow: 128000, compactionCount: 2, tokenCurve: Array.from({ length: 35 }, (_, i) => 1800 + i * 3000), saturation: 18, costEfficiency: null, verdict: 'limited', events: [{ type: 'compaction', requestIndex: 8, label: 'Compaction (full)' }, { type: 'todo-complete', requestIndex: 20, label: 'Write tests' }], requestQueries: Array.from({ length: 35 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true },
-        { sessionId: 's4', date: '2026-05-02', harness: 'Claude Code', requestCount: 12, requestsWithTokens: 12, avgPromptTokens: 61000, maxPromptTokens: 90000, avgUtilization: 47, peakUtilization: 70, contextWindow: 128000, compactionCount: 0, tokenCurve: Array.from({ length: 12 }, (_, i) => 30000 + i * 5000), saturation: 10, costEfficiency: null, verdict: 'degraded', events: [], requestQueries: Array.from({ length: 12 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true }
+        { sessionId: 's4', date: '2026-05-02', harness: 'Claude Code', requestCount: 12, requestsWithTokens: 12, avgPromptTokens: 61000, maxPromptTokens: 90000, avgUtilization: 47, peakUtilization: 70, contextWindow: 128000, compactionCount: 0, tokenCurve: Array.from({ length: 12 }, (_, i) => 30000 + i * 5000), saturation: 10, costEfficiency: null, verdict: 'degraded', events: [], requestQueries: Array.from({ length: 12 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true },
+        ...(window.mockReportedLimits === true ? [mockReportedCliSession()] : [])
       ]
     }),
 

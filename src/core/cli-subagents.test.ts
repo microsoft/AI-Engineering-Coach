@@ -65,11 +65,15 @@ describe('SubagentRunTracker', () => {
     tracker.start(started('call-1', { agentType: 'explore', executionMode: 'sync' }), 1);
     tracker.complete(completed('call-1', { cancelled: true, totalTokens: 5_000 }), 1);
     tracker.complete(completed('call-orphan', { model: 'gpt-6.1-sol' }), 1);
+    tracker.complete(completed('call-orphan-custom', { agentName: 'my-private-agent' }), 1);
+    tracker.complete(completed('call-orphan-nameless', { agentName: undefined }), 1);
     const reqs = requests(2);
     tracker.attach(reqs);
     expect(reqs[1].subagentRuns).toMatchObject([
       { agentType: 'explore', mode: 'sync', cancelled: true, totalTokens: 5_000 },
-      { agentType: 'unknown', mode: null, model: 'gpt-6.1-sol' },
+      { agentType: 'research', mode: null, model: 'gpt-6.1-sol' },
+      { agentType: 'custom', mode: null },
+      { agentType: 'unknown', mode: null },
     ]);
   });
 

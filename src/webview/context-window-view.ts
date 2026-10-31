@@ -16,13 +16,13 @@ const WINDOW_HELP: Record<ContextWindowSource | 'mixed', string> = {
   mixed: 'Some sessions use the context limit the harness reported; others use an estimate from the largest prompt seen.',
 };
 
-export function windowSourceHelp(source: ContextWindowSource | 'mixed'): string {
-  return WINDOW_HELP[source];
+export function windowSourceHelp(source: ContextWindowSource | 'mixed' | undefined): string {
+  return WINDOW_HELP[source ?? 'estimated'];
 }
 
 /** Short tag shown after a utilization value whose window wasn't estimated. */
-export function windowTag(source: ContextWindowSource | 'mixed'): ComponentChildren {
-  if (source === 'estimated') return null;
+export function windowTag(source: ContextWindowSource | 'mixed' | undefined): ComponentChildren {
+  if (source !== 'reported' && source !== 'mixed') return null;
   return html`<span class="ctx-window-tag">${source === 'reported' ? 'reported limit' : 'mixed limits'}</span>`;
 }
 
@@ -55,6 +55,6 @@ export function turnTooltipLines(s: SessionContextDetail, index: number): string
 
 /** Footnote under the workspace table when any utilization uses a reported limit. */
 export function windowFootnote(workspaces: WorkspaceContextScore[]): ComponentChildren {
-  if (!workspaces.some(w => w.windowSource !== 'estimated')) return null;
+  if (!workspaces.some(w => w.windowSource === 'reported' || w.windowSource === 'mixed')) return null;
   return html`<p class="ctx-window-note">Copilot CLI, Copilot App and Codex report their context limit, so their utilization is measured against it. Other harnesses don\u2019t; their window is estimated from the largest prompt seen, which overstates utilization near the top.</p>`;
 }
