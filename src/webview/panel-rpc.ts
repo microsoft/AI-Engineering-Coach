@@ -789,6 +789,18 @@ const rpcHandlers: TypedRpcHandlers = {
     return a.getWorkspaceContextSessions(workspaceId, filter, params?.rangeMatch === 'requests' ? 'requests' : 'lastActivity');
   },
   getContextRangeAvailability: (a, _p, params) => a.getContextRangeAvailability(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
+  getPromptCache: (a, _p, params) => a.getPromptCache(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
+  getPromptCacheSessions: (a, _p, params) => {
+    const workspaceId = isString(params?.workspaceId) ? params.workspaceId : '';
+    if (!workspaceId) return { workspaceName: '', harness: null, sessions: [], total: 0 };
+    const harness = isString(params?.harness) && params.harness ? params.harness : undefined;
+    const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
+    return a.getPromptCacheSessions(workspaceId, harness, filter);
+  },
+  getSessionTimeline: (a, _p, params) => {
+    const sessionId = isString(params?.sessionId) ? params.sessionId : '';
+    return sessionId ? a.getSessionTimeline(sessionId) : null;
+  },
   getCalendarActivity: (a, _p, params) => a.getCalendarActivity(validateDateFilter(params)),
   getProjectOverview: (a, _p, params) => a.getProjectOverview(validateDateFilter(params)),
   getImageGallery: (a, _p, params) => a.getImageGallery(validateDateFilter(params)),

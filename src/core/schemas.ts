@@ -6,6 +6,8 @@
 import { z } from 'zod';
 import type { Session } from './types';
 import { warnCore } from './log';
+import { CACHE_MAX_BREAKS_PER_SESSION } from './constants';
+import { MAX_TIMELINE_BUCKETS } from './call-timeline';
 
 /* ---- Sub-schemas ---- */
 
@@ -79,6 +81,78 @@ export const SessionContextCompositionSchema = z.object({
   }).strict()),
 }).strict();
 
+/* ---- Prompt cache and call timeline (see types/prompt-cache-types.ts, types/call-timeline-types.ts) ---- */
+
+const tokenSchema = z.number().min(0);
+const modelNameSchema = z.string().max(64);
+const cacheBreakCauseSchema = z.enum(['compaction', 'model-switch', 'ttl-expired', 'reasoning-effort', 'tools-changed', 'system-prompt', 'mode-change', 'resume']);
+
+export const ModelCallRowSchema = z.object({
+  stream: z.enum(['main', 'subagent', 'compaction']),
+  model: modelNameSchema,
+  calls: z.number().int().min(0),
+  reasoningEffort: z.string().max(16).optional(),
+  input: tokenSchema,
+  cacheRead: tokenSchema,
+  cacheWrite: tokenSchema,
+  cost: tokenSchema.optional(),
+  missCost: tokenSchema.optional(),
+  ratedInput: tokenSchema.optional(),
+  ttlSeconds: tokenSchema.optional(),
+  cacheBreaks: z.number().int().min(0).optional(),
+}).strict();
+
+export const RequestPromptCacheSchema = z.object({
+  rows: z.array(ModelCallRowSchema).max(16),
+  coldStart: tokenSchema.optional(),
+  coldStartCost: tokenSchema.optional(),
+  rebuilt: tokenSchema.optional(),
+  rebuiltCost: tokenSchema.optional(),
+  returns: z.number().int().min(0).optional(),
+  expiredReturns: z.number().int().min(0).optional(),
+}).strict();
+
+export const CacheBreakSchema = z.object({
+  requestIndex: z.number().int().min(0),
+  callIndex: z.number().int().min(-1),
+  timestamp: z.number().nullable(),
+  model: modelNameSchema,
+  causes: z.array(cacheBreakCauseSchema).max(8),
+  inferred: z.array(cacheBreakCauseSchema).max(8).optional(),
+  confidence: z.enum(['logged', 'checkpoint', 'unattributed']),
+  rebuiltTokens: tokenSchema,
+  rebuiltCost: tokenSchema.optional(),
+  idleSeconds: tokenSchema.nullable(),
+  ttlSeconds: tokenSchema.nullable(),
+  initiator: z.enum(['user', 'agent']).nullable(),
+  autoModel: z.boolean().optional(),
+  segments: z.array(z.string().max(64)).max(6).optional(),
+  compactionTrigger: z.enum(['auto', 'manual']).optional(),
+}).strict();
+
+export const SessionPromptCacheSchema = z.object({
+  breaks: z.array(CacheBreakSchema).max(CACHE_MAX_BREAKS_PER_SESSION),
+  omittedBreaks: z.number().int().min(0).optional(),
+}).strict();
+
+/** Add new `CallTimelineBucket` fields here as well, or sessions carrying them fail validation. */
+export const CallTimelineSchema = z.object({
+  calls: z.number().int().min(0),
+  bucketSize: z.number().int().min(1),
+  buckets: z.array(z.object({
+    firstCall: z.number().int().min(0),
+    lastCall: z.number().int().min(0),
+    firstRequest: z.number().int().min(0),
+    lastRequest: z.number().int().min(0),
+    startTs: z.number().nullable(),
+    endTs: z.number().nullable(),
+    cacheCalls: z.number().int().min(0),
+    cacheRead: tokenSchema,
+    cacheWrite: tokenSchema,
+    uncached: tokenSchema,
+  }).strict()).max(MAX_TIMELINE_BUCKETS),
+}).strict();
+
 /* ---- SessionRequest ---- */
 
 export const SessionRequestSchema = z.object({
@@ -110,6 +184,7 @@ export const SessionRequestSchema = z.object({
   cacheWriteTokens: z.number().nullable(),
   compaction: CompactionEventSchema.nullable(),
   promptComposition: PromptCompositionSchema.optional(),
+  promptCache: RequestPromptCacheSchema.optional(),
   todoSnapshot: z.array(TodoItemSchema).nullable(),
   workType: z.string(),
   userEventId: z.string().optional(),
@@ -147,6 +222,8 @@ export const SessionSchema = z.object({
   requests: z.array(SessionRequestSchema),
   modelUsage: z.record(z.string(), ModelUsageSchema).optional(),
   contextComposition: SessionContextCompositionSchema.optional(),
+  callTimeline: CallTimelineSchema.optional(),
+  promptCache: SessionPromptCacheSchema.optional(),
   endReason: z.enum(['shutdown', 'active', 'aborted', 'unknown']).optional(),
   hasDevcontainer: z.boolean().optional(),
   customInstructionsBytes: z.number().optional(),

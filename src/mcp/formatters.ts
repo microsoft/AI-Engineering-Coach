@@ -10,7 +10,7 @@
  */
 
 import type { Analyzer } from '../core/analyzer';
-import type { ContextCompositionData, DateFilter } from '../core/types';
+import type { ContextCompositionData, DateFilter, PromptCacheData } from '../core/types';
 
 /* ---- helpers ---- */
 
@@ -481,11 +481,69 @@ function formatComposition(composition: ContextCompositionData) {
   };
 }
 
+/** Prompt-cache efficiency per harness and, where logged, why the cache broke. Percentages, not amounts. */
+export function formatPromptCache(data: PromptCacheData) {
+  const a = data.attribution;
+  return {
+    harnesses: data.harnesses.map(h => ({
+      harness: h.harness,
+      reported: h.reporting !== 'none',
+      granularity: h.reporting,
+      hitPct: h.all?.hitPct ?? null,
+      writtenPct: h.all?.writePct ?? null,
+      inputCostSavedPct: h.cost?.savedPct ?? null,
+      inputCostOnMissesPct: h.cost?.missCostPct ?? null,
+      breaksPer100Calls: h.breaksPer100,
+      requestsWithData: h.requestsWithData,
+      totalRequests: h.totalRequests,
+    })),
+    cacheBreaks: a ? {
+      harnesses: a.label,
+      breaks: a.breaks,
+      per100Calls: a.breaksPer100,
+      rebuiltTokens: a.rebuiltTokens,
+      rebuiltYouCanChangePct: a.controlPct.you,
+      rebuiltPartlyYoursPct: a.controlPct.partly,
+      causes: a.causes.slice(0, 6).map(c => ({ cause: c.key, who: c.control, breaks: c.breaks, rebuiltPct: c.pctOfRebuilt, inputCostPct: c.costPct })),
+      cacheMissOrigins: a.origins.map(o => ({ origin: o.origin, pct: o.pct, inputCostPct: o.costPct })),
+      cacheLifetimes: a.idle.ttlByModel.map(t => ({ model: t.model, seconds: t.ttlSeconds })),
+      returnsAfterExpiry: { expired: a.idle.expiredReturns, of: a.idle.returns },
+      medianMinutesSinceCacheRefreshAtExpiry: a.idle.medianIdleMinutes,
+    } : null,
+    tips: data.tips,
+  };
+}
+
+function formatConfigHealth(cfg: ReturnType<Analyzer['getConfigHealth']>) {
+  return {
+    overallScore: cfg.overallScore,
+    suggestions: cfg.suggestions,
+    agenticReadiness: {
+      score: cfg.agenticReadiness.score,
+      missingSignals: cfg.agenticReadiness.signals
+        .filter(s => !s.present)
+        .map(s => ({ label: s.label, detail: s.detail })),
+    },
+    workspaceSummary: topN(
+      [...cfg.workspaces].sort((a, b) => a.instructionQualityScore - b.instructionQualityScore),
+      5,
+    ).map(w => ({
+      workspace: w.workspaceName,
+      hasInstructions: w.hasInstructions,
+      hasPrompts: w.hasPrompts,
+      hasAgents: w.hasAgents,
+      qualityScore: w.instructionQualityScore,
+      staleContext: w.staleContext,
+      suggestions: w.suggestions.slice(0, 3),
+    })),
+  };
+}
+
 export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
   const ctx = analyzer.getContextManagement(f);
-  const cfg = analyzer.getConfigHealth(f);
 
   return {
+    promptCache: formatPromptCache(analyzer.getPromptCache(f)),
     contextManagement: {
       overallScore: ctx.overallScore,
       estimatedContextWindow: ctx.estimatedContextWindow,
@@ -508,27 +566,6 @@ export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
       })),
       composition: ctx.composition ? formatComposition(ctx.composition) : undefined,
     },
-    configHealth: {
-      overallScore: cfg.overallScore,
-      suggestions: cfg.suggestions,
-      agenticReadiness: {
-        score: cfg.agenticReadiness.score,
-        missingSignals: cfg.agenticReadiness.signals
-          .filter(s => !s.present)
-          .map(s => ({ label: s.label, detail: s.detail })),
-      },
-      workspaceSummary: topN(
-        [...cfg.workspaces].sort((a, b) => a.instructionQualityScore - b.instructionQualityScore),
-        5,
-      ).map(w => ({
-        workspace: w.workspaceName,
-        hasInstructions: w.hasInstructions,
-        hasPrompts: w.hasPrompts,
-        hasAgents: w.hasAgents,
-        qualityScore: w.instructionQualityScore,
-        staleContext: w.staleContext,
-        suggestions: w.suggestions.slice(0, 3),
-      })),
-    },
+    configHealth: formatConfigHealth(analyzer.getConfigHealth(f)),
   };
 }

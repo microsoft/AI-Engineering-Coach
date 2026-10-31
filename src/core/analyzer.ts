@@ -13,6 +13,7 @@ import {
   WorkflowOptimizationData, ConfigHealthData, FlowStateData, Workspace,
   CalendarActivityData, ProjectOverviewData, ContextManagementData, InsightsData,
   ParserCoverageData, ParserPreviewData, SessionRangeMatch,
+  PromptCacheData, PromptCacheSessionsData, SessionTimelineData,
 } from './types';
 import { DashboardAnalyzer } from './analyzer-dashboard';
 import { ProductionAnalyzer } from './analyzer-production';
@@ -23,6 +24,7 @@ import { WorkflowAnalyzer } from './analyzer-workflows';
 import { ConfigAnalyzer } from './analyzer-config';
 import { FlowAnalyzer } from './analyzer-flow';
 import { ContextAnalyzer } from './analyzer-context';
+import { PromptCacheAnalyzer } from './analyzer-prompt-cache';
 import { InsightsAnalyzer } from './analyzer-insights';
 import { ImageAnalyzer, ImageGalleryData } from './analyzer-images';
 import { CuriosityAnalyzer } from './analyzer-curiosity';
@@ -45,6 +47,7 @@ export class Analyzer {
   private readonly insights: InsightsAnalyzer;
   private readonly flow: FlowAnalyzer;
   private readonly context: ContextAnalyzer;
+  private readonly promptCache: PromptCacheAnalyzer;
   private readonly images: ImageAnalyzer;
   private readonly curiosity: CuriosityAnalyzer;
   private readonly sessions: Session[];
@@ -68,6 +71,7 @@ export class Analyzer {
     this.insights = new InsightsAnalyzer(sessions, elIdx, sharedMap);
     this.flow = new FlowAnalyzer(sessions, elIdx, sharedMap);
     this.context = new ContextAnalyzer(sessions, elIdx, sharedMap);
+    this.promptCache = new PromptCacheAnalyzer(sessions, elIdx, sharedMap);
     this.images = new ImageAnalyzer(sessions, elIdx, sharedMap);
     this.curiosity = new CuriosityAnalyzer(sessions, elIdx, sharedMap);
   }
@@ -200,6 +204,12 @@ export class Analyzer {
   } {
     return this.context.getContextRangeAvailability(f);
   }
+
+  getPromptCache(f?: DateFilter): PromptCacheData { return this.promptCache.getPromptCache(f); }
+  getPromptCacheSessions(workspaceId: string, harness?: string, f?: DateFilter): PromptCacheSessionsData {
+    return this.promptCache.getPromptCacheSessions(workspaceId, harness, f);
+  }
+  getSessionTimeline(sessionId: string): SessionTimelineData | null { return this.promptCache.getSessionTimeline(sessionId); }
 
   getCalendarActivity(f?: DateFilter): CalendarActivityData { return this.dashboard.getCalendarActivity(f); }
 

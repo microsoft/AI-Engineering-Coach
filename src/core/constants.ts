@@ -125,6 +125,18 @@ export const COMPOSITION_TOOL_HEAVY_PCT = 50;            // tool definitions ≥
 export const COMPOSITION_ROUNDING_TOLERANCE = 3;          // VS Code rounds each label; sums within ±3 points are noise
 export const COMPOSITION_TIP_MIN_SAMPLES = 10;            // min requests with composition before coaching tips fire
 
+/* ---- Prompt cache ---- */
+// A main-agent call breaks the cache when the previous call's prompt was at least CACHE_BREAK_MIN_PREFIX
+// tokens and at least max(CACHE_BREAK_MIN_LOST, CACHE_BREAK_MIN_LOST_SHARE × that prompt) of it wasn't
+// read from the cache. Validated on 241 local breaks: logged cache expiry preceded 146 of them.
+export const CACHE_BREAK_MIN_PREFIX = 20_000;
+export const CACHE_BREAK_MIN_LOST = 10_000;
+export const CACHE_BREAK_MIN_LOST_SHARE = 0.3;
+export const CACHE_MAX_BREAKS_PER_SESSION = 100;          // listed breaks per session; the rest are counted only
+export const CACHE_TIP_MIN_MAIN_CALLS = 50;               // min main-agent calls in range before cache tips fire
+export const CACHE_TIP_MIN_BREAKS = 3;                    // min breaks of a cause before it gets a tip
+export const CACHE_TIP_MIN_REBUILT_PCT = 10;              // min share of rebuilt tokens before a cause gets a tip
+
 /* ---- Token data quality cutoff ---- */
 export const TOKEN_DATA_AVAILABLE_FROM = '2026-04-01';
 

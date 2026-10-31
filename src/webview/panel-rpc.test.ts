@@ -8,7 +8,7 @@ import { Analyzer } from '../core/analyzer';
 import { createSession, createRequest } from '../core/parser-shared';
 import { detectCuriosity } from '../core/curiosity';
 import type { ParseResult } from '../core/cache';
-import type { WorkspaceContextSessionsData } from '../core/types';
+import type { PromptCacheData, PromptCacheSessionsData, SessionTimelineData, WorkspaceContextSessionsData } from '../core/types';
 import { loadSessionImages } from '../core/session-image-loader';
 import { generateRuleMarkdown, getRpcHandler, validateDateFilter, type RuleFeedback } from './panel-rpc';
 
@@ -31,6 +31,30 @@ describe('panel-rpc', () => {
   it('exposes handlers for the newer analyzer-backed methods', () => {
     expect(getRpcHandler('getInsights')).toBeTypeOf('function');
     expect(getRpcHandler('getWorkspaceContextSessions')).toBeTypeOf('function');
+    expect(getRpcHandler('getPromptCache')).toBeTypeOf('function');
+    expect(getRpcHandler('getPromptCacheSessions')).toBeTypeOf('function');
+    expect(getRpcHandler('getSessionTimeline')).toBeTypeOf('function');
+  });
+
+  it('validates Prompt Cache params and serves session timelines from memory', () => {
+    const promptCache = { rows: [{ stream: 'main' as const, model: 'claude-opus-5.5', calls: 3, input: 90_000, cacheRead: 80_000, cacheWrite: 10_000 }] };
+    const session = createSession({
+      sessionId: 'app', workspaceId: 'ws', workspaceName: 'Project', harness: 'GitHub Copilot App',
+      requests: [createRequest({ timestamp: new Date(2026, 9, 1, 12).getTime(), messageText: 'Fix it', responseText: 'Done', promptCache })],
+      promptCache: { breaks: [] },
+    });
+    const analyzer = new Analyzer([session], new Map());
+    const parsed: ParseResult = { sessions: [session], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    const call = (method: 'getPromptCache' | 'getPromptCacheSessions' | 'getSessionTimeline', params: unknown) => getRpcHandler(method)!(analyzer, parsed, params as never);
+
+    expect((call('getPromptCache', { filter: { fromDate: '2026-10-01', toDate: '2026-10-01' } }) as PromptCacheData).harnesses[0].all?.hitPct).toBe(88.9);
+    expect((call('getPromptCache', { filter: { fromDate: '2026-10-02' } }) as PromptCacheData).harnesses).toEqual([]);
+    expect(call('getPromptCacheSessions', { filter: {} })).toEqual({ workspaceName: '', harness: null, sessions: [], total: 0 });
+    expect((call('getPromptCacheSessions', { workspaceId: 'ws', harness: 'GitHub Copilot App' }) as PromptCacheSessionsData).sessions.map(s => s.sessionId)).toEqual(['app']);
+    expect((call('getPromptCacheSessions', { workspaceId: 'ws', harness: 'Claude' }) as PromptCacheSessionsData).total).toBe(0);
+    expect((call('getSessionTimeline', { sessionId: 'app' }) as SessionTimelineData).unit).toBe('requests');
+    expect(call('getSessionTimeline', { sessionId: 42 })).toBeNull();
+    expect(call('getSessionTimeline', { sessionId: 'missing' })).toBeNull();
   });
 
   it('matches workspace sessions by request overlap only when the caller asks for it', () => {

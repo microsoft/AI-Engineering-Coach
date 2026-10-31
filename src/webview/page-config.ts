@@ -10,6 +10,7 @@ import { TOKEN_DATA_AVAILABLE_FROM } from '../core/constants';
 import { rpc, COLORS, Chart, trackChart, destroyCharts } from './shared';
 import { html, render, StatCard, ComponentChildren } from './render';
 import { renderContextManagement } from './page-context-mgmt';
+import { renderPromptCache } from './page-prompt-cache';
 import { llmAvailable, llmUnavailableNote } from './capabilities';
 
 /* Harness colors */
@@ -30,14 +31,18 @@ interface ContextProvisionDetailRow {
 let currentProvisionRows: ContextProvisionDetailRow[] = [];
 
 /** Track the active sub-tab so we can restore it on re-render */
-let activeSubTab: 'config-quality' | 'context-mgmt' = 'config-quality';
+let activeSubTab: 'config-quality' | 'context-mgmt' | 'prompt-cache' = 'config-quality';
+
+/** Each Prompt Cache render; a response for an older one is dropped. */
+let promptCacheGeneration = 0;
 
 /** Track active range (days back) per sub-tab. Default 30 = 1 month. 0 = all time.
  *  Kept independent so context-mgmt's range filter (which auto-hides ranges
- *  with no token data) doesn't override config-quality's selection. */
-const activeRangeDays: Record<'config-quality' | 'context-mgmt', number> = {
+ *  with no token data) doesn't override the other tabs' selection. */
+const activeRangeDays: Record<'config-quality' | 'context-mgmt' | 'prompt-cache', number> = {
   'config-quality': 30,
   'context-mgmt': 30,
+  'prompt-cache': 30,
 };
 
 const ALL_RANGES: { days: number; label: string }[] = [
@@ -162,6 +167,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
     <div style=${tabBarStyle}>
       <button id="ctxSubTabConfig" class="ctx-sub-tab" data-tab="config-quality" style=${tabStyle(activeSubTab === 'config-quality')}>Context Quality</button>
       <button id="ctxSubTabMgmt" class="ctx-sub-tab" data-tab="context-mgmt" style=${tabStyle(activeSubTab === 'context-mgmt')}>Context Management</button>
+      <button id="ctxSubTabCache" class="ctx-sub-tab" data-tab="prompt-cache" style=${tabStyle(activeSubTab === 'prompt-cache')}>Prompt Cache</button>
     </div>
     <div class="cons-range-bar" id="ctxRangeBar" style="margin-top:12px;display:flex;align-items:center;gap:0;flex-wrap:wrap;">
       ${rangeButtons}
@@ -203,6 +209,9 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
 
   if (activeSubTab === 'context-mgmt') {
     await renderContextManagement(contentEl, effectiveFilter);
+  } else if (activeSubTab === 'prompt-cache') {
+    const generation = ++promptCacheGeneration;
+    await renderPromptCache(contentEl, effectiveFilter, () => generation === promptCacheGeneration && activeSubTab === 'prompt-cache' && contentEl.isConnected);
   } else {
     await renderConfigQuality(contentEl, effectiveFilter);
   }

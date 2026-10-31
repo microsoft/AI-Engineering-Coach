@@ -4,6 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 export * from './types/session-types';
+export * from './types/call-timeline-types';
+export * from './types/prompt-cache-types';
+export * from './types/session-timeline-types';
 export * from './types/curiosity-types';
 export * from './types/analytics-types';
 export * from './types/catalog-types';
