@@ -1,12 +1,12 @@
 ---
 title: "Context Health"
 weight: 30
-description: "Evaluate context quality, window management, and prompt caching"
+description: "Evaluate context quality, window management, prompt caching, and token types"
 ---
 
 # Context Health
 
-The Context Health page has three tabs: **Context Quality**, **Context Management**, and **Prompt Cache**. Together, they evaluate how well your workspaces are configured for AI-assisted development, how efficiently your coding sessions use the context window, and how much of that context the model reuses from its cache.
+The Context Health page has four tabs: **Context Quality**, **Context Management**, **Prompt Cache**, and **Token Types**. Together, they evaluate how well your workspaces are configured for AI-assisted development, how efficiently your coding sessions use the context window, how much of that context the model reuses from its cache, and where tokens go besides your prompts and the answers.
 
 ## Context Quality
 
@@ -54,7 +54,18 @@ The Context Management tab analyzes how efficiently your coding sessions use the
 ### Key Metrics
 
 - **Context Score** -- Overall efficiency rating (0-100)
-- **Compactions** -- Number of times the context window was auto-compacted because it ran out of space
+- **Compactions** -- Number of times the context window was compacted because it ran out of space. Every compaction counts, including several in one turn.
+
+### Reported and estimated context limits
+
+Utilization is a turn's context divided by the context window. Where the window comes from depends on the harness:
+
+- **Reported** -- Copilot CLI and the Copilot App log the context limit of every model call, and Codex logs the model's context window. A turn's context is the prompt of its last main-agent model call, including cached tokens, and it's measured against the limit reported for that turn.
+- **Estimated** -- VS Code, Claude Code, OpenCode, and Xcode don't log their limit. The window is estimated from the largest prompt seen, rounded up, which overstates utilization near the top.
+
+Utilization values in the workspace and session tables are tagged **reported limit** or **mixed limits** when they don't use an estimate. The adaptive thresholds for the verdicts are learned from sessions with an estimated window only, so adding reported sessions doesn't move the verdicts of your other harnesses.
+
+Copilot CLI and Copilot App turns count in the Context Score, the verdicts, saturation, and the utilization trend. Earlier versions left them out, because these harnesses logged no per-turn prompt size, so your score can change after you update. Older CLI builds that don't log per-call usage still show no utilization. Copilot CLI compacts automatically at about 80% of its limit, so its utilization rarely goes higher.
 
 ### Context Composition
 
@@ -121,14 +132,32 @@ A detailed table with per-session breakdowns for each workspace:
 | Column | Meaning |
 |---|---|
 | Score | Overall session health score |
-| Verdict | Optimal, Degraded, or Critical |
+| Verdict | Optimal, Degraded, or Limited |
 | Avg Tokens | Average context window token count |
-| Avg Util | Average context utilization percentage |
+| Avg Util | Average context utilization percentage, tagged when it uses a reported limit |
 | Saturation | How close the window gets to its limit |
-| Cost Eff. | Ratio of output to context consumed |
-| Compactions | Number of auto-compaction events |
+| Compactions | Number of compaction events |
+| Sessions | Sessions in the workspace |
 
 Click a workspace row to expand inline session-level details with per-session verdicts, token curves, prompt composition, and event counts.
+
+### Copilot CLI and Copilot App session timeline
+
+![Context Management session timeline](/screenshots/screen-context-management-timeline.png)
+
+Open a Copilot CLI or Copilot App session to load its call timeline: the same chart as the Prompt Cache tab, with context layers on top. In long sessions, a bar covers a group of consecutive model calls. Use the buttons above the chart to show or hide each layer:
+
+| Layer | What it shows | Shown by default |
+|---|---|---|
+| **Context** | The largest prompt in each bar, including cached tokens: how full the context window got | Yes |
+| **Limit and thresholds** | The limit Copilot reported, and the utilization at which a session counts as degraded or limited | Yes |
+| **Turn ends** | The context when each of your turns ended. Context Management scores utilization from these points | Yes |
+| **Compactions** | When the context was summarized, with its size before and after, and failed compactions | Yes |
+| **Truncated calls** | Model calls that stopped at the output-token limit | Yes |
+| **Output and reasoning** | Average output tokens per call and the part that was reasoning, on the right-hand axis | No |
+| **Cache tokens** and **Cache breaks** | The Prompt Cache tab's layers | No |
+
+**Turns as a table** lists each turn with its context at the end, largest prompt, limit, utilization, model calls, cache hit ratio, and compactions. A line under the chart sums up the session's token types. Sessions from other harnesses keep the per-request chart.
 
 ### Insights
 
@@ -226,4 +255,59 @@ Insights at the top of the tab apply these tips to your own numbers and quote th
 - Totals count the requests sent in the selected range, like Context Composition, and a break counts when its request is in the range. The session lists include every session with a request in the range, and their numbers cover the whole session.
 - Cost percentages use the prices logged with each call. Costs are added up in the logged price unit before the percentage is taken, so calls to pricier models weigh more. They describe the relative effect of caching, not what you're billed.
 - Claude Code, OpenCode, and Codex don't log what invalidated the cache, so they show efficiency only.
+- These figures are for your own coaching, not for evaluating anyone's performance.
+
+## Token Types
+
+![Token Types](/screenshots/screen-token-types.png)
+
+Besides your prompts and the answers, tokens and time go to thinking, to summarizing a full context, to sub-agents, and to answers cut off at the output limit. The Token Types tab shows them for the requests sent in the selected range, one harness at a time: harnesses log these figures differently, so they're never pooled. When several harnesses have data, pick one above the figures.
+
+### Key figures
+
+- **Reasoning** -- The share of output tokens the model spent reasoning. Reasoning tokens are part of the output and billed as output.
+- **Compaction** -- The input of the compaction calls as a share of main-agent input. Without per-call usage, the number of compactions.
+- **Sub-agents** -- Sub-agent tokens as a share of all tokens. Without per-call usage, their total.
+- **Truncated calls** -- Model calls that stopped at the output-token limit, so their answer was cut off.
+- **Latency** -- The median time to the first token for the model with the most calls.
+
+A figure a harness doesn't log shows **Not reported**, never zero. The sections below the figures add detail:
+
+- **Reasoning share of output** -- For the main agent and sub-agents, and by reasoning effort.
+- **Sub-agent tokens by type** -- Runs and tokens for each built-in sub-agent type, such as research, code-review, and explore. Your own agents are counted as custom; their names aren't stored.
+- **Compaction overhead** -- Automatic and failed compactions, the average context before and after, the share removed, and the tokens and model time of the compaction calls.
+- **Truncated calls** -- Truncated calls out of all calls, and calls the content filter stopped.
+- **Latency by model** -- First-token time and call duration, median and 90th percentile, per model.
+
+The **What each harness reports** table shows, for every harness with requests in the range, which figures it logs.
+
+#### Where the data comes from
+
+| Harness | Source | What you get |
+|---|---|---|
+| GitHub Copilot App and Copilot CLI | `session.usage_record`, `session.compaction_complete`, and `subagent.started` and `subagent.completed` in `events.jsonl` | All five. Reasoning, truncation, and latency need per-call usage, which older builds don't log. Compactions and sub-agent runs come from every build that logs them |
+| Codex | `token_count` events | Reasoning, from the session's reasoning output tokens. No split by effort |
+| Claude Code | `stop_reason` on each API response | Truncated calls, counting each response once. Thinking is billed as output and not reported separately |
+| OpenCode | `finish` on each assistant message | Truncated calls. Its reasoning count depends on the model provider, so it isn't compared |
+| VS Code, Xcode | Not logged | Shown as "Not reported". Request response times are under [Activity Patterns](/measure/patterns/) |
+
+Token types hold only token counts, durations, reasoning effort, model names, and sub-agent types. Prompts, summaries, checkpoint paths, tool names, and custom agent names are never stored.
+
+#### How to act on it
+
+GitHub's [guide to optimizing AI usage](https://docs.github.com/en/copilot/tutorials/optimize-ai-usage) maps to these figures:
+
+- **High reasoning share** -- Use a lower reasoning effort for routine edits and questions, and keep high effort for hard problems. Compare the effort rows to see what each level costs in your own sessions.
+- **Frequent automatic compaction** -- Run `/compact` yourself at a natural breakpoint, or start a new session between unrelated tasks, so you choose what's kept.
+- **Heavy sub-agent use** -- Sub-agent transcripts stay out of your main context, but their tokens still count. Pick a smaller model for routine sub-agent work.
+- **Truncated calls** -- Ask for smaller steps, such as one file or one function at a time.
+
+Insights at the top of the tab apply these tips to your own numbers.
+
+#### Caveats
+
+- Sub-agent tokens are what Copilot reported when each run finished: input, including cached tokens, plus output. They're counted for the turn that launched the run, also when it finished later. Runs that were still going aren't counted.
+- The shares for compaction and sub-agents count only turns that log per-call usage, where the main agent's tokens are known.
+- Latency percentiles use up to 128 evenly spaced calls per model and turn, and pool the main agent and sub-agents for each model.
+- Only tokens and ratios are shown. AI credits aren't.
 - These figures are for your own coaching, not for evaluating anyone's performance.
