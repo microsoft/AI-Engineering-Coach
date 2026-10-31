@@ -144,6 +144,14 @@ describe('runInlineTests: timestamps, humanTurn and string values', () => {
     expect(failures(runInlineTests(probe))).toEqual([]);
   });
 
+  it('keeps escaped double quotes and backslashes in single-quoted strings', () => {
+    const probe = rule('requests', 'messageLength > 0', 'count > 0', [
+      String.raw`{messageText: 'say \"hi\"'} -> triggered`,
+      String.raw`{messageText: 'a \\ b'} -> triggered`,
+    ]);
+    expect(probe.tests.map(test => test.input)).toEqual([{ messageText: 'say "hi"' }, { messageText: 'a \\ b' }]);
+  });
+
   it('keeps colons and quotes inside string values', () => {
     const probe = rule('requests', 'messageLength > 0', 'count > 0', [
       String.raw`{messageText: 'see http://x.test: it\'s "ok"', timestamp: "2026-01-17T02:00:00", "workType": "bug"} -> triggered`,

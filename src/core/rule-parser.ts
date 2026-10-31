@@ -383,7 +383,7 @@ function parseTestFixtures(body: string): Array<{ input: Record<string, unknown>
     try {
       // Quote bare keys and single-quoted strings; string contents such as "02:00" stay as written
       const strict = jsonPart.replaceAll(/"(?:[^"\\]|\\.)*"|'((?:[^'\\]|\\.)*)'|(\w+)\s*:/g, (match, single?: string, key?: string) =>
-        key === undefined ? (single === undefined ? match : `"${single.replaceAll('\\\'', '\'').replaceAll('"', '\\"')}"`) : `"${key}":`);
+        key === undefined ? (single === undefined ? match : `"${single.replaceAll(/\\.|"/g, s => (s === '"' ? '\\"' : s === '\\\'' ? '\'' : s))}"`) : `"${key}":`);
       const input = JSON.parse(strict) as Record<string, unknown>;
       tests.push({ input, expect: expectPart });
     } catch { /* skip unparseable lines */ }
