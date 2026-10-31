@@ -202,3 +202,26 @@ describe('Claude Code sub-agent and Context Management context', () => {
     });
   });
 });
+
+describe('Claude Code turns without a call of their own', () => {
+  it('keep their sub-agents\u2019 tokens but no context, so their prompts aren\u2019t taken for the turn\u2019s context', () => {
+    withProject({
+      [`${SESSION}.jsonl`]: [
+        user('delegate', '2026-10-28T10:00:00Z'),
+        block('msg_s1', '2026-10-28T10:00:01Z', B, SIDECHAIN),
+        block('msg_s2', '2026-10-28T10:00:02Z', C, SIDECHAIN),
+        user('continue', '2026-10-28T10:01:00Z'),
+        block('msg_m', '2026-10-28T10:01:01Z', A),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir)[0].sessions;
+      const [delegated, own] = sessions[0].requests;
+      expect(delegated.promptTokens).toBe(promptOf(B) + promptOf(C));
+      expect(delegated.contextUsage).toEqual({ lastPromptTokens: 0, peakPromptTokens: 0, contextLimit: null, calls: 0 });
+      expect(requestContextTokens(delegated)).toBe(0);
+      expect(own.contextUsage).toMatchObject({ lastPromptTokens: promptOf(A), calls: 1 });
+      const [workspace] = new Analyzer(sessions).getContextManagement().workspaces;
+      expect(workspace.maxPromptTokens).toBe(promptOf(A));
+    });
+  });
+});

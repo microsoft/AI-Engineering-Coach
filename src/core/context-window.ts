@@ -14,10 +14,12 @@
 import type { CompactionEvent, ContextWindowSource, Session, SessionRequest } from './types';
 import { CONTEXT_WINDOW_DEFAULT } from './constants';
 
-/** Prompt tokens of the request's last model call; 0 when not recorded. */
+/** Prompt tokens of the request's last model call; 0 when not recorded, or when the turn made no call of its own
+ *  (`contextUsage.calls` 0: its prompt tokens are its sub-agents'). */
 export function requestContextTokens(request: SessionRequest): number {
-  const last = request.contextUsage?.lastPromptTokens;
-  if (last != null && last > 0) return last;
+  const usage = request.contextUsage;
+  if (usage && usage.lastPromptTokens > 0) return usage.lastPromptTokens;
+  if (usage?.calls === 0) return 0;
   return request.promptTokens != null && request.promptTokens > 0 ? request.promptTokens : 0;
 }
 

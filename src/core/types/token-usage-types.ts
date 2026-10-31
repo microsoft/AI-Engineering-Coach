@@ -20,7 +20,8 @@ export interface TurnContextUsage {
   /** Context limit the harness reported for the turn's last call (Copilot CLI `maxPromptTokens`,
    *  Codex `model_context_window`); `null` when it wasn't reported (Claude Code, OpenCode). */
   contextLimit: number | null;
-  /** Main-agent model calls in the turn. */
+  /** Main-agent model calls in the turn. 0 when every call of the turn was a sub-agent's (Claude Code), so the
+   *  turn's own context is unknown and its other fields are 0. */
   calls: number;
 }
 

@@ -30,6 +30,10 @@ describe('token-usage fields on SessionRequest', () => {
       subagentRuns: [RUN],
     }));
     expect(parsed.success).toBe(true);
+    // A turn whose calls were all sub-agent calls has no context of its own.
+    const subagentsOnly = { lastPromptTokens: 0, peakPromptTokens: 0, contextLimit: null, calls: 0 };
+    expect(SessionRequestSchema.safeParse(request({ contextUsage: subagentsOnly })).success).toBe(true);
+    expect(SessionRequestSchema.safeParse(request({ contextUsage: { ...subagentsOnly, calls: -1 } })).success).toBe(false);
   });
 
   it('rejects unexpected keys, unknown agent types and oversized lists', () => {
