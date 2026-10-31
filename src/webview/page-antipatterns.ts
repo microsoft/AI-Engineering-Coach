@@ -425,7 +425,7 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
           </div>
           <div class="rule-form-field">
             <label>Examples Template</label>
-            <input type="text" id="rf-examples" placeholder=${"\"{{message}}...\""} />
+            <textarea id="rf-examples" rows="2" placeholder=${"\"{{message}}...\""}></textarea>
           </div>
           <div class="rule-form-field">
             <label>Thresholds <span class="muted">(key: value, one per line)</span></label>

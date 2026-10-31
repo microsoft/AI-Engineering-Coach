@@ -156,6 +156,11 @@ describe('Rule Editor form with every built-in rule', () => {
       expect(formToMarkdown(page)).toBe(lf.replace(/^name: (.*)$/m, (_line, value: string) => `name: ${value.trim()} (edited)`));
     }
   });
+
+  it.each(BUILT_IN_RULES)('shows every field of $id as it is in the rule', ({ lf }) => {
+    markdownToForm(page, toCrlf(lf));
+    expect(formValues(page)).toEqual(readRuleFields(lf));
+  });
 });
 
 describe('Rule Editor form', () => {
@@ -184,6 +189,15 @@ describe('Rule Editor form', () => {
     const lf = builtIn('frustration-signals');
     markdownToForm(form, toCrlf(lf));
     expect(formToMarkdown(form)).toBe(lf);
+  });
+
+  it('keeps the line breaks of multi-line examples that are edited', () => {
+    const lf = builtIn('no-plan-mode');
+    markdownToForm(page, toCrlf(lf));
+    const examples = input(page, 'rf-examples');
+    expect(examples.value.split('\n')).toHaveLength(3);
+    examples.value += '\nUse plan mode for refactors';
+    expect(parseRule(formToMarkdown(page))?.exampleTemplate).toBe(`${parseRule(lf)!.exampleTemplate}\nUse plan mode for refactors`);
   });
 });
 
