@@ -22,6 +22,7 @@ import { CliCacheTracker } from './prompt-cache-cli';
 import { uncachedTokens } from './prompt-cache-usage';
 import { addTurnCompaction, readCliCompaction } from './cli-compaction';
 import { SubagentRunTracker } from './cli-subagents';
+import { TurnContextAccumulator } from './cli-turn-context';
 import { EditLocIndex } from './edit-loc-diff';
 import {
   FileEditLocMap,
@@ -112,6 +113,10 @@ interface CLIParseState {
   cache: CliCacheTracker;
   /** Sub-agent runs, attributed to the turn that launched them when the session is finalized. */
   subagents: SubagentRunTracker;
+  /** Main-agent context of the turn being built (`SessionRequest.contextUsage`). */
+  context: TurnContextAccumulator;
+  /** Main-agent calls logged so far: the index of the next call in the call timeline. */
+  mainCalls: number;
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -242,10 +247,12 @@ function flushTurn(state: CLIParseState): void {
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
 
-/** Attach the turn's prompt-cache usage and composition (deferred until a system-prompt size is known). */
+/** Attach the turn's prompt-cache usage, context and composition (deferred until a system-prompt size is known). */
 function attachTurnUsage(state: CLIParseState, turn: TurnState, request: SessionRequest): void {
   const promptCache = state.cache.takeRequest();
   if (promptCache) request.promptCache = promptCache;
+  const contextUsage = state.context.take();
+  if (contextUsage) request.contextUsage = contextUsage;
   if (turn.usage.calls > 0) {
     if (state.systemTokens == null) state.pendingCompositions.push({ request, usage: turn.usage });
     else attachComposition(request, turn.usage, state.systemTokens);
@@ -274,8 +281,8 @@ function eventTime(ev: CLIEvent): number | null {
   return Number.isFinite(ts) ? ts : null;
 }
 
-/** One model call: read it once, then feed the call timeline, the prompt-cache tracker and the turn's
- *  composition. Records logged before the first prompt are taken by the first turn. */
+/** One model call: read it once, then feed the call timeline, the prompt-cache tracker, the turn's context
+ *  and the turn's composition. Records logged before the first prompt are taken by the first turn. */
 function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
   const call = readCliModelCall(ev.data || {}, eventTime(ev), state.currentModelId);
   if (!call) return;
@@ -287,9 +294,16 @@ function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
       cacheRead: call.cacheReadTokens,
       cacheWrite: call.cacheWriteTokens,
       uncached: uncachedTokens({ input: call.inputTokens, cacheRead: call.cacheReadTokens, cacheWrite: call.cacheWriteTokens }),
+      promptTokens: call.inputTokens,
+      contextLimit: call.maxPromptTokens,
+      outputTokens: call.outputTokens,
+      reasoningTokens: call.reasoningTokens,
+      truncated: call.finishReason === 'length',
     })
     : null;
+  if (callIndex != null) state.mainCalls = callIndex + 1;
   state.cache.onCall(call, callIndex, state.requests.length);
+  state.context.addCall(call);
   addCompositionUsage(state.turn, call);
 }
 
@@ -519,9 +533,11 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
 function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState): void {
   state.cache.onCompaction(data);
   setSystemTokens(state, data.systemTokens);
+  const event = readCliCompaction(data);
+  state.context.addLimit(event.tokenLimit);
   const turn = state.turn;
   if (!turn) return;
-  const event = readCliCompaction(data);
+  if (state.mainCalls > 0) event.atCall = state.mainCalls;
   addTurnCompaction(turn.compactions, event);
   turn.compaction ??= event;
 }
@@ -644,6 +660,8 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     timeline: new CallTimelineBuilder(),
     cache: new CliCacheTracker(),
     subagents: new SubagentRunTracker(),
+    context: new TurnContextAccumulator(),
+    mainCalls: 0,
   };
 }
 
