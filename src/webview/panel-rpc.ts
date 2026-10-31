@@ -522,7 +522,7 @@ Switch to Plan mode in the mode picker before starting large features
 # Detection Logic
 \\\`\\\`\\\`detect
 scan: requests
-match: matches(harness, "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)") AND (agentMode == "agent" OR agentName != "")
+match: matches(harness, "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)") AND NOT matches(agentMode, "(?i)^(ask|edit|chat|plan)?$")
 aggregate: count
 planLoggedReqs: countWhere(all, "harness", "matches", "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)")
 agentRatio: count / planLoggedReqs

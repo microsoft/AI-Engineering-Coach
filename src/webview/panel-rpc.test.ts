@@ -101,7 +101,7 @@ describe('rule evaluation RPCs', () => {
   });
 
   it("runs a built-in rule's inline # Tests", () => {
-    expect(call('runRuleTests', { ruleId: 'no-plan-mode' })).toMatchObject({ passed: 10, total: 10 });
+    expect(call('runRuleTests', { ruleId: 'no-plan-mode' })).toMatchObject({ passed: 15, total: 15 });
     expect(call('runRuleTests', { ruleId: 'abandon-sessions' })).toMatchObject({ error: 'No test cases found in rule' });
   });
 });

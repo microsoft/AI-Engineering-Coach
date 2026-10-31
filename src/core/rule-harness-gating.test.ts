@@ -58,6 +58,21 @@ describe('no-plan-mode', () => {
     }
   });
 
+  it('counts agent, autopilot, build and custom-agent requests as agentic, not Ask or Edit', () => {
+    // VS Code keeps the participant name on Ask requests, so agentName can't tell agentic use apart.
+    expect(detect([session('Local Agent', requests(40, { ...vscodeAgent, agentMode: 'ask' }))], 'no-plan-mode')).toBeUndefined();
+    expect(detect([session('Local Agent', requests(40, { ...vscodeAgent, agentMode: 'edit' }))], 'no-plan-mode')).toBeUndefined();
+
+    const mixed = [session('Local Agent', [...requests(30, { ...vscodeAgent, agentMode: 'ask' }), ...requests(15, vscodeAgent)])];
+    expect(detect(mixed, 'no-plan-mode')?.occurrences).toBe(15);
+    expect(emission(mixed, 'no-plan-mode')).toMatchObject({ count: 15, total: 45 });
+    const askHeavy = [session('Local Agent', [...requests(40, { ...vscodeAgent, agentMode: 'ask' }), ...requests(10, vscodeAgent)])];
+    expect(detect(askHeavy, 'no-plan-mode')).toBeUndefined();
+
+    expect(detect([session('Local Agent', requests(40, { ...vscodeAgent, agentMode: 'Reviewer' }))], 'no-plan-mode')?.occurrences).toBe(40);
+    expect(detect([session('GitHub Copilot CLI', requests(40, { ...cliAgent, agentMode: 'autopilot' }))], 'no-plan-mode')?.occurrences).toBe(40);
+  });
+
   it('fires for Copilot CLI and OpenCode, whose logs record plan mode', () => {
     expect(detect([session('GitHub Copilot CLI', requests(35, cliAgent))], 'no-plan-mode')?.occurrences).toBe(35);
     expect(detect([session('OpenCode', requests(35, { agentName: 'build', agentMode: 'build' }))], 'no-plan-mode')?.occurrences).toBe(35);
