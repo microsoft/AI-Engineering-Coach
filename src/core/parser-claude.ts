@@ -23,6 +23,8 @@ import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDe
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
+import { markNonHuman } from './human-turns';
+import { claudeNonHumanKind } from './parser-turn-kinds';
 import {
   FileEditLocMap,
   mergeRequestEditLoc,
@@ -833,6 +835,8 @@ export function parseClaudeSessionFile(
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);
+    const nonHumanKind = claudeNonHumanKind(lines, i);
+    if (nonHumanKind) markNonHuman(request, nonHumanKind);
     requests.push(request);
     i = assistantData.nextIndex;
   }

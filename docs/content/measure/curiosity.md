@@ -215,9 +215,13 @@ and it does not change session logs.
 Before analysis, the parser removes fenced code, quoted text, URLs, and
 harness context blocks (tags in `snake_case` or `kebab-case`). A replayed
 transcript with `User:` and `Assistant:` labels counts only its latest user
-turn. Turns that a harness marks as agent, system, sidechain, compaction
-summary, or relayed from another session (a `from_*` sender field) are not
-human turns. Harness prompts without such markers count as human turns.
+turn. Turns that the harness logged as sent by something other than you are
+not human turns: another agent, a skill, the harness itself, autopilot, another
+session (a `from_*` or `sender_*` sender field, or a VS Code delegation), a
+parent agent (Claude Code sidechain transcripts, Codex sub-agent sessions,
+OpenCode child sessions), harness-written meta lines, compaction summaries, and
+command output. Activity Patterns and the time-based rules leave out the same
+turns. Harness prompts without such markers count as human turns.
 Inline code identifiers inside prose questions are retained; standalone code
 and quoted or code-formatted questions are still excluded.
 

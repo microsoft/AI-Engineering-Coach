@@ -75,6 +75,7 @@ describe('stripSessionsForMemory', () => {
     const originalResponseLength = request.responseLength;
     const originalWorkType = request.workType;
     request.webDomains = ['docs.python.org'];
+    request.nonHumanKind = 'autopilot';
 
     stripSessionsForMemory(sessions);
 
@@ -82,6 +83,7 @@ describe('stripSessionsForMemory', () => {
     expect(request.responseLength).toBe(originalResponseLength);
     expect(request.workType).toBe(originalWorkType);
     expect(request.webDomains).toEqual(['docs.python.org']);
+    expect(request.nonHumanKind).toBe('autopilot');
     expect(request.aiCode).toEqual([]);
     expect(request.userCode).toEqual([]);
   });

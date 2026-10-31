@@ -373,7 +373,8 @@ export function createRequest(overrides: Partial<SessionRequest> & Pick<SessionR
     userCode: overrides.userCode ?? extractCodeBlocks(textForCodeScan(rawMsg)),
     aiCode: overrides.aiCode ?? extractCodeBlocks(textForCodeScan(rawResp)),
     workType: overrides.workType || classifyWorkType(msg),
-    curiosity: overrides.curiosity ?? curiosityDetector?.(rawMsg),
+    // Curiosity leaves out turns the user didn't type.
+    curiosity: overrides.curiosity ?? (overrides.nonHumanKind ? { kind: 'excluded', excerpts: [] } : curiosityDetector?.(rawMsg)),
     answerEvidence: overrides.answerEvidence ?? (
       rawResp.trim() && !overrides.isCanceled && overrides.endState !== 'pending' && overrides.endState !== 'errored'
         ? 'legacy' : 'missing'

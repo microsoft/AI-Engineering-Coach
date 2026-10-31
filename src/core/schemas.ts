@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import type { Session } from './types';
 import { warnCore } from './log';
+import { NON_HUMAN_KINDS } from './human-turns';
 
 /* ---- Sub-schemas ---- */
 
@@ -82,6 +83,7 @@ export const SessionRequestSchema = z.object({
   answerEvidence: z.enum(['final', 'legacy', 'missing']).optional(),
   investigationDelegations: z.array(z.enum(['research', 'explore'])).max(2).optional(),
   webDomains: z.array(z.string()).optional(),
+  nonHumanKind: z.enum(NON_HUMAN_KINDS).optional(),
   curiosity: z.union([
     z.object({ kind: z.enum(['excluded', 'unscanned']), excerpts: z.array(z.string()).max(0) }),
     z.object({
