@@ -62,3 +62,12 @@ Request rows also carry their session's `harness`, so a rule can count only requ
 ```
 match: startsWith(harness, "Local Agent") AND customInstructions.length == 0
 ```
+
+Request rows also carry `humanTurn`: `true` when you typed the turn, and `false` when the harness logged that another agent, autopilot, a parent agent or the harness itself sent it. It's read-only and derived from what each parser recorded, so a message that is only code, a URL or a quote still counts as typed. A rule about your own working hours keys off it, and a ratio should count only typed prompts in its total too:
+
+```
+match: humanTurn == true AND (dayOfWeek(timestamp) == 0 OR dayOfWeek(timestamp) == 6)
+aggregate: ratio
+typedReqs: countWhere(all, "humanTurn", "==", true)
+emitTotal: typedReqs
+```

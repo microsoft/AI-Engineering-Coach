@@ -54,7 +54,10 @@ messageText, messageLength, timestamp, totalElapsed, modelId, agentMode, agentNa
 slashCommand, referencedFiles (array), customInstructions (array), skillsUsed (array),
 toolsUsed (array), toolConfirmations (array), aiCode (array of {language, loc}),
 userCode (array), cancelled (boolean), sessionId, workspaceName,
-harness (the request's session harness, e.g. "Local Agent" for VS Code)
+harness (the request's session harness, e.g. "Local Agent" for VS Code),
+humanTurn (boolean: false when an agent, autopilot, the harness or a parent agent sent the turn;
+use humanTurn == true for time-of-day and weekday rules, and count the denominator with
+countWhere(all, "humanTurn", "==", true) as emitTotal)
 
 ## Available Row Fields (sessions)
 sessionId, workspaceName, requestCount, requests (array), harness, startTime, endTime,

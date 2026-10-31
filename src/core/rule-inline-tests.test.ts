@@ -121,7 +121,7 @@ describe('runInlineTests', () => {
   });
 });
 
-describe('runInlineTests: timestamps and string values', () => {
+describe('runInlineTests: timestamps, humanTurn and string values', () => {
   it('reads a string timestamp as a local date-time, whatever the time zone', () => {
     const probe = rule('requests', 'hour(timestamp) == 2 AND dayOfWeek(timestamp) == 6', 'count > 0', [
       '{timestamp: "2026-01-17T02:00:00"} -> triggered',
@@ -130,6 +130,17 @@ describe('runInlineTests: timestamps and string values', () => {
       '{} -> clean',
     ]);
     expect(probe.tests[0].input).toEqual({ timestamp: '2026-01-17T02:00:00' });
+    expect(failures(runInlineTests(probe))).toEqual([]);
+  });
+
+  it('exposes humanTurn on request rows: false for a marked turn or a line that sets it, true otherwise', () => {
+    const probe = rule('requests', 'humanTurn == false', 'count > 0', [
+      '{nonHumanKind: "autopilot"} -> triggered',
+      '{nonHumanKind: "subagent", humanTurn: true} -> triggered',
+      '{humanTurn: false} -> triggered',
+      '{} -> clean',
+      '{humanTurn: true} -> clean',
+    ]);
     expect(failures(runInlineTests(probe))).toEqual([]);
   });
 

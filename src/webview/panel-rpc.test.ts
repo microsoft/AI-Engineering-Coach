@@ -215,3 +215,32 @@ describe('generateRuleMarkdown failures', () => {
     await expect(generateRuleMarkdown(ask)).rejects.toBe(unavailable);
   });
 });
+
+describe('humanTurn on request rows', () => {
+  const at = Date.parse('2026-09-30T12:00:00Z');
+  const sessions = [createSession({
+    sessionId: 's', workspaceId: 'ws', workspaceName: 'Project', harness: 'GitHub Copilot App',
+    requests: (['typed', 'typed', 'agent', 'typed', 'autopilot'] as const).map((kind, index) => createRequest({
+      requestId: `r${index}`, timestamp: at + index, messageText: 'Refactor the parser', responseText: '',
+      nonHumanKind: kind === 'typed' ? undefined : kind,
+    })),
+  })];
+  const analyzer = new Analyzer(sessions, new Map());
+  const parsed: ParseResult = { sessions, workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+  const call = (method: string, params: Record<string, unknown>) => getRpcHandler(method)!(analyzer, parsed, params);
+  const automatedRule = [
+    '---', 'id: automated-turns', 'name: Automated turns', 'group: session-hygiene', 'severity: low', 'scope: requests', '---',
+    '', '# Detection Logic', '```detect', 'scan: requests', 'match: humanTurn == false', 'check: count >= 2', '```',
+  ].join('\n');
+
+  it('lets the Playground and Test Rule read it', () => {
+    expect(call('evaluateExpression', { expr: 'humanTurn == true', scope: 'requests' })).toMatchObject({ matched: 3, total: 5 });
+    expect(call('testRuleLive', { markdown: automatedRule })).toMatchObject({ ok: true, triggered: true, occurrences: 2, total: 5 });
+  });
+
+  it('shows it in the Data Explorer', () => {
+    expect(call('getDataExplorer', { field: 'humanTurn' })).toMatchObject({ count: 5, trueCount: 3, falseCount: 2, trueRate: 60 });
+    const { fields } = call('getDataExplorerFields', {}) as { fields: Array<{ name: string; type: string; fillRate: number; total: number }> };
+    expect(fields.find(field => field.name === 'humanTurn')).toMatchObject({ type: 'boolean', fillRate: 100, total: 5 });
+  });
+});

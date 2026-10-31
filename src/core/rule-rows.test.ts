@@ -22,8 +22,24 @@ describe('toRuleRequestRows', () => {
     const rows = toRuleRequestRows(reqs, [claude, vscode]);
     expect(rows.map(row => [row.requestId, row.harness])).toEqual([['a', 'Claude'], ['b', 'Claude'], ['c', 'Local Agent']]);
     expect(rows[0]).not.toBe(reqs[0]);
-    expect(rows[0]).toEqual({ ...reqs[0], harness: 'Claude' });
-    expect(reqs.some(request => 'harness' in request)).toBe(false);
+    expect(rows[0]).toEqual({ ...reqs[0], harness: 'Claude', humanTurn: true });
+    expect(reqs.some(request => 'harness' in request || 'humanTurn' in request)).toBe(false);
+  });
+
+  it('derives humanTurn from the non-human marker, and treats an unmarked turn as typed', () => {
+    const marked = session('GitHub Copilot App', 'typed', 'agent', 'relay');
+    marked.requests[1].nonHumanKind = 'agent';
+    marked.requests[2].nonHumanKind = 'relayed';
+    expect(toRuleRequestRows(marked.requests, [marked]).map(row => row.humanTurn)).toEqual([true, false, false]);
+    expect(marked.requests.some(request => 'humanTurn' in request)).toBe(false);
+  });
+
+  it('keeps a humanTurn a row already carries, unless a marker says otherwise', () => {
+    const carried = session('Claude', 'false', 'true', 'marked');
+    const rows = carried.requests.map(request => ({ ...request, humanTurn: request.requestId !== 'false' }));
+    rows[2].nonHumanKind = 'subagent';
+    expect(toRuleRequestRows(rows, [carried]).map(row => row.humanTurn)).toEqual([false, true, false]);
+    expect(toRuleRequestRows(toRuleRequestRows(rows, [carried]), []).map(row => row.humanTurn)).toEqual([false, true, false]);
   });
 
   it('resolves requests by identity, not by request ID', () => {

@@ -89,6 +89,8 @@ rule's block through the detector pipeline as part of `npm test`:
   and `requestCount`, go on the request's session. `harness` defaults to `Local Agent` (VS Code).
 - `timestamp` defaults to noon on a Wednesday. A string `timestamp` such as `"2026-01-17T02:00:00"`
   is a local date-time, so `hour()` and `dayOfWeek()` tests pass in every time zone.
+- A line is a typed prompt unless it sets `humanTurn: false`, or `nonHumanKind` to a reason the
+  parser records, such as `"autopilot"` or `"agent"`.
 - The request is repeated 100 times, each copy in its own session, so one line clears the rule's
   sample-size thresholds. A line can't mix different rows or stay under a threshold; cover those
   cases in a unit test.

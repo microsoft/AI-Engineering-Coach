@@ -47,6 +47,7 @@ export const FIELD_SCHEMA: FieldInfo[] = [
   { name: 'cacheWriteTokens',   type: 'number | null', description: 'Cached tokens written / cache creation',             scope: 'request' },
   { name: 'reasoningEffort',    type: 'string',       description: 'Reasoning effort level (max | high | medium | low) when known', scope: 'request', example: '"high"' },
   { name: 'workType',           type: 'string',       description: 'Work type classification: feature, bugfix, refactor, etc.', scope: 'request' },
+  { name: 'humanTurn',          type: 'boolean',      description: 'True when the user typed the turn; false when the harness logged that an agent, autopilot, the harness itself or a parent agent sent it. Request rows only', scope: 'request', example: 'true' },
 
   // Session fields
   { name: 'sessionId',          type: 'string',       description: 'Unique session identifier',                           scope: 'session' },
