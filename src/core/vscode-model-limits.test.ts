@@ -58,7 +58,7 @@ const AUTO = model('copilot/auto', { maxInput: 128_000 });
 function request(id: string, modelId: string | undefined, promptTokens = 20_000): Record<string, unknown> {
   return {
     requestId: id,
-    timestamp: 1_790_000_000_000 + Number(id.replace(/\D/g, '') || 0) * 60_000,
+    timestamp: 1_790_000_000_000 + Number(id.replaceAll(/\D/g, '') || 0) * 60_000,
     message: { text: 'secret prompt' },
     response: [{ value: 'secret answer' }],
     ...(modelId ? { modelId } : {}),
@@ -142,7 +142,9 @@ describe('VS Code request context limits', () => {
     const none = writeTemp('none.json', JSON.stringify({ sessionId: 'n', requests: [request('r1', 'copilot/gpt-5.6-sol')] }));
     expect(limitsOf(none)).toEqual([null]);
   });
+});
 
+describe('VS Code request context limits as a session is replayed', () => {
   it('give a request added before its model id is set the limit of the model then selected', () => {
     const file = jsonl([
       { kind: 0, v: { sessionId: 's', inputState: { selectedModel: OPUS }, requests: [] } },

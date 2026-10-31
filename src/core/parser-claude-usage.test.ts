@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 /* Claude Code token totals and per-turn context. Claude Code writes one transcript line per content block
- * (thinking, text, each tool use) and repeats the response's `usage` on every line (anthropics/claude-code#87303),
- * so each response counts once. A turn's context is the prompt of its last model call on its own chain.
- * Fixtures mirror real transcript shapes with content replaced. */
+ * (thinking, text, each tool use) and repeats the response's `usage` on every line
+ * (https://github.com/anthropics/claude-code/issues/87303), so each response counts once. A turn's context is the
+ * prompt of its last model call on its own chain. Fixtures mirror real transcript shapes with content replaced. */
 
 import * as fs from 'fs';
 import * as os from 'os';
@@ -20,6 +20,7 @@ import type { SessionRequest } from './types';
 const SESSION = 'sess-usage';
 
 interface Usage { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; output_tokens: number }
+interface BlockOptions { kind?: 'thinking' | 'text' | 'tool_use'; extra?: Record<string, unknown> }
 
 function withProject(files: Record<string, object[]>, run: (projectsDir: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-usage-test-'));
@@ -45,7 +46,7 @@ function user(text: string, ts: string, extra: Record<string, unknown> = {}): ob
 }
 
 /** One content-block line of a response; `id` undefined omits `message.id`. */
-function block(id: string | undefined, ts: string, usage: Usage, kind: 'thinking' | 'text' | 'tool_use' = 'text', extra: Record<string, unknown> = {}): object {
+function block(id: string | undefined, ts: string, usage: Usage, { kind = 'text', extra = {} }: BlockOptions = {}): object {
   const content = kind === 'tool_use' ? [{ type: 'tool_use', id: `tool-${ts}`, name: 'Read', input: { file_path: '/secret/file.ts' } }]
     : [{ type: kind, text: 'secret' }];
   return {
@@ -57,6 +58,7 @@ function block(id: string | undefined, ts: string, usage: Usage, kind: 'thinking
 const A: Usage = { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 40_000, output_tokens: 50 };
 const B: Usage = { input_tokens: 5, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 2_000, output_tokens: 80 };
 const C: Usage = { input_tokens: 2, cache_read_input_tokens: 15_000, cache_creation_input_tokens: 3_000, output_tokens: 20 };
+const SIDECHAIN: BlockOptions = { extra: { isSidechain: true } };
 const promptOf = (u: Usage): number => u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
 
 describe('Claude Code request token fields', () => {
@@ -64,11 +66,11 @@ describe('Claude Code request token fields', () => {
     withProject({
       [`${SESSION}.jsonl`]: [
         user('fix the bug', '2026-10-28T10:00:00Z'),
-        block('msg_a', '2026-10-28T10:00:01Z', A, 'thinking'),
-        block('msg_a', '2026-10-28T10:00:02Z', A, 'text'),
-        block('msg_a', '2026-10-28T10:00:03Z', A, 'tool_use'),
-        block('msg_b', '2026-10-28T10:00:05Z', B, 'text'),
-        block('msg_b', '2026-10-28T10:00:06Z', B, 'tool_use'),
+        block('msg_a', '2026-10-28T10:00:01Z', A, { kind: 'thinking' }),
+        block('msg_a', '2026-10-28T10:00:02Z', A),
+        block('msg_a', '2026-10-28T10:00:03Z', A, { kind: 'tool_use' }),
+        block('msg_b', '2026-10-28T10:00:05Z', B),
+        block('msg_b', '2026-10-28T10:00:06Z', B, { kind: 'tool_use' }),
       ],
     }, projectsDir => {
       expect(requestsOf(projectsDir)[0]).toMatchObject({
@@ -84,9 +86,9 @@ describe('Claude Code request token fields', () => {
     withProject({
       [`${SESSION}.jsonl`]: [
         user('stream', '2026-10-28T10:00:00Z'),
-        block('msg_a', '2026-10-28T10:00:01Z', { input_tokens: 0, output_tokens: 0 }, 'thinking'),
-        block('msg_a', '2026-10-28T10:00:02Z', { ...A, output_tokens: 12 }, 'text'),
-        block('msg_a', '2026-10-28T10:00:03Z', A, 'tool_use'),
+        block('msg_a', '2026-10-28T10:00:01Z', { input_tokens: 0, output_tokens: 0 }, { kind: 'thinking' }),
+        block('msg_a', '2026-10-28T10:00:02Z', { ...A, output_tokens: 12 }),
+        block('msg_a', '2026-10-28T10:00:03Z', A, { kind: 'tool_use' }),
       ],
     }, projectsDir => {
       expect(requestsOf(projectsDir)[0]).toMatchObject({ promptTokens: promptOf(A), completionTokens: 50, cacheWriteTokens: 40_000 });
@@ -104,15 +106,17 @@ describe('Claude Code request token fields', () => {
       expect(requestsOf(projectsDir)[0]).toMatchObject({ promptTokens: 2 * promptOf(A), completionTokens: 100 });
     });
   });
+});
 
-  it('match the prompt-cache rows of the same request', () => {
+describe('Claude Code request token fields and prompt-cache rows', () => {
+  it('agree for the same request, sub-agent calls included', () => {
     withProject({
       [`${SESSION}.jsonl`]: [
         user('explore then fix', '2026-10-28T10:00:00Z'),
         block('msg_a', '2026-10-28T10:00:01Z', A),
-        block('msg_a', '2026-10-28T10:00:02Z', A, 'tool_use'),
-        block('msg_s', '2026-10-28T10:00:03Z', C, 'text', { isSidechain: true }),
-        block('msg_s', '2026-10-28T10:00:04Z', C, 'tool_use', { isSidechain: true }),
+        block('msg_a', '2026-10-28T10:00:02Z', A, { kind: 'tool_use' }),
+        block('msg_s', '2026-10-28T10:00:03Z', C, SIDECHAIN),
+        block('msg_s', '2026-10-28T10:00:04Z', C, { kind: 'tool_use', extra: { isSidechain: true } }),
         block('msg_b', '2026-10-28T10:00:05Z', B),
       ],
     }, projectsDir => {
@@ -133,7 +137,7 @@ describe('Claude Code turn context', () => {
         user('long task', '2026-10-28T10:00:00Z'),
         block('msg_a', '2026-10-28T10:00:01Z', A),
         block('msg_b', '2026-10-28T10:00:02Z', B),
-        block('msg_b', '2026-10-28T10:00:03Z', B, 'tool_use'),
+        block('msg_b', '2026-10-28T10:00:03Z', B, { kind: 'tool_use' }),
         block('msg_c', '2026-10-28T10:00:04Z', C),
       ],
     }, projectsDir => {
@@ -147,7 +151,7 @@ describe('Claude Code turn context', () => {
     withProject({
       [`${SESSION}.jsonl`]: [
         user('delegate', '2026-10-28T10:00:00Z'),
-        block('msg_s', '2026-10-28T10:00:01Z', B, 'text', { isSidechain: true }),
+        block('msg_s', '2026-10-28T10:00:01Z', B, SIDECHAIN),
         block('msg_m', '2026-10-28T10:00:02Z', A),
       ],
     }, projectsDir => {
@@ -156,7 +160,9 @@ describe('Claude Code turn context', () => {
       expect(request.contextUsage).toMatchObject({ lastPromptTokens: promptOf(A), peakPromptTokens: promptOf(A), calls: 1 });
     });
   });
+});
 
+describe('Claude Code sub-agent and Context Management context', () => {
   it('measures a sub-agent transcript against its own calls', () => {
     const sidechain = { isSidechain: true, agentId: 'agent-1' };
     withProject({
@@ -166,8 +172,8 @@ describe('Claude Code turn context', () => {
       ],
       [`${SESSION}/subagents/agent-1.jsonl`]: [
         user('sub-agent task', '2026-10-28T10:00:10Z', sidechain),
-        block('msg_s1', '2026-10-28T10:00:11Z', C, 'text', sidechain),
-        block('msg_s2', '2026-10-28T10:00:12Z', B, 'text', sidechain),
+        block('msg_s1', '2026-10-28T10:00:11Z', C, { extra: sidechain }),
+        block('msg_s2', '2026-10-28T10:00:12Z', B, { extra: sidechain }),
       ],
     }, projectsDir => {
       const [parent, sub] = requestsOf(projectsDir);
@@ -184,8 +190,8 @@ describe('Claude Code turn context', () => {
       lines.push(user(`step ${turn}`, `2026-10-28T10:${minute}:00Z`));
       for (let call = 0; call < 3; call++) {
         const usage = { input_tokens: 10, cache_read_input_tokens: 30_000 + turn * 1_000, cache_creation_input_tokens: 500, output_tokens: 40 };
-        lines.push(block(`msg_${turn}_${call}`, `2026-10-28T10:${minute}:${String(call + 1).padStart(2, '0')}Z`, usage));
-        lines.push(block(`msg_${turn}_${call}`, `2026-10-28T10:${minute}:${String(call + 1).padStart(2, '0')}Z`, usage, 'tool_use'));
+        const ts = `2026-10-28T10:${minute}:${String(call + 1).padStart(2, '0')}Z`;
+        lines.push(block(`msg_${turn}_${call}`, ts, usage), block(`msg_${turn}_${call}`, ts, usage, { kind: 'tool_use' }));
       }
     }
     withProject({ [`${SESSION}.jsonl`]: lines }, projectsDir => {

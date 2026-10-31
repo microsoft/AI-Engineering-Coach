@@ -39,6 +39,7 @@ function parse(events: Array<Record<string, unknown>>) {
   return session;
 }
 
+/** Token counts as the CLI logs them: `input` includes the tokens read from and written to the cache. */
 interface Tokens { input: number; cacheRead: number; cacheWrite: number; output: number }
 
 function details(t: Tokens): Record<string, unknown> {
@@ -61,6 +62,28 @@ function metrics(usage: Tokens, billed?: Record<string, unknown>, extra: Record<
 
 function shutdown(at: number, modelMetrics: Record<string, unknown>): Record<string, unknown> {
   return { type: 'session.shutdown', timestamp: iso(at), data: { shutdownType: 'routine', modelMetrics } };
+}
+
+function usageRecord(at: number, t: Tokens): Record<string, unknown> {
+  return {
+    type: 'session.usage_record',
+    timestamp: iso(at),
+    data: {
+      usage: {
+        model: MODEL, initiator: 'agent', interactionType: 'conversation-agent', inputTokens: t.input, outputTokens: t.output,
+        cacheReadTokens: t.cacheRead, cacheWriteTokens: t.cacheWrite, cacheDetailsReported: true, maxPromptTokens: 968_000,
+      },
+    },
+  };
+}
+
+function compactionComplete(at: number, call: Tokens): Record<string, unknown> {
+  const compactionTokensUsed = { inputTokens: call.input, outputTokens: call.output, cacheReadTokens: call.cacheRead, cacheWriteTokens: call.cacheWrite, model: MODEL };
+  return {
+    type: 'session.compaction_complete',
+    timestamp: iso(at),
+    data: { success: true, trigger: 'threshold', preCompactionTokens: 100_000, postCompactionTokens: 20_000, tokenLimit: 968_000, compactionTokensUsed },
+  };
 }
 
 const START = { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-model-usage', startTime: iso(0), selectedModel: MODEL } };
@@ -96,7 +119,9 @@ describe('Copilot CLI shutdown model usage', () => {
       expect(session.modelUsage?.[MODEL], JSON.stringify(billed)).toMatchObject({ inputTokens: 334, cacheReadTokens: 800, cacheWriteTokens: 100, outputTokens: 567 });
     }
   });
+});
 
+describe('Copilot CLI shutdown model usage across shutdowns and model ids', () => {
   it('keeps usage.inputTokens when it is below the cached tokens (cache reported separately)', () => {
     const session = parse([START, PROMPT, REPLY, shutdown(10, {
       [MODEL]: { usage: { inputTokens: 300, outputTokens: 50, cacheReadTokens: 6_000, cacheWriteTokens: 500 } },
@@ -115,29 +140,16 @@ describe('Copilot CLI shutdown model usage', () => {
     ]);
     expect(session.modelUsage?.[MODEL]).toMatchObject({ inputTokens: 1_500 + 1_000, cacheReadTokens: 28_000, cacheWriteTokens: 1_500, outputTokens: 310 });
   });
+});
 
-  it('agrees with the per-call prompt-cache rows, and AI-credit totals count each prompt token once', () => {
-    const call = (at: number, input: number, cacheRead: number, cacheWrite: number, output: number) => ({
-      type: 'session.usage_record',
-      timestamp: iso(at),
-      data: {
-        usage: {
-          model: MODEL, initiator: 'agent', interactionType: 'conversation-agent', inputTokens: input, outputTokens: output,
-          cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, cacheDetailsReported: true, maxPromptTokens: 968_000,
-        },
-      },
-    });
-    const compactionCall = { inputTokens: 120_000, outputTokens: 3_000, cacheReadTokens: 100_000, cacheWriteTokens: 15_000, model: MODEL };
-    const events = [
+describe('Copilot CLI shutdown model usage and per-call rows', () => {
+  it('agree, and AI-credit totals count each prompt token once', () => {
+    const session = parse([
       START, PROMPT,
-      call(3, 50_000, 40_000, 8_000, 400),
-      call(6, 100_000, 95_000, 5_000, 600),
+      usageRecord(3, { input: 50_000, cacheRead: 40_000, cacheWrite: 8_000, output: 400 }),
+      usageRecord(6, { input: 100_000, cacheRead: 95_000, cacheWrite: 5_000, output: 600 }),
       REPLY,
-      {
-        type: 'session.compaction_complete',
-        timestamp: iso(8),
-        data: { success: true, trigger: 'threshold', preCompactionTokens: 100_000, postCompactionTokens: 20_000, tokenLimit: 968_000, compactionTokensUsed: compactionCall },
-      },
+      compactionComplete(8, { input: 120_000, cacheRead: 100_000, cacheWrite: 15_000, output: 3_000 }),
       // usage = the usage records; tokenDetails = the usage records plus the compaction call.
       shutdown(10, {
         [MODEL]: metrics(
@@ -145,8 +157,7 @@ describe('Copilot CLI shutdown model usage', () => {
           details({ input: 270_000, cacheRead: 235_000, cacheWrite: 28_000, output: 4_000 }),
         ),
       }),
-    ];
-    const session = parse(events);
+    ]);
     const usage = session.modelUsage?.[MODEL];
     expect(usage).toMatchObject({ inputTokens: 7_000, cacheReadTokens: 235_000, cacheWriteTokens: 28_000, outputTokens: 4_000 });
 

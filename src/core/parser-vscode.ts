@@ -486,24 +486,28 @@ interface SessionFileData {
   };
 }
 
-export function parseSessionFile(sessionFile: string, wsId: string, wsName: string, harness: string, customInstructionsBytes?: number): Session | null {
-
-  let data: SessionFileData;
-  const modelLimits = new SelectedModelLimits();
+/** The session file's final state, collecting the context limit of each request's model on the way. `null` when
+ *  the file can't be read or parsed. */
+function readSessionFileData(sessionFile: string, modelLimits: SelectedModelLimits): SessionFileData | null {
   try {
     if (sessionFile.endsWith('.jsonl')) {
       const result = reconstructFromJsonl(sessionFile, true, modelLimits);
-      if (!result) return null;
-      data = result as SessionFileData;
-    } else {
-      data = JSON.parse(stripImageData(readFile(sessionFile))) as SessionFileData;
-      modelLimits.select(data.inputState?.selectedModel);
-      modelLimits.stamp(data.requests);
+      return result ? result as SessionFileData : null;
     }
+    const data = JSON.parse(stripImageData(readFile(sessionFile))) as SessionFileData;
+    modelLimits.select(data.inputState?.selectedModel);
+    modelLimits.stamp(data.requests);
+    return data;
   } catch (e) {
     debugCore('parser-vscode', `Cannot read/parse session file ${sessionFile}`, e);
     return null;
   }
+}
+
+export function parseSessionFile(sessionFile: string, wsId: string, wsName: string, harness: string, customInstructionsBytes?: number): Session | null {
+  const modelLimits = new SelectedModelLimits();
+  const data = readSessionFileData(sessionFile, modelLimits);
+  if (!data) return null;
 
   const creationTs = data.creationDate ?? null;
   let lastMsgTs = data.lastMessageDate ?? null;
