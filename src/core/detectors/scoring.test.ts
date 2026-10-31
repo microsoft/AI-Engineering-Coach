@@ -36,6 +36,21 @@ describe('late-night and weekend penalties count only typed prompts', () => {
     expect(hygieneScores([request('agent')])).toEqual([100]);
   });
 
+  it('rates them over the typed prompts, so automated turns do not dilute them', () => {
+    const automated = Array.from({ length: 99 }, () => request('agent'));
+    expect(hygieneScores([request(), ...automated])).toEqual([50]);
+  });
+
+  it('rates canceled requests over every turn and the late-night and weekend penalties over the typed prompts', () => {
+    const wednesdayNoon = new Date(2026, 0, 14, 12).getTime();
+    expect(hygieneScores([
+      request(),
+      request(undefined, { timestamp: wednesdayNoon }),
+      request('autopilot', { timestamp: wednesdayNoon, isCanceled: true }),
+      request('agent', { timestamp: wednesdayNoon }),
+    ])).toEqual([50]);
+  });
+
   it('still counts a canceled automated turn', () => {
     expect(computeWeeklyTrend([request('autopilot', { isCanceled: true })]).counts).toEqual([1]);
     expect(hygieneScores([request('autopilot', { isCanceled: true })])).toEqual([0]);
