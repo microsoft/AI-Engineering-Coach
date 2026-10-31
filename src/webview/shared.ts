@@ -117,6 +117,7 @@ import {
   Filler,
 } from 'chart.js';
 import { TreemapController, TreemapElement } from 'chartjs-chart-treemap';
+import type { Plugin } from 'chart.js';
 import type { ExtensionMethodName } from '../core/types/rpc-types';
 
 Chart.register(
@@ -374,20 +375,33 @@ export const SEVERITY_COLORS: Record<string, string> = {
 
 type ChartType = 'bar' | 'line' | 'doughnut' | 'pie' | 'radar';
 
+interface ChartSpec {
+  type: ChartType;
+  data: { labels: (string | number)[]; datasets: Record<string, unknown>[] };
+  options?: Record<string, unknown>;
+  /** Inline plugins for this chart only, such as Context Management's chart guides. */
+  plugins?: Plugin[];
+}
+
 export function createChart(
   canvasId: string,
   type: ChartType,
   data: { labels: (string | number)[]; datasets: Record<string, unknown>[] },
   options?: Record<string, unknown>,
 ): Chart {
+  return createChartFrom(canvasId, { type, data, options });
+}
+
+export function createChartFrom(canvasId: string, spec: ChartSpec): Chart {
   const defaults: Record<string, unknown> = {
     responsive: true,
     maintainAspectRatio: false,
   };
   const c = new Chart(document.getElementById(canvasId) as HTMLCanvasElement, {
-    type,
-    data: data as never,
-    options: { ...defaults, ...options } as never,
+    type: spec.type,
+    data: spec.data as never,
+    options: { ...defaults, ...spec.options },
+    ...(spec.plugins ? { plugins: spec.plugins } : {}),
   });
   trackChart(c);
   return c;

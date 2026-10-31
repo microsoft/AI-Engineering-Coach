@@ -82,6 +82,33 @@ test.describe('Context Management', () => {
   });
 });
 
+test.describe('Context Management chart guides', () => {
+  test('marks the verdict thresholds on the utilization trend, in both modes', async ({ page }) => {
+    await page.addInitScript(() => { (window as Window & { mockWorkspaceTrend?: boolean }).mockWorkspaceTrend = true; });
+    await navigateToContextHealth(page);
+    const trend = page.locator('#ctxMgmtTrendChart');
+    await expect(trend).toHaveAttribute('role', 'img');
+    await expect(trend).toHaveAttribute('aria-label', 'Weekly average context utilization and compactions. Lines: Degraded (45%), Limited (80%).');
+    await expect(trend).toHaveAttribute('data-guides', 'lines=2 markers=0 bands=0');
+    await page.locator('.ctx-trend-mode[data-mode="workspace"]').click();
+    // The degraded line follows the adaptive threshold (45%) in this mode too, not a fixed 50%.
+    await expect(page.locator('#ctxMgmtTrendChart')).toHaveAttribute('aria-label', 'Weekly average context utilization per workspace. Lines: Degraded (45%), Limited (80%).');
+    await expect(page.locator('#ctxMgmtTrendChart')).toHaveAttribute('data-guides', 'lines=2 markers=0 bands=0');
+  });
+
+  test('marks compactions, to-do events and to-do lifetimes on a session chart', async ({ page }) => {
+    await navigateToContextHealth(page);
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(4);
+    await page.locator('.ctx-session-row').nth(2).click();
+    const chart = page.locator('#ctxSessionTokenChart');
+    await expect(chart).toBeVisible();
+    await expect(chart).toHaveAttribute('aria-label', 'Context utilization per request of this session. Lines: 45%, 80%. Markers: Compaction (full), Write tests. Bands: \u2714 Write tests.');
+    // Chart.js ran the guides plugin with the real scales: both thresholds, both events and the to-do band.
+    await expect(chart).toHaveAttribute('data-guides', 'lines=2 markers=2 bands=1');
+  });
+});
+
 test.describe('Context Management with reported context limits', () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => { (window as Window & { mockReportedLimits?: boolean }).mockReportedLimits = true; });
