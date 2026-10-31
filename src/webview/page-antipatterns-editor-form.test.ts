@@ -219,6 +219,31 @@ describe('Rule Editor form', () => {
   });
 });
 
+describe('Rule Editor sections inside the detect block', () => {
+  const md = [
+    '---', 'id: inside-detect', 'name: Inside detect', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '',
+    '# Description', 'Text', '',
+    '# Detection Logic', '```detect', 'scan: requests', '# Examples', 'match: messageLength > 0', 'check: count >= 1', '```', '',
+  ].join('\n');
+
+  it('makes them read-only, saves the other edits with the detect block, and unlocks them for the next rule', async () => {
+    const page = await renderPage();
+    await openRule(page, 'inside-detect', toCrlf(md));
+    const examples = page.querySelector<HTMLTextAreaElement>('#rf-examples')!;
+    expect(examples).toMatchObject({ readOnly: true, value: parseRule(md)!.exampleTemplate });
+    expect(examples.title).toContain('Source tab');
+    expect(page.querySelector<HTMLTextAreaElement>('#rf-description')).toMatchObject({ readOnly: false, title: '' });
+
+    input(page, 'rf-description').value = 'Edited';
+    page.querySelector<HTMLButtonElement>('#rule-editor-save')!.click();
+    await vi.waitFor(() => sentMarkdown('saveRule'));
+    expect(sentMarkdown('saveRule')).toBe(md.replace('# Description\nText', '# Description\nEdited'));
+
+    openRuleEditor(page, null);
+    expect(examples).toMatchObject({ readOnly: false, title: '' });
+  });
+});
+
 describe('Rule Editor Test Rule', () => {
   it.each(['context-engineering-gaps', 'no-devcontainer'])('runs %s from the form as the rule runs directly', async id => {
     const source = toCrlf(builtIn(id));

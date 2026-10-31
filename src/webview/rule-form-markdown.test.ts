@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { parseRuleExtensions } from '../core/metric-engine';
 import { parseRule } from '../core/rule-parser';
 import { parsePipeline } from '../core/rule-pipeline';
-import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
+import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, sourceOnlyFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'rules');
 const toLf = (md: string) => md.replaceAll('\r\n', '\n');
@@ -309,6 +309,32 @@ describe('mergeRuleMarkdown with the rule parser\'s sections and keys', () => {
     const merged = mergeRuleMarkdown(md, { ...fullFields(md), scope: 'sessions' }, new Set<RuleFormField>(['scope']));
     expect(merged).toBe(md.replace('scope: both', 'scope: sessions'));
     expect(parseRule(merged)?.scope).toBe('sessions');
+  });
+});
+
+describe('mergeRuleMarkdown with a heading inside the detect block', () => {
+  const md = [
+    '---', 'id: x', 'name: X', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '',
+    '# Description', 'Text', '',
+    '# Detection Logic', '```detect', 'scan: requests', '# Examples', 'match: messageLength > 0', 'check: count >= 1', '```', '',
+    '# Tests', '```test', '{messageLength: 5} -> triggered', '```', '',
+  ].join('\n');
+
+  it('shows the section the rule parser reads, but leaves it to the Source view', () => {
+    expect(sourceOnlyFields(toCrlf(md))).toEqual(new Set(['examples']));
+    expect(readRuleFields(md).examples).toBe(parseRule(md)!.exampleTemplate);
+    const merged = mergeRuleMarkdown(md, { ...fullFields(md), examples: 'New example' }, new Set<RuleFormField>(['examples']));
+    expect(merged).toBe(md);
+  });
+
+  it('still writes the other sections and the detect logic', () => {
+    const fields = { ...fullFields(md), description: 'New text', detect: 'scan: requests\n# Examples\ncheck: count >= 2' };
+    const merged = mergeRuleMarkdown(md, fields, new Set<RuleFormField>(['description', 'detect']));
+    expect(merged).toBe(md.replace('# Description\nText', '# Description\nNew text').replace('match: messageLength > 0\ncheck: count >= 1', 'check: count >= 2'));
+  });
+
+  it('finds no such section in the built-in rules', () => {
+    expect(BUILT_IN_RULES.filter(rule => sourceOnlyFields(toCrlf(rule.lf)).size > 0).map(rule => rule.id)).toEqual([]);
   });
 });
 

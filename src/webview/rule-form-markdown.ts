@@ -38,6 +38,8 @@ const SECTION_HEADINGS: Record<SectionField, string> = {
   examples: 'Examples',
 };
 const SECTION_FIELDS = Object.keys(SECTION_HEADINGS) as SectionField[];
+/** The fields for text sections, which the form can leave to the Source view (see `sourceOnlyFields`). */
+export const TEXT_SECTION_FIELDS: readonly RuleFormField[] = SECTION_FIELDS;
 
 /** What the form writes for a field left empty. */
 const EMPTY_FIELD_DEFAULTS: Partial<Record<RuleFormField, string>> = {
@@ -111,6 +113,40 @@ function sectionBlocks(body: string): Block[] {
 function lastBlockIndex(blocks: Block[], key: string): number {
   for (let at = blocks.length - 1; at >= 0; at--) if (blocks[at].key === key) return at;
   return -1;
+}
+
+/** The lines of a body's first detect block, as the rule parser finds it: from its marker to its closing fence. */
+function detectBlockLines(body: string): { first: number; last: number } | null {
+  const match = DETECT_LOGIC_RE.exec(body);
+  if (!match) return null;
+  const lineAt = (offset: number) => body.slice(0, offset).split('\n').length - 1;
+  return { first: lineAt(match.index), last: lineAt(match.index + match[0].length) };
+}
+
+/**
+ * The section blocks whose heading lies inside the detect block. The rule parser reads them as sections, but
+ * rewriting one would rewrite part of the detection logic, so the form leaves them to the Source view.
+ */
+function sectionsInDetectBlock(body: string, blocks: Block[]): Set<Block> {
+  const inside = new Set<Block>();
+  const span = detectBlockLines(body);
+  let line = 0;
+  for (const block of blocks) {
+    if (span && line > span.first && line <= span.last) inside.add(block);
+    line += block.lines.length;
+  }
+  return inside;
+}
+
+/** The text-section fields the form shows but doesn't write: their section's heading is inside the detect block. */
+export function sourceOnlyFields(markdown: string): Set<RuleFormField> {
+  const { body } = splitFrontmatter(normalizeLineEndings(markdown));
+  const blocks = sectionBlocks(body);
+  const inside = sectionsInDetectBlock(body, blocks);
+  return new Set(SECTION_FIELDS.filter(field => {
+    const section = blocks.find(block => block.key === SECTION_HEADINGS[field].toLowerCase());
+    return section !== undefined && inside.has(section);
+  }));
 }
 
 function joinBlocks(blocks: Block[]): string {
@@ -238,11 +274,36 @@ export function readRuleFields(markdown: string): Partial<RuleFormFields> {
 }
 
 /**
+ * Writes text sections into a rule body. The form edits the text before a detect block in a section, and keeps
+ * the block and what follows it; it doesn't write a section whose heading is inside the detect block.
+ */
+function writeSections(body: string, fields: RuleFormFields, sectionFields: readonly SectionField[]): string {
+  const blocks = sectionBlocks(body);
+  const inDetectBlock = sectionsInDetectBlock(body, blocks);
+  for (const field of sectionFields) {
+    const heading = SECTION_HEADINGS[field];
+    const content = (fields[field] || EMPTY_FIELD_DEFAULTS[field] || '').split('\n');
+    const section = blocks.find(block => block.key === heading.toLowerCase());
+    if (section && inDetectBlock.has(section)) continue;
+    if (section) {
+      const { text: old, rest } = splitAtDetectBlock(section.lines.slice(1));
+      section.lines = rest.length > 0
+        ? [section.lines[0], ...content, ...old.slice(old.length - trailingCount(old, BLANK, 0)), ...rest]
+        : [section.lines[0], ...content, ''];
+    } else {
+      insertSection(blocks, { key: heading.toLowerCase(), lines: [`# ${heading}`, ...content, ''] });
+    }
+  }
+  return joinBlocks(blocks);
+}
+
+/**
  * Writes the changed form fields into rule markdown and keeps everything else as it was: front-matter keys and
  * sections the form has no field for (such as `# Tests`), text around the detect block, and their order. Fields
  * the markdown doesn't have yet are added. Markdown without front matter gets every front-matter field from the
  * form, so it becomes a rule; from an empty `base`, this builds one. Empty fields get the template's defaults,
- * but only a `newRule` gets its detect logic: cleared detection logic stays cleared.
+ * but only a `newRule` gets its detect logic: cleared detection logic stays cleared. A section whose heading is
+ * inside the detect block is never written (see `sourceOnlyFields`).
  */
 export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed: ReadonlySet<RuleFormField>, newRule = false): string {
   const md = normalizeLineEndings(base);
@@ -265,26 +326,8 @@ export function mergeRuleMarkdown(base: string, fields: RuleFormFields, changed:
     }
     head = `---\n${joinBlocks(blocks)}\n---\n`;
   }
-  let text = body;
   const sectionFields = SECTION_FIELDS.filter(field => changed.has(field));
-  if (sectionFields.length > 0) {
-    const blocks = sectionBlocks(body);
-    for (const field of sectionFields) {
-      const heading = SECTION_HEADINGS[field];
-      const content = (fields[field] || EMPTY_FIELD_DEFAULTS[field] || '').split('\n');
-      const section = blocks.find(block => block.key === heading.toLowerCase());
-      if (section) {
-        // The form edits the text before a detect block in the section; the block and what follows it stay.
-        const { text: old, rest } = splitAtDetectBlock(section.lines.slice(1));
-        section.lines = rest.length > 0
-          ? [section.lines[0], ...content, ...old.slice(old.length - trailingCount(old, BLANK, 0)), ...rest]
-          : [section.lines[0], ...content, ''];
-      } else {
-        insertSection(blocks, { key: heading.toLowerCase(), lines: [`# ${heading}`, ...content, ''] });
-      }
-    }
-    text = joinBlocks(blocks);
-  }
+  let text = sectionFields.length > 0 ? writeSections(body, fields, sectionFields) : body;
   if (changed.has('detect')) text = writeDetectLogic(text, fields.detect || (newRule ? EMPTY_FIELD_DEFAULTS.detect ?? '' : ''));
   return head + text;
 }

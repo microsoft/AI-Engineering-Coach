@@ -9,7 +9,7 @@ import { DateFilter } from '../core/types';
 import { rpc } from './shared';
 import { html, render, type ComponentChildren } from './render';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
-import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
+import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, sourceOnlyFields, TEXT_SECTION_FIELDS, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULE_EDITOR_SYSTEM_PROMPT = `You are an expert at writing detection rules for the AI Engineer Coach VS Code extension.
 Rules are markdown files with YAML frontmatter and a Detection Logic block using a custom DSL.
@@ -107,6 +107,19 @@ function readForm(c: HTMLElement): RuleFormFields {
   return fields;
 }
 
+const SOURCE_ONLY_HINT = 'This section starts inside the detect block, so edit it in the Source tab.';
+
+/** Makes the given text sections read-only, with a hint: the form shows them but doesn't write them. */
+function lockSourceOnlyFields(c: HTMLElement, sourceOnly: ReadonlySet<RuleFormField>): void {
+  for (const field of TEXT_SECTION_FIELDS) {
+    const input = c.querySelector<HTMLTextAreaElement>(`#${FIELD_INPUTS[field]}`);
+    if (!input) continue;
+    input.readOnly = sourceOnly.has(field);
+    if (input.readOnly) input.title = SOURCE_ONLY_HINT;
+    else input.removeAttribute('title');
+  }
+}
+
 /** Fills the form from rule markdown, and keeps that markdown as the Source text that formToMarkdown edits. */
 export function markdownToForm(c: HTMLElement, markdown: string): void {
   const fields = readRuleFields(markdown);
@@ -115,6 +128,7 @@ export function markdownToForm(c: HTMLElement, markdown: string): void {
     const value = fields[field];
     if (input && value !== undefined) input.value = value;
   }
+  lockSourceOnlyFields(c, sourceOnlyFields(markdown));
   loadedRules.set(c, { markdown, fields: readForm(c) });
   newRuleForms.delete(c);
   const source = c.querySelector<HTMLTextAreaElement>('#rule-editor-raw');
@@ -159,6 +173,7 @@ export function openRuleEditor(container: HTMLElement, existingRuleId: string | 
 
   if (existingRuleId || markdown) newRuleForms.delete(container);
   else newRuleForms.add(container);
+  lockSourceOnlyFields(container, new Set());
   if (markdown) {
     markdownToForm(container, markdown);
   } else if (existingRuleId) {

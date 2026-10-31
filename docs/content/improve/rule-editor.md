@@ -23,7 +23,7 @@ Click **Edit** on any rule to open the modal editor. The editor has two tabs:
 | **Form** | Fill in structured fields -- id, name, group, severity, scope, tags, thresholds, description, examples, and detection logic |
 | **Source** | View or edit the full markdown file directly. Useful for advanced edits or for pasting in rules from elsewhere |
 
-Switching tabs syncs both directions, so you can round-trip between the form and the raw source. The form writes back only the fields you change; everything else in the rule stays as it is, including frontmatter keys and sections the form doesn't show, such as `# Tests`. Rules with Windows (CRLF) line endings load into the form like any other.
+Switching tabs syncs both directions, so you can round-trip between the form and the raw source. The form writes back only the fields you change; everything else in the rule stays as it is, including frontmatter keys and sections the form doesn't show, such as `# Tests`. Rules with Windows (CRLF) line endings load into the form like any other. A section whose heading sits inside the detect block is read-only in the form, because rewriting it would change the detection logic; edit it in the Source tab.
 
 ## Live Testing
 
