@@ -50,6 +50,8 @@ export interface PersistedUpdateState extends ScheduleState, UpdateMarkers {
   release?: UpdateCandidate;
   /** Where `installedVersion` was installed; globalState is shared with remote windows. */
   installedLocation?: string;
+  /** When it was installed: windows started since then already run whatever is on disk. */
+  installedAt?: number;
 }
 
 export interface UpdateServiceOptions {
@@ -96,6 +98,8 @@ export class UpdateService implements vscode.Disposable {
   private readonly location: string;
   /** One-click install is verified in local windows only; remote windows get the release page. */
   private readonly localWindow: boolean;
+  /** An install made after this moment still needs this window to reload. */
+  private readonly startedAt: number;
 
   constructor(private readonly context: vscode.ExtensionContext, options: UpdateServiceOptions = {}) {
     // Bound late so VS Code's proxy-aware fetch patch is the one that runs.
@@ -108,6 +112,7 @@ export class UpdateService implements vscode.Disposable {
     this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.location = `${vscode.env.remoteName ?? 'local'}:${path.posix.dirname(context.extensionUri.path)}`;
     this.localWindow = vscode.env.remoteName === undefined;
+    this.startedAt = this.now();
   }
 
   start(): void {
@@ -118,7 +123,6 @@ export class UpdateService implements vscode.Disposable {
         this.reschedule(true);
       }
     }));
-    void this.forgetInstalledMarker();
     void this.purgeStaleDownloads();
     this.refresh();
     this.reschedule(true);
@@ -130,6 +134,7 @@ export class UpdateService implements vscode.Disposable {
 
   /** "Check for Updates": asks GitHub now and reports every outcome. */
   async checkNow(): Promise<void> {
+    this.refresh();
     if (this.status.state === 'installed') {
       await this.offerReload(this.status.latest);
       return;
@@ -156,8 +161,13 @@ export class UpdateService implements vscode.Disposable {
 
   /** "Install Update", the dashboard footer and the activity-bar view: a native confirmation first. */
   async promptInstall(): Promise<void> {
-    if (this.status.state === 'installed') {
-      await this.reloadAfterUpdate();
+    const reloadShown = this.status.state === 'installed';
+    // Another window of this installation may have installed the update meanwhile.
+    this.refresh();
+    const status = this.getStatus();
+    if (status.state === 'installed') {
+      // Reload at once only when the user clicked a visible Reload; otherwise ask first.
+      await (reloadShown ? this.reloadAfterUpdate() : this.offerReload(status.latest));
       return;
     }
     if (this.installing) return;
@@ -227,7 +237,9 @@ export class UpdateService implements vscode.Disposable {
 
   private evaluate(): Evaluation {
     const state = this.readState();
-    const installedHere = state.installedLocation === this.location;
+    // Other windows of the installation that were running before the install still need to reload.
+    const installedHere = state.installedLocation === this.location
+      && typeof state.installedAt === 'number' && state.installedAt >= this.startedAt;
     return evaluateUpdate({
       candidate: state.release,
       current: this.build.version,
@@ -365,6 +377,7 @@ export class UpdateService implements vscode.Disposable {
 
   private async installUpdate(chosen: UpdateCandidate): Promise<void> {
     if (this.installing) return;
+    this.refresh();
     // A notification can outlive its release: never install over an update that is waiting for a reload.
     if (this.status.state === 'installed') {
       await this.offerReload(this.status.latest);
@@ -389,7 +402,7 @@ export class UpdateService implements vscode.Disposable {
       this.installing = false;
     }
     if (!failure) {
-      await this.writeState({ installedVersion: release.version, installedLocation: this.location });
+      await this.writeState({ installedVersion: release.version, installedLocation: this.location, installedAt: this.now() });
       runtimeDebug('update', 'installed', `version=${release.version}`);
       this.refresh();
       await this.offerReload(release.version);
@@ -424,16 +437,6 @@ export class UpdateService implements vscode.Disposable {
   private async purgeStaleDownloads(): Promise<void> {
     if (!this.downloadDir && this.context.globalStorageUri.scheme !== 'file') return;
     await purgeStaleDownloads(await this.downloadDirectory(), this.now());
-  }
-
-  /** The installed build is running now, so "reload to update" no longer applies. */
-  private async forgetInstalledMarker(): Promise<void> {
-    const state = this.readState();
-    if (state.installedVersion && state.installedLocation === this.location
-      && !isNewerVersion(state.installedVersion, this.build.version)) {
-      await this.writeState({ installedVersion: undefined, installedLocation: undefined });
-      this.refresh();
-    }
   }
 }
 

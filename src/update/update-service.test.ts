@@ -605,29 +605,52 @@ describe('an update notification answered late', () => {
 });
 
 describe('installed marker', () => {
+  const LOCAL = 'local:/home/u/.vscode/extensions';
+
   it('shows "reload" in other windows of the same installation only', () => {
     const store = sharedStore();
-    store.set(UPDATE_STATE_KEY, {
-      installedVersion: '0.4.0',
-      installedLocation: 'local:/home/u/.vscode/extensions',
-    });
     const local = createService(vi.fn<typeof globalThis.fetch>(), { store });
-    local.start();
-    expect(local.getStatus()).toEqual({ state: 'installed', latest: '0.4.0' });
     mocks.remoteName = 'wsl';
     const remote = createService(vi.fn<typeof globalThis.fetch>(), { store, extensionPath: '/home/u/.vscode-server/extensions/x' });
+    store.set(UPDATE_STATE_KEY, { installedVersion: '0.4.0', installedLocation: LOCAL, installedAt: Date.now() });
+    local.start();
     remote.start();
+    expect(local.getStatus()).toEqual({ state: 'installed', latest: '0.4.0' });
     expect(remote.getStatus()).toEqual({ state: 'none' });
   });
 
-  it('is cleared once the new version runs', async () => {
+  it('keeps "reload" in a window still running the old build after another window reloads', async () => {
     const store = sharedStore();
-    store.set(UPDATE_STATE_KEY, { installedVersion: '0.4.0', installedLocation: 'local:/home/u/.vscode/extensions' });
-    const service = createService(vi.fn<typeof globalThis.fetch>(), {
-      store, build: { version: '0.4.0', dev: false }, extensionPath: '/home/u/.vscode/extensions/ai-engineer-coach.ai-engineer-coach-0.4.0',
+    const bytes = fakeVsix(512);
+    const fetch = serve({
+      [API]: () => jsonResponse(releaseJson('0.4.0', { bytes })),
+      [VSIX_URL]: () => new Response(null, { status: 302, headers: { location: STORAGE_URL } }),
+      [STORAGE_URL]: () => new Response(bytes),
     });
+    const other = createService(fetch, { store });
+    other.start();
+    const installer = createService(fetch, { store });
+    installer.start();
+    mocks.showInformationMessage.mockResolvedValueOnce('Update');
+    await installer.checkNow();
+    // The installing window reloads into v0.4.0; the other window still runs v0.2.0.
+    installer.dispose();
+    const reloaded = createService(fetch, { store, build: { version: '0.4.0', dev: false } });
+    reloaded.start();
+    expect(reloaded.getStatus()).toEqual({ state: 'none' });
+    await other.promptInstall();
+    expect(other.getStatus()).toEqual({ state: 'installed', latest: '0.4.0' });
+    expect(installCalls()).toHaveLength(1);
+    expect(mocks.executeCommand).not.toHaveBeenCalledWith('workbench.action.reloadWindow');
+    expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
+      'AI Engineer Coach v0.4.0 is installed. Reload the window to start using it.', 'Reload Window');
+  });
+
+  it('is ignored by windows started after the install, such as after a downgrade', () => {
+    const store = sharedStore();
+    store.set(UPDATE_STATE_KEY, { installedVersion: '0.4.0', installedLocation: LOCAL, installedAt: Date.now() - 60_000 });
+    const service = createService(vi.fn<typeof globalThis.fetch>(), { store });
     service.start();
-    await vi.waitFor(() => expect(store.get(UPDATE_STATE_KEY)).toEqual({}));
     expect(service.getStatus()).toEqual({ state: 'none' });
   });
 
