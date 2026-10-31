@@ -66,7 +66,7 @@ interface CallOptions {
 function call(at: number, o: CallOptions): Record<string, unknown> {
   const ttl = o.ttl ?? 300;
   const write = o.write ?? o.input - o.read;
-  const rates = o.rates === undefined ? { input: 5, read: 0.5, write: 6.25 } : o.rates;
+  const rates = o.rates === undefined ? { input: 1, read: 0.1, write: 1.25 } : o.rates;
   return {
     type: 'session.usage_record',
     timestamp: iso(at + (o.duration ?? 0)),
@@ -94,9 +94,9 @@ function call(at: number, o: CallOptions): Record<string, unknown> {
           copilotUsage: {
             totalNanoAiu: 123,
             tokenDetails: [
-              { tokenType: 'input', tokenCount: o.input - o.read - write, batchSize: 1_000_000, costPerBatch: rates.input * 1_000_000_000, model: 'm' },
-              { tokenType: 'cache_read', tokenCount: o.read, batchSize: 1_000_000, costPerBatch: rates.read * 1_000_000_000, model: 'm' },
-              { tokenType: 'cache_write', tokenCount: write, batchSize: 1_000_000, costPerBatch: rates.write * 1_000_000_000, model: 'm' },
+              { tokenType: 'input', tokenCount: o.input - o.read - write, batchSize: 1_000_000, costPerBatch: rates.input * 1_000_000, model: 'm' },
+              { tokenType: 'cache_read', tokenCount: o.read, batchSize: 1_000_000, costPerBatch: rates.read * 1_000_000, model: 'm' },
+              { tokenType: 'cache_write', tokenCount: write, batchSize: 1_000_000, costPerBatch: rates.write * 1_000_000, model: 'm' },
             ],
           },
         } : {}),
@@ -152,7 +152,7 @@ describe('Copilot CLI prompt-cache usage per request', () => {
     ]);
     const [first, second] = session.requests;
     expect(first.promptCache).toEqual({
-      rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 2, reasoningEffort: 'high', input: 210_000, cacheRead: 100_000, cacheWrite: 110_000, cost: 147_500, missCost: 137_500, ratedInput: 210_000, ttlSeconds: 300 }],
+      rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 2, reasoningEffort: 'high', input: 210_000, cacheRead: 100_000, cacheWrite: 110_000, cost: 147_500, missCost: 137_500, baselineCost: 210_000, ratedInput: 210_000, ttlSeconds: 300 }],
       coldStart: 100_000,
       coldStartCost: 125_000,
     });

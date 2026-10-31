@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Token-sum accumulators for the Prompt Cache tab. Ratios are always ratios of sums (token-weighted). */
+/* Accumulators for the Prompt Cache tab. Ratios are always ratios of sums: token shares are token-weighted, and
+ * cost shares are weighted by the logged prices, so a call weighs by what it cost. */
 
 import type { CacheCost, CacheTotals, ModelCallRow } from './types';
 
@@ -14,20 +15,22 @@ export interface TotalsAcc {
   cacheWrite: number;
   cost: number;
   missCost: number;
+  baselineCost: number;
   ratedInput: number;
 }
 
 export function emptyTotals(): TotalsAcc {
-  return { calls: 0, input: 0, cacheRead: 0, cacheWrite: 0, cost: 0, missCost: 0, ratedInput: 0 };
+  return { calls: 0, input: 0, cacheRead: 0, cacheWrite: 0, cost: 0, missCost: 0, baselineCost: 0, ratedInput: 0 };
 }
 
-export function addUsage(acc: TotalsAcc, row: Pick<ModelCallRow, 'calls' | 'input' | 'cacheRead' | 'cacheWrite' | 'cost' | 'missCost' | 'ratedInput'>): void {
+export function addUsage(acc: TotalsAcc, row: Pick<ModelCallRow, 'calls' | 'input' | 'cacheRead' | 'cacheWrite' | 'cost' | 'missCost' | 'baselineCost' | 'ratedInput'>): void {
   acc.calls += row.calls;
   acc.input += row.input;
   acc.cacheRead += row.cacheRead;
   acc.cacheWrite += row.cacheWrite;
   acc.cost += row.cost ?? 0;
   acc.missCost += row.missCost ?? 0;
+  acc.baselineCost += row.baselineCost ?? 0;
   acc.ratedInput += row.ratedInput ?? 0;
 }
 
@@ -59,11 +62,12 @@ export function toTotals(acc: TotalsAcc): CacheTotals | null {
   };
 }
 
-/** Cost effect over the calls that logged rates; `null` when none did. */
+/** Cost effect over the calls that logged prices; `null` when none did. Costs are summed in the logged price
+ *  unit before taking ratios, so calls weigh by what they cost, not by their token count. */
 export function toCost(acc: TotalsAcc): CacheCost | null {
-  if (acc.ratedInput <= 0 || acc.cost <= 0) return null;
+  if (acc.baselineCost <= 0 || acc.cost <= 0) return null;
   return {
-    savedPct: Math.max(0, Math.round((1 - acc.cost / acc.ratedInput) * 1000) / 10),
+    savedPct: Math.max(0, Math.round((1 - acc.cost / acc.baselineCost) * 1000) / 10),
     missCostPct: pct(acc.missCost, acc.cost) ?? 0,
     ratedPct: pct(acc.ratedInput, acc.input) ?? 0,
   };

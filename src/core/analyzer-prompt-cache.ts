@@ -260,7 +260,7 @@ function buildAttribution(c: Collected): CacheAttribution | null {
     rebuiltTokens: c.origin.rebuilt,
     causes,
     confidence,
-    controlPct: controlShares(causes),
+    controlPct: controlShares(causes, c.origin.rebuilt),
     misses: totalMisses(c.origin),
     origins: buildOrigins(c.origin, totalCost),
     idle: buildIdle(c.breaks, c.origin, c.ttlCalls),

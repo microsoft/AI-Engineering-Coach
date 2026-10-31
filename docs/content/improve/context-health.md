@@ -178,6 +178,8 @@ Causes often occur together. Resuming an old session, for example, usually also 
 
 Most causes are logged on the call itself or in an event since the previous call. System-prompt and tool-schema changes are visible only between two usage checkpoints, which are written periodically rather than on every call. Breaks explained only by such a change are marked as attributed from a **checkpoint window**: the change happened somewhere in that window.
 
+Each session lists its first 100 breaks. Later breaks still count toward rebuilt tokens and break rates, but their causes aren't listed, so their rebuilt tokens count as unknown in who can change the cause.
+
 Two cards break the misses down further:
 
 - **Where cache misses come from** -- Prompt tokens not read from the cache, by origin: new context such as your prompts and tool results (expected), context rebuilt after a break, subagents (which build their own context), compaction summaries, and the first call of each session. In parentheses, the share of the input cost.
@@ -189,7 +191,7 @@ Below them, **Cache hit ratio by week** shows a line per harness, and **By model
 
 ![Prompt Cache session timeline](/screenshots/screen-prompt-cache-session.png)
 
-Open a session to load its timeline. Each bar is one main-agent model call, split into read, written, and uncached tokens, so its height is the prompt size. In long sessions, a bar averages a group of consecutive calls. Cache breaks are marked with their cause; use the **Cache tokens** and **Cache breaks** buttons to show or hide each layer. The table below the chart lists each break with its time, the time since the cache was last refreshed against the cache lifetime, rebuilt tokens, and confidence.
+Open a session to load its timeline. Each bar is one main-agent model call, split into read, written, and uncached tokens, so its height is the prompt size. In long sessions, a bar averages a group of consecutive calls. Cache breaks are marked with their cause; use the **Cache tokens** and **Cache breaks** buttons to show or hide each layer. The table below the chart lists each break with its time, the time since the cache was last refreshed against the cache lifetime, rebuilt tokens, and confidence. For keyboard and screen-reader use, **Show the chart as a table** lists every bar with its time span, its values, and the full text of its markers.
 
 Claude Code and OpenCode sessions show one bar per request and no breaks. Codex sessions show only their totals.
 
@@ -197,7 +199,7 @@ Claude Code and OpenCode sessions show one bar per request and no breaks. Codex 
 
 | Harness | Source | What you get |
 |---|---|---|
-| GitHub Copilot App and Copilot CLI | `session.usage_record` and `session.usage_checkpoint`, plus compaction, mode-change, and resume events, in `events.jsonl` | Cache tokens, cache lifetime and expiry, and relative prices for every model call of the main agent, subagents, and compaction summaries, plus cache breaks and their causes. Older builds that don't log per-call usage show no cache data |
+| GitHub Copilot App and Copilot CLI | `session.usage_record` and `session.usage_checkpoint`, plus compaction, mode-change, and resume events, in `events.jsonl` | Cache tokens, cache lifetime and expiry, and the logged prices for every model call of the main agent, subagents, and compaction summaries, plus cache breaks and their causes. Older builds that don't log per-call usage show no cache data |
 | Claude Code | `usage` on each API response | Cache read and write tokens for every response. Claude Code repeats a response's usage on each of its content blocks, so each response is counted once |
 | OpenCode | Token counts of each assistant message | Cache read and write tokens of every assistant message |
 | Codex | Session token totals | The hit ratio, from cached input tokens. OpenAI's cache has no separate cache writes |
@@ -222,6 +224,6 @@ Insights at the top of the tab apply these tips to your own numbers and quote th
 - Breaks are detected for the main agent only. Subagents build their own context and appear under **Where cache misses come from**.
 - Copilot App and Copilot CLI log each call when it finishes, but its cache lifetime counts from when it started. Expiry is therefore checked from each call's start, using the call duration in the log.
 - Totals count the requests sent in the selected range, like Context Composition, and a break counts when its request is in the range. The session lists include every session with a request in the range, and their numbers cover the whole session.
-- Cost percentages use the prices logged with each call. They describe the relative effect of caching, not what you're billed.
+- Cost percentages use the prices logged with each call. Costs are added up in the logged price unit before the percentage is taken, so calls to pricier models weigh more. They describe the relative effect of caching, not what you're billed.
 - Claude Code, OpenCode, and Codex don't log what invalidated the cache, so they show efficiency only.
 - These figures are for your own coaching, not for evaluating anyone's performance.

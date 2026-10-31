@@ -7,6 +7,7 @@
  * cache misses come from, cache lifetime and expiry, and breakdowns by model and week. */
 
 import type { CacheAttribution, CacheCauseSummary, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData } from '../core/types';
+import { CACHE_MAX_BREAKS_PER_SESSION } from '../core/constants';
 import { createChart, destroyChartById, formatNum, harnessColor } from './shared';
 import { html, type ComponentChildren } from './render';
 import { CAUSE_META, CAUSE_NAMES, CONTROL_META, ORIGIN_META, TOKEN_META, countText, durationText, pctText, shortHarness } from './prompt-cache-labels';
@@ -108,15 +109,19 @@ function toggleDetails(event: Event): void {
   if (panel) panel.hidden = !open;
 }
 
-function causeDetail(cause: CacheCauseSummary): ComponentChildren {
-  const meta = CAUSE_META[cause.key];
-  const confidence = cause.checkpoint > 0
+function confidenceText(cause: CacheCauseSummary): string {
+  if (cause.key === 'unattributed') return 'Not logged: nothing on these calls, or in the events since the previous call, explains why the cache broke.';
+  return cause.checkpoint > 0
     ? `${cause.checkpoint} of ${cause.breaks} known only from a usage-checkpoint window, so the change happened somewhere in that window.`
     : 'Logged on the call itself or in an event just before it.';
+}
+
+function causeDetail(cause: CacheCauseSummary): ComponentChildren {
+  const meta = CAUSE_META[cause.key];
   return html`<div class="ctx-cache-cause-detail">
     <p>${meta.help}</p>
     <p><strong>What you can do:</strong> ${meta.action}</p>
-    <p class="ctx-cache-muted">Confidence: ${confidence}</p>
+    <p class="ctx-cache-muted">Confidence: ${confidenceText(cause)}</p>
     ${cause.segments.length > 0 ? html`<p class="ctx-cache-muted">System-prompt parts that changed: ${cause.segments.map((s, i) => html`${i > 0 ? ', ' : ''}<code>${s.name}</code> (${s.breaks})`)}</p>` : null}
     ${cause.alsoSeen.length > 0 ? html`<p class="ctx-cache-muted">Also logged on these breaks: ${cause.alsoSeen.map(a => `${CAUSE_NAMES[a.cause]} (${a.breaks})`).join(', ')}</p>` : null}
   </div>`;
@@ -136,14 +141,24 @@ function causeRows(cause: CacheCauseSummary, index: number): ComponentChildren {
     <tr id=${detailId} class="ctx-cache-cause-row" hidden><td colspan="5">${causeDetail(cause)}</td></tr>`;
 }
 
+/** Breaks counted in range whose causes aren't listed: each session lists only its first breaks. */
+function unlistedNote(a: CacheAttribution): string {
+  const one = a.breaks === 1;
+  return `${countText(a.breaks, 'cache break')} in this range ${one ? 'isn’t' : 'aren’t'} listed, because each session lists only its first ${CACHE_MAX_BREAKS_PER_SESSION} breaks. ${one ? 'It counts' : 'They count'} toward rebuilt tokens and break rates, but ${one ? 'its cause is' : 'their causes are'} unknown.`;
+}
+
 function causesTable(a: CacheAttribution): ComponentChildren {
-  if (a.causes.length === 0) return html`<div class="ctx-comp-note">No cache breaks in this range: every main-agent call reused the previous call\u2019s cache.</div>`;
+  if (a.causes.length === 0) {
+    return a.breaks > 0
+      ? html`<div class="ctx-comp-note" id="ctxCacheUnlisted">${unlistedNote(a)}</div>`
+      : html`<div class="ctx-comp-note">No cache breaks in this range: every main-agent call reused the previous call’s cache.</div>`;
+  }
   return html`<table class="ctx-cache-table" aria-label="Why the cache broke">
-    <thead><tr><th scope="col">Cause</th><th scope="col" class="num">Breaks</th><th scope="col" class="num">Rebuilt tokens</th><th scope="col" class="num" title="Share of input cost, from logged rates">Cost</th><th scope="col">Who</th></tr></thead>
+    <thead><tr><th scope="col">Cause</th><th scope="col" class="num">Breaks</th><th scope="col" class="num">Rebuilt tokens</th><th scope="col" class="num" title="Share of input cost, from logged prices">Cost</th><th scope="col">Who</th></tr></thead>
     <tbody>${a.causes.map(causeRows)}</tbody>
   </table>
   <p class="ctx-cache-muted ctx-cache-summary">${pctText(a.controlPct.you)} of rebuilt tokens came from causes you can change, and ${pctText(a.controlPct.partly)} partly.
-    ${a.confidence.checkpoint > 0 ? ` ${countText(a.confidence.checkpoint, 'break is', 'breaks are')} attributed from a checkpoint window.` : ''}${a.omittedBreaks > 0 ? ` ${countText(a.omittedBreaks, 'more break is', 'more breaks are')} counted but not listed.` : ''}</p>`;
+    ${a.confidence.checkpoint > 0 ? ` ${countText(a.confidence.checkpoint, 'break is', 'breaks are')} attributed from a checkpoint window.` : ''}${a.omittedBreaks > 0 ? ` ${countText(a.omittedBreaks, 'more break is', 'more breaks are')} counted but not listed, because each session lists only its first ${CACHE_MAX_BREAKS_PER_SESSION}; ${a.omittedBreaks === 1 ? 'its' : 'their'} rebuilt tokens count as unknown cause.` : ''}</p>`;
 }
 
 function originsCard(a: CacheAttribution): ComponentChildren {

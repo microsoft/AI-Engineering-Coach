@@ -389,7 +389,7 @@ function mockSessionCompositionCli(n) {
   };
 }
 
-/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error') ---- */
+/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error' | 'unlisted') ---- */
 
 function cacheTotals(calls, input, readPct, writePct) {
   const cacheRead = Math.round(input * readPct / 100);
@@ -447,6 +447,10 @@ function mockPromptCache(mode, params) {
       medianIdleMinutes: 51,
     },
   };
+  if (mode === 'unlisted' && attribution) {
+    // Breaks counted in range, but every listed break falls outside it: their causes are unknown.
+    Object.assign(attribution, { breaks: 5, breaksPer100: 0.1, omittedBreaks: 5, causes: [], confidence: { logged: 0, checkpoint: 0, unattributed: 0 }, controlPct: { you: 0, partly: 0, harness: 0, unknown: 100 } });
+  }
   return {
     harnesses: [app, claude, codex, vscode],
     attribution,

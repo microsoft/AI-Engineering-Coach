@@ -1999,6 +1999,15 @@
 .ctx-cache-timeline { position: relative; height: 220px; }
 .ctx-cache-breaks { margin-top: 10px; }
 .ctx-cache-breaks td:first-child, .ctx-cache-breaks td:last-child { white-space: nowrap; }
+.call-timeline-data { margin: 6px 0 4px; font-size: 12px; }
+.call-timeline-data summary { cursor: pointer; color: var(--text-muted); }
+.call-timeline-data-scroll { max-height: 280px; overflow: auto; margin-top: 6px; }
+.call-timeline-table { width: 100%; border-collapse: collapse; }
+.call-timeline-table caption { text-align: left; color: var(--text-muted); padding: 2px 0 4px; }
+.call-timeline-table th, .call-timeline-table td { padding: 3px 8px; text-align: left; font-weight: normal; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.call-timeline-table thead th { color: var(--text-muted); font-weight: 600; }
+.call-timeline-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.call-timeline-table .call-timeline-markers { white-space: normal; min-width: 240px; }
 .ctx-cache-ws { padding-bottom: 4px; }
 .ctx-cache-ws-sessions { margin-top: 6px; }
 @media (max-width: 800px) {

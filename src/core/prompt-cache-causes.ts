@@ -109,10 +109,12 @@ export function summarizeCauses(breaks: CacheBreak[], totalRebuilt: number, tota
     .sort((a, b) => b.rebuiltTokens - a.rebuiltTokens || b.breaks - a.breaks);
 }
 
-/** Percent of listed rebuilt tokens by who can change the cause. */
-export function controlShares(causes: CacheCauseSummary[]): Record<CacheControl, number> {
-  const total = causes.reduce((sum, cause) => sum + cause.rebuiltTokens, 0);
-  const out: Record<CacheControl, number> = { you: 0, partly: 0, harness: 0, unknown: 0 };
+/** Percent of all rebuilt tokens by who can change the cause. `totalRebuilt` includes breaks that aren't listed
+ *  (beyond a session's listing cap); their causes aren't known, so their tokens count as unknown. */
+export function controlShares(causes: CacheCauseSummary[], totalRebuilt: number): Record<CacheControl, number> {
+  const listed = causes.reduce((sum, cause) => sum + cause.rebuiltTokens, 0);
+  const total = Math.max(totalRebuilt, listed);
+  const out: Record<CacheControl, number> = { you: 0, partly: 0, harness: 0, unknown: total - listed };
   for (const cause of causes) out[cause.control] += cause.rebuiltTokens;
   for (const control of Object.keys(out) as CacheControl[]) out[control] = pct(out[control], total) ?? 0;
   return out;

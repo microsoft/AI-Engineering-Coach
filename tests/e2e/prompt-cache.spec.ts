@@ -62,6 +62,11 @@ test.describe('Prompt Cache tab', () => {
     await expect(detail).toContainText('session resumed (9)');
     await page.keyboard.press('Space');
     await expect(detail).toBeHidden();
+    const unattributed = table.locator('tr[data-cause="unattributed"] button.ctx-cache-expand');
+    await unattributed.click();
+    const unattributedDetail = page.locator(`#${await unattributed.getAttribute('aria-controls')}`);
+    await expect(unattributedDetail).toContainText('Confidence: Not logged');
+    await expect(unattributedDetail).not.toContainText('Logged on the call itself');
     await expect(page.locator('#ctxCacheAttribution')).toContainText('54% of rebuilt tokens came from causes you can change');
   });
 
@@ -91,6 +96,17 @@ test.describe('Prompt Cache tab', () => {
     await expect(layers).toHaveText(['Cache tokens', 'Cache breaks']);
     await layers.nth(1).click();
     await expect(layers.nth(1)).toHaveAttribute('aria-pressed', 'false');
+    // The chart's values as a table, from the keyboard; it keeps every layer even when one is toggled off.
+    const data = panel.locator('details.call-timeline-data');
+    await expect(data.locator('summary')).toHaveText('Show the chart as a table');
+    await data.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await expect(data).toHaveAttribute('open', '');
+    await expect(data.locator('thead th')).toHaveText(['Model calls', 'Time', 'Read from cache', 'Written to cache', 'Uncached', 'Markers']);
+    await expect(data.locator('tbody tr')).toHaveCount(60);
+    await expect(data.locator('tbody tr').first().locator('th')).toHaveText('#1\u20132');
+    await expect(data.locator('tbody tr').first()).toContainText('30.0K');
+    await expect(data.locator('tbody tr').nth(18)).toContainText('Came back after the cache expired: 98.0K tokens rebuilt');
     const requests = await page.evaluate(() => (window as unknown as { promptCacheRequests: { method: string; params: { sessionId?: string } }[] }).promptCacheRequests);
     expect(requests.filter(r => r.method === 'getSessionTimeline').map(r => r.params.sessionId)).toEqual(['pc-1']);
   });
@@ -101,6 +117,9 @@ test.describe('Prompt Cache tab', () => {
     const panel = page.locator(`#${await toggle.getAttribute('aria-controls')}`);
     await expect(panel.locator('canvas')).toHaveAttribute('aria-label', /per request/);
     await expect(panel).toContainText('Cache breaks are logged only by Copilot App and Copilot CLI');
+    await panel.locator('details.call-timeline-data summary').click();
+    await expect(panel.locator('details.call-timeline-data thead th')).toHaveText(['Requests', 'Time', 'Read from cache', 'Written to cache', 'Uncached']);
+    await expect(panel.locator('details.call-timeline-data tbody tr')).toHaveCount(18);
   });
 
   test('loads a workspace\u2019s sessions for that harness', async ({ page }) => {
@@ -159,5 +178,11 @@ test.describe('Prompt Cache tab states', () => {
     await openPromptCache(page, 'no-attribution', 'Prompt Cache');
     await expect(page.locator('#ctxCacheNoAttribution')).toContainText('logged only by Copilot App and Copilot CLI');
     await expect(page.locator('.ctx-comp-row')).toHaveCount(4);
+  });
+
+  test('says breaks in range are unlisted instead of claiming the cache never broke', async ({ page }) => {
+    await openPromptCache(page, 'unlisted', 'Why the cache broke');
+    await expect(page.locator('#ctxCacheUnlisted')).toContainText('5 cache breaks in this range aren\u2019t listed, because each session lists only its first 100 breaks.');
+    await expect(page.locator('#ctxCacheAttribution')).not.toContainText('every main-agent call reused');
   });
 });

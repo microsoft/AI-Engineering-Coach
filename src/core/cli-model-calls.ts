@@ -38,7 +38,7 @@ export interface CliModelCall {
   cacheTtlSeconds: number | null;
   availableTools: number | null;
   toolTokens: number | null;
-  /** Cache prices relative to the input price, from the call's logged token details. */
+  /** Logged prices: the input price per token and the cache prices relative to it (`relativeRates`). */
   rates: RelativeRates | null;
 }
 
@@ -86,8 +86,10 @@ function tokenTypeRates(copilotUsage: unknown): Map<string, number> {
   return rates;
 }
 
-/** Cache read and write prices relative to the input price. `null` when the input price isn't logged, or a
- *  price is missing for a token type the call used. */
+/** Prices from `copilotUsage.tokenDetails` (cost per batch ÷ batch size): the input price per token, in the
+ *  unit Copilot logs (nano-AIU, the same for every model; the details add up to `totalNanoAiu`), and the cache
+ *  read and write prices as multiples of it. `null` when the input price isn't logged, or a price is missing
+ *  for a token type the call used. */
 export function relativeRates(copilotUsage: unknown, cacheRead: number, cacheWrite: number): RelativeRates | null {
   const rates = tokenTypeRates(copilotUsage);
   const input = rates.get('input');
@@ -95,7 +97,7 @@ export function relativeRates(copilotUsage: unknown, cacheRead: number, cacheWri
   const read = rates.get('cache_read');
   const write = rates.get('cache_write');
   if ((read == null && cacheRead > 0) || (write == null && cacheWrite > 0)) return null;
-  return { cacheRead: (read ?? 0) / input, cacheWrite: (write ?? 0) / input };
+  return { inputPrice: input, cacheRead: (read ?? 0) / input, cacheWrite: (write ?? 0) / input };
 }
 
 function initiatorOf(value: unknown): CliModelCall['initiator'] {

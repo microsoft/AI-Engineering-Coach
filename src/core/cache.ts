@@ -127,7 +127,7 @@ const CACHE_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '
 const CACHE_FILE = path.join(CACHE_DIR, 'parsed.json');
 const CACHE_META = path.join(CACHE_DIR, 'meta.json');
 
-const CACHE_VERSION = 24;
+const CACHE_VERSION = 25;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */
