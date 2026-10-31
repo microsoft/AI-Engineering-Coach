@@ -6,7 +6,7 @@ description: "AI coding tools that AI Engineer Coach can analyze"
 
 # Supported Tools
 
-AI Engineer Coach reads local log files from the following AI coding assistants. No network requests are made; all data stays on your machine.
+AI Engineer Coach reads local log files from the following AI coding assistants. Reading them makes no network requests; all data stays on your machine.
 
 ## Local Agent (VS Code and VS Code Insiders)
 

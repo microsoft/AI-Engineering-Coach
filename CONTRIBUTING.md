@@ -129,6 +129,19 @@ helper waits for chart pixels to settle so it does not show an in-progress anima
 are preserved even if a later assertion fails; the report still marks that suite as failed.
 Existing automatic failure screenshots remain separate.
 
+### Update check tests
+
+Tests never contact GitHub. Unit tests inject `fetch` and fail if anything calls the global one.
+The desktop `update.spec.ts` suite runs against a loopback stand-in for GitHub Releases
+([`tests/vscode/update-server.ts`](tests/vscode/update-server.ts)): the runner packages the same
+sources as the next patch version (with `vsce package <version> --no-update-package-json`, so
+`package.json` is untouched, then rebuilds `dist` with the original stamp) and points the installed
+extension at the server through the test-only `AI_ENGINEER_COACH_UPDATE_TEST_ORIGIN` variable. The
+extension honors that variable only for a loopback origin with an explicit port. The suite checks
+that a checksum mismatch installs nothing, then updates through **Update** and **Reload Window** and
+expects the new version and What's New after the reload. Every other suite turns automatic checks
+off and points the variable at a closed loopback port.
+
 ### Maintaining regression coverage
 
 Add the regression test in the same PR as the feature or fix. Prefer the smallest layer that
