@@ -85,6 +85,26 @@ describe('layoutGuides', () => {
   });
 });
 
+describe('layoutGuides markers', () => {
+  it('give markers at the same request one label: the first one\u2019s, and how many more there are', () => {
+    const { markers } = layoutGuides({
+      markers: [
+        { x: 1, color: 'red', label: 'Compaction' },
+        { x: 1, color: 'blue', label: 'Plan' },
+        { x: 1, color: 'blue' },
+        { x: 2, color: 'blue', label: 'Ship' },
+      ],
+    }, PIXEL, AREA);
+    expect(markers.map(m => [m.x, m.label])).toEqual([[70, 'Compaction +1'], [70, undefined], [70, undefined], [90, 'Ship']]);
+  });
+
+  it('count positions, not markers, against the label limit', () => {
+    const many = Array.from({ length: MAX_MARKER_LABELS + 1 }, (_, i) => ({ x: 3, color: 'red', label: `M${i}` }));
+    const labels = layoutGuides({ markers: many }, PIXEL, AREA).markers.map(m => m.label);
+    expect(labels).toEqual([`M0 +${MAX_MARKER_LABELS}`, ...Array.from({ length: MAX_MARKER_LABELS }, () => undefined)]);
+  });
+});
+
 describe('layoutGuides bands', () => {
   it('stacks the rows up from the bottom of a session chart, tall enough for their labels', () => {
     const { bands } = layoutGuides({ bands: [0, 1, 2, 3].map(band) }, PIXEL, SESSION_AREA);
