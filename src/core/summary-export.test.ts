@@ -164,6 +164,8 @@ describe('summary export', () => {
     expect(markdown).toContain('# AI Engineer Coach Summary');
     expect(markdown).toContain('- Sessions: 7');
     expect(markdown).toContain('- AI-generated LoC: 1,200');
+    expect(markdown).toContain('- Max streak (days you typed a prompt): n/a');
+    expect(markdown).toContain('## Flow (from the prompts you typed)\n- Overall flow score:');
     expect(markdown).toContain('## Top Anti-Patterns');
     expect(markdown).toContain('Mega Sessions');
 

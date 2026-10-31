@@ -10,7 +10,24 @@
  */
 
 import type { Analyzer } from '../core/analyzer';
-import type { DateFilter } from '../core/types';
+import type { DateFilter, TurnBasis } from '../core/types';
+
+/** What a time-based measure counts: the prompts the user typed, not the turns agents or the harness sent. */
+function typedPromptBasis(basis: TurnBasis): { counts: string; typedPrompts: number; automatedTurnsLeftOut: number } {
+  return { counts: 'prompts the user typed', typedPrompts: basis.humanTurns, automatedTurnsLeftOut: basis.automatedTurns };
+}
+
+function sustainablePace(insights: ReturnType<Analyzer['getInsights']>) {
+  const pace = insights.sustainablePace;
+  return {
+    counts: 'prompts the user typed',
+    burnoutRisk: pace.burnoutRisk,
+    alerts: pace.alerts,
+    currentStreak: pace.currentStreak,
+    weekendTrending: pace.weekendTrending,
+    lateNightTrending: pace.lateNightTrending,
+  };
+}
 
 /* ---- helpers ---- */
 
@@ -108,6 +125,7 @@ export function formatActivity(analyzer: Analyzer, f?: DateFilter) {
       [...cal.days].sort((a, b) => b.date.localeCompare(a.date)),
       7,
     ).map(d => ({ date: d.date, requests: d.requests, focusScore: d.focusScore })),
+    recentDaysBasis: typedPromptBasis(cal.turnBasis),
   };
 }
 
@@ -207,6 +225,7 @@ export function formatFlow(analyzer: Analyzer, f?: DateFilter) {
     .slice(0, 5);
 
   return {
+    basis: typedPromptBasis(heatmap.turnBasis),
     summary: {
       overallFlowScore: flow.overallFlowScore,
       avgFollowUpSec: Math.round(flow.avgFollowUpSec),
@@ -327,13 +346,7 @@ export function formatInsights(analyzer: Analyzer, f?: DateFilter) {
         promptPreview: p.text.slice(0, 150),
       })),
     },
-    sustainablePace: {
-      burnoutRisk: insights.sustainablePace.burnoutRisk,
-      alerts: insights.sustainablePace.alerts,
-      currentStreak: insights.sustainablePace.currentStreak,
-      weekendTrending: insights.sustainablePace.weekendTrending,
-      lateNightTrending: insights.sustainablePace.lateNightTrending,
-    },
+    sustainablePace: sustainablePace(insights),
   };
 }
 
@@ -342,10 +355,11 @@ export function formatWellbeing(analyzer: Analyzer, f?: DateFilter) {
   const insights = analyzer.getInsights(f);
 
   if (!wlb) {
-    return { status: 'no-data', message: 'Not enough data to assess work-life balance.' };
+    return { status: 'no-data', message: 'Not enough data to assess work-life balance: no prompts the user typed in range.' };
   }
 
   return {
+    basis: typedPromptBasis(wlb.turnBasis),
     workLifeBalance: {
       score: wlb.score,
       weekendRatio: Math.round(wlb.weekendRatio * 1000) / 10,
@@ -357,13 +371,7 @@ export function formatWellbeing(analyzer: Analyzer, f?: DateFilter) {
       maxBreak: wlb.maxBreak,
       activeDays: wlb.activeDays,
     },
-    sustainablePace: {
-      burnoutRisk: insights.sustainablePace.burnoutRisk,
-      alerts: insights.sustainablePace.alerts,
-      currentStreak: insights.sustainablePace.currentStreak,
-      weekendTrending: insights.sustainablePace.weekendTrending,
-      lateNightTrending: insights.sustainablePace.lateNightTrending,
-    },
+    sustainablePace: sustainablePace(insights),
   };
 }
 
