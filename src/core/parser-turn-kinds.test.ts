@@ -70,6 +70,10 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
     content: 'from_session_id: abc\r\nWhy does this log line repeat?',
     transformedContent: '<current_datetime>2026</current_datetime>\nfrom_session_id: abc\nWhy does this log line repeat?',
   }, undefined],
+  ['a typed sender ID header in text the harness reflowed', {
+    content: 'from_session_id: abc\n\nWhy is this ID repeated?',
+    transformedContent: '<current_datetime>2026</current_datetime>\nfrom_session_id: abc\nWhy is this ID repeated?',
+  }, undefined],
   ['typed text the harness reworded', { content: 'from_date: 2026-01-01\n\nWhy is the total wrong?', transformedContent: 'from_date: 2026-01-01\nWhy is the total wrong?' }, undefined],
 ];
 

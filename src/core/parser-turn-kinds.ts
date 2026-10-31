@@ -26,13 +26,19 @@ const RELAY_ID_HEADER = /^(?:from|sender)(?:_project)?_(?:session|agent)_id[ \t]
 /** An element tag: group 1 is `/` in a closing tag, group 2 the name, group 3 `/` in a self-closing tag. */
 const TAG = /<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>/g;
 
-/** What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
- *  endings or surrounding whitespace, which the harness may change. */
+/**
+ * What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
+ * endings or surrounding whitespace, which the harness may change. When the harness reflowed the typed text, so it
+ * can't be found whole, every line of the typed text is left out instead.
+ */
 function harnessAddedText(data: Record<string, unknown> | undefined): string {
   const transformed = text(data?.transformedContent).replaceAll('\r\n', '\n');
   const typed = text(data?.content).replaceAll('\r\n', '\n').trim();
-  const at = typed ? transformed.lastIndexOf(typed) : -1;
-  return at < 0 ? transformed : transformed.slice(0, at) + transformed.slice(at + typed.length);
+  if (!typed) return transformed;
+  const at = transformed.lastIndexOf(typed);
+  if (at >= 0) return transformed.slice(0, at) + transformed.slice(at + typed.length);
+  const typedLines = new Set(typed.split('\n').map(line => line.trim()).filter(Boolean));
+  return transformed.split('\n').filter(line => !typedLines.has(line.trim())).join('\n');
 }
 
 /** Where a scan of the text the harness added is: in fenced code, or in a quoted element that spans lines. */
