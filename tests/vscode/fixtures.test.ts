@@ -7,9 +7,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatBuildLogFields } from '../../src/core/build-info';
 import {
-  addReloadFixture, assertFixturesUnchanged, exportFixtureDataset, fixtureDatasetSchema,
-  fixtureFiles, fixturePaths, isolatedEnvironment, prepareFixtures,
+  activateLinePattern, addReloadFixture, assertFixturesUnchanged, exportFixtureDataset, fixtureDatasetSchema,
+  fixtureFiles, fixturePaths, isolatedEnvironment, prepareFixtures, readInstalledBuild,
 } from './fixtures';
 import { discoverSuites, vscodeVersion } from './run';
 
@@ -149,6 +150,29 @@ describe('desktop test fixtures', () => {
     expect(fixturePaths(root, 'win32').logs).toContain(path.join('AppData', 'Roaming', 'Code', 'User'));
     expect(fixturePaths(root, 'darwin').logs).toContain(path.join('Library', 'Application Support', 'Code', 'User'));
     expect(fixturePaths(root, 'linux').logs).toContain(path.join('.config', 'Code', 'User'));
+  });
+});
+
+describe('installed build stamp', () => {
+  const stamp = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', builtAt: '2026-11-03T09:30:12.345Z', dev: false };
+
+  it('reads dist/build-info.json from the one installed extension', async () => {
+    const installed = path.join(fixturePaths(root).extensions, 'ai-engineer-coach.ai-engineer-coach-0.2.0');
+    await fs.mkdir(path.join(installed, 'dist'), { recursive: true });
+    await fs.writeFile(path.join(installed, 'dist', 'build-info.json'), JSON.stringify(stamp));
+    expect(await readInstalledBuild(root)).toEqual({ ...stamp, root: installed });
+    await fs.mkdir(path.join(fixturePaths(root).extensions, 'another.extension-1.0.0'));
+    await expect(readInstalledBuild(root)).rejects.toThrow('Only the packaged extension should be installed');
+  });
+
+  it('matches the activate line the extension writes for that build', () => {
+    const build = { ...stamp, root };
+    const line = '2026-11-03T10:00:00.000Z pid=4242 [extension] activate | rss=90.1MB heap=20.0MB/40.0MB ext=1.0MB'
+      + ` | ${formatBuildLogFields(build)} runtimeLog=/home/user/.copilot-analytics-cache/runtime.log`;
+    expect(line).toMatch(activateLinePattern(build));
+    expect(line).not.toMatch(activateLinePattern({ ...build, version: '0.2.1' }));
+    expect(line).not.toMatch(activateLinePattern({ ...build, commit: 'abc1235' }));
+    expect(line.replace('0.2.0', '0x2x0')).not.toMatch(activateLinePattern(build));
   });
 });
 

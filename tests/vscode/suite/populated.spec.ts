@@ -9,23 +9,26 @@ import { after, before, describe, it } from 'mocha';
 import { VSBrowser } from 'vscode-extension-tester';
 import { Dashboard } from '../dashboard';
 import {
-  addReloadFixture, assertFixturesUnchanged, FIRST_PROMPT, fixturePaths,
-  INITIAL_COUNTS, INITIAL_NET_LOC, PROJECT_NAMES, RELOADED_COUNTS, scenarioContext,
+  activateLinePattern, addReloadFixture, assertFixturesUnchanged, FIRST_PROMPT, fixturePaths,
+  INITIAL_COUNTS, INITIAL_NET_LOC, PROJECT_NAMES, readInstalledBuild, RELOADED_COUNTS, scenarioContext,
+  type InstalledBuild,
 } from '../fixtures';
 
 describe('Packaged VSIX with synthetic sessions', () => {
   const dashboard = new Dashboard();
   const { root, timestamp } = scenarioContext();
   let reloaded = false;
+  let build: InstalledBuild;
 
   before(async () => {
+    build = await readInstalledBuild(root);
     await dashboard.open();
   });
 
   after(async () => {
     await assertFixturesUnchanged(root, timestamp, reloaded);
     const runtime = await fs.readFile(fixturePaths(root).runtimeLog, 'utf8');
-    assert.match(runtime, /\[extension\] activate/);
+    assert.match(runtime, activateLinePattern(build));
     assert.match(runtime, /\[panel\] parse-complete/);
     assert.match(runtime, /\[panel\] warmUp-done/);
     assert.doesNotMatch(runtime, /uncaught-exception|unhandled-rejection|loadData-error|rules-load-error|metrics-load-error/);
@@ -34,6 +37,9 @@ describe('Packaged VSIX with synthetic sessions', () => {
   it('activates the installed extension and renders real worker results', async () => {
     await dashboard.expectStats(INITIAL_COUNTS);
     await dashboard.waitForText('#content', 'Local Agent');
+    // The sidebar footer shows the stamp of the installed build.
+    await dashboard.waitForText('#build-info .build-info-version', `v${build.version}`);
+    await dashboard.waitForText('#build-info .build-info-meta', build.commit);
     await dashboard.snapshot('01-dashboard', 'Dashboard: 3 projects, 21 sessions, 63 requests and 315 AI LoC');
     await dashboard.scrollTo('#dailyChart');
     await dashboard.snapshot('01-dashboard-activity', 'Dashboard activity: 7 days and the three-project breakdown');
@@ -127,5 +133,20 @@ describe('Packaged VSIX without GitHub Copilot', () => {
     await dashboard.expectHealthy();
     await dashboard.snapshot('08-copilot-unavailable',
       'Copilot unavailable: Why?, Skill Finder and Level Up hidden, Review Context Files disabled with a sign-in hint');
+  });
+});
+
+describe('Packaged VSIX release notes', () => {
+  const dashboard = new Dashboard();
+
+  it('opens the packaged changelog from What\'s New', async () => {
+    await dashboard.runCommand("What's New");
+    // vsce packages CHANGELOG.md as changelog.md; the command opens it in the Markdown preview.
+    const preview = await dashboard.waitForEditor(/^Preview changelog\.md$/i);
+    await dashboard.snapshot('09-whats-new', "What's New: the packaged changelog in VS Code's Markdown preview");
+    await dashboard.closeEditor(preview);
+    const runtime = await fs.readFile(fixturePaths(scenarioContext().root).runtimeLog, 'utf8');
+    assert.match(runtime, /\[extension\] command-whats-new/);
+    assert.doesNotMatch(runtime, /whats-new-preview-unavailable|whats-new-error/);
   });
 });

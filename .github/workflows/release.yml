@@ -37,6 +37,31 @@ jobs:
             exit 1
           fi
 
+      # Release notes come from the matching CHANGELOG.md section (see skills/cut-release.md);
+      # odd minor versions (0.3.x) are pre-releases and never become the latest release.
+      - name: Read release metadata
+        id: meta
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::package.json version $VERSION must be major.minor.patch; the Marketplace rejects pre-release suffixes"
+            exit 1
+          fi
+          MINOR="$(echo "$VERSION" | cut -d. -f2)"
+          if [ $((MINOR % 2)) -eq 1 ]; then PRERELEASE=true; else PRERELEASE=false; fi
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          node scripts/release.mjs notes "$VERSION" > "$NOTES"
+          {
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "notes=$NOTES"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release notes for v$VERSION (pre-release: $PRERELEASE)"
+            echo
+            cat "$NOTES"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run build
         run: npm run build
 
@@ -61,16 +86,40 @@ jobs:
         with:
           vsix: ${{ steps.vsix.outputs.path }}
 
+      - name: Write VSIX checksum
+        id: checksum
+        env:
+          VSIX_PATH: ${{ steps.vsix.outputs.path }}
+        run: |
+          sha256sum "$VSIX_PATH" > "$VSIX_PATH.sha256"
+          echo "path=$VSIX_PATH.sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo
+            echo "## VSIX checksum"
+            echo
+            echo '```'
+            cat "$VSIX_PATH.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: ${{ steps.vsix.outputs.path }}
+          body_path: ${{ steps.meta.outputs.notes }}
           generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          make_latest: ${{ steps.meta.outputs.prerelease == 'true' && 'false' || 'true' }}
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.vsix.outputs.path }}
+            ${{ steps.checksum.outputs.path }}
 
       - name: Upload VSIX artifact
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vsix
-          path: ${{ steps.vsix.outputs.path }}
+          path: |
+            ${{ steps.vsix.outputs.path }}
+            ${{ steps.checksum.outputs.path }}

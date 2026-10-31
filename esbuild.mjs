@@ -6,11 +6,14 @@
 import * as esbuild from 'esbuild';
 import * as fs from 'fs';
 import * as path from 'path';
+import { computeBuildInfo, describeBuildInfo } from './scripts/build-info.mjs';
 
 const isWatch = process.argv.includes('--watch');
 
-// Stamp the build time into the bundle so the UI can show which build is running.
-const define = { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) };
+// Stamp version, commit and build time into every bundle so the UI and runtime.log
+// show which build is running (read through src/core/build-info.ts).
+const buildInfo = computeBuildInfo();
+const define = { __AIC_BUILD_INFO__: JSON.stringify(buildInfo) };
 
 // Bundle the extension host
 const extensionBuild = esbuild.build({
@@ -35,6 +38,7 @@ const workerBuild = esbuild.build({
   outfile: 'dist/warm-up-worker.js',
   sourcemap: true,
   external: ['vscode'],
+  define,
 });
 
 // Bundle the parse worker (runs the full parse pipeline off the extension host thread)
@@ -47,6 +51,7 @@ const parseWorkerBuild = esbuild.build({
   outfile: 'dist/parse-worker.js',
   sourcemap: true,
   external: ['vscode'],
+  define,
 });
 
 // Bundle the cache write worker (writes cache data to disk off the main thread)
@@ -59,6 +64,7 @@ const cacheWriteWorkerBuild = esbuild.build({
   outfile: 'dist/cache-write-worker.js',
   sourcemap: true,
   external: ['vscode'],
+  define,
 });
 
 // Bundle the canvas host (serves the webview as a Copilot app canvas; no vscode)
@@ -71,6 +77,7 @@ const canvasHostBuild = esbuild.build({
   outfile: 'dist/canvas-host.cjs',
   sourcemap: true,
   external: ['vscode'],
+  define,
 });
 
 // Bundle the webview script
@@ -82,9 +89,13 @@ const webviewBuild = esbuild.build({
   format: 'iife',
   outfile: 'dist/webview/app.js',
   sourcemap: true,
+  define,
 });
 
 await Promise.all([extensionBuild, workerBuild, parseWorkerBuild, cacheWriteWorkerBuild, canvasHostBuild, webviewBuild]);
+
+// Ship the stamp with the bundle so an installed build can be identified from its extension folder.
+fs.writeFileSync(path.join('dist', 'build-info.json'), `${JSON.stringify(buildInfo, null, 2)}\n`);
 
 // Copy static webview assets
 const webviewDist = 'dist/webview';
@@ -131,7 +142,7 @@ bundleCss();
 // Copy sidebar CSS separately (sidebar is its own webview)
 fs.copyFileSync('src/webview/styles-sidebar.css', path.join(webviewDist, 'sidebar.css'));
 
-console.log('Build complete.');
+console.log(`Build complete: ${describeBuildInfo(buildInfo)}.`);
 
 if (isWatch) {
   const ctx1 = await esbuild.context({
@@ -154,6 +165,7 @@ if (isWatch) {
     outfile: 'dist/warm-up-worker.js',
     sourcemap: true,
     external: ['vscode'],
+    define,
   });
   const ctx3 = await esbuild.context({
     entryPoints: ['src/core/parse-worker.ts'],
@@ -164,6 +176,7 @@ if (isWatch) {
     outfile: 'dist/parse-worker.js',
     sourcemap: true,
     external: ['vscode'],
+    define,
   });
   const ctx5 = await esbuild.context({
     entryPoints: ['src/core/cache-write-worker.ts'],
@@ -174,6 +187,7 @@ if (isWatch) {
     outfile: 'dist/cache-write-worker.js',
     sourcemap: true,
     external: ['vscode'],
+    define,
   });
   const ctxCanvas = await esbuild.context({
     entryPoints: ['src/canvas/host.ts'],
@@ -184,6 +198,7 @@ if (isWatch) {
     outfile: 'dist/canvas-host.cjs',
     sourcemap: true,
     external: ['vscode'],
+    define,
   });
   const ctx4 = await esbuild.context({
     entryPoints: ['src/webview/app.ts'],
@@ -193,6 +208,7 @@ if (isWatch) {
     format: 'iife',
     outfile: 'dist/webview/app.js',
     sourcemap: true,
+    define,
   });
   await Promise.all([ctx1.watch(), ctx2.watch(), ctx3.watch(), ctx4.watch(), ctx5.watch(), ctxCanvas.watch()]);
   for (const source of cssSources) {

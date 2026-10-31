@@ -59,6 +59,34 @@ export class Dashboard {
     await this.command('Open Dashboard');
   }
 
+  /** Runs an AI Engineer Coach command that opens something other than the dashboard. */
+  async runCommand(title: string): Promise<void> {
+    await VSBrowser.instance.driver.switchTo().defaultContent();
+    await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
+  }
+
+  /** Waits for an editor tab whose title matches and returns that title. */
+  async waitForEditor(pattern: RegExp): Promise<string> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const editors = new EditorView();
+    let match: string | undefined;
+    await driver.wait(async () => {
+      match = (await editors.getOpenEditorTitles()).find(title => pattern.test(title));
+      return match !== undefined;
+    }, READY_TIMEOUT, `Expected an editor titled ${String(pattern)}`);
+    if (match === undefined) throw new Error(`Expected an editor titled ${String(pattern)}`);
+    return match;
+  }
+
+  async closeEditor(title: string): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const editors = new EditorView();
+    await editors.closeEditor(title);
+    await driver.wait(async () => !(await editors.getOpenEditorTitles()).includes(title), READY_TIMEOUT);
+  }
+
   async snapshot(name: string, title: string): Promise<void> {
     const artifacts = process.env.AIC_E2E_ARTIFACTS;
     if (!artifacts) throw new Error('Missing isolated test artifact directory');
