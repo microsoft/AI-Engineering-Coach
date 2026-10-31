@@ -3,9 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Per-turn main-agent context for Copilot CLI and Copilot App: the prompt size of the turn's last
- * and largest model call, and the context limit the CLI reported. Fed once per `session.usage_record`
- * with the call the parser already read (see cli-model-calls.ts), so the records are walked once. */
+/* Per-turn context: the prompt size of the turn's last and largest model call, and the context limit the
+ * harness reported. Copilot CLI and Copilot App feed it once per `session.usage_record` with the call the parser
+ * already read (see cli-model-calls.ts), so the records are walked once; Codex, Claude Code and OpenCode feed
+ * their own per-call usage. */
 
 import type { TurnContextUsage } from './types';
 

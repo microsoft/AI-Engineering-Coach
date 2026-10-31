@@ -162,7 +162,7 @@ export class ContextAnalyzer extends AnalyzerBase {
 
   /**
    * Per-request context-size series for a session: the prompt of each request's last model call
-   * (Copilot CLI and Codex: `contextUsage`; other harnesses: native `promptTokens`), `0` for a request
+   * (`contextUsage` when the harness logs per-call usage; VS Code: native `promptTokens`), `0` for a request
    * without native data. No token approximation (see helpers.ts).
    */
   private estimateSessionTokens(session: Session): number[] {
@@ -322,8 +322,8 @@ export class ContextAnalyzer extends AnalyzerBase {
     return sessionTokens.some(tokens => tokens > 0);
   }
 
-  /** Compute average input tokens per request from session-level modelUsage.
-   *  Returns 0 if no modelUsage data is available.
+  /** Compute average prompt tokens (uncached, read from and written to the cache) per request from
+   *  session-level modelUsage. Returns 0 if no modelUsage data is available.
    *  NOTE: This is the billing-total average, NOT the context window size.
    *  Used only to determine whether a session has *any* token data at all,
    *  not for utilization computation. */
@@ -331,7 +331,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     if (!session.modelUsage || session.requests.length === 0) return 0;
     let totalInput = 0;
     for (const usage of Object.values(session.modelUsage)) {
-      totalInput += usage.inputTokens + usage.cacheReadTokens;
+      totalInput += usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
     }
     return totalInput > 0 ? Math.round(totalInput / session.requests.length) : 0;
   }

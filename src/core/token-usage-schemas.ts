@@ -20,7 +20,7 @@ export const TurnContextUsageSchema = z.object({
   lastPromptTokens: tokens,
   peakPromptTokens: tokens,
   contextLimit: z.number().positive().nullable(),
-  calls: z.number().int().min(1),
+  calls: z.number().int().min(0),
 }).strict();
 
 export const CompactionTokensUsedSchema = z.object({

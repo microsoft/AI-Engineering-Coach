@@ -773,7 +773,10 @@ function getMockData(method, params) {
         trend: noSessions ? [] : [
           { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
         ],
-        workspaceTrend: [],
+        workspaceTrend: window.mockWorkspaceTrend === true ? [
+          { workspaceName: 'my-api', data: [30, 35, null, 40] },
+          { workspaceName: 'frontend-app', data: [40, 45, 43, 52] },
+        ] : [],
         totalCompactions: noSessions ? 0 : 12,
         fullCompactions: noSessions ? 0 : 4,
         simpleCompactions: noSessions ? 0 : 8,

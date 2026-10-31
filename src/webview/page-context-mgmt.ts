@@ -7,7 +7,7 @@
  * compaction tracking, per-workspace context scores, and anti-patterns. */
 
 import { DateFilter, ContextCompositionData, ContextManagementData, ContextVerdictThresholds, WorkspaceContextScore, WorkspaceContextSessionsData, SessionContextDetail } from '../core/types';
-import { rpc, COLORS, createChart, destroyChartById, formatNum, PALETTE } from './shared';
+import { rpc, COLORS, createChartFrom, destroyChartById, formatNum, PALETTE } from './shared';
 import { html, render, StatCard, CanvasEl, ComponentChildren } from './render';
 import {
   SESSION_COMPOSITION_CHART_ID,
@@ -22,12 +22,22 @@ import { attachCompositionDrilldown } from './context-composition-drilldown';
 import { turnTooltipLines, utilizationSeries, windowFootnote, windowNote, windowSourceHelp, windowTag } from './context-window-view';
 import { closeContextTimeline, renderContextTimeline } from './context-session-timeline';
 import { renderSessionStrip } from './token-types-view';
+import { chartGuidesPlugin, describeGuides, type ChartGuides } from './chart-guides';
+import { eventTooltipLines, sessionChartGuides, thresholdLines } from './context-mgmt-guides';
 
 const VERDICT_COLORS: Record<string, string> = {
   optimal: COLORS.green,
   degraded: COLORS.yellow,
   limited: COLORS.red,
 };
+
+/** Name a chart canvas for screen readers, including what its guides mark. */
+function labelChart(canvasId: string, description: string, guides: ChartGuides): void {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', [description, describeGuides(guides)].filter(Boolean).join(' '));
+}
 
 function contextColor(utilization: number, thresholds: ContextVerdictThresholds): string {
   if (utilization >= thresholds.limitedUtilization) return COLORS.red;
@@ -139,6 +149,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
   function renderTrendChart(mode: 'avg' | 'workspace'): void {
     destroyChartById('ctxMgmtTrendChart');
+    const guides: ChartGuides = { lines: thresholdLines(data.thresholds, 'named') };
 
     if (mode === 'workspace' && data.workspaceTrend.length > 0) {
       // Per-workspace lines
@@ -153,10 +164,10 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         pointRadius: 2,
         spanGaps: true,
       }));
-      createChart('ctxMgmtTrendChart', 'line', {
+      createChartFrom('ctxMgmtTrendChart', { type: 'line', data: {
         labels: trendLabels,
         datasets,
-      }, {
+      }, options: {
         interaction: { mode: 'index', intersect: false },
         scales: {
           y: {
@@ -171,23 +182,8 @@ export async function renderContextManagement(container: HTMLElement, currentFil
             grid: { color: 'rgba(48,54,61,0.3)' },
           },
         },
-        plugins: {
-          annotation: {
-            annotations: {
-              warnLine: {
-                type: 'line', yMin: 50, yMax: 50,
-                borderColor: 'rgba(210,153,34,0.5)', borderWidth: 1, borderDash: [6, 4],
-                label: { display: true, content: `Degraded (${data.thresholds.optimalUtilization}%)`, position: 'start', backgroundColor: 'transparent', color: COLORS.yellow, font: { size: 10 } },
-              },
-              dangerLine: {
-                type: 'line', yMin: data.thresholds.limitedUtilization, yMax: data.thresholds.limitedUtilization,
-                borderColor: 'rgba(248,81,73,0.5)', borderWidth: 1, borderDash: [6, 4],
-                label: { display: true, content: `Limited (${data.thresholds.limitedUtilization}%)`, position: 'start', backgroundColor: 'transparent', color: COLORS.red, font: { size: 10 } },
-              },
-            },
-          },
-        },
-      });
+      }, plugins: [chartGuidesPlugin(guides)] });
+      labelChart('ctxMgmtTrendChart', 'Weekly average context utilization per workspace.', guides);
     } else {
       // Total average + compactions (default) — with color-coded area fill
       const canvas = document.getElementById('ctxMgmtTrendChart') as HTMLCanvasElement | null;
@@ -195,7 +191,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
       if (canvas) {
         gradientFill = buildContextGradient(canvas, data.thresholds);
       }
-      createChart('ctxMgmtTrendChart', 'line', {
+      createChartFrom('ctxMgmtTrendChart', { type: 'line', data: {
         labels: trendLabels,
         datasets: [
           {
@@ -216,7 +212,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
             yAxisID: 'y1',
           },
         ],
-      }, {
+      }, options: {
         interaction: { mode: 'index', intersect: false },
         scales: {
           y: {
@@ -239,23 +235,8 @@ export async function renderContextManagement(container: HTMLElement, currentFil
             grid: { color: 'rgba(48,54,61,0.3)' },
           },
         },
-        plugins: {
-          annotation: {
-            annotations: {
-              warnLine: {
-                type: 'line', yMin: data.thresholds.optimalUtilization, yMax: data.thresholds.optimalUtilization,
-                borderColor: 'rgba(210,153,34,0.5)', borderWidth: 1, borderDash: [6, 4],
-                label: { display: true, content: `Degraded (${data.thresholds.optimalUtilization}%)`, position: 'start', backgroundColor: 'transparent', color: COLORS.yellow, font: { size: 10 } },
-              },
-              dangerLine: {
-                type: 'line', yMin: data.thresholds.limitedUtilization, yMax: data.thresholds.limitedUtilization,
-                borderColor: 'rgba(248,81,73,0.5)', borderWidth: 1, borderDash: [6, 4],
-                label: { display: true, content: `Limited (${data.thresholds.limitedUtilization}%)`, position: 'start', backgroundColor: 'transparent', color: COLORS.red, font: { size: 10 } },
-              },
-            },
-          },
-        },
-      });
+      }, plugins: [chartGuidesPlugin(guides)] });
+      labelChart('ctxMgmtTrendChart', 'Weekly average context utilization and compactions.', guides);
     }
   }
 
@@ -503,101 +484,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
 function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWindow: number, thresholds: ContextVerdictThresholds): void {
   destroyChartById(chartId);
-
-  const eventMarkers = s.events.map(ev => {
-    const color = ev.type === 'compaction' ? COLORS.red
-      : ev.type === 'todo-complete' ? COLORS.green
-      : ev.type === 'todo-progress' ? COLORS.yellow
-      : COLORS.blue;
-    return {
-      type: 'line' as const,
-      xMin: ev.requestIndex,
-      xMax: ev.requestIndex,
-      borderColor: color,
-      borderWidth: 1.5,
-      borderDash: ev.type === 'compaction' ? undefined : [4, 3],
-      label: {
-        display: true,
-        content: ev.label.length > 20 ? ev.label.slice(0, 18) + '\u2026' : ev.label,
-        position: 'start' as const,
-        backgroundColor: 'transparent',
-        color,
-        font: { size: 9 },
-        rotation: -90,
-        yAdjust: -10,
-      },
-    };
-  });
-
-  const annotations: Record<string, unknown> = {
-    warnLine: {
-      type: 'line', yMin: thresholds.optimalUtilization, yMax: thresholds.optimalUtilization,
-      borderColor: 'rgba(210,153,34,0.4)', borderWidth: 1, borderDash: [6, 4],
-      label: { display: true, content: `${thresholds.optimalUtilization}%`, position: 'end', backgroundColor: 'transparent', color: COLORS.yellow, font: { size: 9 } },
-    },
-    dangerLine: {
-      type: 'line', yMin: thresholds.limitedUtilization, yMax: thresholds.limitedUtilization,
-      borderColor: 'rgba(248,81,73,0.4)', borderWidth: 1, borderDash: [6, 4],
-      label: { display: true, content: `${thresholds.limitedUtilization}%`, position: 'end', backgroundColor: 'transparent', color: COLORS.red, font: { size: 9 } },
-    },
-  };
-  for (const [i, m] of eventMarkers.entries()) { annotations['ev' + i] = m; }
-
-  // Embed TODO lifecycle bars as box annotations at the bottom of the chart
-  const todoEvts = s.events.filter(e => e.type !== 'compaction');
-  if (todoEvts.length > 0) {
-    interface TodoLife { title: string; addedAt: number; startedAt: number | null; completedAt: number | null }
-    const todoItems: TodoLife[] = [];
-    const todoMap = new Map<string, TodoLife>();
-    for (const ev of todoEvts) {
-      const key = ev.label;
-      if (ev.type === 'todo-add') {
-        if (!todoMap.has(key)) {
-          const item: TodoLife = { title: key, addedAt: ev.requestIndex, startedAt: null, completedAt: null };
-          todoItems.push(item);
-          todoMap.set(key, item);
-        }
-      } else if (ev.type === 'todo-progress') {
-        const it = todoMap.get(key);
-        if (it && it.startedAt == null) it.startedAt = ev.requestIndex;
-      } else if (ev.type === 'todo-complete') {
-        const it = todoMap.get(key);
-        if (it) it.completedAt = ev.requestIndex;
-        else {
-          const item: TodoLife = { title: key, addedAt: 0, startedAt: null, completedAt: ev.requestIndex };
-          todoItems.push(item);
-          todoMap.set(key, item);
-        }
-      }
-    }
-    const bandH = 3; // % height per todo item
-    for (const [i, it] of todoItems.entries()) {
-      const yBase = i * bandH;
-      const endReq = it.completedAt ?? (s.requestCount - 1);
-      const barColor = it.completedAt != null ? COLORS.green
-        : it.startedAt != null ? COLORS.yellow
-        : COLORS.blue;
-      annotations['todo_' + i] = {
-        type: 'box',
-        xMin: it.addedAt,
-        xMax: endReq,
-        yMin: yBase,
-        yMax: yBase + bandH - 0.5,
-        backgroundColor: barColor + '30',
-        borderColor: barColor + '80',
-        borderWidth: 1,
-        borderRadius: 2,
-        label: {
-          display: true,
-          content: (it.completedAt != null ? '\u2714 ' : it.startedAt != null ? '\u25B6 ' : '') + (it.title.length > 30 ? it.title.slice(0, 28) + '\u2026' : it.title),
-          position: 'start',
-          color: barColor,
-          font: { size: 8 },
-          padding: { left: 2, top: 0, bottom: 0, right: 0 },
-        },
-      };
-    }
-  }
+  const guides = sessionChartGuides(s, thresholds);
 
   const utilData = utilizationSeries(s, ctxWindow);
   const queries = s.requestQueries;
@@ -612,7 +499,7 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
   // Point colors per data point based on zone (null entries default to muted)
   const pointColors = utilData.map(v => v == null ? 'transparent' : contextColor(v, thresholds));
 
-  createChart(chartId, 'line', {
+  createChartFrom(chartId, { type: 'line', data: {
     labels: utilData.map((_, i) => `R${i + 1}`),
     datasets: [{
       label: 'Utilization %',
@@ -631,7 +518,7 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
       // line keeps flowing across them rather than fragmenting the chart.
       spanGaps: true,
     }],
-  }, {
+  }, options: {
     interaction: { mode: 'index', intersect: false },
     scales: {
       y: {
@@ -651,7 +538,6 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
     },
     plugins: {
       legend: { display: false },
-      annotation: { annotations },
       tooltip: {
         callbacks: {
           title: (items: { dataIndex: number }[]) => {
@@ -673,10 +559,12 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
             return `${val.toFixed(1)}% (${formatNum(tokens)} tokens) — ${zone}`;
           },
           afterLabel: (item: { dataIndex: number }) => turnTooltipLines(s, item.dataIndex),
+          afterBody: (items: { dataIndex: number }[]) => (items.length > 0 ? eventTooltipLines(s.events, items[0].dataIndex) : []),
         },
       },
     },
-  });
+  }, plugins: [chartGuidesPlugin(guides)] });
+  labelChart(chartId, 'Context utilization per request of this session.', guides);
 }
 
 function renderTips(tips: string[]): ComponentChildren {

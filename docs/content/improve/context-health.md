@@ -37,7 +37,7 @@ A table shows how context is provided across each harness (VS Code, Claude, etc.
 
 - Request count
 - File reference percentage
-- Instruction attachment rate
+- Instruction attachment rate: requests VS Code attached an instruction file to, such as `copilot-instructions.md`, a `.instructions.md` file, `AGENTS.md`, `CLAUDE.md`, or a rule in `.claude/rules`. Prompt files (`.prompt.md`) don't count. Other harnesses don't log which instruction files they loaded
 - Skills and tools usage percentage
 - Average context per request
 
@@ -60,12 +60,14 @@ The Context Management tab analyzes how efficiently your coding sessions use the
 
 Utilization is a turn's context divided by the context window. Where the window comes from depends on the harness:
 
-- **Reported** -- Copilot CLI and the Copilot App log the context limit of every model call, and Codex logs the model's context window. A turn's context is the prompt of its last main-agent model call, including cached tokens, and it's measured against the limit reported for that turn.
-- **Estimated** -- VS Code, Claude Code, OpenCode, and Xcode don't log their limit. The window is estimated from the largest prompt seen, rounded up, which overstates utilization near the top. Where a turn logs its largest prompt, such as before a compaction within the turn, that prompt counts.
+- **Reported** -- Copilot CLI and the Copilot App log the context limit of every model call, and Codex logs the model's context window. A turn's context is the prompt of its last main-agent model call, including cached tokens, and it's measured against the limit reported for that turn. VS Code logs the model you selected with its context size: the size you configured for the model, such as 272K or 922K, or else the model's default. Each request is measured against the context size of the model selected when you sent it. Auto picks a model for each request, so its requests use an estimate.
+- **Estimated** -- Claude Code, OpenCode, and Xcode don't log their limit. The window is estimated from the largest prompt seen, rounded up, which overstates utilization near the top. Claude Code and OpenCode log every model call, so a turn's context is the prompt of its last call, and the estimate uses the largest call. Where a turn logs its largest prompt, such as before a compaction within the turn, that prompt counts.
 
 Utilization values in the workspace and session tables are tagged **reported limit** or **mixed limits** when they don't use an estimate. A session is tagged **mixed limits** when only some of its turns reported a limit: each of the other turns is measured against an estimate from the largest prompt among them, never against another turn's limit. The adaptive thresholds for the verdicts are learned from sessions with an estimated window only, so adding reported or mixed sessions doesn't move the verdicts of your other harnesses.
 
 Copilot CLI and Copilot App turns count in the Context Score, the verdicts, saturation, and the utilization trend. Earlier versions left them out, because these harnesses logged no per-turn prompt size, so your score can change after you update. Older CLI builds that don't log per-call usage still show no utilization. Copilot CLI compacts automatically at about 80% of its limit, so its utilization rarely goes higher.
+
+VS Code utilization uses the selected model's context size, and Claude Code and OpenCode utilization uses the last model call of each turn. Earlier versions estimated every VS Code window from your own largest prompt, and measured Claude Code and OpenCode turns by their total input over all calls, so utilization and verdicts for these harnesses can drop after you update.
 
 ### Context Composition
 
@@ -123,7 +125,7 @@ GitHub's [Optimizing your AI usage](https://docs.github.com/en/copilot/tutorials
 
 ### Context Utilization Trend
 
-A weekly chart showing average context utilization percentage and compaction events over time. High utilization with frequent compactions suggests you need shorter, more focused sessions.
+A weekly chart showing average context utilization percentage and compaction events over time. Dashed lines mark the utilization at which a session counts as degraded or limited. High utilization with frequent compactions suggests you need shorter, more focused sessions.
 
 ### Per-Workspace Context Session Health
 
@@ -139,7 +141,7 @@ A detailed table with per-session breakdowns for each workspace:
 | Compactions | Number of compaction events |
 | Sessions | Sessions in the workspace |
 
-Click a workspace row to expand inline session-level details with per-session verdicts, token curves, prompt composition, and event counts.
+Click a workspace row to expand inline session-level details with per-session verdicts, token curves, prompt composition, and event counts. A session from a harness without a call timeline shows a per-request utilization chart: dashed lines mark the degraded and limited thresholds, a solid red line marks each compaction, dashed lines mark to-do events, and bands along the bottom show how long each to-do item stayed open. Hover a request to see its compactions and to-do events.
 
 ### Copilot CLI and Copilot App session timeline
 

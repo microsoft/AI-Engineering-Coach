@@ -145,7 +145,7 @@ describe('parseCLIEventsFile', () => {
     });
   });
 
-  it('captures session.shutdown modelMetrics into Session.modelUsage', () => {
+  it('captures session.shutdown modelMetrics into Session.modelUsage, with input uncached', () => {
     const lines = [
       JSON.stringify({
         type: 'session.start',
@@ -183,7 +183,8 @@ describe('parseCLIEventsFile', () => {
       expect(session).not.toBeNull();
       expect(session?.modelUsage).toBeDefined();
       expect(session?.modelUsage?.['gpt-5.5']).toMatchObject({
-        inputTokens: 1234,
+        // usage.inputTokens (1234) includes the 800 read from and 100 written to the cache.
+        inputTokens: 334,
         outputTokens: 567,
         cacheReadTokens: 800,
         cacheWriteTokens: 100,

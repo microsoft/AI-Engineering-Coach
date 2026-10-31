@@ -235,6 +235,7 @@ export const SessionRequestSchema = z.object({
   reasoningEffort: z.enum(['max', 'high', 'medium', 'low']).nullable().optional(),
   endState: z.enum(['pending', 'errored', 'no-data']).optional(),
   contextUsage: TurnContextUsageSchema.optional(),
+  modelContextLimit: z.number().positive().optional(),
   compactions: z.array(CompactionEventSchema).max(MAX_TURN_COMPACTIONS).optional(),
   subagentRuns: z.array(SubagentRunSchema).max(MAX_TURN_SUBAGENT_RUNS).optional(),
 }).passthrough();

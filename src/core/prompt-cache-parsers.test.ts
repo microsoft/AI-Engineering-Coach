@@ -62,8 +62,8 @@ describe('Claude Code prompt-cache usage', () => {
       expect(second.promptCache).toEqual({
         rows: [{ stream: 'main', model: 'claude-opus-4.6', calls: 1, input: 43_003, cacheRead: 42_000, cacheWrite: 1_000 }],
       });
-      // Existing per-request token fields keep their current behavior.
-      expect(first.promptTokens).toBe(3 * 40_010 + 2 * 42_005);
+      // The per-request token fields count each response once too.
+      expect(first).toMatchObject({ promptTokens: 40_010 + 42_005, completionTokens: 50 + 80, cacheReadTokens: 40_000, cacheWriteTokens: 42_000 });
     });
   });
 
@@ -154,10 +154,9 @@ describe('OpenCode prompt-cache usage', () => {
         rows: [{ stream: 'main', model: 'big-pickle', calls: 2, input: 14_738, cacheRead: 9_664, cacheWrite: 0 }],
         coldStart: 4_874,
       });
-      // The existing request fields still describe the first assistant message only, which reported zero
-      // cache tokens: 0, not null.
-      expect(request.promptTokens).toBe(4_874);
-      expect(request).toMatchObject({ cacheReadTokens: 0, cacheWriteTokens: 0 });
+      // The request token fields sum every model call too, and match the rows.
+      expect(request).toMatchObject({ promptTokens: 14_738, completionTokens: 40, cacheReadTokens: 9_664, cacheWriteTokens: 0 });
+      expect(request.contextUsage).toEqual({ lastPromptTokens: 9_864, peakPromptTokens: 9_864, contextLimit: null, calls: 2 });
     });
   });
 

@@ -7,8 +7,9 @@
  * sub-agent tokens, truncated calls and model-call latency. Only numbers, enum values and model
  * names, never prompt content, ids, paths or tool names. */
 
-/** Main-agent context of one turn, from the harness's per-call usage (Copilot CLI and Copilot App
- *  `session.usage_record`, Codex `token_count`). */
+/** Context of one turn, from the harness's per-call usage: Copilot CLI and Copilot App `session.usage_record`,
+ *  Codex `token_count`, and the model calls of Claude Code and OpenCode. Main-agent calls only, except for a
+ *  Claude Code sub-agent's own turns, whose context is the sub-agent's. */
 export interface TurnContextUsage {
   /** Prompt tokens, including cached tokens, of the turn's last main-agent model call:
    *  the size of the context when the turn ended. */
@@ -17,9 +18,10 @@ export interface TurnContextUsage {
    *  compacted during the turn. */
   peakPromptTokens: number;
   /** Context limit the harness reported for the turn's last call (Copilot CLI `maxPromptTokens`,
-   *  Codex `model_context_window`); `null` when it wasn't reported. */
+   *  Codex `model_context_window`); `null` when it wasn't reported (Claude Code, OpenCode). */
   contextLimit: number | null;
-  /** Main-agent model calls in the turn. */
+  /** Main-agent model calls in the turn. 0 when every call of the turn was a sub-agent's (Claude Code), so the
+   *  turn's own context is unknown and its other fields are 0. */
   calls: number;
 }
 
