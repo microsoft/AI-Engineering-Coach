@@ -54,6 +54,7 @@ function session(sessionId: string, source: 'copilot-cli' | 'vscode' = 'copilot-
     events: [],
     requestQueries: ['first', 'second'],
     hasPerRequestTokens: false,
+    windowSource: 'estimated',
     composition: {
       source,
       breakdown: { slices: [{ category: 'toolDefinitions', pct: 10, tokens: 30_000 }, { category: 'conversation', pct: 90, tokens: 270_000 }], weighting: 'tokens', samples: 2, avgPromptTokens: 300_000 },

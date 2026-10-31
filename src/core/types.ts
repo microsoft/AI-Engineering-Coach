@@ -16,3 +16,4 @@ export * from './types/context-types';
 export * from './types/github-app-types';
 export * from './types/rule-types';
 export * from './types/rpc-types';
+export * from './types/token-usage-types';
