@@ -10,6 +10,7 @@
 
 import type { CallTimeline, CallTimelineBucket } from '../core/types';
 import { Chart, destroyChartById, formatNum, trackChart } from './shared';
+import { html, type ComponentChildren } from './render';
 
 export interface CallTimelineMarker {
   /** Short label drawn next to the marker line, e.g. "Expired". */
@@ -152,4 +153,47 @@ export function renderCallTimelineChart(
   });
   trackChart(chart);
   return chart;
+}
+
+function seriesOf(dataset: Record<string, unknown>): unknown[] {
+  const data: unknown = dataset.data;
+  return Array.isArray(data) ? (data as unknown[]) : [];
+}
+
+function cellText(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? formatNum(value) : '\u2014';
+}
+
+/** Text equivalent of the chart for keyboard and screen-reader users, in a collapsed disclosure below it: one
+ *  row per bar with its time span, every layer's values (toggled on or not) and the markers' full text. */
+export function callTimelineTable(
+  timeline: CallTimeline,
+  layers: CallTimelineLayer[],
+  unit: CallTimelineChartOptions['unit'],
+  caption: string,
+): ComponentChildren {
+  const datasets = layers.flatMap(layer => layer.datasets?.(timeline) ?? []);
+  const columns = datasets.map(dataset => (typeof dataset.label === 'string' ? dataset.label : ''));
+  const series = datasets.map(seriesOf);
+  const markers = mergeMarkers(timeline, layers);
+  return html`<details class="call-timeline-data">
+    <summary>Show the chart as a table</summary>
+    <div class="call-timeline-data-scroll" role="region" tabindex="0" aria-label=${caption}>
+      <table class="call-timeline-table">
+        <caption>${caption}</caption>
+        <thead><tr>
+          <th scope="col">${unit === 'calls' ? 'Model calls' : 'Requests'}</th>
+          <th scope="col">Time</th>
+          ${columns.map(column => html`<th scope="col" class="num">${column}</th>`)}
+          ${markers.size > 0 ? html`<th scope="col">Markers</th>` : null}
+        </tr></thead>
+        <tbody>${timeline.buckets.map((bucket, index) => html`<tr>
+          <th scope="row">${bucketLabel(bucket, unit)}</th>
+          <td>${[...new Set([formatClock(bucket.startTs), formatClock(bucket.endTs)].filter(Boolean))].join('\u2013')}</td>
+          ${series.map(values => html`<td class="num">${cellText(values[index])}</td>`)}
+          ${markers.size > 0 ? html`<td class="call-timeline-markers">${(markers.get(index) ?? []).map(marker => marker.detail).join('; ')}</td>` : null}
+        </tr>`)}</tbody>
+      </table>
+    </div>
+  </details>`;
 }

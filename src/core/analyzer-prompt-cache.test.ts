@@ -40,19 +40,19 @@ function session(id: string, harness: string, requests: SessionRequest[], extra:
 
 /** A Copilot App session: 60 main calls over two requests, two breaks, rates logged on every call. */
 function appSession(): Session {
-  const rated = { cost: 0, missCost: 0, ratedInput: 0 };
+  const rated = { cost: 0, missCost: 0, baselineCost: 0, ratedInput: 0 };
   const first: RequestPromptCache = {
     rows: [
-      row('main', [30, 3_000_000, 2_900_000, 100_000], { ...rated, cost: 415_000, missCost: 125_000, ratedInput: 3_000_000, ttlSeconds: 300 }),
-      row('subagent', [10, 500_000, 450_000, 50_000], { model: 'gpt-6-astra', cost: 107_500, missCost: 62_500, ratedInput: 500_000 }),
+      row('main', [30, 3_000_000, 2_900_000, 100_000], { ...rated, cost: 415_000, missCost: 125_000, baselineCost: 3_000_000, ratedInput: 3_000_000, ttlSeconds: 300 }),
+      row('subagent', [10, 500_000, 450_000, 50_000], { model: 'gpt-6-astra', cost: 107_500, missCost: 62_500, baselineCost: 500_000, ratedInput: 500_000 }),
     ],
     coldStart: 40_000,
     coldStartCost: 50_000,
   };
   const second: RequestPromptCache = {
     rows: [
-      row('main', [30, 3_000_000, 2_700_000, 300_000], { cost: 645_000, missCost: 375_000, ratedInput: 3_000_000, ttlSeconds: 300, cacheBreaks: 2 }),
-      row('compaction', [1, 400_000, 380_000, 20_000], { cost: 63_000, missCost: 25_000, ratedInput: 400_000 }),
+      row('main', [30, 3_000_000, 2_700_000, 300_000], { cost: 645_000, missCost: 375_000, baselineCost: 3_000_000, ratedInput: 3_000_000, ttlSeconds: 300, cacheBreaks: 2 }),
+      row('compaction', [1, 400_000, 380_000, 20_000], { cost: 63_000, missCost: 25_000, baselineCost: 400_000, ratedInput: 400_000 }),
     ],
     rebuilt: 200_000,
     rebuiltCost: 250_000,
@@ -140,6 +140,26 @@ describe('PromptCacheAnalyzer date range and break counts', () => {
     expect(all.attribution).toMatchObject({ mainCalls: 150, breaks: 8, omittedBreaks: 5 });
     expect(all.trend.series[0]).toMatchObject({ breaksPer100: [6, 5], calls: [50, 100] });
     expect(ranged.topSessions[0]).toMatchObject({ breaks: 8 });
+  });
+
+  it('counts the rebuilt tokens of unlisted breaks as unknown in who can change the cause', () => {
+    // In range: 500K rebuilt tokens, of which the two listed breaks account for 100K each (you, partly).
+    const capped = session('app-4', 'GitHub Copilot App', [
+      request(`${DAY}T11:00:00Z`, { rows: [row('main', [100, 10_000_000, 9_000_000, 1_000_000], { cacheBreaks: 5 })], rebuilt: 500_000 }),
+    ], { promptCache: { breaks: [brk(0, ['ttl-expired']), brk(0, ['tools-changed'])], omittedBreaks: 3 } });
+    const a = analyzer([capped]).getPromptCache({ fromDate: DAY, toDate: DAY }).attribution;
+    expect(a?.causes.map(c => [c.key, c.pctOfRebuilt])).toEqual([['ttl-user', 20], ['tools-changed', 20]]);
+    expect(a?.controlPct).toEqual({ you: 20, partly: 20, harness: 0, unknown: 60 });
+  });
+
+  it('reports counted breaks without listed causes when the listed ones fall outside the range', () => {
+    const capped = session('app-5', 'GitHub Copilot App', [
+      request('2026-10-18T11:00:00Z', { rows: [row('main', [50, 5_000_000, 4_500_000, 500_000], { cacheBreaks: 2 })], rebuilt: 200_000 }),
+      request(`${DAY}T11:00:00Z`, { rows: [row('main', [50, 5_000_000, 4_600_000, 400_000], { cacheBreaks: 3 })], rebuilt: 300_000 }),
+    ], { promptCache: { breaks: [brk(0, ['ttl-expired']), brk(0, ['resume'])], omittedBreaks: 3 } });
+    const a = analyzer([capped]).getPromptCache({ fromDate: DAY, toDate: DAY }).attribution;
+    expect(a).toMatchObject({ breaks: 3, omittedBreaks: 3, causes: [], rebuiltTokens: 300_000 });
+    expect(a?.controlPct).toEqual({ you: 0, partly: 0, harness: 0, unknown: 100 });
   });
 });
 

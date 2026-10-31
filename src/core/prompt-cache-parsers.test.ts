@@ -101,6 +101,33 @@ describe('Claude Code cache token fields', () => {
       expect(unanswered).toMatchObject({ promptTokens: null, cacheReadTokens: null, cacheWriteTokens: null });
     });
   });
+
+  it('keeps cache fields null and records no cache usage when a response reports no cache tokens', () => {
+    withClaudeFile([
+      claudeUser('no usage block', '2026-10-28T10:00:00Z'),
+      { type: 'assistant', timestamp: '2026-10-28T10:00:02Z', sessionId: 'sess-1', message: { id: 'msg_bare', role: 'assistant', model: 'claude-opus-4-6-20251001', content: [{ type: 'text', text: 'secret answer' }] } },
+      claudeUser('usage without cache fields', '2026-10-28T10:05:00Z'),
+      claudeBlock('msg_old', '2026-10-28T10:05:02Z', { input_tokens: 30_000, output_tokens: 40 }),
+    ], (projectsDir) => {
+      const [bare, old] = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(bare).toMatchObject({ cacheReadTokens: null, cacheWriteTokens: null });
+      expect(old).toMatchObject({ promptTokens: 30_000, cacheReadTokens: null, cacheWriteTokens: null });
+      expect(bare).not.toHaveProperty('promptCache');
+      expect(old).not.toHaveProperty('promptCache');
+    });
+  });
+
+  it('counts a response once its usage arrives, even after a content block without usable usage', () => {
+    withClaudeFile([
+      claudeUser('fix the bug', '2026-10-28T10:00:00Z'),
+      claudeBlock('msg_1', '2026-10-28T10:00:02Z', { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 }),
+      claudeBlock('msg_1', '2026-10-28T10:00:03Z', { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 40_000, output_tokens: 50 }),
+      claudeBlock('msg_1', '2026-10-28T10:00:04Z', { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 40_000, output_tokens: 50 }),
+    ], (projectsDir) => {
+      const cache = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0].promptCache;
+      expect(cache?.rows).toEqual([expect.objectContaining({ stream: 'main', calls: 1, input: 40_010, cacheRead: 0, cacheWrite: 40_000 })]);
+    });
+  });
 });
 
 function withOpenCodeStorage(messages: object[], run: (storageDir: string) => void): void {
@@ -141,6 +168,17 @@ describe('OpenCode prompt-cache usage', () => {
     ], (storageDir) => {
       const request = parseOpenCodeSessions(storageDir)[0].requests[0];
       expect(request).toMatchObject({ promptTokens: null, cacheReadTokens: null, cacheWriteTokens: null });
+      expect(request).not.toHaveProperty('promptCache');
+    });
+  });
+
+  it('keeps the cache fields null when token usage carries no cache entry', () => {
+    withOpenCodeStorage([
+      { id: 'u1', sessionID: 'sess-oc', role: 'user', time: { created: 1700000000000 }, summary: { title: 'task' } },
+      { id: 'a1', sessionID: 'sess-oc', role: 'assistant', parentID: 'u1', modelID: 'big-pickle', time: { created: 1700000001000 }, tokens: { input: 5_000, output: 20 } },
+    ], (storageDir) => {
+      const request = parseOpenCodeSessions(storageDir)[0].requests[0];
+      expect(request).toMatchObject({ promptTokens: 5_000, cacheReadTokens: null, cacheWriteTokens: null });
       expect(request).not.toHaveProperty('promptCache');
     });
   });

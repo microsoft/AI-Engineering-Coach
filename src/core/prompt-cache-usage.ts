@@ -9,8 +9,11 @@
 import type { CacheStream, ModelCallRow, RequestPromptCache } from './types';
 import { normalizeModel } from './helpers';
 
-/** Cache read and cache write prices divided by the input price, as a harness logged them for one call. */
+/** Prices a harness logged for one call: the input price per token, in the harness's price unit (one unit for
+ *  every model, so costs add up across models with different prices), and the cache read and cache write
+ *  prices as multiples of it. */
 export interface RelativeRates {
+  inputPrice: number;
   cacheRead: number;
   cacheWrite: number;
 }
@@ -45,12 +48,17 @@ export function missTokens(sample: CacheCallSample): number {
   return Math.max(0, sample.input - sample.cacheRead);
 }
 
-/** Input-cost units of a call, in input-token equivalents; `null` without logged rates. */
-export function callCost(sample: CacheCallSample): { cost: number; missCost: number } | null {
+/** Input cost of a call in the harness's price unit: what it cost, the part spent on tokens not read from the
+ *  cache, and what the same prompt would have cost uncached. `null` without logged rates. */
+export function callCost(sample: CacheCallSample): { cost: number; missCost: number; baseline: number } | null {
   const rates = sample.rates;
   if (!rates) return null;
-  const missCost = uncachedTokens(sample) + sample.cacheWrite * rates.cacheWrite;
-  return { cost: missCost + sample.cacheRead * rates.cacheRead, missCost };
+  const missCost = rates.inputPrice * (uncachedTokens(sample) + sample.cacheWrite * rates.cacheWrite);
+  return {
+    cost: missCost + rates.inputPrice * sample.cacheRead * rates.cacheRead,
+    missCost,
+    baseline: rates.inputPrice * sample.input,
+  };
 }
 
 /** Cache hit ratio in percent (Σ cacheRead ÷ Σ input, token-weighted) over the rows of one stream,
@@ -79,6 +87,7 @@ function addSample(row: ModelCallRow, sample: CacheCallSample): void {
   if (cost) {
     row.cost = (row.cost ?? 0) + cost.cost;
     row.missCost = (row.missCost ?? 0) + cost.missCost;
+    row.baselineCost = (row.baselineCost ?? 0) + cost.baseline;
     row.ratedInput = (row.ratedInput ?? 0) + sample.input;
   }
   if (sample.ttlSeconds != null && sample.ttlSeconds > 0) row.ttlSeconds = sample.ttlSeconds;
@@ -87,6 +96,7 @@ function addSample(row: ModelCallRow, sample: CacheCallSample): void {
 
 function roundRow(row: ModelCallRow): ModelCallRow {
   const out: ModelCallRow = { ...row };
+  if (out.baselineCost != null) out.baselineCost = Math.round(out.baselineCost);
   if (out.cost != null) out.cost = Math.round(out.cost);
   if (out.missCost != null) out.missCost = Math.round(out.missCost);
   return out;
