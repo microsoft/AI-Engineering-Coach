@@ -16,6 +16,10 @@ import { createRequest, createSession, detectDevcontainerFromRequests, recordFai
 import { forEachJsonlLine, forEachJsonlLineAsync } from './parser-vscode-files';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, normalizeModel } from './helpers';
 import { compositionFromCliUsage, readSystemSegments, type CliTurnUsage } from './context-composition';
+import { readCliModelCall, type CliModelCall } from './cli-model-calls';
+import { CallTimelineBuilder } from './call-timeline';
+import { CliCacheTracker } from './prompt-cache-cli';
+import { uncachedTokens } from './prompt-cache-usage';
 import { EditLocIndex } from './edit-loc-diff';
 import {
   FileEditLocMap,
@@ -98,6 +102,10 @@ interface CLIParseState {
   checkpointToolCount: number | null;
   checkpointToolTokens: number | null;
   compactionSnapshots: CompactionContextSnapshot[];
+  /** Main-agent model calls in order (`Session.callTimeline`). */
+  timeline: CallTimelineBuilder;
+  /** Prompt-cache usage and breaks (`SessionRequest.promptCache`, `Session.promptCache`). */
+  cache: CliCacheTracker;
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -222,11 +230,18 @@ function flushTurn(state: CLIParseState): void {
     curiosity: turn.nonUser ? { kind: 'excluded', excerpts: [] } : undefined,
   });
   state.requests.push(request);
+  attachTurnUsage(state, turn, request);
+  mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
+}
+
+/** Attach the turn's prompt-cache usage and composition (deferred until a system-prompt size is known). */
+function attachTurnUsage(state: CLIParseState, turn: TurnState, request: SessionRequest): void {
+  const promptCache = state.cache.takeRequest();
+  if (promptCache) request.promptCache = promptCache;
   if (turn.usage.calls > 0) {
     if (state.systemTokens == null) state.pendingCompositions.push({ request, usage: turn.usage });
     else attachComposition(request, turn.usage, state.systemTokens);
   }
-  mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
 
 function attachComposition(request: SessionRequest, usage: CliTurnUsage, systemTokens: number | null): void {
@@ -246,39 +261,53 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function eventTime(ev: CLIEvent): number | null {
+  const ts = ev.timestamp ? Date.parse(ev.timestamp) : Number.NaN;
+  return Number.isFinite(ts) ? ts : null;
+}
+
+/** One model call: read it once, then feed the call timeline, the prompt-cache tracker and the turn's
+ *  composition. Records logged before the first prompt are taken by the first turn. */
+function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
+  const call = readCliModelCall(ev.data || {}, eventTime(ev), state.currentModelId);
+  if (!call) return;
+  const callIndex = call.stream === 'main'
+    ? state.timeline.add({
+      timestamp: call.timestamp,
+      requestIndex: state.requests.length,
+      cacheReported: call.cacheReported,
+      cacheRead: call.cacheReadTokens,
+      cacheWrite: call.cacheWriteTokens,
+      uncached: uncachedTokens({ input: call.inputTokens, cacheRead: call.cacheReadTokens, cacheWrite: call.cacheWriteTokens }),
+    })
+    : null;
+  state.cache.onCall(call, callIndex, state.requests.length);
+  addCompositionUsage(state.turn, call);
+}
+
 /** Main-thread calls build the main context; sub-agent calls have their own. */
-function isMainAgentCall(usage: Record<string, unknown>): boolean {
-  if (typeof usage.interactionType === 'string') return usage.interactionType === 'conversation-agent';
-  return usage.initiator === 'user' || usage.initiator === 'agent';
-}
-
-function handleUsageRecord(data: Record<string, unknown>, state: CLIParseState): void {
-  const turn = state.turn;
-  const usage = recordValue(data.usage);
-  if (!turn || !usage || !isMainAgentCall(usage)) return;
-  const inputTokens = finiteNumber(usage.inputTokens);
-  const toolTokens = finiteNumber(usage.toolTokenCount);
-  if (inputTokens == null || toolTokens == null || inputTokens <= 0) return;
+function addCompositionUsage(turn: TurnState | null, call: CliModelCall): void {
+  if (!turn || call.stream !== 'main' || call.toolTokens == null) return;
   turn.usage.calls++;
-  turn.usage.inputTokens += inputTokens;
-  turn.usage.toolTokens += Math.max(0, toolTokens);
-  const availableTools = finiteNumber(usage.availableToolCount);
-  if (availableTools != null && availableTools > turn.usage.availableTools) turn.usage.availableTools = availableTools;
+  turn.usage.inputTokens += call.inputTokens;
+  turn.usage.toolTokens += Math.max(0, call.toolTokens);
+  if (call.availableTools != null && call.availableTools > turn.usage.availableTools) turn.usage.availableTools = call.availableTools;
 }
 
-/** Reads only segment names/tokens and tool totals; hashes, tool names and schemas are ignored. */
+/** Reads only segment names/tokens and tool totals; hashes, tool names and schemas are ignored
+ *  (the prompt-cache tracker compares them in memory and keeps only which segments changed). */
 function handleUsageCheckpoint(data: Record<string, unknown>, state: CLIParseState): void {
   const states = recordArrayValue(data.promptCacheBreakState);
   // A lone entry counts as the main agent only when it doesn't name its conversation: a sub-agent's
   // checkpoint must not replace the main agent's segments and tool totals or back-fill its turns.
   const main = states.find(s => s.conversation === 'main')
     ?? (states.length === 1 && states[0].conversation == null ? states[0] : undefined);
-  const models = recordValue(main?.models);
-  if (!main || !models) return;
+  if (!main) return;
+  const models = recordValue(main.models);
   const active = str(main.lastActiveModel);
-  const model = Object.prototype.hasOwnProperty.call(models, active)
-    ? recordValue(models[active])
-    : recordValue(Object.values(models)[0]);
+  const modelName = models && Object.prototype.hasOwnProperty.call(models, active) ? active : Object.keys(models ?? {})[0] ?? '';
+  const model = models ? recordValue(models[modelName]) : undefined;
+  state.cache.onCheckpoint(main, model, modelName);
   if (!model) return;
   const segments = readSystemSegments(model.system_segments);
   if (segments.length > 0) {
@@ -293,6 +322,7 @@ const MAX_COMPACTION_SNAPSHOTS = 50;
 
 function handleCompactionStart(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
+  state.cache.onCompaction();
   setSystemTokens(state, data.systemTokens);
   const currentTokens = finiteNumber(data.currentTokens);
   const systemTokens = finiteNumber(data.systemTokens);
@@ -479,6 +509,7 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
 }
 
 function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState): void {
+  state.cache.onCompaction(data);
   setSystemTokens(state, data.systemTokens);
   const turn = state.turn;
   if (!turn) return;
@@ -531,11 +562,13 @@ function handleShutdown(data: Record<string, unknown>, state: CLIParseState): vo
   if (Object.keys(collected).length > 0) state.modelUsage = collected;
 }
 
-/* Context-composition events. A Map (not an object) because event types come from the file. */
+/* Context-composition and prompt-cache events. A Map (not an object) because event types come from the file. */
 const CONTEXT_EVENT_HANDLERS = new Map<string, (ev: CLIEvent, state: CLIParseState) => void>([
-  ['session.usage_record', (ev, state) => handleUsageRecord(ev.data || {}, state)],
+  ['session.usage_record', handleUsageRecord],
   ['session.usage_checkpoint', (ev, state) => handleUsageCheckpoint(ev.data || {}, state)],
   ['session.compaction_start', handleCompactionStart],
+  ['session.mode_changed', (_ev, state) => state.cache.onSignal('mode-change')],
+  ['session.resume', (_ev, state) => state.cache.onSignal('resume')],
 ]);
 
 function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void {
@@ -600,6 +633,8 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     checkpointToolCount: null,
     checkpointToolTokens: null,
     compactionSnapshots: [],
+    timeline: new CallTimelineBuilder(),
+    cache: new CliCacheTracker(),
   };
 }
 
@@ -618,6 +653,8 @@ function finalizeCliSession(
 
   const creationDate = state.startTime ? new Date(state.startTime).getTime() : null;
   const contextComposition = buildSessionComposition(state);
+  const callTimeline = state.timeline.build();
+  const promptCache = state.cache.finish();
   return createSession({
     sessionId: state.sessionId,
     workspaceId: wsId,
@@ -628,6 +665,8 @@ function finalizeCliSession(
     requests: state.requests,
     modelUsage: state.modelUsage,
     ...(contextComposition ? { contextComposition } : {}),
+    ...(callTimeline ? { callTimeline } : {}),
+    ...(promptCache ? { promptCache } : {}),
     endReason: state.sawShutdown ? 'shutdown' : 'active',
     customInstructionsBytes,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests),

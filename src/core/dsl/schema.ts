@@ -43,8 +43,8 @@ export const FIELD_SCHEMA: FieldInfo[] = [
   { name: 'toolConfirmations',  type: 'object[]',     description: 'Tool confirmation events',                            scope: 'request' },
   { name: 'promptTokens',       type: 'number | null', description: 'Prompt token count (total input context size, includes cached portion)', scope: 'request' },
   { name: 'completionTokens',   type: 'number | null', description: 'Completion token count',                             scope: 'request' },
-  { name: 'cacheReadTokens',    type: 'number | null', description: 'Cached tokens read (subset of promptTokens)',        scope: 'request' },
-  { name: 'cacheWriteTokens',   type: 'number | null', description: 'Cached tokens written / cache creation',             scope: 'request' },
+  { name: 'cacheReadTokens',    type: 'number | null', description: 'Cached tokens read (subset of promptTokens); null when the harness doesn\'t report cache usage, 0 when it reported none', scope: 'request' },
+  { name: 'cacheWriteTokens',   type: 'number | null', description: 'Cached tokens written / cache creation; null when the harness doesn\'t report cache usage, 0 when it reported none', scope: 'request' },
   { name: 'reasoningEffort',    type: 'string',       description: 'Reasoning effort level (max | high | medium | low) when known', scope: 'request', example: '"high"' },
   { name: 'workType',           type: 'string',       description: 'Work type classification: feature, bugfix, refactor, etc.', scope: 'request' },
 

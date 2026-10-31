@@ -51,6 +51,8 @@ import type {
 import type { ConfigHealthData } from './config-types';
 import type { InsightsData } from './insights-types';
 import type { ContextManagementData, FlowStateData, SessionRangeMatch, WorkspaceContextSessionsData } from './context-types';
+import type { PromptCacheData, PromptCacheSessionsData } from './prompt-cache-types';
+import type { SessionTimelineData } from './session-timeline-types';
 import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
 import type { CuriosityData, CuriosityFilter } from './curiosity-types';
@@ -89,6 +91,9 @@ export interface RpcMethodMap {
   getContextManagement: { params: { filter?: DateFilter } | undefined; result: ContextManagementData };
   getWorkspaceContextSessions: { params: { workspaceId: string; filter?: DateFilter; rangeMatch?: SessionRangeMatch }; result: WorkspaceContextSessionsData };
   getContextRangeAvailability: { params: { filter?: DateFilter } | undefined; result: { rangesWithTokens: number[]; matchingSessions: number; sessionsWithRequestTokens: number; harnessesWithoutRequestTokens: string[] } };
+  getPromptCache: { params: { filter?: DateFilter } | undefined; result: PromptCacheData };
+  getPromptCacheSessions: { params: { workspaceId: string; harness?: string; filter?: DateFilter }; result: PromptCacheSessionsData };
+  getSessionTimeline: { params: { sessionId: string }; result: SessionTimelineData | null };
   getCalendarActivity: { params: DateFilter | undefined; result: CalendarActivityData };
   getProjectOverview: { params: DateFilter | undefined; result: ProjectOverviewData };
   getImageGallery: { params: DateFilter | undefined; result: ImageGalleryData };

@@ -181,7 +181,7 @@ const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'aiEngineerCoach_contextHealth',
-    description: 'Get context management health: context window utilization, compaction events, config health scores, agentic readiness, and instruction quality per workspace.',
+    description: 'Get context management health: context window utilization, compaction events, prompt-cache efficiency and why the cache broke, config health scores, agentic readiness, and instruction quality per workspace.',
     inputSchema: { type: 'object', properties: { ...FILTER_SCHEMA } },
     invoke: (a, input) => textResult(formatContextHealth(a, parseFilter(input))),
     prepareMessage: 'Checking context health…',
