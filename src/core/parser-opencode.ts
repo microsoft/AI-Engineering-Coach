@@ -34,6 +34,8 @@ import {
 import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromContent, type ImageReference } from './image-data';
 import type { SessionSource } from './cache';
+import type { RequestPromptCache } from './types';
+import { RequestCacheBuilder, cacheModelName, missTokens } from './prompt-cache-usage';
 
 interface OcSession {
   id: string;
@@ -397,12 +399,37 @@ function buildOpenCodeRequest(
     // are tracked separately for billing.
     promptTokens: hasTokenData ? (assistantData.tokenSource?.input ?? 0) + cacheRead + cacheWrite : null,
     completionTokens: hasTokenData ? (assistantData.tokenSource?.output ?? 0) : null,
-    cacheReadTokens: cacheRead > 0 ? cacheRead : null,
-    cacheWriteTokens: cacheWrite > 0 ? cacheWrite : null,
+    // null: no usage was reported. 0: usage was reported with no cache reads or writes (caching off).
+    cacheReadTokens: hasTokenData ? cacheRead : null,
+    cacheWriteTokens: hasTokenData ? cacheWrite : null,
     // OpenCode stores reasoning effort as "variant" on user messages
     reasoningEffort: canonicalizeReasoningEffort(msg.variant)
       ?? extractReasoningEffortFromModelId(assistantData.modelId),
   });
+}
+
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Cache usage of every model call of a request. OpenCode writes one assistant message per call, and its
+ *  `tokens.input` excludes the cached tokens. */
+function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawMain: boolean }): RequestPromptCache | undefined {
+  const builder = new RequestCacheBuilder();
+  for (const message of assistantMessages) {
+    const tokens = message.tokens;
+    if (!tokens) continue;
+    const cacheRead = tokenCount(tokens.cache?.read);
+    const cacheWrite = tokenCount(tokens.cache?.write);
+    const sample = { input: tokenCount(tokens.input) + cacheRead + cacheWrite, cacheRead, cacheWrite };
+    if (sample.input <= 0) continue;
+    builder.addCall('main', cacheModelName(message.modelID || message.model?.modelID), sample);
+    if (!cacheState.sawMain) {
+      cacheState.sawMain = true;
+      builder.addColdStart(missTokens(sample), undefined);
+    }
+  }
+  return builder.take();
 }
 
 function buildOpenCodeSession(
@@ -418,6 +445,7 @@ function buildOpenCodeSession(
 
   const { wsId, wsName } = getOpenCodeWorkspace(rawSession);
   const requests: SessionRequest[] = [];
+  const cacheState = { sawMain: false };
   let firstTs: number | null = null;
   let lastTs: number | null = null;
 
@@ -431,7 +459,10 @@ function buildOpenCodeSession(
     const assistantMessages = findAssistantMessages(rawMessages, i + 1);
     const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
-    requests.push(buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex));
+    const request = buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex);
+    const promptCache = openCodeRequestCache(assistantMessages, cacheState);
+    if (promptCache) request.promptCache = promptCache;
+    requests.push(request);
   }
 
   if (requests.length === 0) return null;

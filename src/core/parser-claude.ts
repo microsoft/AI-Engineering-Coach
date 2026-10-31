@@ -31,6 +31,7 @@ import {
 } from './edit-tool-diff';
 import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromContent, type ImageReference, type ImageRequestMatch } from './image-data';
+import { RequestCacheBuilder, cacheModelName, missTokens } from './prompt-cache-usage';
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
 
@@ -45,6 +46,9 @@ interface ClaudeContentBlock {
 }
 
 interface ClaudeMessage {
+  /** API response id. Claude Code writes one line per content block and repeats `usage` on each,
+   *  so usage must be counted once per id. */
+  id?: string;
   role?: string;
   model?: string;
   content?: ClaudeContentBlock[] | string;
@@ -113,6 +117,14 @@ interface ClaudeAssistantData {
   answerEvidence: 'final' | 'legacy' | 'missing';
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
+  /** Prompt-cache usage per API response (counted once per `message.id`). */
+  cache: RequestCacheBuilder;
+  responseIds: Set<string>;
+}
+
+/** Session-wide prompt-cache state across Claude requests. */
+interface ClaudeCacheState {
+  sawMain: boolean;
 }
 
 const CLAUDE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'MultiEditTool']);
@@ -369,7 +381,28 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
-function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, lastTs: number | null): ClaudeAssistantData {
+/** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain). */
+function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
+  const usage = line.message?.usage;
+  if (!usage) return;
+  const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
+  if (responseId) {
+    if (data.responseIds.has(responseId)) return;
+    data.responseIds.add(responseId);
+  }
+  const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
+  const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
+  const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
+  if (sample.input <= 0) return;
+  const stream = line.isSidechain ? 'subagent' : 'main';
+  data.cache.addCall(stream, cacheModelName(line.message?.model), sample);
+  if (stream === 'main' && !cacheState.sawMain) {
+    cacheState.sawMain = true;
+    data.cache.addColdStart(missTokens(sample), undefined);
+  }
+}
+
+function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, lastTs: number | null, cacheState: ClaudeCacheState): ClaudeAssistantData {
   const data: ClaudeAssistantData = {
     nextIndex: startIndex,
     lastTs,
@@ -388,6 +421,8 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
     answerEvidence: 'missing',
     investigationDelegations: [],
     webDomains: [],
+    cache: new RequestCacheBuilder(),
+    responseIds: new Set(),
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);
@@ -412,6 +447,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
       data.totalOutputTokens += getNumberField(usage, 'output_tokens');
       data.totalCacheReadTokens += cacheRead;
       data.totalCacheWriteTokens += cacheWrite;
+      addClaudeCacheUsage(data, next, cacheState);
 
       for (const block of toContentArray(next.message?.content)) {
         if (block.type === 'text' && block.text) {
@@ -758,6 +794,7 @@ function buildClaudeRequest(
   const uniqueRefs = [...new Set(assistantData.referencedFiles)];
   const skills = new Set(assistantData.skillsUsed);
   for (const name of extractSkillsFromRefs(uniqueRefs)) skills.add(name);
+  const promptCache = assistantData.cache.take();
   const request = createRequest({
     requestId,
     userEventId: line.uuid,
@@ -778,10 +815,12 @@ function buildClaudeRequest(
     totalElapsed: userTs && assistantData.lastTs ? assistantData.lastTs - userTs : null,
     promptTokens: hasAnyTokens ? assistantData.totalInputTokens : null,
     completionTokens: hasAnyTokens ? assistantData.totalOutputTokens : null,
-    cacheReadTokens: assistantData.totalCacheReadTokens > 0 ? assistantData.totalCacheReadTokens : null,
-    cacheWriteTokens: assistantData.totalCacheWriteTokens > 0 ? assistantData.totalCacheWriteTokens : null,
+    // null: no usage was reported. 0: usage was reported with no cache reads or writes (caching off).
+    cacheReadTokens: hasAnyTokens ? assistantData.totalCacheReadTokens : null,
+    cacheWriteTokens: hasAnyTokens ? assistantData.totalCacheWriteTokens : null,
     reasoningEffort: extractReasoningEffortFromModelId(assistantData.model),
     curiosity: line.isSidechain || line.isMeta || line.isCompactSummary ? { kind: 'excluded', excerpts: [] } : undefined,
+    ...(promptCache ? { promptCache } : {}),
   });
   mergeRequestEditLoc(editLocIndex, requestId, assistantData.editLocs);
   return request;
@@ -809,6 +848,7 @@ export function parseClaudeSessionFile(
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
   const transcriptKey = claudeTranscriptKey(filePath);
   const requests: SessionRequest[] = [];
+  const cacheState: ClaudeCacheState = { sawMain: false };
   let cwd = '';
   let firstTs: number | null = null;
   let lastTs: number | null = null;
@@ -829,7 +869,7 @@ export function parseClaudeSessionFile(
     const userTs = getTimestamp(line.timestamp);
     ({ firstTs, lastTs } = updateClaudeTimestampRange(userTs, firstTs, lastTs));
 
-    const assistantData = collectClaudeAssistantData(lines, i + 1, lastTs);
+    const assistantData = collectClaudeAssistantData(lines, i + 1, lastTs, cacheState);
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);
