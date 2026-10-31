@@ -154,10 +154,9 @@ describe('OpenCode prompt-cache usage', () => {
         rows: [{ stream: 'main', model: 'big-pickle', calls: 2, input: 14_738, cacheRead: 9_664, cacheWrite: 0 }],
         coldStart: 4_874,
       });
-      // The existing request fields still describe the first assistant message only, which reported zero
-      // cache tokens: 0, not null.
-      expect(request.promptTokens).toBe(4_874);
-      expect(request).toMatchObject({ cacheReadTokens: 0, cacheWriteTokens: 0 });
+      // The request token fields sum every model call too, and match the rows.
+      expect(request).toMatchObject({ promptTokens: 14_738, completionTokens: 40, cacheReadTokens: 9_664, cacheWriteTokens: 0 });
+      expect(request.contextUsage).toEqual({ lastPromptTokens: 9_864, peakPromptTokens: 9_864, contextLimit: null, calls: 2 });
     });
   });
 
