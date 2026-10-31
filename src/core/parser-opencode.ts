@@ -5,10 +5,12 @@
 
 /* OpenCode session parser
  *
- * Data layout (macOS):
+ * V1 JSON layout (macOS):
  *   ~/.local/share/opencode/storage/session/global/<session-id>.json   -- session metadata
  *   ~/.local/share/opencode/storage/message/<session-id>/<msg-id>.json -- message metadata
  *   ~/.local/share/opencode/storage/part/<msg-id>/<part-id>.json       -- content parts (text, tool, step-start/finish)
+ * SQLite: opencode.db (and channel-specific databases) stores V1 session/message/part
+ * tables or V2 session_v2/session_message tables with inline content. Both can coexist.
  *
  * Sessions have: id, slug, version, projectID, directory, title, time.created/updated
  * Messages have: id, sessionID, role (user|assistant), time, agent, model {providerID, modelID}, tokens, cost
@@ -61,6 +63,10 @@ interface OcMessage {
   summary?: { title?: string; diffs?: OcFileDiff[] };
   variant?: string;
   model?: { providerID?: string; modelID?: string };
+  seq?: number;
+  text?: string;
+  files?: unknown[];
+  content?: unknown[];
 }
 
 interface OcFileDiff {
@@ -79,12 +85,14 @@ interface OcPart {
   text?: string;
   mime?: string;
   url?: string;
+  data?: unknown;
   tool?: string;
   callID?: string;
   state?: { status?: string; input?: Record<string, unknown>; output?: string };
   tokens?: { input?: number; output?: number; reasoning?: number };
   cost?: number;
   reason?: string;
+  fileDiffs?: OcFileDiff[];
 }
 
 interface OpenCodeAssistantData {
@@ -93,6 +101,8 @@ interface OpenCodeAssistantData {
   editedFiles: string[];
   referencedFiles: string[];
   modelId: string;
+  agent: string;
+  variant?: string;
   totalElapsed: number | null;
   lastTs: number | null;
   tokenSource: OcMessage['tokens'] | null;
@@ -107,7 +117,10 @@ const READ_TOOLS = new Set(['read', 'glob', 'grep', 'ls', 'find']);
 
 /** The subset of `node:sqlite` this parser uses, so the module stays optional at build time. */
 interface SqliteDatabase {
-  prepare(sql: string): { all(...parameters: string[]): unknown[] };
+  prepare(sql: string): {
+    all(...parameters: string[]): unknown[];
+    iterate(...parameters: string[]): Iterable<unknown>;
+  };
   close(): void;
 }
 
@@ -236,10 +249,21 @@ function applyOpenCodePart(
   const toolLower = part.tool.toLowerCase();
   const toolSucceeded = part.state?.status === undefined || part.state.status === 'completed';
   if (!toolSucceeded && WRITE_TOOLS.has(toolLower)) return;
-  if (toolLower === 'patch' || toolLower === 'apply_patch') {
-    const patch = typeof input.patch === 'string' ? input.patch
-      : typeof input.input === 'string' ? input.input
-        : '';
+  const recordedLocs: FileEditLocMap = new Map();
+  if (WRITE_TOOLS.has(toolLower)) {
+    for (const diff of part.fileDiffs ?? []) {
+      if (diff.file && typeof diff.additions === 'number' && typeof diff.deletions === 'number') {
+        addFileEditLoc(recordedLocs, diff.file, diff.additions, diff.deletions);
+      }
+    }
+    mergeFileEditLoc(data.editLocs, recordedLocs);
+    data.editedFiles.push(...recordedLocs.keys());
+  }
+  if ((toolLower === 'patch' || toolLower === 'apply_patch') && recordedLocs.size === 0) {
+    const patch = typeof input.patchText === 'string' ? input.patchText
+      : typeof input.patch === 'string' ? input.patch
+        : typeof input.input === 'string' ? input.input
+          : '';
     const patchEdits = parseApplyPatch(patch);
     mergeFileEditLoc(data.editLocs, patchEdits);
     for (const file of patchEdits.keys()) data.editedFiles.push(file);
@@ -255,15 +279,18 @@ function applyOpenCodePart(
 
   if (WRITE_TOOLS.has(toolLower)) {
     data.editedFiles.push(filePath);
-    const previous = typeof input.old_string === 'string' ? input.old_string
-      : typeof input.old_str === 'string' ? input.old_str
-        : '';
-    const next = typeof input.new_string === 'string' ? input.new_string
-      : typeof input.new_str === 'string' ? input.new_str
-        : '';
-    if (previous || next) {
+    const previous = typeof input.oldString === 'string' ? input.oldString
+      : typeof input.old_string === 'string' ? input.old_string
+        : typeof input.old_str === 'string' ? input.old_str
+          : '';
+    const next = typeof input.newString === 'string' ? input.newString
+      : typeof input.new_string === 'string' ? input.new_string
+        : typeof input.new_str === 'string' ? input.new_str
+          : '';
+    // Recorded diffs capture replace-all and overwrite behavior that inputs alone cannot.
+    if (!recordedLocs.has(filePath) && (previous || next)) {
       recordContentReplacement(data.editLocs, filePath, previous, next);
-    } else {
+    } else if (!recordedLocs.has(filePath)) {
       const written = typeof input.content === 'string' ? input.content
         : typeof input.code === 'string' ? input.code
           : '';
@@ -275,9 +302,10 @@ function applyOpenCodePart(
     // Write tools store the code in various input fields; also check state.output.
     const content = typeof input.content === 'string' ? input.content
       : typeof input.code === 'string' ? input.code
-        : typeof input.new_string === 'string' ? input.new_string
-          : typeof part.state?.output === 'string' ? part.state.output
-            : null;
+        : typeof input.newString === 'string' ? input.newString
+          : typeof input.new_string === 'string' ? input.new_string
+            : typeof part.state?.output === 'string' ? part.state.output
+              : null;
     if (content) {
       const ext = filePath.split('.').pop() || 'unknown';
       textParts.push(`\n\`\`\`${ext}\n${content}\n\`\`\`\n`);
@@ -299,6 +327,7 @@ function collectAssistantData(
     editedFiles: [],
     referencedFiles: [],
     modelId: '',
+    agent: '',
     totalElapsed: null,
     lastTs,
     tokenSource: null,
@@ -310,15 +339,20 @@ function collectAssistantData(
   const assistantMsg = assistantMessages[0];
   if (!assistantMsg) return data;
 
-  const assistantTs = assistantMsg.time?.completed || assistantMsg.time?.created || null;
-  if (assistantTs && (!data.lastTs || assistantTs > data.lastTs)) data.lastTs = assistantTs;
-  if (userTs && assistantTs) data.totalElapsed = assistantTs - userTs;
-
-  data.modelId = assistantMsg.modelID || '';
-  data.tokenSource = assistantMsg.tokens ?? null;
-
   const textParts: string[] = [];
   for (const message of assistantMessages) {
+    const assistantTs = message.time?.completed || message.time?.created || null;
+    if (assistantTs && (!data.lastTs || assistantTs > data.lastTs)) data.lastTs = assistantTs;
+    // Multi-round turn: totalElapsed measures from the user message to the *last*
+    // assistant message, yielding a more accurate total turn duration.
+    if (userTs && assistantTs) data.totalElapsed = assistantTs - userTs;
+    data.modelId = message.modelID || data.modelId;
+    data.agent = message.agent || data.agent;
+    data.variant = message.variant ?? data.variant;
+    if (message.tokens) {
+      // Context uses the last recorded round; generated output accumulates across rounds.
+      data.tokenSource = { ...message.tokens, output: (data.tokenSource?.output ?? 0) + (message.tokens.output ?? 0) };
+    }
     const parts = partsByMsg.get(message.id) || [];
     const hasText = parts.some(part => part.type === 'text' && part.text?.trim());
     data.answerEvidence = hasText && (message.finish === 'stop' || message.finish === 'end_turn') ? 'final'
@@ -381,8 +415,8 @@ function buildOpenCodeRequest(
     messageText: getOpenCodeUserText(msg, partsByMsg),
     variableKinds: imageCount > 0 ? { image: imageCount } : {},
     responseText: assistantData.responseText,
-    agentName: msg.agent || 'OpenCode',
-    agentMode: msg.agent || 'build',
+    agentName: msg.agent || assistantData.agent || 'OpenCode',
+    agentMode: msg.agent || assistantData.agent || 'build',
     modelId: assistantData.modelId,
     toolsUsed: assistantData.toolsUsed,
     investigationDelegations: assistantData.investigationDelegations,
@@ -399,8 +433,8 @@ function buildOpenCodeRequest(
     completionTokens: hasTokenData ? (assistantData.tokenSource?.output ?? 0) : null,
     cacheReadTokens: cacheRead > 0 ? cacheRead : null,
     cacheWriteTokens: cacheWrite > 0 ? cacheWrite : null,
-    // OpenCode stores reasoning effort as "variant" on user messages
-    reasoningEffort: canonicalizeReasoningEffort(msg.variant)
+    // V1 stores variants on user messages; V2 records them on assistant models.
+    reasoningEffort: canonicalizeReasoningEffort(msg.variant ?? assistantData.variant)
       ?? extractReasoningEffortFromModelId(assistantData.modelId),
   });
 }
@@ -413,7 +447,8 @@ function buildOpenCodeSession(
 ): Session | null {
   if (!rawSession.id) return null;
 
-  rawMessages.sort((a, b) => (a.time?.created || 0) - (b.time?.created || 0));
+  rawMessages.sort((a, b) => a.seq !== undefined && b.seq !== undefined
+    ? a.seq - b.seq : (a.time?.created || 0) - (b.time?.created || 0));
   if (rawMessages.length === 0) return null;
 
   const { wsId, wsName } = getOpenCodeWorkspace(rawSession);
@@ -427,6 +462,7 @@ function buildOpenCodeSession(
 
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
+    if (userTs && (!lastTs || userTs > lastTs)) lastTs = userTs;
 
     const assistantMessages = findAssistantMessages(rawMessages, i + 1);
     const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
@@ -493,6 +529,8 @@ interface OcDbDataRow {
   created?: number;
   completed?: number;
   data: string;
+  type?: string;
+  seq?: number;
 }
 
 function decodeOpenCodeMessage(row: OcDbDataRow): OcMessage | null {
@@ -500,11 +538,15 @@ function decodeOpenCodeMessage(row: OcDbDataRow): OcMessage | null {
     const data: unknown = JSON.parse(row.data);
     if (!isRecord(data)) return null;
     const time = isRecord(data.time) ? data.time : {};
+    const model = isRecord(data.model) ? data.model : {};
     return {
       ...data,
       id: row.id,
       sessionID: row.sessionID,
-      role: typeof data.role === 'string' ? data.role : '',
+      role: row.type ?? (typeof data.role === 'string' ? data.role : ''),
+      seq: row.seq,
+      modelID: typeof model.id === 'string' ? model.id : data.modelID,
+      variant: typeof model.variant === 'string' ? model.variant : data.variant,
       time: {
         created: typeof time.created === 'number' ? time.created : row.created,
         completed: typeof time.completed === 'number' ? time.completed : row.completed,
@@ -531,32 +573,35 @@ function decodeOpenCodePart(row: OcDbDataRow): OcPart | null {
   }
 }
 
-function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
-  assertTrustedPath(dbPath);
-  const sqlite = loadSqlite();
-  if (!sqlite) return [];
-  let database: SqliteDatabase;
-  try {
-    database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-  } catch (error) {
-    warnCore('parser-opencode', 'Could not open OpenCode database', error);
-    return [];
-  }
-
+function readOpenCodeV1Database(database: SqliteDatabase, editLocIndex: EditLocIndex | undefined,
+  sessionId: string | undefined, excludeIds: string[]): Session[] {
   const parameters = sessionId === undefined ? [] : [sessionId];
   const sessionFilter = sessionId === undefined ? '' : ' WHERE id = ?';
   const dataFilter = sessionId === undefined ? '' : ' WHERE session_id = ?';
+  // Use parameterized NOT IN to exclude V2 session IDs — avoids a wasteful
+  // `NOT IN (SELECT id FROM session_v2)` subquery on every query.
+  let sessionExclusion = '';
+  if (excludeIds.length > 0) {
+    const placeholders = excludeIds.map(() => '?').join(',');
+    sessionExclusion = `${sessionFilter ? ' AND' : ' WHERE'} id NOT IN (${placeholders})`;
+    parameters.push(...excludeIds);
+  }
+  let dataExclusion = '';
+  if (excludeIds.length > 0) {
+    const placeholders = excludeIds.map(() => '?').join(',');
+    dataExclusion = `${dataFilter ? ' AND' : ' WHERE'} session_id NOT IN (${placeholders})`;
+  }
   const rawSessions = queryOpenCodeDatabase<OcDbSessionRow>(database,
     'SELECT id, project_id AS projectID, directory, title, slug, '
-      + `time_created AS created, time_updated AS updated FROM session${sessionFilter} ORDER BY time_created`, ...parameters);
+      + `time_created AS created, time_updated AS updated FROM session${sessionFilter}${sessionExclusion} ORDER BY time_created`, ...parameters);
+  if (rawSessions.length === 0) return [];
   const messageRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, time_created AS created, '
-      + `time_updated AS completed, data FROM message${dataFilter} ORDER BY session_id, time_created, id`, ...parameters);
+      + `time_updated AS completed, data FROM message${dataFilter}${dataExclusion} ORDER BY session_id, time_created, id`, ...parameters);
   const partRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, message_id AS messageID, '
-      + `time_created AS created, time_updated AS completed, data FROM part${dataFilter} `
+      + `time_created AS created, time_updated AS completed, data FROM part${dataFilter}${dataExclusion} `
       + 'ORDER BY session_id, time_created, id', ...parameters);
-  database.close();
   const messagesBySession = new Map<string, OcMessage[]>();
   for (const message of messageRows.map(decodeOpenCodeMessage)) {
     if (!message) continue;
@@ -597,6 +642,106 @@ function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sess
     if (session) sessions.push(session);
   }
   return sessions;
+}
+
+function openCodeDatabaseTables(database: SqliteDatabase): Set<string> {
+  return new Set(queryOpenCodeDatabase<{ name: string }>(database,
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session', 'message', 'part', 'session_v2', 'session_message')",
+  ).map(row => row.name));
+}
+
+function openCodeV2Parts(message: OcMessage): OcPart[] {
+  const values: unknown[] = message.role === 'user'
+    ? [{ type: 'text', text: message.text }, ...(Array.isArray(message.files)
+      ? message.files.filter(isRecord).map(file => ({ ...file, type: 'file' })) : [])]
+    : message.role === 'assistant' && Array.isArray(message.content) ? message.content : [];
+  return values.filter(isRecord).map((value, index) => {
+    const state = isRecord(value.state) ? value.state : {};
+    const source = isRecord(value.source) ? value.source : {};
+    const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const files: unknown[] = Array.isArray(metadata.files) ? metadata.files : [];
+    const fileDiffs = [metadata.filediff, ...files]
+      .filter(isRecord).map(diff => ({
+        file: typeof diff.file === 'string' ? diff.file : undefined,
+        additions: typeof diff.additions === 'number' ? diff.additions : undefined,
+        deletions: typeof diff.deletions === 'number' ? diff.deletions : undefined,
+      }));
+    return {
+      id: `${message.id}:${index}`, sessionID: message.sessionID, messageID: message.id,
+      type: typeof value.type === 'string' ? value.type : '',
+      text: value.type === 'text' && typeof value.text === 'string' ? value.text : undefined,
+      tool: typeof value.name === 'string' ? value.name : undefined,
+      mime: typeof value.mime === 'string' ? value.mime : undefined,
+      data: value.data,
+      fileDiffs,
+      url: typeof source.uri === 'string' ? source.uri : undefined,
+      // Tool output can be very large and is not needed for analytics.
+      state: { status: typeof state.status === 'string' ? state.status : undefined,
+        input: isRecord(state.input) ? state.input : {} },
+    };
+  });
+}
+
+function readOpenCodeV2Database(database: SqliteDatabase, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
+  const parameters = sessionId === undefined ? [] : [sessionId];
+  const filter = sessionId === undefined ? '' : ' WHERE id = ?';
+  const rows = queryOpenCodeDatabase<OcDbSessionRow>(database,
+    'SELECT id, project_id AS projectID, coalesce(nullif(directory, \'\'), path) AS directory, title, slug, '
+    + `time_created AS created, time_updated AS updated FROM session_v2${filter} ORDER BY time_created`, ...parameters);
+  const sessions: Session[] = [];
+  for (const row of rows) {
+    if (!/^[\w-]+$/.test(row.id)) continue;
+    const messages: OcMessage[] = [];
+    const partsByMsg = new Map<string, OcPart[]>();
+    try {
+      // Stream one session at a time; retaining every tool output can exhaust the worker heap.
+      const messageRows = database.prepare('SELECT id, session_id AS sessionID, type, seq, '
+        + "time_created AS created, data FROM session_message WHERE session_id = ? AND type IN ('user', 'assistant') ORDER BY seq, id").iterate(row.id);
+      for (const messageRow of messageRows) {
+        const message = decodeOpenCodeMessage(messageRow as OcDbDataRow);
+        if (!message || (message.role !== 'user' && message.role !== 'assistant')) continue;
+        partsByMsg.set(message.id, openCodeV2Parts(message));
+        message.content = undefined;
+        message.files = undefined;
+        messages.push(message);
+      }
+    } catch (error) {
+      warnCore('parser-opencode', 'Could not read OpenCode V2 messages', error);
+      continue;
+    }
+    const session = buildOpenCodeSession({ ...row, time: { created: row.created, updated: row.updated } }, messages, partsByMsg, editLocIndex);
+    if (session) sessions.push(session);
+  }
+  return sessions;
+}
+
+function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
+  assertTrustedPath(dbPath);
+  const sqlite = loadSqlite();
+  if (!sqlite) return [];
+  let database: SqliteDatabase | undefined;
+  try {
+    database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    const tables = openCodeDatabaseTables(database);
+    const hasV2 = tables.has('session_v2') && tables.has('session_message');
+    const sessions = hasV2 ? readOpenCodeV2Database(database, editLocIndex, sessionId) : [];
+    // Skip V1 query for a specific session when V2 already has it — avoids a wasteful
+    // `NOT IN (SELECT id FROM session_v2)` subquery that would return zero rows.
+    if (sessionId === undefined || !hasV2 || sessions.every(s => s.sessionId !== sessionId)) {
+      if (tables.has('session') && tables.has('message') && tables.has('part')) {
+        const excludeIds = hasV2
+          ? queryOpenCodeDatabase<{ id: string }>(database, 'SELECT id FROM session_v2').map(r => r.id)
+          : [];
+        sessions.push(...readOpenCodeV1Database(database, editLocIndex, sessionId, excludeIds));
+      }
+    }
+    return sessions;
+  } catch (error) {
+    warnCore('parser-opencode', 'Could not read OpenCode database', error);
+    return [];
+  } finally {
+    database?.close();
+  }
 }
 
 export function loadOpenCodeSession(source: string, sessionId: string): Session | null {
@@ -643,6 +788,16 @@ export function readOpenCodeImageReferences(source: string, sessionId: string, r
   let database: SqliteDatabase | undefined;
   try {
     database = new sqlite.DatabaseSync(source, { readOnly: true });
+    const tables = openCodeDatabaseTables(database);
+    if (tables.has('session_v2') && tables.has('session_message')
+      && database.prepare('SELECT id FROM session_v2 WHERE id = ?').all(sessionId).length > 0) {
+      const rows = queryOpenCodeDatabase<OcDbDataRow>(database,
+        "SELECT id, session_id AS sessionID, type, data FROM session_message WHERE session_id = ? AND id = ? AND type = 'user'",
+        sessionId, requestId);
+      const message = rows[0] && decodeOpenCodeMessage(rows[0]);
+      return message ? imageReferencesFromContent(openCodeV2Parts(message)) : [];
+    }
+    if (!tables.has('message') || !tables.has('part')) return [];
     const rows = database.prepare(
       'SELECT part.data FROM part JOIN message ON message.id = part.message_id AND message.session_id = part.session_id '
       + "WHERE part.session_id = ? AND part.message_id = ? AND json_extract(message.data, '$.role') = 'user' "

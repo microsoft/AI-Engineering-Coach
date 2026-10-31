@@ -11,7 +11,7 @@ import { detectCuriosity } from './curiosity';
 describe('Recorded Curiosity tools', () => {
   it.each([
     ['functions.view', true], ['functions.web_fetch', true], ['apply_patch', true],
-    ['Agent', true], ['spawn_agent', true], ['multi_tool_use.parallel', true],
+    ['Agent', true], ['spawn_agent', true], ['subagent', true], ['multi_tool_use.parallel', true],
     ['bash', false], ['task_complete', false], ['unknown_read_tool', false],
   ])('checks evidence eligibility before reading arguments: %s', (name, eligible) => {
     expect(hasRecordedToolEvidence(name)).toBe(eligible);
@@ -59,6 +59,9 @@ describe('Recorded Curiosity tools', () => {
   it('uses recorded roles for investigation evidence, never agent names or prompt keywords', () => {
     expect(recordedInvestigation('functions.task', { agent_type: 'research' })).toBe('research');
     expect(recordedInvestigation('Agent', { subagent_type: 'Explore' })).toBe('explore');
+    expect(recordedInvestigation('subagent', { agent: 'explore' })).toBe('explore');
+    expect(recordedInvestigation('subagent', { agent: 'RESEARCH' })).toBe('research');
+    expect(recordedInvestigation('subagent', { agent: 'general', prompt: 'Research the web.' })).toBeUndefined();
     expect(recordedInvestigation('spawn_agent', { agent_type: 'general-purpose', prompt: 'Research the web.' })).toBeUndefined();
     expect(recordedInvestigation('unknown_research_agent', { agent_type: 'research' })).toBeUndefined();
   });
