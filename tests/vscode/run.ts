@@ -11,7 +11,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFixtures, scenarioContext } from './fixtures';
+import { exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFixtures, readInstalledBuild, scenarioContext } from './fixtures';
 import { writeSnapshotReport } from './snapshots';
 
 const PROJECT = path.resolve(__dirname, '..', '..');
@@ -80,6 +80,25 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
   await fs.cp(source, destination, { recursive: true });
 }
 
+/** The installed VSIX ships its bundles, a build stamp from this checkout, and release notes for its version. */
+async function assertInstalledPackage(root: string, installedRoot: string, manifestVersion: string): Promise<void> {
+  for (const asset of ['extension.js', 'parse-worker.js', 'warm-up-worker.js', 'cache-write-worker.js',
+    path.join('webview', 'app.js'), path.join('webview', 'styles.css')]) {
+    assert.ok((await fs.stat(path.join(installedRoot, 'dist', asset))).size > 0, `Missing packaged asset: ${asset}`);
+  }
+  const build = await readInstalledBuild(root);
+  assert.equal(build.version, manifestVersion, 'The build stamp does not match the installed manifest');
+  assert.match(build.commit, /^[0-9a-f]{7,40}$/, `The build stamp has no git commit: ${build.commit}`);
+  const ciCommit = process.env.GITHUB_SHA;
+  if (ciCommit) assert.ok(ciCommit.startsWith(build.commit), `The build stamp commit ${build.commit} is not ${ciCommit}`);
+  const changelog = (await fs.readdir(build.root)).find(name => /^changelog\.md$/i.test(name));
+  assert.ok(changelog, 'The packaged extension has no changelog');
+  const notes = await fs.readFile(path.join(build.root, changelog), 'utf8');
+  assert.ok(notes.includes(`## [${build.version}]`), `The packaged changelog has no section for ${build.version}`);
+  console.log(`Installed build: v${build.version} commit ${build.commit}${build.dirty ? '-dirty' : ''}`
+    + `${build.dev ? ' (dev)' : ''}, built ${build.builtAt}`);
+}
+
 async function runWorker(vsix: string, version: string, scenario: string): Promise<void> {
   if (!(await discoverSuites(SUITES)).includes(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
   const { root, timestamp } = scenarioContext();
@@ -103,7 +122,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
 
   // Import only in the child, after its home/profile environment has been isolated.
   const { ExTester, ReleaseQuality } = await import('vscode-extension-tester');
-  const extensions = path.join(root, 'extensions');
+  const extensions = fixturePaths(root).extensions;
   const tester = new ExTester(storage, ReleaseQuality.Stable, extensions);
   try {
     await tester.downloadCode(version);
@@ -115,10 +134,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     const installedRoot = path.join(extensions, installed[0].name);
     const installedManifest = manifestSchema.parse(JSON.parse(await fs.readFile(path.join(installedRoot, 'package.json'), 'utf8')));
     assert.deepEqual(installedManifest, manifest, 'Installed VSIX does not match the repository manifest');
-    for (const asset of ['extension.js', 'parse-worker.js', 'warm-up-worker.js', 'cache-write-worker.js',
-      path.join('webview', 'app.js'), path.join('webview', 'styles.css')]) {
-      assert.ok((await fs.stat(path.join(installedRoot, 'dist', asset))).size > 0, `Missing packaged asset: ${asset}`);
-    }
+    await assertInstalledPackage(root, installedRoot, installedManifest.version);
     const suite = path.join(__dirname, 'suite', `${scenario}.spec.js`).replaceAll('\\', '/');
     const code = await tester.runTests(suite, {
       vscodeVersion: version, offline: true, config, settings, locale: 'en',

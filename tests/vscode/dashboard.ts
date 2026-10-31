@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { By, EditorView, error, until, VSBrowser, WebView, Workbench } from 'vscode-extension-tester';
+import { ActivityBar, By, EditorView, error, until, VSBrowser, WebView, WebviewView, Workbench } from 'vscode-extension-tester';
 import { saveSnapshot } from './snapshots';
 
 const READY_TIMEOUT = 60_000;
@@ -57,6 +57,81 @@ export class Dashboard {
 
   async open(): Promise<void> {
     await this.command('Open Dashboard');
+  }
+
+  /** Runs an AI Engineer Coach command that opens something other than the dashboard. */
+  async runCommand(title: string): Promise<void> {
+    await VSBrowser.instance.driver.switchTo().defaultContent();
+    await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
+  }
+
+  /** Waits for an editor tab whose title matches and returns that title. */
+  async waitForEditor(pattern: RegExp): Promise<string> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const editors = new EditorView();
+    let match: string | undefined;
+    await driver.wait(async () => {
+      match = (await editors.getOpenEditorTitles()).find(title => pattern.test(title));
+      return match !== undefined;
+    }, READY_TIMEOUT, `Expected an editor titled ${String(pattern)}`);
+    if (match === undefined) throw new Error(`Expected an editor titled ${String(pattern)}`);
+    return match;
+  }
+
+  async closeEditor(title: string): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const editors = new EditorView();
+    await editors.closeEditor(title);
+    await driver.wait(async () => !(await editors.getOpenEditorTitles()).includes(title), READY_TIMEOUT);
+  }
+
+  /**
+   * Opens the AI Engineer Coach activity-bar view, then runs `action` inside its webview and
+   * returns to the workbench.
+   */
+  async inActivityBarView<T>(action: (view: WebviewView) => Promise<T>): Promise<T> {
+    await VSBrowser.instance.driver.switchTo().defaultContent();
+    const control = await new ActivityBar().getViewControl('AI Engineer Coach');
+    if (!control) throw new Error('The AI Engineer Coach activity-bar container is missing');
+    const view = new WebviewView(await control.openView());
+    // #whatsNew exists only in this view, so another ready webview is retried instead of read.
+    return this.inFrame(view, '#whatsNew', () => action(view), 'the AI Engineer Coach activity-bar view');
+  }
+
+  /** Headings of the active Markdown preview, once it has rendered. */
+  async markdownPreviewHeadings(): Promise<string[]> {
+    await VSBrowser.instance.driver.switchTo().defaultContent();
+    const view = new WebView();
+    return this.inFrame(view, '.markdown-body h1', async () => Promise.all(
+      (await view.findWebElements(By.css('.markdown-body h1, .markdown-body h2'))).map(heading => heading.getText())),
+    'the rendered Markdown preview');
+  }
+
+  /**
+   * Runs `action` inside `view`'s frame once it contains `marker`, then returns to the workbench.
+   * Retries while frames load: until a webview is ready, another one can be the only ready frame.
+   */
+  private async inFrame<T>(view: WebView | WebviewView, marker: string, action: () => Promise<T>, what: string): Promise<T> {
+    const driver = VSBrowser.instance.driver;
+    let result: { value: T } | undefined;
+    await driver.wait(async () => {
+      try {
+        await view.switchToFrame(READY_TIMEOUT);
+        await view.findWebElement(By.css(marker));
+        result = { value: await action() };
+        return true;
+      } catch (err: unknown) {
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError
+          || err instanceof error.NoSuchFrameError) return false;
+        throw err;
+      } finally {
+        await driver.switchTo().defaultContent();
+      }
+    }, READY_TIMEOUT, `Waiting for ${what}`);
+    if (!result) throw new Error(`${what} did not load`);
+    return result.value;
   }
 
   async snapshot(name: string, title: string): Promise<void> {

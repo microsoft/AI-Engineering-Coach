@@ -26,6 +26,8 @@ import { panelCache } from './webview/panel-cache';
 import { registerTools } from './mcp/tools';
 import { registerChatParticipant } from './chat/participant';
 import { exportSummaryFiles } from './summary-export-vscode';
+import { formatBuildLogFields } from './core/build-info';
+import { registerWhatsNew } from './whats-new-vscode';
 
 type PanelModule = typeof import('./webview/panel');
 let panelModulePromise: Promise<PanelModule> | null = null;
@@ -107,7 +109,7 @@ async function reviewPendingTrust(context: vscode.ExtensionContext): Promise<Set
 
 export function activate(context: vscode.ExtensionContext) {
   installRuntimeDebugHooks();
-  runtimeDebug('extension', 'activate', `runtimeLog=${getRuntimeDebugLogPath()}`);
+  runtimeDebug('extension', 'activate', `${formatBuildLogFields()} runtimeLog=${getRuntimeDebugLogPath()}`);
 
   const outputChannel = vscode.window.createOutputChannel('AI Engineer Coach');
   context.subscriptions.push(outputChannel);
@@ -233,6 +235,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  registerWhatsNew(context);
   registerTools(context, () => panelCache.analyzerInstance);
   registerChatParticipant(context);
 

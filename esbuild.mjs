@@ -6,85 +6,48 @@
 import * as esbuild from 'esbuild';
 import * as fs from 'fs';
 import * as path from 'path';
+import { buildInfoOptions, computeBuildInfo, createWatchStamp, describeBuildInfo } from './scripts/build-info.mjs';
 
 const isWatch = process.argv.includes('--watch');
 
-// Stamp the build time into the bundle so the UI can show which build is running.
-const define = { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) };
+// Stamp version, commit and build time into every bundle so the UI and runtime.log
+// show which build is running (read through src/core/build-info.ts).
+const buildInfo = computeBuildInfo();
 
-// Bundle the extension host
-const extensionBuild = esbuild.build({
-  entryPoints: ['src/extension.ts'],
-  bundle: true,
-  platform: 'node',
-  target: 'es2022',
-  format: 'cjs',
-  outfile: 'dist/extension.js',
-  sourcemap: true,
-  external: ['vscode'],
-  define,
-});
+// Ship the stamp with the bundle so an installed build can be identified from its extension folder.
+function writeBuildInfo(info) {
+  fs.mkdirSync('dist', { recursive: true });
+  fs.writeFileSync(path.join('dist', 'build-info.json'), `${JSON.stringify(info, null, 2)}\n`);
+}
 
-// Bundle the warm-up worker (runs off the extension host thread)
-const workerBuild = esbuild.build({
-  entryPoints: ['src/core/warm-up-worker.ts'],
-  bundle: true,
-  platform: 'node',
-  target: 'es2022',
-  format: 'cjs',
-  outfile: 'dist/warm-up-worker.js',
-  sourcemap: true,
-  external: ['vscode'],
-});
+const nodeBundle = { bundle: true, platform: 'node', target: 'es2022', format: 'cjs', sourcemap: true, external: ['vscode'] };
 
-// Bundle the parse worker (runs the full parse pipeline off the extension host thread)
-const parseWorkerBuild = esbuild.build({
-  entryPoints: ['src/core/parse-worker.ts'],
-  bundle: true,
-  platform: 'node',
-  target: 'es2022',
-  format: 'cjs',
-  outfile: 'dist/parse-worker.js',
-  sourcemap: true,
-  external: ['vscode'],
-});
+// Both the one-off build and the --watch contexts use these options.
+const bundles = {
+  // The extension host
+  extension: { ...nodeBundle, entryPoints: ['src/extension.ts'], outfile: 'dist/extension.js' },
+  // The warm-up worker (runs off the extension host thread)
+  warmUpWorker: { ...nodeBundle, entryPoints: ['src/core/warm-up-worker.ts'], outfile: 'dist/warm-up-worker.js' },
+  // The parse worker (runs the full parse pipeline off the extension host thread)
+  parseWorker: { ...nodeBundle, entryPoints: ['src/core/parse-worker.ts'], outfile: 'dist/parse-worker.js' },
+  // The cache write worker (writes cache data to disk off the main thread)
+  cacheWriteWorker: { ...nodeBundle, entryPoints: ['src/core/cache-write-worker.ts'], outfile: 'dist/cache-write-worker.js' },
+  // The canvas host (serves the webview as a Copilot app canvas; no vscode)
+  canvasHost: { ...nodeBundle, entryPoints: ['src/canvas/host.ts'], outfile: 'dist/canvas-host.cjs' },
+  // The webview script
+  webview: {
+    entryPoints: ['src/webview/app.ts'],
+    bundle: true,
+    platform: 'browser',
+    target: 'es2022',
+    format: 'iife',
+    outfile: 'dist/webview/app.js',
+    sourcemap: true,
+  },
+};
 
-// Bundle the cache write worker (writes cache data to disk off the main thread)
-const cacheWriteWorkerBuild = esbuild.build({
-  entryPoints: ['src/core/cache-write-worker.ts'],
-  bundle: true,
-  platform: 'node',
-  target: 'es2022',
-  format: 'cjs',
-  outfile: 'dist/cache-write-worker.js',
-  sourcemap: true,
-  external: ['vscode'],
-});
-
-// Bundle the canvas host (serves the webview as a Copilot app canvas; no vscode)
-const canvasHostBuild = esbuild.build({
-  entryPoints: ['src/canvas/host.ts'],
-  bundle: true,
-  platform: 'node',
-  target: 'es2022',
-  format: 'cjs',
-  outfile: 'dist/canvas-host.cjs',
-  sourcemap: true,
-  external: ['vscode'],
-});
-
-// Bundle the webview script
-const webviewBuild = esbuild.build({
-  entryPoints: ['src/webview/app.ts'],
-  bundle: true,
-  platform: 'browser',
-  target: 'es2022',
-  format: 'iife',
-  outfile: 'dist/webview/app.js',
-  sourcemap: true,
-});
-
-await Promise.all([extensionBuild, workerBuild, parseWorkerBuild, cacheWriteWorkerBuild, canvasHostBuild, webviewBuild]);
+await Promise.all(Object.values(bundles).map(options => esbuild.build({ ...options, ...buildInfoOptions(() => buildInfo) })));
+writeBuildInfo(buildInfo);
 
 // Copy static webview assets
 const webviewDist = 'dist/webview';
@@ -131,70 +94,29 @@ bundleCss();
 // Copy sidebar CSS separately (sidebar is its own webview)
 fs.copyFileSync('src/webview/styles-sidebar.css', path.join(webviewDist, 'sidebar.css'));
 
-console.log('Build complete.');
+console.log(`Build complete: ${describeBuildInfo(buildInfo)}.`);
 
 if (isWatch) {
-  const ctx1 = await esbuild.context({
-    entryPoints: ['src/extension.ts'],
-    bundle: true,
-    platform: 'node',
-    target: 'es2022',
-    format: 'cjs',
-    outfile: 'dist/extension.js',
-    sourcemap: true,
-    external: ['vscode'],
-    define,
+  // A rebuild after a change restamps, and the other bundles and dist/build-info.json are
+  // brought up to that stamp, so the dashboard, activity-bar view, and runtime.log agree.
+  const stamp = createWatchStamp({
+    initial: buildInfo,
+    compute: () => computeBuildInfo(),
+    write: (info, generation) => {
+      try {
+        writeBuildInfo(info);
+        if (generation > 0) console.log(`Build stamp refreshed: ${describeBuildInfo(info)}.`);
+      } catch (err) {
+        console.error('Writing dist/build-info.json failed:', err);
+      }
+    },
   });
-  const ctx2 = await esbuild.context({
-    entryPoints: ['src/core/warm-up-worker.ts'],
-    bundle: true,
-    platform: 'node',
-    target: 'es2022',
-    format: 'cjs',
-    outfile: 'dist/warm-up-worker.js',
-    sourcemap: true,
-    external: ['vscode'],
-  });
-  const ctx3 = await esbuild.context({
-    entryPoints: ['src/core/parse-worker.ts'],
-    bundle: true,
-    platform: 'node',
-    target: 'es2022',
-    format: 'cjs',
-    outfile: 'dist/parse-worker.js',
-    sourcemap: true,
-    external: ['vscode'],
-  });
-  const ctx5 = await esbuild.context({
-    entryPoints: ['src/core/cache-write-worker.ts'],
-    bundle: true,
-    platform: 'node',
-    target: 'es2022',
-    format: 'cjs',
-    outfile: 'dist/cache-write-worker.js',
-    sourcemap: true,
-    external: ['vscode'],
-  });
-  const ctxCanvas = await esbuild.context({
-    entryPoints: ['src/canvas/host.ts'],
-    bundle: true,
-    platform: 'node',
-    target: 'es2022',
-    format: 'cjs',
-    outfile: 'dist/canvas-host.cjs',
-    sourcemap: true,
-    external: ['vscode'],
-  });
-  const ctx4 = await esbuild.context({
-    entryPoints: ['src/webview/app.ts'],
-    bundle: true,
-    platform: 'browser',
-    target: 'es2022',
-    format: 'iife',
-    outfile: 'dist/webview/app.js',
-    sourcemap: true,
-  });
-  await Promise.all([ctx1.watch(), ctx2.watch(), ctx3.watch(), ctx4.watch(), ctx5.watch(), ctxCanvas.watch()]);
+  const contexts = await Promise.all(Object.entries(bundles).map(async ([name, options]) => {
+    const context = await esbuild.context({ ...options, ...stamp.options(name) });
+    stamp.attach(name, context);
+    return context;
+  }));
+  await Promise.all(contexts.map(context => context.watch()));
   for (const source of cssSources) {
     fs.watch(source, () => {
       try {

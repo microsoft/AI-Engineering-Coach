@@ -239,6 +239,65 @@ body {
   padding: 12px 0;
 }
 
+/* ---- Build stamp (bottom of the sidebar; see build-info-footer.ts) ---- */
+.build-info {
+  border-top: 1px solid var(--border);
+  padding: 8px 16px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.build-info-version {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.build-info-dev {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.build-info-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.build-info-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text);
+}
+
+.build-info-status[hidden] {
+  display: none;
+}
+
+.build-info-action {
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 11px;
+  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background, #0e639c);
+  cursor: pointer;
+}
+
+.build-info-action:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
 .sidebar-filter {
   padding: 4px 16px;
 }

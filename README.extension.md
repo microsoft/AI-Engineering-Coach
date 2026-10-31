@@ -74,6 +74,7 @@ Type `@aicoach` in any VS Code chat panel for conversational access to all coach
 3. Use the sidebar to navigate pages. Filter by workspace or harness at the bottom.
 4. Run **AI Engineer Coach: Reload Data** to re-parse after new sessions.
 5. Type `@aicoach` in VS Code chat for conversational coaching.
+6. Run **AI Engineer Coach: What's New** for the release notes. The bottom of the dashboard sidebar shows the installed version and build.
 
 
 
