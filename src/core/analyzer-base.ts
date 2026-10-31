@@ -48,16 +48,21 @@ export class AnalyzerBase {
     return session.workspaceId === workspaceId || session.workspaceName === workspaceId;
   }
 
+  /** True when the request has a timestamp inside the filter's date range. */
+  protected requestInRange(r: SessionRequest, f?: DateFilter): boolean {
+    if (r.timestamp == null || r.timestamp <= 0) return false;
+    if (f?.fromDate && toDateStr(r.timestamp) < f.fromDate) return false;
+    if (f?.toDate && toDateStr(r.timestamp) > f.toDate) return false;
+    return true;
+  }
+
   protected filter(f?: DateFilter): SessionRequest[] {
     const reqs: SessionRequest[] = [];
     for (const s of this.sessions) {
       if (!this.matchesWorkspaceFilter(s, f?.workspaceId)) continue;
       if (f?.harness && s.harness !== f.harness) continue;
       for (const r of s.requests) {
-        if (r.timestamp == null || r.timestamp <= 0) continue;
-        if (f?.fromDate && toDateStr(r.timestamp) < f.fromDate) continue;
-        if (f?.toDate && toDateStr(r.timestamp) > f.toDate) continue;
-        reqs.push(r);
+        if (this.requestInRange(r, f)) reqs.push(r);
       }
     }
     return reqs;
@@ -78,6 +83,15 @@ export class AnalyzerBase {
       if (f?.toDate && d > f.toDate) return false;
       return true;
     });
+  }
+
+  /** Sessions with at least one request in the date range, matching `filter`. Unlike `filteredSessions`
+   *  (keyed on last activity), this keeps sessions that span the range boundary. */
+  protected sessionsWithRequestsInRange(f?: DateFilter): Session[] {
+    return this.sessions.filter(s =>
+      this.matchesWorkspaceFilter(s, f?.workspaceId)
+      && (!f?.harness || s.harness === f.harness)
+      && s.requests.some(r => this.requestInRange(r, f)));
   }
 
   /** Ensure the day-key array includes fromDate so fillDayRange starts

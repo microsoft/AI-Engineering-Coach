@@ -272,6 +272,123 @@ function getMockCuriosity(params = {}) {
   return data;
 }
 
+function compositionSlices(pairs, promptTokens) {
+  return pairs.map(([category, pct]) => ({ category, pct, tokens: promptTokens == null ? null : Math.round(pct / 100 * promptTokens) }));
+}
+
+function compositionBreakdown(pairs, samples, avgPromptTokens) {
+  return { slices: compositionSlices(pairs, avgPromptTokens), weighting: 'tokens', samples, avgPromptTokens };
+}
+
+const VSCODE_MIX = [['systemInstructions', 11.2], ['toolDefinitions', 36.1], ['messages', 21.1], ['toolResults', 30.4], ['files', 1.2]];
+const INSIDERS_MIX = [['systemInstructions', 9.8], ['toolDefinitions', 41.5], ['messages', 18.2], ['toolResults', 29.9], ['files', 0.6]];
+const VSCODE_POOLED_MIX = [['systemInstructions', 10.8], ['toolDefinitions', 37.5], ['messages', 20.4], ['toolResults', 30.3], ['files', 1.0]];
+const CLI_MIX = [['systemInstructions', 5.4], ['toolDefinitions', 9.5], ['conversation', 85.0], ['other', 0.1]];
+const CLI_SEGMENTS = [
+  { name: 'tool_instructions', tokens: 9570 }, { name: 'host_system_message_content', tokens: 2162 },
+  { name: 'custom_instructions', tokens: 1890 }, { name: 'memory', tokens: 1172 }, { name: 'canvases', tokens: 1049 },
+  { name: 'environment_context', tokens: 820 }, { name: 'git_commit_trailer', tokens: 310 }, { name: 'final_instructions', tokens: 220 },
+];
+
+/* Synthetic composition data for the Context Management tab.
+ * window.mockCompositionMode: undefined = full data, 'empty' = nothing recorded, false = field absent,
+ * 'boundary' = no session's last activity in range but composition recorded, 'boundary-empty' = neither. */
+function mockContextComposition(empty) {
+  if (empty) {
+    return {
+      sources: [],
+      harnesses: [
+        { harness: 'Local Agent', source: 'vscode', breakdown: null, totalRequests: 260, requestsWithData: 0, sessions: 30, sessionsWithData: 0, toolHeavyPct: null, avgToolDefinitionTokens: null, maxAvailableTools: null },
+        { harness: 'Claude Code', source: null, breakdown: null, totalRequests: 300, requestsWithData: 0, sessions: 22, sessionsWithData: 0, toolHeavyPct: null, avgToolDefinitionTokens: null, maxAvailableTools: null },
+      ],
+      workspaces: [],
+      trend: { labels: [], series: [] },
+      systemSegments: [],
+      systemSegmentSessions: 0,
+      coverage: { requestsWithData: 0, totalRequests: 560, sessionsWithData: 0, totalSessions: 52 },
+      toolHeavyThreshold: 50,
+    };
+  }
+  return {
+    sources: [
+      { source: 'vscode', label: 'VS Code', harnesses: ['Local Agent', 'Local Agent (Insiders)'], breakdown: compositionBreakdown(VSCODE_POOLED_MIX, 663, 50600), requestsWithData: 663, toolHeavyPct: 25.9, avgToolDefinitionTokens: null, maxAvailableTools: null },
+      { source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown(CLI_MIX, 640, 312000), requestsWithData: 640, toolHeavyPct: 1.2, avgToolDefinitionTokens: 29500, maxAvailableTools: 271 },
+    ],
+    harnesses: [
+      { harness: 'GitHub Copilot CLI', source: 'copilot-cli', breakdown: compositionBreakdown(CLI_MIX, 640, 312000), totalRequests: 900, requestsWithData: 640, sessions: 40, sessionsWithData: 32, toolHeavyPct: 1.2, avgToolDefinitionTokens: 29500, maxAvailableTools: 271 },
+      { harness: 'Local Agent', source: 'vscode', breakdown: compositionBreakdown(VSCODE_MIX, 483, 52000), totalRequests: 483, requestsWithData: 483, sessions: 45, sessionsWithData: 45, toolHeavyPct: 24, avgToolDefinitionTokens: null, maxAvailableTools: null },
+      { harness: 'Local Agent (Insiders)', source: 'vscode', breakdown: compositionBreakdown(INSIDERS_MIX, 180, 47000), totalRequests: 240, requestsWithData: 180, sessions: 20, sessionsWithData: 15, toolHeavyPct: 31, avgToolDefinitionTokens: null, maxAvailableTools: null },
+      { harness: 'Claude Code', source: null, breakdown: null, totalRequests: 300, requestsWithData: 0, sessions: 22, sessionsWithData: 0, toolHeavyPct: null, avgToolDefinitionTokens: null, maxAvailableTools: null },
+    ],
+    workspaces: [
+      { workspaceId: 'my-api', workspaceName: 'my-api', source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown([['systemInstructions', 5.0], ['toolDefinitions', 10.2], ['conversation', 84.8]], 347, 290000) },
+      { workspaceId: 'frontend-app', workspaceName: 'frontend-app', source: 'vscode', label: 'VS Code', harnesses: ['Local Agent'], breakdown: compositionBreakdown([['systemInstructions', 12.0], ['toolDefinitions', 44.0], ['messages', 18.0], ['toolResults', 25.0], ['files', 1.0]], 310, 49000) },
+      { workspaceId: 'infra-tools', workspaceName: 'infra-tools', source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown: compositionBreakdown([['systemInstructions', 4.0], ['toolDefinitions', 7.0], ['conversation', 89.0]], 293, 340000) },
+      { workspaceId: 'mobile-sdk', workspaceName: 'mobile-sdk', source: 'vscode', label: 'VS Code', harnesses: ['Local Agent (Insiders)'], breakdown: compositionBreakdown(INSIDERS_MIX, 180, 47000) },
+      { workspaceId: 'my-api', workspaceName: 'my-api', source: 'vscode', label: 'VS Code', harnesses: ['Local Agent'], breakdown: compositionBreakdown([['systemInstructions', 12.5], ['toolDefinitions', 33.0], ['messages', 22.0], ['toolResults', 31.0], ['files', 1.5]], 173, 56000) },
+    ],
+    trend: {
+      labels: ['2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04'],
+      series: [
+        { harness: 'GitHub Copilot CLI', toolDefinitions: [11.2, 10.1, 9.0, 8.4], systemInstructions: [5.8, 5.5, 5.2, 5.0], samples: [140, 160, 160, 180] },
+        { harness: 'Local Agent', toolDefinitions: [41.0, 38.5, 35.2, 31.0], systemInstructions: [12.0, 11.5, 11.0, 10.4], samples: [110, 120, 125, 128] },
+        { harness: 'Local Agent (Insiders)', toolDefinitions: [null, 44.0, 41.0, 39.5], systemInstructions: [null, 10.2, 9.9, 9.5], samples: [0, 50, 60, 70] },
+      ],
+    },
+    systemSegments: [
+      { name: 'tool_instructions', avgTokens: 9570, sessions: 32 },
+      { name: 'host_system_message_content', avgTokens: 2162, sessions: 32 },
+      { name: 'custom_instructions', avgTokens: 1890, sessions: 25 },
+      { name: 'canvases', avgTokens: 1049, sessions: 32 },
+      { name: 'environment_context', avgTokens: 820, sessions: 32 },
+      { name: 'memory', avgTokens: 1172, sessions: 14 },
+    ],
+    systemSegmentSessions: 32,
+    coverage: { requestsWithData: 1303, totalRequests: 1923, sessionsWithData: 92, totalSessions: 127 },
+    toolHeavyThreshold: 50,
+  };
+}
+
+function mockSessionCompositionVsCode(n) {
+  const perRequest = Array.from({ length: n }, (_, i) => {
+    const toolDefinitions = Math.max(20, 60 - i * 1.4);
+    const systemInstructions = Math.max(6, 12 - i * 0.2);
+    const toolResults = Math.min(45, 8 + i * 1.4);
+    const files = 1;
+    const shares = { systemInstructions, toolDefinitions, toolResults, files, messages: 100 - toolDefinitions - systemInstructions - toolResults - files };
+    return Object.fromEntries(Object.entries(shares).map(([k, v]) => [k, Math.round(v * 10) / 10]));
+  });
+  return {
+    source: 'vscode',
+    breakdown: compositionBreakdown([['systemInstructions', 9.0], ['toolDefinitions', 35.0], ['messages', 20.0], ['toolResults', 35.0], ['files', 1.0]], n, 38000),
+    perRequest,
+    systemSegments: [], toolCount: null, toolTokens: null, compactions: [],
+  };
+}
+
+function mockSessionCompositionCli(n) {
+  const perRequest = Array.from({ length: n }, (_, i) => {
+    const toolDefinitions = Math.max(6, 40 - i * 2.6);
+    const systemInstructions = Math.max(3, 22 - i * 1.4);
+    return { systemInstructions: Math.round(systemInstructions * 10) / 10, toolDefinitions: Math.round(toolDefinitions * 10) / 10, conversation: Math.round((100 - toolDefinitions - systemInstructions) * 10) / 10 };
+  });
+  return {
+    source: 'copilot-cli',
+    breakdown: compositionBreakdown([['systemInstructions', 5.5], ['toolDefinitions', 9.6], ['conversation', 84.9]], n, 310000),
+    perRequest,
+    systemSegments: CLI_SEGMENTS,
+    toolCount: 64,
+    toolTokens: 33370,
+    compactions: [{
+      timestamp: Date.parse('2026-05-03T10:42:00Z'), currentTokens: 774836, tokenLimit: 968000,
+      slices: [
+        { category: 'systemInstructions', pct: 2.2, tokens: 17190 }, { category: 'toolDefinitions', pct: 4.3, tokens: 33370 },
+        { category: 'conversation', pct: 87.1, tokens: 675206 }, { category: 'other', pct: 6.3, tokens: 49070 },
+      ],
+    }],
+  };
+}
+
 function getMockData(method, params) {
   const labels30 = genLabels(30);
 
@@ -426,36 +543,47 @@ function getMockData(method, params) {
       }
     }),
 
-    getContextManagement: () => ({
-      overallScore: 74,
-      estimatedContextWindow: 128000,
-      thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
-      workspaces: [
-        { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null },
-        { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null },
-        { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null }
-      ],
-      trend: [
-        { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
-      ],
-      workspaceTrend: [],
-      totalCompactions: 12,
-      fullCompactions: 4,
-      simpleCompactions: 8,
-      sessionsWithTokenData: 89,
-      totalSessions: 127,
-      antiPatterns: [],
-      tips: ['Consider shorter sessions to reduce compaction events']
-    }),
+    getContextManagement: () => {
+      const mode = window.mockCompositionMode;
+      // 'boundary*': the only sessions in range continue past it, so utilization (keyed on last activity) is empty.
+      const noSessions = mode === 'boundary' || mode === 'boundary-empty';
+      const compositionTip = 'Tool definitions take 38% of your VS Code prompts and at least half of the prompt in 26% of requests. Turn off MCP servers and tools you don\u2019t need, or pick a smaller tool set, before you start a chat (changing them mid-session breaks the prompt cache).';
+      return {
+        overallScore: noSessions ? 0 : 74,
+        estimatedContextWindow: 128000,
+        thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
+        workspaces: noSessions ? [] : [
+          { workspaceId: 'ws-1', workspaceName: 'my-api', harness: 'Local Agent', sessionCount: 45, requestsWithTokens: 380, avgPromptTokens: 42000, maxPromptTokens: 92000, avgUtilization: 33, peakUtilization: 72, saturation: 12, compactionCount: 5, costEfficiency: null },
+          { workspaceId: 'ws-2', workspaceName: 'frontend-app', harness: 'Local Agent', sessionCount: 32, requestsWithTokens: 260, avgPromptTokens: 55000, maxPromptTokens: 102000, avgUtilization: 43, peakUtilization: 80, saturation: 22, compactionCount: 4, costEfficiency: null },
+          { workspaceId: 'ws-3', workspaceName: 'data-pipeline', harness: 'Claude Code', sessionCount: 22, requestsWithTokens: 180, avgPromptTokens: 62000, maxPromptTokens: 110000, avgUtilization: 48, peakUtilization: 86, saturation: 30, compactionCount: 3, costEfficiency: null }
+        ],
+        trend: noSessions ? [] : [
+          { week: 'W17', score: 70 }, { week: 'W18', score: 72 }, { week: 'W19', score: 73 }, { week: 'W20', score: 74 }
+        ],
+        workspaceTrend: [],
+        totalCompactions: noSessions ? 0 : 12,
+        fullCompactions: noSessions ? 0 : 4,
+        simpleCompactions: noSessions ? 0 : 8,
+        sessionsWithTokenData: noSessions ? 0 : 89,
+        totalSessions: noSessions ? 0 : 127,
+        antiPatterns: [],
+        tips: [
+          ...(noSessions ? [] : ['Consider shorter sessions to reduce compaction events']),
+          ...(mode === undefined || mode === 'boundary' ? [compositionTip] : []),
+        ],
+        ...(mode === false ? {} : { composition: mockContextComposition(mode === 'empty' || mode === 'boundary-empty') }),
+      };
+    },
 
     getWorkspaceContextSessions: () => ({
       workspaceName: 'my-api',
       estimatedContextWindow: 128000,
       thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: true, sampleSize: 85 },
       sessions: [
-        { sessionId: 's1', date: '2026-05-03', harness: 'Local Agent', requestCount: 28, requestsWithTokens: 28, avgPromptTokens: 38000, maxPromptTokens: 72000, avgUtilization: 30, peakUtilization: 56, contextWindow: 128000, compactionCount: 1, tokenCurve: Array.from({ length: 28 }, (_, i) => 2000 + i * 2500), saturation: 8, costEfficiency: null, verdict: 'optimal', events: [{ type: 'compaction', requestIndex: 12 }] },
-        { sessionId: 's2', date: '2026-05-03', harness: 'GitHub Copilot CLI', requestCount: 15, requestsWithTokens: 0, avgPromptTokens: 45000, maxPromptTokens: 60000, avgUtilization: 35, peakUtilization: 47, contextWindow: 128000, compactionCount: 0, tokenCurve: [], saturation: 0, costEfficiency: null, verdict: 'optimal', events: [] },
-        { sessionId: 's3', date: '2026-05-03', harness: 'Local Agent', requestCount: 35, requestsWithTokens: 35, avgPromptTokens: 52000, maxPromptTokens: 108000, avgUtilization: 41, peakUtilization: 84, contextWindow: 128000, compactionCount: 2, tokenCurve: Array.from({ length: 35 }, (_, i) => 1800 + i * 3000), saturation: 18, costEfficiency: null, verdict: 'limited', events: [{ type: 'compaction', requestIndex: 8 }, { type: 'todo-complete', requestIndex: 20 }] }
+        { sessionId: 's1', date: '2026-05-03', harness: 'Local Agent', requestCount: 28, requestsWithTokens: 28, avgPromptTokens: 38000, maxPromptTokens: 72000, avgUtilization: 30, peakUtilization: 56, contextWindow: 128000, compactionCount: 1, tokenCurve: Array.from({ length: 28 }, (_, i) => 2000 + i * 2500), saturation: 8, costEfficiency: null, verdict: 'optimal', events: [{ type: 'compaction', requestIndex: 12, label: 'Compaction (full)' }], requestQueries: Array.from({ length: 28 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true, composition: mockSessionCompositionVsCode(28) },
+        { sessionId: 's2', date: '2026-05-03', harness: 'GitHub Copilot CLI', requestCount: 15, requestsWithTokens: 0, avgPromptTokens: 45000, maxPromptTokens: 60000, avgUtilization: 35, peakUtilization: 47, contextWindow: 128000, compactionCount: 0, tokenCurve: [], saturation: 0, costEfficiency: null, verdict: 'optimal', events: [], requestQueries: Array.from({ length: 15 }, (_, i) => `Turn ${i + 1}`), hasPerRequestTokens: false, composition: mockSessionCompositionCli(15) },
+        { sessionId: 's3', date: '2026-05-03', harness: 'Local Agent', requestCount: 35, requestsWithTokens: 35, avgPromptTokens: 52000, maxPromptTokens: 108000, avgUtilization: 41, peakUtilization: 84, contextWindow: 128000, compactionCount: 2, tokenCurve: Array.from({ length: 35 }, (_, i) => 1800 + i * 3000), saturation: 18, costEfficiency: null, verdict: 'limited', events: [{ type: 'compaction', requestIndex: 8, label: 'Compaction (full)' }, { type: 'todo-complete', requestIndex: 20, label: 'Write tests' }], requestQueries: Array.from({ length: 35 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true },
+        { sessionId: 's4', date: '2026-05-02', harness: 'Claude Code', requestCount: 12, requestsWithTokens: 12, avgPromptTokens: 61000, maxPromptTokens: 90000, avgUtilization: 47, peakUtilization: 70, contextWindow: 128000, compactionCount: 0, tokenCurve: Array.from({ length: 12 }, (_, i) => 30000 + i * 5000), saturation: 10, costEfficiency: null, verdict: 'degraded', events: [], requestQueries: Array.from({ length: 12 }, (_, i) => `Request ${i + 1}`), hasPerRequestTokens: true }
       ]
     }),
 
@@ -631,6 +759,8 @@ function getMockData(method, params) {
     evaluateExpression: () => ({ result: null }),
   };
 
+  // Lets e2e assert which params the session drill-downs send.
+  if (method === 'getWorkspaceContextSessions') (window.workspaceSessionsRequests ||= []).push(params);
   const handler = mocks[method];
   if (handler) return handler();
   return {};

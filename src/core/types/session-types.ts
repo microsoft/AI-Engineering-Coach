@@ -44,6 +44,67 @@ export interface TodoItem {
   status: 'not-started' | 'in-progress' | 'completed';
 }
 
+/** Prompt-composition categories shared by every harness. VS Code splits the
+ *  conversation into messages, tool results and files; Copilot CLI reports it
+ *  as one `conversation` bucket. `other` holds unrecognized or unattributed tokens. */
+export type ContextCategory =
+  | 'systemInstructions'
+  | 'toolDefinitions'
+  | 'messages'
+  | 'toolResults'
+  | 'files'
+  | 'conversation'
+  | 'other';
+
+/** Where a prompt composition was measured. */
+export type CompositionSource = 'vscode' | 'copilot-cli';
+
+/** What filled a request's prompt, as reported by the harness. Holds only
+ *  category names and numbers, never prompt content. */
+export interface PromptComposition {
+  source: CompositionSource;
+  /** Percent of the prompt per category. A missing category is not reported
+   *  by the source (not zero). VS Code rounds each value, so the sum can be off by a few points. */
+  shares: Partial<Record<ContextCategory, number>>;
+  /** Prompt tokens the shares describe: VS Code = the request's last model call;
+   *  Copilot CLI = the average main-agent call in the turn. `null` = unknown. */
+  promptTokens: number | null;
+  /** Copilot CLI: main-agent model calls aggregated into this turn. */
+  calls?: number;
+  /** Copilot CLI: average tool-definition tokens per model call. */
+  toolDefinitionTokens?: number;
+  /** Copilot CLI: most tools offered to the model during the turn. */
+  availableTools?: number;
+}
+
+/** A named part of the Copilot CLI system prompt and its size. */
+export interface SystemPromptSegment {
+  name: string;
+  tokens: number;
+}
+
+/** Context snapshot Copilot CLI records when compaction starts. */
+export interface CompactionContextSnapshot {
+  timestamp: number | null;
+  systemTokens: number;
+  toolDefinitionTokens: number;
+  conversationTokens: number;
+  /** Total context estimate. Can exceed the sum of the parts; the difference is unattributed. */
+  currentTokens: number;
+  tokenLimit: number | null;
+}
+
+/** Session-level context composition details (Copilot CLI). */
+export interface SessionContextComposition {
+  /** System-prompt segments from the latest usage checkpoint, largest first. */
+  systemSegments: SystemPromptSegment[];
+  /** Tools sent with the model call recorded in the latest checkpoint, and their tokens. */
+  toolCount: number | null;
+  toolTokens: number | null;
+  /** Context snapshots taken when compaction started. */
+  compactions: CompactionContextSnapshot[];
+}
+
 export type CuriositySignal =
   | { kind: 'excluded'; excerpts: string[] }
   | { kind: 'unscanned'; excerpts: string[] }
@@ -88,6 +149,8 @@ export interface SessionRequest {
   cacheWriteTokens: number | null;
   /** Compaction/summarization event attached to this request, if one occurred */
   compaction: CompactionEvent | null;
+  /** What filled the prompt, when the harness reports it (VS Code, Copilot CLI). */
+  promptComposition?: PromptComposition;
   /** Final TODO list state at the end of this request (from manage_todo_list tool calls) */
   todoSnapshot: TodoItem[] | null;
   /** Precomputed work-type classification (feature, bug fix, refactor, etc.) */
@@ -152,6 +215,8 @@ export interface Session {
   /** Authoritative per-model usage totals reported at session close (Copilot CLI).
    *  Preferred over per-request token data for billing math when present. */
   modelUsage?: Record<string, ModelUsage>;
+  /** System-prompt segments and compaction snapshots (Copilot CLI). */
+  contextComposition?: SessionContextComposition;
   /** How the session ended. Drives "pending" vs "missing" classification
    *  in the Token Coverage view: active/aborted sessions cannot have full
    *  token data and so are excluded from the missing% denominator. */

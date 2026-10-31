@@ -11,6 +11,7 @@ import { createRequest, extractSkillNameFromPath } from './parser-shared';
 import { debugCore } from './log';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { hasRecordedToolEvidence, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
+import { compositionFromPromptTokenDetails } from './context-composition';
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -31,6 +32,10 @@ export interface RawRequest {
   editedFileEvents?: { uri?: { path?: string } }[];
   /** Cumulative completion token count across all agentic rounds (streaming counter). */
   completionTokens?: number;
+  /** Prompt size of the latest model call, written together with `promptTokenDetails`. */
+  promptTokens?: number;
+  /** Share of the prompt per category (`[{ category, label, percentageOfPrompt }]`). */
+  promptTokenDetails?: unknown;
 }
 
 interface RawVariable {
@@ -535,6 +540,12 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
   const { promptTokens, completionTokens } = extractTokenInfo(req, { resultObj, meta, resultIsFinalized });
   const endState = computeEndState(resultObj, resultIsFinalized, promptTokens, completionTokens, meta);
   const compaction = extractCompaction(meta);
+  // The request-level promptTokens is written by the same usage update as the details, so it is
+  // the matching basis; result.metadata.promptTokens covers builds that only finalize metadata.
+  const promptComposition = compositionFromPromptTokenDetails(
+    req.promptTokenDetails,
+    typeof req.promptTokens === 'number' && req.promptTokens > 0 ? req.promptTokens : promptTokens,
+  );
 
   return createRequest({
     requestId: req.requestId || '',
@@ -557,6 +568,7 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
     promptTokens,
     completionTokens,
     compaction,
+    ...(promptComposition ? { promptComposition } : {}),
     todoSnapshot: extractTodoSnapshot(result),
     reasoningEffort: extractReasoningEffortFromModelId(req.modelId || ''),
     endState,

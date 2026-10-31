@@ -18,10 +18,12 @@ import {
   ContextTrend,
   WorkspaceTrendSeries,
   SessionContextDetail,
+  SessionRangeMatch,
   SessionTimelineEvent,
   WorkspaceContextSessionsData,
 } from './types';
 import { toDateStr } from './helpers';
+import { analyzeComposition, buildSessionCompositionDetail } from './analyzer-composition';
 import {
   CONTEXT_WINDOW_DEFAULT,
   CONTEXT_OPTIMAL_UTILIZATION,
@@ -178,11 +180,18 @@ export class ContextAnalyzer extends AnalyzerBase {
     const trend = this.buildWeeklyTrend(sessions, thresholds);
     const workspaceTrend = this.buildWorkspaceTrend(sessions, trend.map(t => t.label), workspaces);
     const antiPatterns = this.detectContextAntiPatterns(sessions, thresholds);
-    const tips = this.generateTips(workspaces, totalCompactions, overallScore, thresholds);
+    const requests = this.filter(f);
+    const composition = analyzeComposition(requests, request => this.requestSessionMap.get(request));
+    // Composition counts requests in range, so it can have data when no session's last activity falls
+    // in range; skip utilization advice then rather than coaching on a score of 0.
+    const tips = [
+      ...(sessions.length > 0 ? this.generateTips(workspaces, totalCompactions, overallScore, thresholds) : []),
+      ...composition.tips,
+    ];
 
     return {
       overallScore,
-      estimatedContextWindow: this.estimateContextWindowFromRequests(this.filter(f)),
+      estimatedContextWindow: this.estimateContextWindowFromRequests(requests),
       thresholds,
       workspaces,
       trend,
@@ -194,6 +203,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       totalSessions: sessions.length,
       antiPatterns,
       tips,
+      composition: composition.data,
     };
   }
 
@@ -613,8 +623,11 @@ export class ContextAnalyzer extends AnalyzerBase {
     return patterns;
   }
 
-  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter): WorkspaceContextSessionsData {
-    const sessions = this.filteredSessions(f).filter(s => this.matchesWorkspaceFilter(s, workspaceId));
+  /** Session details for one workspace. `rangeMatch: 'requests'` (Context Composition) keeps sessions with
+   *  any request in range; the default keys on last activity, like the utilization table. */
+  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter, rangeMatch: SessionRangeMatch = 'lastActivity'): WorkspaceContextSessionsData {
+    const inRange = rangeMatch === 'requests' ? this.sessionsWithRequestsInRange(f) : this.filteredSessions(f);
+    const sessions = inRange.filter(s => this.matchesWorkspaceFilter(s, workspaceId));
     const workspaceName = sessions[0]?.workspaceName ?? workspaceId;
     const thresholds = this.computeVerdictThresholds(sessions);
     const estimatedContextWindow = this.estimateContextWindowFromRequests(
@@ -635,13 +648,14 @@ export class ContextAnalyzer extends AnalyzerBase {
     const sessionTokens = this.estimateSessionTokens(session);
     const tokensWithData = sessionTokens.filter(t => t > 0);
     const hasPerRequestTokens = tokensWithData.length > 0;
+    const composition = buildSessionCompositionDetail(session);
 
     if (!hasPerRequestTokens) {
       // Fall back to session-level modelUsage — include the session but
       // don't compute utilization (modelUsage totals are cumulative billing
       // sums across all internal LLM calls, not context window sizes).
       const avgFromUsage = this.getSessionLevelAvgTokens(session);
-      if (avgFromUsage === 0) return null;
+      if (avgFromUsage === 0 && !composition) return null;
 
       const compactionCount = session.requests.filter(r => r.compaction != null).length;
 
@@ -664,6 +678,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         events: this.buildSessionTimelineEvents(session),
         requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
         hasPerRequestTokens: false,
+        ...(composition ? { composition } : {}),
       };
     }
 
@@ -695,6 +710,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       events: this.buildSessionTimelineEvents(session),
       requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
       hasPerRequestTokens: true,
+      ...(composition ? { composition } : {}),
     };
   }
 

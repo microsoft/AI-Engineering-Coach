@@ -785,7 +785,8 @@ const rpcHandlers: TypedRpcHandlers = {
       };
     }
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
-    return a.getWorkspaceContextSessions(workspaceId, filter);
+    // Context Composition asks for every session with a request in range; the default keys on last activity.
+    return a.getWorkspaceContextSessions(workspaceId, filter, params?.rangeMatch === 'requests' ? 'requests' : 'lastActivity');
   },
   getContextRangeAvailability: (a, _p, params) => a.getContextRangeAvailability(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
   getCalendarActivity: (a, _p, params) => a.getCalendarActivity(validateDateFilter(params)),
