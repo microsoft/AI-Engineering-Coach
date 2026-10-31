@@ -56,10 +56,12 @@ export class SubagentRunTracker {
     if (id) this.started.delete(id);
     const owner = started ? started.requestIndex : requestIndex;
     if (owner == null) return;
+    // Some runs log no start event; their completion still names built-in agents after their type.
+    const agentType = started?.agentType ?? (typeof data.agentName === 'string' ? subagentTypeOf(undefined, data.agentName) : 'unknown');
     this.finished.push({
       requestIndex: owner,
       run: {
-        agentType: started?.agentType ?? 'unknown',
+        agentType,
         model: modelOf(data.model) || (started?.model ?? ''),
         mode: started?.mode ?? null,
         totalTokens: count(data.totalTokens),

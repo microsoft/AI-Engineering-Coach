@@ -26,7 +26,8 @@ export interface TurnContextUsage {
 export type ContextWindowSource = 'reported' | 'estimated';
 
 /** Built-in sub-agent types that Copilot CLI and Copilot App log. Any other agent is `custom`;
- *  a run whose start wasn't logged is `unknown`. Custom agent names are never stored. */
+ *  a run whose type can't be told (no start event and no agent name) is `unknown`. Custom agent
+ *  names are never stored. */
 export const SUBAGENT_TYPES = [
   'explore',
   'task',
