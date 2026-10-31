@@ -1,8 +1,9 @@
 import { test, expect, Page } from '@playwright/test';
+import { harnessUrl } from './harness-url';
 
 // Use the clean (extensionless) path: `npx serve` 301-redirects `harness.html` → `harness` and
 // drops the query string, which would lose ?mode=loading. Requesting the clean path keeps it.
-const LOADING_URL = 'http://localhost:3999/tests/e2e/harness?mode=loading';
+const LOADING_URL = harnessUrl('tests/e2e/harness?mode=loading');
 
 async function waitForTelemetryStrip(page: Page) {
   await page.goto(LOADING_URL);
