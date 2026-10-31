@@ -36,10 +36,10 @@ export function splitHumanTurns<T extends { nonHumanKind?: NonHumanKind }>(reque
 
 /**
  * Follow-up gaps (ms) before the turns the user typed, for `turns` in time order. A gap runs from the end of the
- * assistant's work to the typed turn: the latest end of any turn since the previous typed turn, so automated turns
- * extend that work but never start a gap. A typed turn has no gap when nothing came before it. When every turn is
- * typed, these are the gaps between consecutive turns. A gap is negative when the turn started before that work
- * ended; callers decide how to treat it.
+ * assistant's work to the typed turn: the end of the previous typed turn, or of automated work that ends later, such
+ * as a sub-agent still running across typed turns. Automated turns extend that work but never start a gap. A typed
+ * turn has no gap when nothing came before it. When every turn is typed, these are the gaps between consecutive
+ * turns. A gap is negative when the turn started before that work ended; callers decide how to treat it.
  */
 export function humanFollowUpGaps<T>(
   turns: readonly T[],
@@ -48,15 +48,22 @@ export function humanFollowUpGaps<T>(
   isHuman: (turn: T) => boolean,
 ): number[] {
   const gaps: number[] = [];
-  let workEnd: number | null = null;
+  let typedEnd: number | null = null;
+  let automatedEnd: number | null = null;
   for (const turn of turns) {
     const end = endOf(turn);
-    if (isHuman(turn)) {
-      if (workEnd !== null) gaps.push(startOf(turn) - workEnd);
-      workEnd = end;
-    } else {
-      workEnd = workEnd === null ? end : Math.max(workEnd, end);
+    if (!isHuman(turn)) {
+      automatedEnd = latest(automatedEnd, end);
+      continue;
     }
+    const workEnd = latest(typedEnd, automatedEnd);
+    if (workEnd !== null) gaps.push(startOf(turn) - workEnd);
+    typedEnd = end;
   }
   return gaps;
+}
+
+function latest(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  return b === null ? a : Math.max(a, b);
 }

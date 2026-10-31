@@ -99,6 +99,10 @@ describe('humanFollowUpGaps', () => {
     expect(gaps([typed(0, 10), automated(100, 110), automated(500, 510)])).toEqual([]);
   });
 
+  it('keeps automated work that runs across typed turns, such as a sub-agent', () => {
+    expect(gaps([typed(0, 10), automated(5, 600), typed(20, 30), typed(610, 620)])).toEqual([-580, 10]);
+  });
+
   it('returns a negative gap when a typed turn starts before the work ends', () => {
     expect(gaps([typed(0, 100), typed(50, 60)])).toEqual([-50]);
   });
