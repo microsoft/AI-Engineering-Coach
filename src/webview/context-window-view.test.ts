@@ -9,6 +9,9 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionContextDetail, WorkspaceContextScore } from '../core/types';
+import { Analyzer } from '../core/analyzer';
+import { createRequest, createSession } from '../core/parser-shared';
+import { CONTEXT_WINDOW_DEFAULT } from '../core/constants';
 
 vi.mock('./shared', () => ({ formatNum: (n: number) => `${Math.round(n / 1000)}K` }));
 
@@ -42,8 +45,23 @@ function rendered(children: ReturnType<typeof windowFootnote>): HTMLElement {
 describe('context-window labels', () => {
   it('measures a mixed session\u2019s turns against their own limit, else the session\u2019s estimate', () => {
     expect(utilizationSeries(detail({}), 128_000)).toEqual([10.3, 93.8]);
-    // Fully estimated sessions keep the workspace's window, as before.
-    expect(utilizationSeries(detail({ windowSource: 'estimated', turnLimits: undefined }), 200_000)).toEqual([50, 75]);
+    // Estimated sessions use their own estimate, like their row; the workspace's window is only a fallback.
+    expect(utilizationSeries(detail({ windowSource: 'estimated', turnLimits: undefined }), 200_000)).toEqual([62.5, 93.8]);
+    expect(utilizationSeries(detail({ windowSource: 'estimated', turnLimits: undefined, contextWindow: 0 }), 200_000)).toEqual([50, 75]);
+  });
+
+  it('charts an estimated session with turns that peaked above their last prompt like its row', () => {
+    const turn = (n: number, last: number, peak: number) => createRequest({
+      requestId: `r${n}`, messageText: 'm', responseText: 'r', timestamp: Date.UTC(2026, 9, 28, 10, n), promptTokens: last, completionTokens: 100,
+      contextUsage: { lastPromptTokens: last, peakPromptTokens: peak, contextLimit: null, calls: 3 },
+    });
+    const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'ws', harness: 'Claude', requests: [turn(1, 30_000, 200_000), turn(2, 30_000, 30_000)] });
+    const data = new Analyzer([session]).getWorkspaceContextSessions('ws');
+    const [row] = data.sessions;
+    // The workspace's window comes from last prompts only; the session's includes the 200K peak (224K).
+    expect(data.estimatedContextWindow).toBe(CONTEXT_WINDOW_DEFAULT);
+    expect(row).toMatchObject({ windowSource: 'estimated', contextWindow: 224_000, avgUtilization: 13.4, peakUtilization: 13.4 });
+    expect(utilizationSeries(row, data.estimatedContextWindow)).toEqual([13.4, 13.4]);
   });
 
   it('says which turns reported their limit in the session header', () => {
