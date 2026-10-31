@@ -10,9 +10,11 @@
 
 import type { RelativeRates } from './prompt-cache-usage';
 import { cacheModelName } from './prompt-cache-usage';
+import { readCallOutputs, type CliCallOutputs } from './call-outputs';
 
-/** One model call. Token counts are normalized so that `inputTokens` includes cached tokens. */
-export interface CliModelCall {
+/** One model call. Token counts are normalized so that `inputTokens` includes cached tokens. The output-side
+ *  fields (output, reasoning, context limit, finish reason, first-token time) come from `CliCallOutputs`. */
+export interface CliModelCall extends CliCallOutputs {
   /** When the record was logged, which is when the call finished (epoch ms). */
   timestamp: number | null;
   /** How long the call took (`usage.duration`, ms); `null` when not logged. */
@@ -121,6 +123,7 @@ export function readCliModelCall(data: Record<string, unknown>, timestamp: numbe
   const cacheReported = usage.cacheDetailsReported !== false && (cacheRead != null || cacheWrite != null);
   const durationMs = nonNegative(usage.duration);
   return {
+    ...readCallOutputs(usage),
     timestamp,
     durationMs,
     startTs: timestamp == null ? null : timestamp - (durationMs ?? 0),

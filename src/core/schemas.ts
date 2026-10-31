@@ -9,6 +9,7 @@ import type { Session } from './types';
 import { warnCore } from './log';
 import { CACHE_MAX_BREAKS_PER_SESSION } from './constants';
 import { MAX_TIMELINE_BUCKETS } from './call-timeline';
+import { MAX_LATENCY_SAMPLES } from './call-outputs';
 
 /* ---- Sub-schemas ---- */
 
@@ -38,6 +39,7 @@ export const CompactionEventSchema = z.object({
   trigger: z.string().max(32).optional(),
   checkpointNumber: z.number().int().min(0).optional(),
   tokensUsed: CompactionTokensUsedSchema.optional(),
+  atCall: z.number().int().min(0).optional(),
 }).passthrough();
 
 export const TodoItemSchema = z.object({
@@ -107,6 +109,12 @@ export const ModelCallRowSchema = z.object({
   ratedInput: tokenSchema.optional(),
   ttlSeconds: tokenSchema.optional(),
   cacheBreaks: z.number().int().min(0).optional(),
+  outputTokens: tokenSchema.optional(),
+  reasoningTokens: tokenSchema.optional(),
+  truncatedCalls: z.number().int().min(0).optional(),
+  filteredCalls: z.number().int().min(0).optional(),
+  ttftMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
+  durationMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
 }).strict();
 
 export const RequestPromptCacheSchema = z.object({
@@ -157,6 +165,11 @@ export const CallTimelineSchema = z.object({
     cacheRead: tokenSchema,
     cacheWrite: tokenSchema,
     uncached: tokenSchema,
+    peakPrompt: tokenSchema.optional(),
+    contextLimit: z.number().positive().optional(),
+    output: tokenSchema.optional(),
+    reasoning: tokenSchema.optional(),
+    truncatedCalls: z.number().int().min(0).optional(),
   }).strict()).max(MAX_TIMELINE_BUCKETS),
 }).strict();
 

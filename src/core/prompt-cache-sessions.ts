@@ -18,6 +18,7 @@ import type {
   SessionTimelineData,
 } from './types';
 import { CallTimelineBuilder } from './call-timeline';
+import { buildContextLayer } from './context-timeline';
 import { causeControl, causeKey } from './prompt-cache-causes';
 import { addUsage, emptyTotals, missesOf, mergeTotals, pct, toTotals, type TotalsAcc } from './prompt-cache-totals';
 import { toDateStr } from './helpers';
@@ -177,9 +178,9 @@ function cacheLayer(session: Session): SessionCacheLayer | null {
 export function buildSessionTimeline(session: Session): SessionTimelineData | null {
   const cache = cacheLayer(session);
   if (session.callTimeline) {
-    return { sessionId: session.sessionId, harness: session.harness, unit: 'calls', timeline: session.callTimeline, cache };
+    return { sessionId: session.sessionId, harness: session.harness, unit: 'calls', timeline: session.callTimeline, cache, context: buildContextLayer(session) };
   }
   const timeline = requestTimeline(session);
   if (!timeline && !cache) return null;
-  return { sessionId: session.sessionId, harness: session.harness, unit: 'requests', timeline, cache };
+  return { sessionId: session.sessionId, harness: session.harness, unit: 'requests', timeline, cache, context: null };
 }

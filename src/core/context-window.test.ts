@@ -26,14 +26,14 @@ function compaction(before: number): CompactionEvent {
 
 describe('request accessors', () => {
   it('prefers the per-turn context of the last call over promptTokens', () => {
-    expect(requestContextTokens(req({ promptTokens: 900_000, contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 240_000, contextLimit: 968_000 } }))).toBe(80_000);
+    expect(requestContextTokens(req({ promptTokens: 900_000, contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 240_000, contextLimit: 968_000, calls: 1 } }))).toBe(80_000);
     expect(requestContextTokens(req({ promptTokens: 52_000 }))).toBe(52_000);
     expect(requestContextTokens(req())).toBe(0);
   });
 
   it('returns the reported limit only when one was logged', () => {
-    expect(requestContextLimit(req({ contextUsage: { lastPromptTokens: 1, peakPromptTokens: 1, contextLimit: 272_000 } }))).toBe(272_000);
-    expect(requestContextLimit(req({ contextUsage: { lastPromptTokens: 1, peakPromptTokens: 1, contextLimit: null } }))).toBeNull();
+    expect(requestContextLimit(req({ contextUsage: { lastPromptTokens: 1, peakPromptTokens: 1, contextLimit: 272_000, calls: 1 } }))).toBe(272_000);
+    expect(requestContextLimit(req({ contextUsage: { lastPromptTokens: 1, peakPromptTokens: 1, contextLimit: null, calls: 1 } }))).toBeNull();
     expect(requestContextLimit(req({ promptTokens: 50_000 }))).toBeNull();
   });
 
@@ -50,9 +50,9 @@ describe('sessionContextWindow', () => {
     const session = createSession({
       sessionId: 's', workspaceId: 'w', workspaceName: 'w', harness: 'GitHub Copilot CLI',
       requests: [
-        req({ contextUsage: { lastPromptTokens: 100_000, peakPromptTokens: 100_000, contextLimit: 968_000 } }),
+        req({ contextUsage: { lastPromptTokens: 100_000, peakPromptTokens: 100_000, contextLimit: 968_000, calls: 1 } }),
         req(),
-        req({ contextUsage: { lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: 272_000 } }),
+        req({ contextUsage: { lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: 272_000, calls: 1 } }),
       ],
     });
     const window = sessionContextWindow(session);

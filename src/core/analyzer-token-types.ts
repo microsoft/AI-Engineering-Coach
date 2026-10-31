@@ -6,14 +6,16 @@
 /* Token types beyond input and output, for the Token Types tab: reasoning share, compaction
  * overhead, sub-agent tokens, truncated calls and model-call latency. Each source is summarized on
  * its own and never pooled with another, and a harness that doesn't log a type gets "not reported"
- * instead of a zero. Counts the requests sent in the date range, like Context Composition. */
+ * instead of a zero. Counts the requests sent in the date range, like Context Composition. Row-based
+ * figures (reasoning, truncation, latency) come from token-types-rows.ts. */
 
 import type {
   CompactionEvent,
+  DateFilter,
   HarnessTokenTypes,
-  ReasoningShare,
   Session,
   SessionRequest,
+  SessionTokenTypes,
   SourceTokenTypes,
   SubagentRun,
   SubagentTypeSummary,
@@ -24,8 +26,22 @@ import type {
   TokenTypesReasoning,
   TokenTypesSource,
   TokenTypesSubagents,
+  TokenTypesTruncation,
 } from './types';
+import { AnalyzerBase } from './analyzer-base';
 import { requestCompactions } from './context-window';
+import { compactionKind } from './cli-compaction';
+import {
+  callRows,
+  hasPerCallOutputs,
+  mainTokens,
+  pct,
+  percentile,
+  reasoningShare,
+  rowLatency,
+  rowReasoning,
+  rowTruncation,
+} from './token-types-rows';
 
 const SOURCE_ORDER: readonly TokenTypesSource[] = ['copilot-cli', 'codex', 'claude', 'opencode'];
 
@@ -45,12 +61,16 @@ const NOT_REPORTED: Record<TokenTypeKey, TokenTypeAvailability> = {
 const TIP_MIN_COMPACTIONS = 3;
 const TIP_MIN_SUBAGENT_RUNS = 5;
 const TIP_REASONING_SHARE = 50;
+const TIP_MIN_TRUNCATED = 5;
+const TIP_TRUNCATED_PCT = 1;
+/** Sub-agent types listed in the session strip. */
+const MAX_STRIP_TYPES = 4;
 
 /** The token-types source of a harness, judged by its name. */
 export function tokenTypesSource(harness: string): TokenTypesSource | null {
   if (harness === 'GitHub Copilot CLI' || harness === 'GitHub Copilot App') return 'copilot-cli';
-  if (harness === 'Codex') return 'codex';
-  if (harness === 'Claude') return 'claude';
+  if (harness.startsWith('Codex')) return 'codex';
+  if (harness.startsWith('Claude')) return 'claude';
   if (harness === 'OpenCode') return 'opencode';
   return null;
 }
@@ -63,21 +83,14 @@ function sourceLabel(source: TokenTypesSource, harnesses: string[]): string {
   return source === 'codex' ? 'Codex' : source === 'claude' ? 'Claude Code' : 'OpenCode';
 }
 
-function pct(part: number, whole: number): number | null {
-  return whole > 0 ? Math.round((part / whole) * 1000) / 10 : null;
-}
-
-function share(outputTokens: number, reasoningTokens: number): ReasoningShare {
-  return { outputTokens, reasoningTokens, sharePct: pct(Math.min(reasoningTokens, outputTokens), outputTokens) };
-}
-
 function summarizeCompactions(events: CompactionEvent[]): TokenTypesCompaction | null {
   if (events.length === 0) return null;
   let automatic = 0, manual = 0, failed = 0, sized = 0, before = 0, after = 0;
   let withUsage = 0, inputTokens = 0, outputTokens = 0, modelTimeMs = 0;
   for (const event of events) {
-    if (event.trigger === 'threshold') automatic++;
-    else if (event.trigger) manual++;
+    const kind = compactionKind(event.trigger);
+    if (kind === 'automatic') automatic++;
+    else if (kind) manual++;
     if (event.outcome === 'failed') failed++;
     if (event.contextLengthAfter != null && event.contextLengthBefore > 0) {
       sized++;
@@ -143,7 +156,7 @@ function summarizeSessionReasoning(sessions: Iterable<Session>): TokenTypesReaso
     }
   }
   if (!reported || output <= 0) return null;
-  return { basis: 'session-totals', main: share(output, reasoning), subagent: null, byEffort: [] };
+  return { basis: 'session-totals', main: reasoningShare(output, reasoning), subagent: null, byEffort: [] };
 }
 
 interface SourceGroup {
@@ -152,20 +165,44 @@ interface SourceGroup {
   sessions: Set<Session>;
 }
 
+/** Compaction-call input as a share of main-agent input, and sub-agent tokens as a share of all tokens, over
+ *  the turns that log per-call usage (the only turns where both sides are known). */
+function addShares(compaction: TokenTypesCompaction | null, subagents: TokenTypesSubagents | null, requests: SessionRequest[]): void {
+  const perCall = requests.filter(hasPerCallOutputs);
+  if (perCall.length === 0) return;
+  const main = mainTokens(callRows(perCall));
+  let compactionTokens = 0, compactionInput = 0, subagentTokens = 0;
+  for (const request of perCall) {
+    for (const event of requestCompactions(request)) {
+      if (!event.tokensUsed) continue;
+      compactionInput += event.tokensUsed.input;
+      compactionTokens += event.tokensUsed.input + event.tokensUsed.output;
+    }
+    for (const run of request.subagentRuns ?? []) subagentTokens += run.totalTokens;
+  }
+  if (compaction) compaction.shareOfMainInputPct = pct(compactionInput, main.input);
+  if (subagents) subagents.shareOfAllTokensPct = pct(subagentTokens, main.input + main.output + compactionTokens + subagentTokens);
+}
+
 function summarizeSource(source: TokenTypesSource, group: SourceGroup): SourceTokenTypes {
   const compactions = group.requests.flatMap(requestCompactions);
   const runs = group.requests.flatMap(request => request.subagentRuns ?? []);
+  const rows = callRows(group.requests);
   const harnesses = [...group.harnesses].sort();
+  const cli = source === 'copilot-cli';
+  const compaction = cli ? summarizeCompactions(compactions) : null;
+  const subagents = cli ? summarizeSubagents(runs) : null;
+  if (cli) addShares(compaction, subagents, group.requests);
   return {
     source,
     label: sourceLabel(source, harnesses),
     harnesses,
     requests: group.requests.length,
-    reasoning: source === 'codex' ? summarizeSessionReasoning(group.sessions) : null,
-    compaction: source === 'copilot-cli' ? summarizeCompactions(compactions) : null,
-    subagents: source === 'copilot-cli' ? summarizeSubagents(runs) : null,
-    truncation: null,
-    latency: null,
+    reasoning: source === 'codex' ? summarizeSessionReasoning(group.sessions) : cli ? rowReasoning(rows) : null,
+    compaction,
+    subagents,
+    truncation: source === 'codex' ? null : rowTruncation(rows),
+    latency: cli ? rowLatency(rows) : null,
   };
 }
 
@@ -199,7 +236,15 @@ function subagentTip(label: string, subagents: TokenTypesSubagents): string | nu
 function reasoningTip(label: string, reasoning: TokenTypesReasoning): string | null {
   const sharePct = reasoning.main?.sharePct;
   if (sharePct == null || sharePct < TIP_REASONING_SHARE) return null;
-  return `Reasoning is ${Math.round(sharePct)}% of ${label} output tokens. Use a lower reasoning effort for routine edits and questions, and keep high effort for hard problems.`;
+  const low = reasoning.byEffort.find(e => e.stream === 'main' && (e.effort === 'medium' || e.effort === 'low') && e.sharePct != null);
+  const contrast = low ? ` At ${low.effort} effort it was ${Math.round(low.sharePct ?? 0)}%.` : '';
+  return `Reasoning is ${Math.round(sharePct)}% of ${label} output tokens.${contrast} Use a lower reasoning effort for routine edits and questions, and keep high effort for hard problems.`;
+}
+
+function truncationTip(label: string, truncation: TokenTypesTruncation): string | null {
+  const share = pct(truncation.truncatedCalls, truncation.calls) ?? 0;
+  if (truncation.truncatedCalls < TIP_MIN_TRUNCATED || share < TIP_TRUNCATED_PCT) return null;
+  return `${truncation.truncatedCalls} of ${truncation.calls} ${label} model calls (${share}%) stopped at the output-token limit, so their answers were cut off. Ask for smaller steps, such as one file or one function at a time.`;
 }
 
 function tokenTypesTips(sources: SourceTokenTypes[]): string[] {
@@ -209,6 +254,7 @@ function tokenTypesTips(sources: SourceTokenTypes[]): string[] {
       source.reasoning ? reasoningTip(source.label, source.reasoning) : null,
       source.compaction ? compactionTip(source.label, source.compaction) : null,
       source.subagents ? subagentTip(source.label, source.subagents) : null,
+      source.truncation ? truncationTip(source.label, source.truncation) : null,
     ];
     tips.push(...tip.filter((t): t is string => t != null));
   }
@@ -246,7 +292,8 @@ export function analyzeTokenTypes(
     })
     .sort((a, b) => b.requests - a.requests || a.harness.localeCompare(b.harness));
   const requestsWithData = requests.filter(request =>
-    (request.subagentRuns?.length ?? 0) > 0 || request.contextUsage != null || requestCompactions(request).some(e => e.tokensUsed != null),
+    (request.subagentRuns?.length ?? 0) > 0 || hasPerCallOutputs(request) || requestCompactions(request).some(e => e.tokensUsed != null)
+    || (request.promptCache?.rows.some(row => row.truncatedCalls != null) ?? false),
   ).length;
 
   return {
@@ -255,4 +302,46 @@ export function analyzeTokenTypes(
     tips: tokenTypesTips(sources),
     coverage: { requests: requests.length, requestsWithData },
   };
+}
+
+/** The main-agent effort with the most calls. */
+function topEffort(reasoning: TokenTypesReasoning | null): SessionTokenTypes['effort'] {
+  const main = (reasoning?.byEffort ?? []).filter(e => e.stream === 'main' && e.effort !== 'unknown');
+  return main.length > 0 ? main.reduce((a, b) => (b.calls > a.calls ? b : a)).effort : null;
+}
+
+/** Token types of one session for Context Management's drill-down strip; `null` when the harness logs none. */
+export function sessionTokenTypes(session: Session): SessionTokenTypes | null {
+  const source = tokenTypesSource(session.harness);
+  if (!source) return null;
+  const rows = callRows(session.requests);
+  const reasoning = source === 'codex' ? summarizeSessionReasoning([session]) : source === 'copilot-cli' ? rowReasoning(rows) : null;
+  const runs = session.requests.flatMap(request => request.subagentRuns ?? []);
+  const types = summarizeSubagents(runs)?.byType ?? [];
+  const compactions = session.requests.flatMap(requestCompactions).filter(event => event.tokensUsed != null);
+  const truncation = source === 'codex' ? null : rowTruncation(rows);
+  const ttft = rows.filter(row => row.stream === 'main').flatMap(row => row.ttftMs ?? []).sort((a, b) => a - b);
+  const strip: SessionTokenTypes = {
+    reasoningPct: reasoning?.main?.sharePct ?? null,
+    effort: topEffort(reasoning),
+    subagentRuns: runs.length,
+    subagentTokens: runs.reduce((sum, run) => sum + run.totalTokens, 0),
+    subagentTypes: [...types].sort((a, b) => b.runs - a.runs).slice(0, MAX_STRIP_TYPES).map(t => ({ agentType: t.agentType, runs: t.runs })),
+    compactionCalls: compactions.length,
+    compactionTokens: compactions.reduce((sum, event) => sum + (event.tokensUsed?.input ?? 0) + (event.tokensUsed?.output ?? 0), 0),
+    compactionTimeMs: compactions.reduce((sum, event) => sum + event.durationMs, 0),
+    truncatedCalls: truncation?.truncatedCalls ?? null,
+    calls: truncation?.calls ?? null,
+    ttftMedianMs: percentile(ttft, 50),
+  };
+  const empty = strip.reasoningPct == null && strip.subagentRuns === 0 && strip.compactionCalls === 0
+    && strip.truncatedCalls == null && strip.ttftMedianMs == null;
+  return empty ? null : strip;
+}
+
+export class TokenTypesAnalyzer extends AnalyzerBase {
+  /** Token types of the requests sent in the date range. */
+  getTokenTypes(f?: DateFilter): TokenTypesData {
+    return analyzeTokenTypes(this.filter(f), request => this.requestSessionMap.get(request));
+  }
 }

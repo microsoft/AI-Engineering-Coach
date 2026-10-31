@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { CallTimelineBuilder, MAX_TIMELINE_BUCKETS, bucketOfCall, mergeBuckets, singleCallBucket, type CallTimelineSample } from './call-timeline';
+import { CallTimelineSchema } from './schemas';
 
 function sample(requestIndex: number, timestamp: number | null, cacheRead = 900, cacheReported = true): CallTimelineSample {
   return { timestamp, requestIndex, cacheReported, cacheRead, cacheWrite: 80, uncached: 20 };
@@ -46,5 +47,31 @@ describe('call timeline', () => {
     expect(bucketOfCall(timeline, 9)).toBe(2);
     expect(bucketOfCall(timeline, 10_000)).toBe(timeline.buckets.length - 1);
     expect(bucketOfCall(timeline, -1)).toBe(0);
+  });
+});
+
+describe('call timeline context fields', () => {
+  it('keeps the context and token-type fields a call logged: peaks and limits take the larger value, the rest add up', () => {
+    type ContextFields = Pick<CallTimelineSample, 'promptTokens' | 'contextLimit' | 'outputTokens' | 'reasoningTokens' | 'truncated'>;
+    const context = (fields: ContextFields): CallTimelineSample => ({ ...sample(0, null), ...fields });
+    const a = singleCallBucket(0, context({ promptTokens: 240_000, contextLimit: 968_000, outputTokens: 1_000, reasoningTokens: 600, truncated: false }));
+    expect(a).toMatchObject({ peakPrompt: 240_000, contextLimit: 968_000, output: 1_000, reasoning: 600 });
+    expect(a).not.toHaveProperty('truncatedCalls');
+    const b = singleCallBucket(1, context({ promptTokens: 60_000, contextLimit: 272_000, outputTokens: 32_000, reasoningTokens: null, truncated: true }));
+    expect(b).not.toHaveProperty('reasoning');
+    expect(mergeBuckets(a, b)).toMatchObject({ peakPrompt: 240_000, contextLimit: 968_000, output: 33_000, reasoning: 600, truncatedCalls: 1 });
+
+    // Request-level timelines and older builds log none of them: the fields stay absent.
+    const plain = mergeBuckets(singleCallBucket(0, sample(0, null)), singleCallBucket(1, sample(0, null)));
+    for (const key of ['peakPrompt', 'contextLimit', 'output', 'reasoning', 'truncatedCalls']) expect(plain).not.toHaveProperty(key);
+    expect(mergeBuckets(plain, a)).toMatchObject({ peakPrompt: 240_000, output: 1_000 });
+
+    const builder = new CallTimelineBuilder();
+    for (let i = 0; i < MAX_TIMELINE_BUCKETS * 2; i++) {
+      builder.add(context({ promptTokens: 1_000 + i, contextLimit: 200_000, outputTokens: 10, reasoningTokens: 4, truncated: i === 5 }));
+    }
+    const timeline = builder.build()!;
+    expect(timeline.buckets[2]).toMatchObject({ peakPrompt: 1_005, contextLimit: 200_000, output: 20, reasoning: 8, truncatedCalls: 1 });
+    expect(CallTimelineSchema.safeParse(timeline).success).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ import {
   WorkflowOptimizationData, ConfigHealthData, FlowStateData, Workspace,
   CalendarActivityData, ProjectOverviewData, ContextManagementData, InsightsData,
   ParserCoverageData, ParserPreviewData, SessionRangeMatch,
-  PromptCacheData, PromptCacheSessionsData, SessionTimelineData,
+  PromptCacheData, PromptCacheSessionsData, SessionTimelineData, TokenTypesData,
 } from './types';
 import { DashboardAnalyzer } from './analyzer-dashboard';
 import { ProductionAnalyzer } from './analyzer-production';
@@ -25,6 +25,7 @@ import { ConfigAnalyzer } from './analyzer-config';
 import { FlowAnalyzer } from './analyzer-flow';
 import { ContextAnalyzer } from './analyzer-context';
 import { PromptCacheAnalyzer } from './analyzer-prompt-cache';
+import { TokenTypesAnalyzer } from './analyzer-token-types';
 import { InsightsAnalyzer } from './analyzer-insights';
 import { ImageAnalyzer, ImageGalleryData } from './analyzer-images';
 import { CuriosityAnalyzer } from './analyzer-curiosity';
@@ -48,6 +49,7 @@ export class Analyzer {
   private readonly flow: FlowAnalyzer;
   private readonly context: ContextAnalyzer;
   private readonly promptCache: PromptCacheAnalyzer;
+  private readonly tokenTypes: TokenTypesAnalyzer;
   private readonly images: ImageAnalyzer;
   private readonly curiosity: CuriosityAnalyzer;
   private readonly sessions: Session[];
@@ -72,6 +74,7 @@ export class Analyzer {
     this.flow = new FlowAnalyzer(sessions, elIdx, sharedMap);
     this.context = new ContextAnalyzer(sessions, elIdx, sharedMap);
     this.promptCache = new PromptCacheAnalyzer(sessions, elIdx, sharedMap);
+    this.tokenTypes = new TokenTypesAnalyzer(sessions, elIdx, sharedMap);
     this.images = new ImageAnalyzer(sessions, elIdx, sharedMap);
     this.curiosity = new CuriosityAnalyzer(sessions, elIdx, sharedMap);
   }
@@ -210,6 +213,7 @@ export class Analyzer {
     return this.promptCache.getPromptCacheSessions(workspaceId, harness, f);
   }
   getSessionTimeline(sessionId: string): SessionTimelineData | null { return this.promptCache.getSessionTimeline(sessionId); }
+  getTokenTypes(f?: DateFilter): TokenTypesData { return this.tokenTypes.getTokenTypes(f); }
 
   getCalendarActivity(f?: DateFilter): CalendarActivityData { return this.dashboard.getCalendarActivity(f); }
 

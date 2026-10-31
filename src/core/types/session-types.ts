@@ -32,6 +32,9 @@ export interface CompactionEvent {
   checkpointNumber?: number;
   /** Tokens of the compaction call itself (Copilot CLI: `compactionTokensUsed`); input includes cached tokens. */
   tokensUsed?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** Main-agent model calls the session had logged when the compaction finished: the index of the next call
+   *  in `Session.callTimeline`, where the smaller context first shows (Copilot CLI and Copilot App). */
+  atCall?: number;
 }
 
 /** Authoritative per-model usage totals reported at the session level

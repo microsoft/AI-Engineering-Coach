@@ -10,7 +10,7 @@
  */
 
 import type { Analyzer } from '../core/analyzer';
-import type { ContextCompositionData, DateFilter, PromptCacheData } from '../core/types';
+import type { ContextCompositionData, DateFilter, PromptCacheData, TokenTypesData } from '../core/types';
 
 /* ---- helpers ---- */
 
@@ -514,6 +514,44 @@ export function formatPromptCache(data: PromptCacheData) {
   };
 }
 
+/** Token types beyond input and output, one entry per source (never pooled). Counts, ratios and times only. */
+export function formatTokenTypes(data: TokenTypesData) {
+  return {
+    sources: data.sources.map(s => ({
+      source: s.label,
+      requests: s.requests,
+      reasoning: s.reasoning ? {
+        basis: s.reasoning.basis,
+        mainPctOfOutput: s.reasoning.main?.sharePct ?? null,
+        subagentPctOfOutput: s.reasoning.subagent?.sharePct ?? null,
+        byEffort: s.reasoning.byEffort.map(e => ({ effort: e.effort, stream: e.stream, pctOfOutput: e.sharePct, calls: e.calls })),
+      } : null,
+      compaction: s.compaction ? {
+        count: s.compaction.count,
+        automatic: s.compaction.automatic,
+        failed: s.compaction.failed,
+        avgTokensBefore: s.compaction.avgTokensBefore,
+        avgTokensAfter: s.compaction.avgTokensAfter,
+        removedPct: s.compaction.yieldPct,
+        compactionCallInputPctOfMainInput: s.compaction.shareOfMainInputPct,
+        modelMinutes: Math.round(s.compaction.modelTimeMs / 60_000),
+      } : null,
+      subagents: s.subagents ? {
+        runs: s.subagents.runs,
+        totalTokens: s.subagents.totalTokens,
+        pctOfAllTokens: s.subagents.shareOfAllTokensPct,
+        byType: s.subagents.byType.slice(0, 6).map(t => ({ type: t.agentType, runs: t.runs, tokens: t.totalTokens })),
+      } : null,
+      truncation: s.truncation,
+      latency: s.latency?.slice(0, 5).map(l => ({
+        model: l.model, calls: l.calls, firstTokenP50Ms: l.ttftP50Ms, firstTokenP90Ms: l.ttftP90Ms, callP50Ms: l.durationP50Ms, callP90Ms: l.durationP90Ms,
+      })) ?? null,
+    })),
+    harnessesWithoutTokenTypes: data.harnesses.filter(h => h.source == null).map(h => h.harness),
+    tips: data.tips,
+  };
+}
+
 function formatConfigHealth(cfg: ReturnType<Analyzer['getConfigHealth']>) {
   return {
     overallScore: cfg.overallScore,
@@ -544,6 +582,7 @@ export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
 
   return {
     promptCache: formatPromptCache(analyzer.getPromptCache(f)),
+    tokenTypes: formatTokenTypes(analyzer.getTokenTypes(f)),
     contextManagement: {
       overallScore: ctx.overallScore,
       estimatedContextWindow: ctx.estimatedContextWindow,
@@ -562,6 +601,7 @@ export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
         verdict: w.verdict,
         avgUtilization: Math.round(w.avgUtilization),
         peakUtilization: Math.round(w.peakUtilization),
+        contextWindow: w.windowSource,
         compactions: w.compactionCount,
       })),
       composition: ctx.composition ? formatComposition(ctx.composition) : undefined,

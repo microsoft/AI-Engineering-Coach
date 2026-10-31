@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Analyzer } from './analyzer';
+import { buildContextLayer } from './context-timeline';
 import { createRequest, createSession } from './parser-shared';
 import { CONTEXT_OPTIMAL_UTILIZATION } from './constants';
 import type { CompactionEvent, Session, SessionRequest } from './types';
@@ -31,7 +32,7 @@ function cliTurn(i: number, lastPromptTokens: number, overrides: Partial<Session
     timestamp: BASE_TS + i * 60_000,
     messageText: `turn ${i}`,
     responseText: 'done',
-    contextUsage: { lastPromptTokens, peakPromptTokens: lastPromptTokens, contextLimit: LIMIT },
+    contextUsage: { lastPromptTokens, peakPromptTokens: lastPromptTokens, contextLimit: LIMIT, calls: 1 },
     ...overrides,
   });
 }
@@ -114,7 +115,7 @@ describe('Context Management with reported context limits', () => {
   it('returns per-turn limits, peaks and compaction labels for the session drill-down', () => {
     const turns = [
       cliTurn(0, 120_000),
-      cliTurn(1, 80_000, { contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 780_000, contextLimit: LIMIT }, compaction: compaction(780_000, 70_000) }),
+      cliTurn(1, 80_000, { contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 780_000, contextLimit: LIMIT, calls: 6 }, compaction: compaction(780_000, 70_000) }),
       createRequest({ requestId: 'no-calls', timestamp: BASE_TS + 3 * 60_000, messageText: 'relayed', responseText: '' }),
     ];
     const session = createSession({ sessionId: 'drill', workspaceId: 'drill', workspaceName: 'drill', harness: 'GitHub Copilot App', requests: turns });
@@ -150,5 +151,45 @@ describe('Context Management with reported context limits', () => {
     expect(availability.sessionsWithRequestTokens).toBe(1);
     expect(availability.harnessesWithoutRequestTokens).toEqual([]);
     expect(availability.rangesWithTokens.length).toBeGreaterThan(0);
+  });
+
+  it('adds per-turn calls, cache hit and the token-types strip to the drill-down', () => {
+    const promptCache = { rows: [{ stream: 'main' as const, model: 'claude-opus-5.5', calls: 6, reasoningEffort: 'high', input: 600_000, cacheRead: 540_000, cacheWrite: 60_000, outputTokens: 9_000, reasoningTokens: 5_400, truncatedCalls: 0, filteredCalls: 0, ttftMs: [3_000], durationMs: [9_000] }] };
+    const session = createSession({
+      sessionId: 'strip', workspaceId: 'strip', workspaceName: 'strip', harness: 'GitHub Copilot App',
+      requests: [cliTurn(0, 120_000, { promptCache, contextUsage: { lastPromptTokens: 120_000, peakPromptTokens: 130_000, contextLimit: LIMIT, calls: 6 } }), cliTurn(1, 90_000)],
+    });
+    const detail = new Analyzer([session]).getWorkspaceContextSessions('strip').sessions[0];
+    expect(detail.turnCalls).toEqual([6, 1]);
+    expect(detail.turnCacheHitPct).toEqual([90, null]);
+    expect(detail.tokenTypes).toMatchObject({ reasoningPct: 60, effort: 'high', truncatedCalls: 0, calls: 6, ttftMedianMs: 3_000 });
+
+    const vs = new Analyzer([vscodeSession('vs-strip', [30_000])]).getWorkspaceContextSessions('vs-strip').sessions[0];
+    expect(vs.turnCalls).toBeUndefined();
+    expect(vs.turnCacheHitPct).toBeUndefined();
+    expect(vs.tokenTypes).toBeUndefined();
+  });
+});
+
+describe('Session timeline context layer', () => {
+  it('places compactions on the call timeline and lists each turn\u2019s context at its end', () => {
+    const timeline = { calls: 6, bucketSize: 1, buckets: [] };
+    const turns = [
+      cliTurn(0, 120_000, { compaction: { ...compaction(780_000, 70_000, LIMIT), atCall: 3 } }),
+      cliTurn(1, 90_000, { compaction: { ...compaction(300_000, 0), outcome: 'failed', trigger: 'manual', atCall: 5 } }),
+      // A compaction from an older build has no position on the timeline.
+      createRequest({ requestId: 'old', timestamp: BASE_TS, messageText: 'q', responseText: '', compaction: compaction(100_000, 20_000) }),
+    ];
+    const session = createSession({ sessionId: 'tl', workspaceId: 'tl', workspaceName: 'tl', harness: 'GitHub Copilot CLI', requests: turns, callTimeline: timeline });
+    expect(buildContextLayer(session)).toEqual({
+      compactions: [
+        { callIndex: 3, requestIndex: 0, tokensBefore: 780_000, tokensAfter: 70_000, tokenLimit: LIMIT, trigger: 'automatic', failed: false },
+        { callIndex: 5, requestIndex: 1, tokensBefore: 300_000, tokensAfter: 0, tokenLimit: null, trigger: 'manual', failed: true },
+      ],
+      omittedCompactions: 0,
+      turnEnds: [120_000, 90_000, null],
+    });
+    expect(buildContextLayer(createSession({ sessionId: 'x', workspaceId: 'x', workspaceName: 'x', harness: 'Claude', requests: [] }))).toBeNull();
+    expect(new Analyzer([session]).getSessionTimeline('tl')?.context?.compactions).toHaveLength(2);
   });
 });

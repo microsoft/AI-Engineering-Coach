@@ -18,14 +18,14 @@ describe('TurnContextAccumulator', () => {
     // Compaction during the turn: the next prompt is much smaller.
     acc.addCall(main(60_000));
     acc.addCall(main(75_000));
-    expect(acc.result()).toEqual({ lastPromptTokens: 75_000, peakPromptTokens: 250_000, contextLimit: 968_000 });
+    expect(acc.result()).toEqual({ lastPromptTokens: 75_000, peakPromptTokens: 250_000, contextLimit: 968_000, calls: 4 });
   });
 
   it('ignores sub-agent calls, which have their own context', () => {
     const acc = new TurnContextAccumulator();
     acc.addCall(main(100_000));
     acc.addCall({ stream: 'subagent', inputTokens: 900_000, maxPromptTokens: 128_000 });
-    expect(acc.result()).toEqual({ lastPromptTokens: 100_000, peakPromptTokens: 100_000, contextLimit: 968_000 });
+    expect(acc.result()).toEqual({ lastPromptTokens: 100_000, peakPromptTokens: 100_000, contextLimit: 968_000, calls: 1 });
   });
 
   it('keeps the latest limit when a call does not report one, and falls back to a compaction limit', () => {

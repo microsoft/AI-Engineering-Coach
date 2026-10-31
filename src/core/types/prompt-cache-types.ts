@@ -40,6 +40,19 @@ export interface ModelCallRow {
    *  per-session cap on listed `CacheBreak`s. Break counts and rates come from here, so they follow the
    *  date filter. */
   cacheBreaks?: number;
+  /* Token types (see call-outputs.ts). Each is absent when the harness doesn't log it per call. */
+  /** Output tokens, including reasoning (Copilot CLI and Copilot App). */
+  outputTokens?: number;
+  /** Reasoning tokens, part of `outputTokens` (Copilot CLI and Copilot App). */
+  reasoningTokens?: number;
+  /** Calls that stopped at the output-token limit (Copilot CLI and Copilot App, Claude Code, OpenCode). */
+  truncatedCalls?: number;
+  /** Calls the content filter stopped or changed (Copilot CLI and Copilot App). */
+  filteredCalls?: number;
+  /** Time to first token of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
+  ttftMs?: number[];
+  /** Duration of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
+  durationMs?: number[];
 }
 
 /** Prompt-cache usage of one request (a Copilot CLI turn, a Claude Code or an OpenCode request). */

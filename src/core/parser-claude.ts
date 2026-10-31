@@ -32,6 +32,7 @@ import {
 import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromContent, type ImageReference, type ImageRequestMatch } from './image-data';
 import { RequestCacheBuilder, cacheModelName, missTokens } from './prompt-cache-usage';
+import { stopReasonSample } from './call-outputs';
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
 
@@ -123,6 +124,9 @@ interface ClaudeAssistantData {
   /** Prompt-cache usage per API response (counted once per `message.id`). */
   cache: RequestCacheBuilder;
   responseIds: Set<string>;
+  /** Responses passed to `cache`, and whether each is already counted as truncated: `stop_reason: max_tokens`
+   *  can be on any of a response's lines. */
+  truncation: Map<string, boolean>;
 }
 
 /** Session-wide prompt-cache state across Claude requests. */
@@ -389,27 +393,37 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
-/** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain). */
+/** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain), and whether it
+ *  stopped at the output-token limit. */
 function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
+  const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
+  const stream = line.isSidechain ? 'subagent' : 'main';
+  const model = cacheModelName(line.message?.model);
+  const truncated = line.message?.stop_reason === 'max_tokens';
+  // A later line of a response already counted can still log that it stopped at the limit.
+  if (responseId && data.responseIds.has(responseId)) {
+    if (truncated && data.truncation.get(responseId) === false) {
+      data.truncation.set(responseId, true);
+      data.cache.addTruncated(stream, model);
+    }
+    return;
+  }
   const usage = line.message?.usage;
   // Usage without cache fields didn't report cache usage; don't count the response as uncached.
   if (!usage || !reportsCacheUsage(usage)) return;
-  const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
-  if (responseId && data.responseIds.has(responseId)) return;
   const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
   const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
   if (sample.input <= 0) return;
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
   if (responseId) data.responseIds.add(responseId);
-  const stream = line.isSidechain ? 'subagent' : 'main';
-  data.cache.addCall(stream, cacheModelName(line.message?.model), sample);
+  data.cache.addCall(stream, model, { ...sample, outputs: stopReasonSample(truncated) });
+  if (responseId) data.truncation.set(responseId, truncated);
   if (stream === 'main' && !cacheState.sawMain) {
     cacheState.sawMain = true;
     data.cache.addColdStart(missTokens(sample), undefined);
   }
 }
-
 function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, lastTs: number | null, cacheState: ClaudeCacheState): ClaudeAssistantData {
   const data: ClaudeAssistantData = {
     nextIndex: startIndex,
@@ -432,6 +446,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
     webDomains: [],
     cache: new RequestCacheBuilder(),
     responseIds: new Set(),
+    truncation: new Map(),
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);

@@ -24,7 +24,7 @@ function request(overrides: Record<string, unknown>) {
 describe('token-usage fields on SessionRequest', () => {
   it('accepts per-turn context, every compaction and sub-agent runs', () => {
     const parsed = SessionRequestSchema.safeParse(request({
-      contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 780_000, contextLimit: 968_000 },
+      contextUsage: { lastPromptTokens: 80_000, peakPromptTokens: 780_000, contextLimit: 968_000, calls: 6 },
       compaction: COMPACTION,
       compactions: [COMPACTION, COMPACTION],
       subagentRuns: [RUN],
@@ -33,7 +33,7 @@ describe('token-usage fields on SessionRequest', () => {
   });
 
   it('rejects unexpected keys, unknown agent types and oversized lists', () => {
-    expect(SessionRequestSchema.safeParse(request({ contextUsage: { lastPromptTokens: 1, peakPromptTokens: 1, contextLimit: null, prompt: 'x' } })).success).toBe(false);
+    expect(SessionRequestSchema.safeParse(request({ contextUsage: { lastPromptTokens: 1, peakPromptTokens: 1, contextLimit: null, calls: 1, prompt: 'x' } })).success).toBe(false);
     expect(SessionRequestSchema.safeParse(request({ subagentRuns: [{ ...RUN, agentType: 'my-private-agent' }] })).success).toBe(false);
     expect(SessionRequestSchema.safeParse(request({ subagentRuns: [{ ...RUN, agentName: 'leak' }] })).success).toBe(false);
     expect(SessionRequestSchema.safeParse(request({ compactions: Array.from({ length: MAX_TURN_COMPACTIONS + 1 }, () => COMPACTION) })).success).toBe(false);

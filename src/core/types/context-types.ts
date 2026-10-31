@@ -5,7 +5,7 @@
 
 import type { AntiPattern } from './analytics-types';
 import type { CompositionSource, ContextCategory, SystemPromptSegment } from './session-types';
-import type { ContextWindowSource } from './token-usage-types';
+import type { ContextWindowSource, SessionTokenTypes } from './token-usage-types';
 
 /* ---- Context Composition (what fills the prompt) ---- */
 
@@ -232,6 +232,14 @@ export interface SessionContextDetail {
   turnLimits?: (number | null)[];
   /** Largest prompt within each turn, aligned with `tokenCurve`; absent when not reported. */
   turnPeaks?: (number | null)[];
+  /** Main-agent model calls in each turn, aligned with `tokenCurve`; absent when not reported. */
+  turnCalls?: (number | null)[];
+  /** Main-agent cache hit ratio of each turn (shared `cacheHitPct`), aligned with `tokenCurve`. */
+  turnCacheHitPct?: (number | null)[];
+  /** Token types beyond input and output in this session; absent when the harness logs none. */
+  tokenTypes?: SessionTokenTypes;
+  /** The session has a per-call timeline (Copilot CLI and Copilot App); load it with `getSessionTimeline`. */
+  hasCallTimeline?: boolean;
   /** What filled this session's prompts; absent when the harness doesn't report it. */
   composition?: SessionCompositionDetail;
 }

@@ -55,8 +55,8 @@ describe('Codex token types', () => {
     ], (sessionsDir) => {
       const session = parseCodexSessions(sessionsDir)[0];
       expect(session.requests).toHaveLength(2);
-      expect(session.requests[0].contextUsage).toEqual({ lastPromptTokens: 45_000, peakPromptTokens: 45_000, contextLimit: 272_000 });
-      expect(session.requests[1].contextUsage).toEqual({ lastPromptTokens: 50_000, peakPromptTokens: 50_000, contextLimit: 272_000 });
+      expect(session.requests[0].contextUsage).toEqual({ lastPromptTokens: 45_000, peakPromptTokens: 45_000, contextLimit: 272_000, calls: 2 });
+      expect(session.requests[1].contextUsage).toEqual({ lastPromptTokens: 50_000, peakPromptTokens: 50_000, contextLimit: 272_000, calls: 1 });
       // promptTokens keeps its meaning: the turn's cumulative input delta.
       expect(session.requests[0].promptTokens).toBe(65_000);
       expect(session.requests[1].promptTokens).toBe(50_000);
@@ -72,7 +72,7 @@ describe('Codex token types', () => {
       tokenCount('2026-10-30T10:00:05Z', usage(200_000, 0, 100, 0), usage(200_000, 0, 100, 0)),
       tokenCount('2026-10-30T10:00:10Z', usage(230_000, 0, 200, 0), usage(30_000, 0, 100, 0)),
     ], (sessionsDir) => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].contextUsage).toEqual({ lastPromptTokens: 30_000, peakPromptTokens: 200_000, contextLimit: 272_000 });
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].contextUsage).toEqual({ lastPromptTokens: 30_000, peakPromptTokens: 200_000, contextLimit: 272_000, calls: 2 });
     });
   });
 
@@ -96,7 +96,7 @@ describe('Codex token types', () => {
       { type: 'event_msg', timestamp: '2026-10-30T10:00:00Z', payload: { type: 'user_message', message: 'hi' } },
       tokenCount('2026-10-30T10:00:05Z', usage(9_000, 0, 50, 10), usage(9_000, 0, 50, 10), null),
     ], (sessionsDir) => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].contextUsage).toEqual({ lastPromptTokens: 9_000, peakPromptTokens: 9_000, contextLimit: null });
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].contextUsage).toEqual({ lastPromptTokens: 9_000, peakPromptTokens: 9_000, contextLimit: null, calls: 1 });
     });
   });
 });

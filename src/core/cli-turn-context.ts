@@ -51,6 +51,18 @@ export class TurnContextAccumulator {
       lastPromptTokens: this.last,
       peakPromptTokens: this.peak,
       contextLimit: this.limit ?? this.fallbackLimit,
+      calls: this.calls,
     };
+  }
+
+  /** The turn's result; the accumulator then starts the next turn. */
+  take(): TurnContextUsage | undefined {
+    const out = this.result();
+    this.calls = 0;
+    this.last = 0;
+    this.peak = 0;
+    this.limit = null;
+    this.fallbackLimit = null;
+    return out;
   }
 }
