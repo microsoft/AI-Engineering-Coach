@@ -26,20 +26,30 @@ For the full DSL reference — field schema, function catalog, and metric primit
 ## Anatomy of a rule
 
 A rule file lives at `src/core/rules/<rule-id>.md`. Below is
-[`lazy-prompting.md`](../src/core/rules/lazy-prompting.md) annotated section by section:
+[`lazy-prompting.md`](../src/core/rules/lazy-prompting.md) annotated section by section. In the
+front matter, a comment is a whole line that starts with `#`: after a value, a `#` and the rest of
+the line are read as part of the value.
 
 ````markdown
 ---
-id: lazy-prompting              # Stable identifier, must match the filename
-name: Lazy Prompting             # Human-readable name shown in the UI
-group: prompt-quality            # Practice category: prompt-quality | session-hygiene |
-                                 #   code-review | tool-mastery | context-management
-severity: medium                 # low | medium | high — drives score weighting
-scope: requests                  # requests (per-message) or sessions (per-session)
-version: 1                       # Bump when changing detection logic
-tags: [prompt, quality, short]   # Free-form tags surfaced in the rule filter
-thresholds:                      # Tunable knobs. Referenced as thresholds.<name> in DSL.
-  minChars: 30                   #   Sliders for these appear in the Rule Editor.
+# Stable identifier, must match the filename
+id: lazy-prompting
+# Human-readable name shown in the UI
+name: Lazy Prompting
+# Practice category: prompt-quality | session-hygiene | code-review | tool-mastery | context-management
+group: prompt-quality
+# low | medium | high — drives score weighting
+severity: medium
+# requests (per-message) or sessions (per-session)
+scope: requests
+# Bump when changing detection logic
+version: 1
+# Free-form tags surfaced in the rule filter
+tags: [prompt, quality, short]
+# Tunable knobs, referenced as thresholds.<name> in the detection logic.
+# Sliders for these appear in the Rule Editor.
+thresholds:
+  minChars: 30
   maxRatio: 0.3
   minSample: 10
 ---
@@ -59,12 +69,15 @@ Template for the per-occurrence example list. {{message}} and any field on the
 matched row (e.g. {{extra.charCount}}) are available.
 
 # Detection Logic
+The DSL has no comments. In the block below, scan sets what to iterate over, match is the predicate
+(fields, thresholds.* and DSL helpers), aggregate is count or ratio, and check is the trigger
+condition. A line that ends with a backslash continues on the next line.
 ```detect
-scan: requests                                    # What to iterate over
-match: messageLength < thresholds.minChars        # Predicate; uses field schema
-       AND messageLength > 0                      #   + thresholds.* + DSL helpers
-aggregate: ratio                                  # count | ratio | sum | someWhere | ...
-check: ratio > thresholds.maxRatio                # The trigger condition
+scan: requests
+match: messageLength < thresholds.minChars \
+       AND messageLength > 0
+aggregate: ratio
+check: ratio > thresholds.maxRatio \
        AND count > thresholds.minSample
 examples: "{{messageText | truncate:80}}" ({{messageLength}} chars)
 ```
@@ -84,22 +97,26 @@ against the rule. Tests run as part of the standard `npm test` suite.
 
 Metrics are simpler than rules — they emit a single named value that rules and dashboards can
 consume. A metric file lives at `src/core/metrics/<metric-id>.metric.md`. Below is
-[`weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md):
+[`weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md), with its front
+matter comments on their own lines. `# Filter` is a predicate over the scope, and `# Metric` is the
+aggregation: count, ratio, sum or avg.
 
 ```markdown
 ---
-id: weekend-requests             # Stable identifier; reference as metrics.weekendRequests
+# Stable identifier; reference as metrics.weekendRequests
+id: weekend-requests
 name: Weekend Requests
-scope: requests                  # requests or sessions
+# requests or sessions
+scope: requests
 version: 1
 tags: [wellbeing, time]
 ---
 
 # Filter
-dayOfWeek(timestamp) == 0 OR dayOfWeek(timestamp) == 6   # Predicate over the scope
+dayOfWeek(timestamp) == 0 OR dayOfWeek(timestamp) == 6
 
 # Metric
-ratio                            # Aggregation: count | ratio | sum | avg
+ratio
 
 # Examples
 {{messageText | truncate:60}} ({{dayOfWeek(timestamp)}})
