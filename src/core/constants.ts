@@ -120,6 +120,11 @@ export const CONTEXT_GROWING_SESSION_GROWTH_RATE = 0.8;   // 80%+ sequential inc
 
 /* ---- Token estimation (for sessions without native token data) ---- */
 
+/* ---- Context composition ---- */
+export const COMPOSITION_TOOL_HEAVY_PCT = 50;            // tool definitions ≥50% of the prompt = tool-heavy request
+export const COMPOSITION_ROUNDING_TOLERANCE = 3;          // VS Code rounds each label; sums within ±3 points are noise
+export const COMPOSITION_TIP_MIN_SAMPLES = 10;            // min requests with composition before coaching tips fire
+
 /* ---- Token data quality cutoff ---- */
 export const TOKEN_DATA_AVAILABLE_FROM = '2026-04-01';
 

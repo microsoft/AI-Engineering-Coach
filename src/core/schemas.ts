@@ -46,6 +46,39 @@ export const ModelUsageSchema = z.object({
   reasoningTokens: z.number().optional(),
 }).passthrough();
 
+const shareSchema = z.number().min(0).max(100).optional();
+
+export const PromptCompositionSchema = z.object({
+  source: z.enum(['vscode', 'copilot-cli']),
+  shares: z.object({
+    systemInstructions: shareSchema,
+    toolDefinitions: shareSchema,
+    messages: shareSchema,
+    toolResults: shareSchema,
+    files: shareSchema,
+    conversation: shareSchema,
+    other: shareSchema,
+  }).strict(),
+  promptTokens: z.number().nullable(),
+  calls: z.number().optional(),
+  toolDefinitionTokens: z.number().optional(),
+  availableTools: z.number().optional(),
+}).strict();
+
+export const SessionContextCompositionSchema = z.object({
+  systemSegments: z.array(z.object({ name: z.string().max(64), tokens: z.number() }).strict()),
+  toolCount: z.number().nullable(),
+  toolTokens: z.number().nullable(),
+  compactions: z.array(z.object({
+    timestamp: z.number().nullable(),
+    systemTokens: z.number(),
+    toolDefinitionTokens: z.number(),
+    conversationTokens: z.number(),
+    currentTokens: z.number(),
+    tokenLimit: z.number().nullable(),
+  }).strict()),
+}).strict();
+
 /* ---- SessionRequest ---- */
 
 export const SessionRequestSchema = z.object({
@@ -76,6 +109,7 @@ export const SessionRequestSchema = z.object({
   cacheReadTokens: z.number().nullable(),
   cacheWriteTokens: z.number().nullable(),
   compaction: CompactionEventSchema.nullable(),
+  promptComposition: PromptCompositionSchema.optional(),
   todoSnapshot: z.array(TodoItemSchema).nullable(),
   workType: z.string(),
   userEventId: z.string().optional(),
@@ -112,6 +146,7 @@ export const SessionSchema = z.object({
   requestCount: z.number(),
   requests: z.array(SessionRequestSchema),
   modelUsage: z.record(z.string(), ModelUsageSchema).optional(),
+  contextComposition: SessionContextCompositionSchema.optional(),
   endReason: z.enum(['shutdown', 'active', 'aborted', 'unknown']).optional(),
   hasDevcontainer: z.boolean().optional(),
   customInstructionsBytes: z.number().optional(),
