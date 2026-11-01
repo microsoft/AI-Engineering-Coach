@@ -13,11 +13,15 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { Worker } from 'worker_threads';
 import { Session, Workspace } from './types';
 import { EditLoc, EditLocIndex } from './edit-loc-diff';
 import { warnCore } from './log';
 import { loadSessionDetails } from './session-image-loader';
 import { stripSingleSession } from './parser-shared';
+import { getCacheDir } from './cache-paths';
+import { isCacheWriteWorkerResult, removeStaleTempFiles, writeCacheFiles, type CacheWritePayload } from './cache-write';
+import { runtimeDebug } from './runtime-debug';
 
 export interface ParseResult {
   workspaces: Map<string, Workspace>;
@@ -123,9 +127,8 @@ export interface CacheData {
 
 /* ---- Paths ---- */
 
-const CACHE_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.copilot-analytics-cache');
-const CACHE_FILE = path.join(CACHE_DIR, 'parsed.json');
-const CACHE_META = path.join(CACHE_DIR, 'meta.json');
+const cacheFilePath = (): string => path.join(getCacheDir(), 'parsed.json');
+const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');
 
 const CACHE_VERSION = 22;
 
@@ -297,22 +300,24 @@ export function findStaleDirs(
 
 export async function loadCacheData(): Promise<CacheData | null> {
   try {
-    if (!fs.existsSync(CACHE_META) || !fs.existsSync(CACHE_FILE)) return null;
-    if (fs.statSync(CACHE_META).size > MAX_CACHE_META_BYTES) {
+    const cacheFile = cacheFilePath();
+    const cacheMeta = cacheMetaPath();
+    if (!fs.existsSync(cacheMeta) || !fs.existsSync(cacheFile)) return null;
+    if (fs.statSync(cacheMeta).size > MAX_CACHE_META_BYTES) {
       warnCore('Cache', 'Cache meta file exceeds size limit; ignoring and re-parsing');
       return null;
     }
-    const meta = readCacheMetaPayload(JSON.parse(fs.readFileSync(CACHE_META, 'utf-8')) as unknown);
+    const meta = readCacheMetaPayload(JSON.parse(fs.readFileSync(cacheMeta, 'utf-8')) as unknown);
     if (!meta || meta.version !== CACHE_VERSION) return null; // old format – full re-parse
 
-    const cacheSize = (await fs.promises.stat(CACHE_FILE)).size;
+    const cacheSize = (await fs.promises.stat(cacheFile)).size;
     if (cacheSize > MAX_CACHE_FILE_BYTES) {
       warnCore('Cache', `Cache file exceeds size limit (${cacheSize} bytes); ignoring and re-parsing`);
       return null;
     }
 
     // Read async to avoid blocking the event loop on the 200+ MB cache file
-    const rawStr = await fs.promises.readFile(CACHE_FILE, 'utf-8');
+    const rawStr = await fs.promises.readFile(cacheFile, 'utf-8');
     // Yield before the expensive JSON.parse so any pending IPC messages flush
     await new Promise<void>(r => setTimeout(r, 0));
     const raw = readSerializedCachePayload(JSON.parse(rawStr) as unknown);
@@ -335,15 +340,68 @@ export async function loadCacheData(): Promise<CacheData | null> {
   }
 }
 
-export function saveCacheData(result: ParseResult, dirMetas: DirMetas): void {
-  // Serialize immediately so the snapshot is captured before any in-memory
-  // stripping (stripSessionsForMemory) mutates the sessions.  Defer the
-  // actual file write to avoid blocking the event loop.
+/** How long the parse worker waits for its cache write before it reports `done` regardless, so a
+ *  stalled disk cannot hold the parse result hostage. */
+const CACHE_WRITE_FLUSH_TIMEOUT_MS = 30_000;
+
+type CacheWriteOutcome =
+  | { ok: true; via: 'worker' | 'in-thread'; bytes: number }
+  | { ok: false; via: 'worker' | 'in-thread'; error: string };
+
+/** Cache writes started by this thread that have not settled yet (see flushCacheWrites). */
+const pendingWrites = new Set<Promise<boolean>>();
+
+/** Write on cache-write-worker.js, which gets its own copy of the payload, so this thread can
+ *  free the large JSON string while the file is still being written. Returns null when the
+ *  worker bundle or worker_threads is unavailable (unbundled sources in tests and scripts). */
+function startWorkerWrite(payload: CacheWritePayload): Promise<CacheWriteOutcome> | null {
+  const script = path.join(__dirname, 'cache-write-worker.js');
+  if (!fs.existsSync(script)) return null;
+  let worker: Worker;
   try {
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
+    worker = new Worker(script, { workerData: payload });
+  } catch {
+    return null;
+  }
+  return new Promise((resolve) => {
+    let outcome: CacheWriteOutcome = { ok: false, via: 'worker', error: 'write worker exited without reporting' };
+    worker.on('message', (message: unknown) => {
+      if (!isCacheWriteWorkerResult(message)) return;
+      outcome = message.ok
+        ? { ok: true, via: 'worker', bytes: message.bytes }
+        : { ok: false, via: 'worker', error: message.error };
+    });
+    worker.on('error', (error: Error) => {
+      outcome = { ok: false, via: 'worker', error: error.message };
+    });
+    worker.on('exit', () => resolve(outcome));
+  });
+}
+
+function startCacheWrite(payload: CacheWritePayload): Promise<CacheWriteOutcome> {
+  return startWorkerWrite(payload) ?? writeCacheFiles(payload).then(
+    (bytes): CacheWriteOutcome => ({ ok: true, via: 'in-thread', bytes }),
+    (error: unknown): CacheWriteOutcome => ({ ok: false, via: 'in-thread', error: error instanceof Error ? error.message : String(error) }),
+  );
+}
+
+/**
+ * Persist `result` to the disk cache. Serializes synchronously, so later in-memory changes
+ * cannot leak into the snapshot, then writes off-thread (see cache-write.ts for crash safety).
+ * Resolves true once both files are committed and false if the write failed; never rejects.
+ * The write outlives this call: a worker whose parent terminates it must first await
+ * flushCacheWrites(), or the write dies with it.
+ */
+export function saveCacheData(result: ParseResult, dirMetas: DirMetas): Promise<boolean> {
+  const started = Date.now();
+  let write: Promise<CacheWriteOutcome>;
+  try {
+    const dir = getCacheDir();
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     // Cached transcripts can contain secrets users pasted into chats; keep the
     // dir owner-only (best effort — file modes are a no-op on Windows).
-    try { fs.chmodSync(CACHE_DIR, 0o700); } catch { /* best effort */ }
+    try { fs.chmodSync(dir, 0o700); } catch { /* best effort */ }
+    removeStaleTempFiles(dir);
 
     const serializable = {
       workspaces: Array.from(result.workspaces.entries()),
@@ -354,32 +412,44 @@ export function saveCacheData(result: ParseResult, dirMetas: DirMetas): void {
       sessionSourceIndex: Array.from(result.sessionSourceIndex.entries()),
     };
     const meta = { version: CACHE_VERSION, dirMetas, savedAt: Date.now() };
-    // JSON.stringify eagerly so we own the data even if sessions are mutated later.
-    const json = JSON.stringify(serializable);
-    const metaJson = JSON.stringify(meta);
-
-    // Write immediately via worker thread so the large JSON string can be
-    // garbage-collected from the main heap once transferred to the worker.
-    const fallbackWrite = (): void => {
-      fs.writeFile(CACHE_FILE, json, { encoding: 'utf-8', mode: 0o600 }, () => {});
-      fs.writeFile(CACHE_META, metaJson, { encoding: 'utf-8', mode: 0o600 }, () => {});
-    };
-
-    void import('worker_threads').then(({ Worker }) => {
-      try {
-        const w = new Worker(path.join(__dirname, 'cache-write-worker.js'), {
-          workerData: { json, metaJson, f: CACHE_FILE, m: CACHE_META },
-        });
-        w.on('error', (e: Error) => console.warn('[cache] worker write error:', e.message));
-        w.unref();
-      } catch {
-        fallbackWrite();
-      }
-    }).catch(() => {
-      fallbackWrite();
+    write = startCacheWrite({
+      cacheFile: path.join(dir, 'parsed.json'),
+      metaFile: path.join(dir, 'meta.json'),
+      json: JSON.stringify(serializable),
+      metaJson: JSON.stringify(meta),
     });
   } catch (e) {
     warnCore('cache', 'Cache write failed', e);
+    return Promise.resolve(false);
+  }
+  const serializeMs = Date.now() - started;
+  const settled = write.then((outcome) => {
+    if (outcome.ok) {
+      runtimeDebug('cache', 'write-complete',
+        `via=${outcome.via} bytes=${outcome.bytes} serializeMs=${serializeMs} totalMs=${Date.now() - started}`);
+    } else {
+      warnCore('cache', `Cache write failed (${outcome.via})`, outcome.error);
+    }
+    return outcome.ok;
+  });
+  pendingWrites.add(settled);
+  void settled.then(() => pendingWrites.delete(settled));
+  return settled;
+}
+
+/**
+ * Wait until every cache write started by this thread has settled, for at most `timeoutMs`.
+ * Resolves true when they all settled (written or failed) and false on timeout. The parse
+ * worker awaits this before posting `done`, because its parent terminates it on `done`.
+ */
+export async function flushCacheWrites(timeoutMs = CACHE_WRITE_FLUSH_TIMEOUT_MS): Promise<boolean> {
+  if (pendingWrites.size === 0) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<boolean>((resolve) => { timer = setTimeout(resolve, timeoutMs, false); });
+  try {
+    return await Promise.race([Promise.all(pendingWrites).then(() => true), timedOut]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -390,12 +460,13 @@ export interface SidebarStats {
   savedAt: number;
 }
 
-const SIDEBAR_STATS_FILE = path.join(CACHE_DIR, 'sidebar-stats.json');
+const sidebarStatsPath = (): string => path.join(getCacheDir(), 'sidebar-stats.json');
 
 export function loadSidebarStats(): SidebarStats | null {
   try {
-    if (!fs.existsSync(SIDEBAR_STATS_FILE)) return null;
-    const raw = JSON.parse(fs.readFileSync(SIDEBAR_STATS_FILE, 'utf-8')) as Partial<SidebarStats>;
+    const file = sidebarStatsPath();
+    if (!fs.existsSync(file)) return null;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<SidebarStats>;
     // Reject malformed data missing required fields
     if (!Array.isArray(raw.harnesses) || typeof raw.savedAt !== 'number') return null;
     return raw as SidebarStats;
@@ -406,8 +477,9 @@ export function loadSidebarStats(): SidebarStats | null {
 
 export function saveSidebarStats(stats: SidebarStats): void {
   try {
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(SIDEBAR_STATS_FILE, JSON.stringify(stats), { encoding: 'utf-8', mode: 0o600 });
+    const dir = getCacheDir();
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(sidebarStatsPath(), JSON.stringify(stats), { encoding: 'utf-8', mode: 0o600 });
   } catch {
     // best-effort
   }
@@ -415,13 +487,13 @@ export function saveSidebarStats(stats: SidebarStats): void {
 
 export function clearCache(): void {
   memoryCache = null;
-  try { fs.unlinkSync(CACHE_FILE); } catch (e) {
+  try { fs.unlinkSync(cacheFilePath()); } catch (e) {
     console.debug('Cache file removal skipped:', e instanceof Error ? e.message : e);
   }
-  try { fs.unlinkSync(CACHE_META); } catch (e) {
+  try { fs.unlinkSync(cacheMetaPath()); } catch (e) {
     console.debug('Cache meta removal skipped:', e instanceof Error ? e.message : e);
   }
-  try { fs.unlinkSync(SIDEBAR_STATS_FILE); } catch (e) {
+  try { fs.unlinkSync(sidebarStatsPath()); } catch (e) {
     console.debug('Sidebar stats removal skipped:', e instanceof Error ? e.message : e);
   }
 }
