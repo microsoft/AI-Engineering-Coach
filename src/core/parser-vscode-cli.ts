@@ -344,7 +344,7 @@ const MAX_COMPACTION_SNAPSHOTS = 50;
 
 function handleCompactionStart(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
-  state.cache.onCompaction();
+  state.cache.onCompactionStart();
   setSystemTokens(state, data.systemTokens);
   const currentTokens = finiteNumber(data.currentTokens);
   const systemTokens = finiteNumber(data.systemTokens);
@@ -531,7 +531,7 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
 }
 
 function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState): void {
-  state.cache.onCompaction(data);
+  state.cache.onCompactionComplete(data);
   setSystemTokens(state, data.systemTokens);
   const event = readCliCompaction(data);
   state.context.addLimit(event.tokenLimit);

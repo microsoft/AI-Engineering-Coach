@@ -14,7 +14,7 @@ import type { CacheBreak, CacheBreakCause, RequestPromptCache, SessionPromptCach
 import type { CliModelCall } from './cli-model-calls';
 import { relativeRates } from './cli-model-calls';
 import { cliOutputSample } from './call-outputs';
-import { AUTO_COMPACTION_TRIGGERS, MANUAL_COMPACTION_TRIGGERS } from './cli-compaction';
+import { AUTO_COMPACTION_TRIGGERS, MANUAL_COMPACTION_TRIGGERS, compactionFailed } from './cli-compaction';
 import { RequestCacheBuilder, cacheModelName, callCost, missTokens, type CacheCallSample } from './prompt-cache-usage';
 import {
   CACHE_BREAK_MIN_LOST,
@@ -173,6 +173,12 @@ export class CliCacheTracker {
   private sawMain = false;
   private readonly signals = new Set<Signal>();
   private trigger: CacheBreak['compactionTrigger'];
+  /** A compaction started since the previous main-agent call, and no compaction has completed since. */
+  private compactionStarted = false;
+  /** Breaks attributed to a compaction that had only started. A completion logged later shows they came before any
+   *  compaction rewrote the context, and takes that cause back. A log without one keeps it: the start is then the
+   *  only record of the compaction. */
+  private startedCompactionBreaks: PendingBreak[] = [];
   private checkpoint: CheckpointState | null = null;
   private windowBreaks: PendingBreak[] = [];
   private readonly breaks: PendingBreak[] = [];
@@ -194,24 +200,29 @@ export class CliCacheTracker {
     const previous = this.previous;
     const expired = lastMain ? expiredBefore(lastMain, call) : null;
     if (lastMain && call.initiator === 'user') this.request.addReturn(expired);
+    const startedOnly = this.compactionStarted && !this.signals.has('compaction');
+    if (startedOnly) this.signals.add('compaction');
     if (!this.sawMain) {
       // Cache data starts here. Its misses are the session's start only on the first main-agent call: after
       // calls that didn't report their cache, nothing says what this call could have reused.
       this.sawMain = true;
       if (callIndex === 0) this.request.addColdStart(missTokens(sample), cost?.missCost);
     } else if (previous && isCacheBreak(previous.inputTokens, call.cacheReadTokens)) {
-      this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost });
+      const pending = this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost });
+      if (pending && startedOnly) this.startedCompactionBreaks.push(pending);
     }
     this.previous = call;
     this.signals.clear();
     this.trigger = undefined;
+    this.compactionStarted = false;
   }
 
+  /** The break, or `null` when the session's list of breaks is full. */
   private recordBreak(
     previous: CliModelCall,
     call: CliModelCall,
     at: { callIndex: number; requestIndex: number; expired: boolean; cost: { missCost: number } | null },
-  ): void {
+  ): PendingBreak | null {
     const rebuilt = Math.max(0, Math.min(previous.inputTokens, call.inputTokens) - call.cacheReadTokens);
     const misses = missTokens(sampleOf(call));
     const rebuiltCost = at.cost && misses > 0 ? at.cost.missCost * (rebuilt / misses) : undefined;
@@ -219,7 +230,7 @@ export class CliCacheTracker {
     this.request.addBreak(call.model);
     if (this.breaks.length >= CACHE_MAX_BREAKS_PER_SESSION) {
       this.omitted++;
-      return;
+      return null;
     }
     const logged = loggedCauses(previous, call, at.expired, this.signals);
     const brk: CacheBreak = {
@@ -240,15 +251,28 @@ export class CliCacheTracker {
     const pending: PendingBreak = { brk, logged, inferred: new Set(), segments: [] };
     this.breaks.push(pending);
     this.windowBreaks.push(pending);
+    return pending;
   }
 
-  /** `session.compaction_start` (no data) or `session.compaction_complete`. Compaction summaries are their
-   *  own model calls, recorded as the `compaction` stream once the session logs per-call usage (older builds
-   *  log compaction tokens without it, and would show compaction calls alone). */
-  onCompaction(data?: Record<string, unknown>): void {
-    this.signals.add('compaction');
-    if (!data) return;
-    this.trigger = compactionTrigger(data.trigger) ?? this.trigger;
+  /** `session.compaction_start`. A compaction rewrites the context only when it completes; current builds keep
+   *  making main-agent calls while it runs. */
+  onCompactionStart(): void {
+    this.compactionStarted = true;
+  }
+
+  /** `session.compaction_complete`. Only a successful compaction rewrote the context, so only it explains the next
+   *  main-agent call's break. Compaction summaries are their own model calls, recorded as the `compaction` stream
+   *  once the session logs per-call usage (older builds log compaction tokens without it, and would show compaction
+   *  calls alone); a failed compaction's call counts too. */
+  onCompactionComplete(data: Record<string, unknown>): void {
+    // Calls since a compaction started ran on the context as it was.
+    for (const pending of this.startedCompactionBreaks) pending.logged.delete('compaction');
+    this.startedCompactionBreaks = [];
+    this.compactionStarted = false;
+    if (!compactionFailed(data)) {
+      this.signals.add('compaction');
+      this.trigger = compactionTrigger(data.trigger) ?? this.trigger;
+    }
     const used = isRecord(data.compactionTokensUsed) ? data.compactionTokensUsed : undefined;
     const input = num(used?.inputTokens);
     if (!this.sawMain || !used || input == null || input <= 0) return;

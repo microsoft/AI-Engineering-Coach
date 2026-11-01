@@ -208,7 +208,7 @@ A cache break is a main-agent call that couldn't reuse most of the previous call
 | **Tool set changed** | The number or size of the tool definitions changed, for example when MCP servers were turned on or off, or a checkpoint shows changed tool schemas | Partly |
 | **Instructions or memory changed** | A checkpoint shows that your instruction files or memories changed in the system prompt | You |
 | **System prompt updated by the harness** | A checkpoint shows that parts the harness maintains changed, such as workspace or environment context | Harness |
-| **Compaction** | The conversation was compacted, so the cache was rebuilt from the summary | Harness |
+| **Compaction** | A compaction finished since the previous call, so the cache was rebuilt from the summary. A compaction that failed isn't a cause, and neither is one still running when the call was made, unless the log never shows a compaction finishing after that call | Harness |
 | **No logged cause** | Nothing logged explains the break | Unknown |
 
 Causes often occur together. Resuming an old session, for example, usually also means that the cache expired. Each break is counted once, under its first logged cause in this order: compaction, model switch, cache expiry, reasoning effort, tool set, mode switch, and resume. A break with no logged cause is counted under a system-prompt or tool-schema change seen between checkpoints, if there was one.

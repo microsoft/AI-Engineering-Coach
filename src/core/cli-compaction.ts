@@ -55,6 +55,12 @@ function readOutcome(data: Record<string, unknown>): string {
   return enumValue(data.outcome) ?? 'success';
 }
 
+/** The compaction logged that it failed (`success: false`, or an `outcome` of `failed`), so it didn't rewrite the
+ *  context. */
+export function compactionFailed(data: Record<string, unknown>): boolean {
+  return readOutcome(data) === 'failed';
+}
+
 /** Context size before and after; after is derived from the tokens removed when not logged. */
 function readSizes(data: Record<string, unknown>): { before: number; after?: number } {
   const before = count(data.preCompactionTokens) ?? count(data.contextLengthBefore) ?? 0;
