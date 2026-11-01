@@ -325,6 +325,51 @@ describe('Copilot CLI cache expiry is measured from call starts', () => {
   });
 });
 
+/** A main-agent call that reported no cache details and logged no cache expiry. */
+function unreported(at: number, o: CallOptions): Record<string, unknown> {
+  const record = call(at, { ...o, extra: { ...o.extra, cacheDetailsReported: false } });
+  delete (record.data as { usage: Record<string, unknown> }).usage.cacheExpiresAt;
+  return record;
+}
+
+describe('Copilot CLI returns after a call that didn\u2019t report its cache', () => {
+  it('count as unmeasured, while breaks still compare only calls that reported it', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(0, { input: 150_000, read: 0 }),
+      unreported(10, { input: 151_000, read: 150_000 }),
+      user('u2', 3_600),
+      // Its previous call says nothing about the cache, so whether it had expired is unknown.
+      call(3_600, { input: 155_000, read: 0, initiator: 'user' }),
+      user('u3', 3_700),
+      call(3_700, { input: 156_000, read: 155_000, initiator: 'user' }),
+    ]);
+    const [, unmeasured, measured] = session.requests;
+    expect(unmeasured.promptCache).toMatchObject({ unmeasuredReturns: 1, rows: [expect.objectContaining({ stream: 'main', calls: 1 })] });
+    expect(unmeasured.promptCache).not.toHaveProperty('returns');
+    expect(measured.promptCache).toMatchObject({ returns: 1 });
+    expect(measured.promptCache).not.toHaveProperty('unmeasuredReturns');
+    expect(measured.promptCache).not.toHaveProperty('expiredReturns');
+    // Nothing to compare the call after the unreported one with, so no break, although it read nothing.
+    expect(breaksOf(session)).toEqual([]);
+  });
+
+  it('count when the session\u2019s first main-agent call didn\u2019t report its cache', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      unreported(0, { input: 150_000, read: 0 }),
+      user('u2', 3_600),
+      call(3_600, { input: 155_000, read: 0, initiator: 'user' }),
+    ]);
+    expect(session.requests[1].promptCache).toMatchObject({ unmeasuredReturns: 1 });
+    expect(session.requests[1].promptCache).not.toHaveProperty('returns');
+    expect(session.requests[1].promptCache).not.toHaveProperty('coldStart');
+    expect(breaksOf(session)).toEqual([]);
+  });
+});
+
 describe('Copilot CLI cache breaks from compaction', () => {
   it('attributes compaction and records the compaction summary call', () => {
     const session = parse([
