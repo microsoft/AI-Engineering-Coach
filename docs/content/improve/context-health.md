@@ -237,7 +237,7 @@ Claude Code and OpenCode sessions show one bar per request and no breaks. Codex 
 | Harness | Source | What you get |
 |---|---|---|
 | GitHub Copilot App and Copilot CLI | `session.usage_record` and `session.usage_checkpoint`, plus compaction, mode-change, and resume events, in `events.jsonl` | Cache tokens, cache lifetime and expiry, and the logged prices for every model call of the main agent, subagents, and compaction summaries, plus cache breaks and their causes. Older builds that don't log per-call usage show no cache data |
-| Claude Code | `usage` on each API response | Cache read and write tokens for every response. Claude Code repeats a response's usage on each of its content blocks, so each response is counted once |
+| Claude Code | `usage` on each API response | Cache read and write tokens for every response. Claude Code repeats a response's usage on each of its content blocks, so each response is counted once. A sub-agent's transcript counts toward subagents even when its lines aren't marked as a sidechain |
 | OpenCode | Token counts of each assistant message | Cache read and write tokens of every assistant message |
 | Codex | Session token totals | The hit ratio, from cached input tokens. OpenAI's cache has no separate cache writes. Logs that carry no cached-token counts show no cache data rather than a 0% hit ratio |
 | VS Code, Xcode | Not logged | Shown as "Not reported by this harness". Nothing is estimated |

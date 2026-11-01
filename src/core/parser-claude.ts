@@ -73,8 +73,10 @@ interface ClaudeLine {
    *  interactive (cli, claude-desktop) vs programmatic (everything else). */
   entrypoint?: string;
   /** True on subagent lines (`<sessionId>/subagents/agent-*.jsonl` files).
-   *  Carried through so callers can roll subagent requests up into the
-   *  parent session rather than treating them as standalone sessions. */
+   *  Not every Claude Code build writes it there, so `parseClaudeSessionFile`
+   *  sets it on every line of such a file. Carried through so callers can roll
+   *  subagent requests up into the parent session rather than treating them
+   *  as standalone sessions. */
   isSidechain?: boolean;
   isMeta?: boolean;
   /** Set on the turn that replays a compacted conversation summary. */
@@ -287,6 +289,12 @@ function getClaudeUserText(line: ClaudeLine): string {
 
 function countClaudeImages(line: ClaudeLine): number {
   return imageReferencesFromContent(line.message?.content).length;
+}
+
+/** Claude Code writes each sub-agent's transcript to `<sessionId>/subagents/agent-*.jsonl`, beside the session's
+ *  own `<sessionId>.jsonl`. */
+export function isClaudeSubagentFile(filePath: string): boolean {
+  return path.basename(path.dirname(filePath)) === 'subagents';
 }
 
 function claudeTranscriptKey(filePath: string): string {
@@ -734,7 +742,7 @@ function parseClaudeProjectSessions(
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const filePath = path.join(projPath, entry.name);
-    const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, editLocIndex);
+    const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
@@ -746,6 +754,7 @@ function parseClaudeProjectSessions(
   // merge its requests into the parent rather than emitting it as its own
   // session. Orphans (subagent dir whose parent session is missing) become
   // standalone programmatic sessions — they're still GHCP-spawned work.
+  // Either way, every line of the file is sub-agent work, marked or not.
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const subagentDir = path.join(projPath, entry.name, 'subagents');
@@ -765,7 +774,7 @@ function parseClaudeProjectSessions(
     for (const subEntry of subagentEntries) {
       if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
       const filePath = path.join(subagentDir, subEntry.name);
-      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, editLocIndex);
+      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
       if (!subSession) continue;
       const sourceId = parent?.sessionId ?? entry.name;
       const files = sessionFiles.get(sourceId) ?? [];
@@ -964,11 +973,12 @@ function buildClaudeRequest(
   return request;
 }
 
+/** Parse one transcript file. `subagentFile`: the file is a sub-agent's transcript (see `isClaudeSubagentFile`). */
 export function parseClaudeSessionFile(
   filePath: string,
   wsId: string,
   wsName: string,
-  editLocIndex?: EditLocIndex,
+  { editLocIndex, subagentFile = false }: { editLocIndex?: EditLocIndex; subagentFile?: boolean } = {},
 ): Session | null {
   assertTrustedPath(filePath);
   let raw: string;
@@ -982,6 +992,9 @@ export function parseClaudeSessionFile(
 
   const lines = parseClaudeLines(raw);
   if (lines.length === 0) return null;
+  // A sub-agent's transcript is all sub-agent work, but not every Claude Code build marks its lines. Mark them, so
+  // its usage, stop reasons, context and prompts never count as the main agent's.
+  if (subagentFile) for (const line of lines) line.isSidechain = true;
 
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
   const transcriptKey = claudeTranscriptKey(filePath);
