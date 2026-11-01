@@ -10,7 +10,7 @@
  */
 
 import type { Analyzer } from '../core/analyzer';
-import type { DateFilter, TurnBasis } from '../core/types';
+import type { ContextCompositionData, DateFilter, TurnBasis } from '../core/types';
 
 /** What a time-based measure counts: the prompts the user typed, not the turns agents or the harness sent. */
 function typedPromptBasis(basis: TurnBasis): { counts: string; typedPrompts: number; automatedTurnsLeftOut: number } {
@@ -469,6 +469,26 @@ export function formatSessions(
   };
 }
 
+/** What fills the prompt, per harness — shares in percent of the prompt. */
+function formatComposition(composition: ContextCompositionData) {
+  return {
+    coverage: composition.coverage,
+    harnesses: composition.harnesses.map(h => ({
+      harness: h.harness,
+      reported: h.source !== null,
+      requestsWithData: h.requestsWithData,
+      totalRequests: h.totalRequests,
+      weighting: h.breakdown?.weighting,
+      avgPromptTokens: h.breakdown?.avgPromptTokens ?? null,
+      sharePct: h.breakdown ? Object.fromEntries(h.breakdown.slices.map(s => [s.category, s.pct])) : null,
+      toolHeavyPct: h.toolHeavyPct,
+      avgToolDefinitionTokens: h.avgToolDefinitionTokens,
+      maxAvailableTools: h.maxAvailableTools,
+    })),
+    topSystemSegments: composition.systemSegments.slice(0, 5),
+  };
+}
+
 export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
   const ctx = analyzer.getContextManagement(f);
   const cfg = analyzer.getConfigHealth(f);
@@ -494,6 +514,7 @@ export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
         peakUtilization: Math.round(w.peakUtilization),
         compactions: w.compactionCount,
       })),
+      composition: ctx.composition ? formatComposition(ctx.composition) : undefined,
     },
     configHealth: {
       overallScore: cfg.overallScore,

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { afterEach, describe, it, expect } from 'vitest';
 import {
   getRuntimeDebugLogPath,
@@ -20,8 +21,7 @@ describe('getRuntimeDebugLogPath', () => {
 
   it('ensures the directory exists', () => {
     const p = getRuntimeDebugLogPath();
-    const dir = p.replace(/\/[^/]+$/, '');
-    expect(fs.existsSync(dir)).toBe(true);
+    expect(fs.existsSync(path.dirname(p))).toBe(true);
   });
 });
 

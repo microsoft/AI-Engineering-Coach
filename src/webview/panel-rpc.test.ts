@@ -8,6 +8,7 @@ import { Analyzer } from '../core/analyzer';
 import { createSession, createRequest } from '../core/parser-shared';
 import { detectCuriosity } from '../core/curiosity';
 import type { ParseResult } from '../core/cache';
+import type { WorkspaceContextSessionsData } from '../core/types';
 import { loadSessionImages } from '../core/session-image-loader';
 import { generateRuleMarkdown, getRpcHandler, validateDateFilter, type RuleFeedback } from './panel-rpc';
 
@@ -30,6 +31,22 @@ describe('panel-rpc', () => {
   it('exposes handlers for the newer analyzer-backed methods', () => {
     expect(getRpcHandler('getInsights')).toBeTypeOf('function');
     expect(getRpcHandler('getWorkspaceContextSessions')).toBeTypeOf('function');
+  });
+
+  it('matches workspace sessions by request overlap only when the caller asks for it', () => {
+    // The session starts on September 30 and ends on October 1 (local time, like the date filter).
+    const session = createSession({
+      sessionId: 'spanning', workspaceId: 'ws', workspaceName: 'Project', harness: 'Local Agent',
+      requests: [new Date(2026, 8, 30, 12), new Date(2026, 9, 1, 12)].map(day => createRequest({ timestamp: day.getTime(), messageText: 'Fix it', responseText: 'Done', promptTokens: 40_000 })),
+    });
+    const analyzer = new Analyzer([session], new Map());
+    const parsed: ParseResult = { sessions: [session], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    const handler = getRpcHandler('getWorkspaceContextSessions')!;
+    const filter = { fromDate: '2026-09-01', toDate: '2026-09-30' };
+    const ids = (params: Record<string, unknown>) => (handler(analyzer, parsed, params) as WorkspaceContextSessionsData).sessions.map(s => s.sessionId);
+    expect(ids({ workspaceId: 'ws', filter })).toEqual([]);
+    expect(ids({ workspaceId: 'ws', filter, rangeMatch: 'bogus' })).toEqual([]);
+    expect(ids({ workspaceId: 'ws', filter, rangeMatch: 'requests' })).toEqual(['spanning']);
   });
 
   it('passes the Curiosity language filter through the runtime handler', () => {

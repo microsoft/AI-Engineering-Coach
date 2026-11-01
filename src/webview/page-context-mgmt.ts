@@ -6,9 +6,19 @@
 /* Context Management sub-page within Context Health — token utilization,
  * compaction tracking, per-workspace context scores, and anti-patterns. */
 
-import { DateFilter, ContextManagementData, ContextVerdictThresholds, WorkspaceContextScore, WorkspaceContextSessionsData, SessionContextDetail } from '../core/types';
+import { DateFilter, ContextCompositionData, ContextManagementData, ContextVerdictThresholds, WorkspaceContextScore, WorkspaceContextSessionsData, SessionContextDetail } from '../core/types';
 import { rpc, COLORS, createChart, destroyChartById, formatNum, PALETTE } from './shared';
 import { html, render, StatCard, CanvasEl, ComponentChildren } from './render';
+import {
+  SESSION_COMPOSITION_CHART_ID,
+  alignSessionChartAxis,
+  compositionMiniBar,
+  renderCompositionSection,
+  renderCompositionTrendChart,
+  renderSessionCompositionChart,
+  renderSessionCompositionPanel,
+} from './context-composition-view';
+import { attachCompositionDrilldown } from './context-composition-drilldown';
 
 const VERDICT_COLORS: Record<string, string> = {
   optimal: COLORS.green,
@@ -47,10 +57,32 @@ function sortWorkspacesBySessions(workspaces: WorkspaceContextScore[]): Workspac
   );
 }
 
+/** Composition without the utilization sections, for a range where no session's last activity falls. */
+function renderCompositionOnly(container: HTMLElement, data: ContextManagementData, composition: ContextCompositionData, filter: DateFilter): void {
+  render(html`
+    <div>
+      <div class="ctx-comp-note" id="ctxUtilizationEmpty" role="note">
+        Context utilization counts sessions by their last activity, and none falls in this range.
+        Composition below covers the requests sent in this range.
+      </div>
+      ${renderTips(data.tips)}
+      ${renderCompositionSection(composition)}
+    </div>`, container);
+  renderCompositionTrendChart(composition);
+  const section = document.getElementById('ctxComposition');
+  if (section) attachCompositionDrilldown(section, filter);
+}
+
 export async function renderContextManagement(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const data = await rpc<ContextManagementData>('getContextManagement', { filter: currentFilter } as Record<string, unknown>);
 
   if (data.totalSessions === 0) {
+    // Composition counts requests sent in the range, so a session that continues past the range still
+    // supplies composition even though utilization (keyed on last activity) has no session to show.
+    if (data.composition && data.composition.sources.length > 0) {
+      renderCompositionOnly(container, data, data.composition, currentFilter);
+      return;
+    }
     render(html`
       <div style="text-align:center;padding:60px 20px;color:var(--text-muted);">
         <div style="font-size:40px;margin-bottom:12px;">&#128202;</div>
@@ -75,6 +107,8 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
       ${renderTips(data.tips)}
 
+      ${data.composition ? renderCompositionSection(data.composition) : null}
+
       <h3 style="margin-top:24px;display:flex;align-items:center;gap:12px;">
         Context Utilization Trend
         ${data.workspaceTrend.length > 0 && data.trend.length > 1 ? html`
@@ -94,6 +128,11 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
   // Trend chart rendering
   const trendLabels = data.trend.map(t => t.label);
+  if (data.composition) {
+    renderCompositionTrendChart(data.composition);
+    const compositionSection = document.getElementById('ctxComposition');
+    if (compositionSection) attachCompositionDrilldown(compositionSection, currentFilter);
+  }
 
   function renderTrendChart(mode: 'avg' | 'workspace'): void {
     destroyChartById('ctxMgmtTrendChart');
@@ -291,6 +330,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
 
   function collapseInlineSessions(): void {
     destroyChartById('ctxSessionTokenChart');
+    destroyChartById(SESSION_COMPOSITION_CHART_ID);
     expandedSessionIdx = null;
     for (const el of tableWrap.querySelectorAll('.ctx-session-inline')) el.remove();
   }
@@ -310,17 +350,20 @@ export async function renderContextManagement(container: HTMLElement, currentFil
     summaryTr.className = 'ctx-session-inline';
 
     const totalSessions = sessions.length;
-    const avgUtil = totalSessions > 0 ? sessions.reduce((s, d) => s + d.avgUtilization, 0) / totalSessions : 0;
+    const averages = measuredSessionAverages(sessions);
     const totalCompactions = sessions.reduce((s, d) => s + d.compactionCount, 0);
     const limitedCount = sessions.filter(s => s.verdict === 'limited').length;
-    const avgSaturation = totalSessions > 0 ? sessions.reduce((s, d) => s + d.saturation, 0) / totalSessions : 0;
     const todoEvents = sessions.reduce((s, d) => s + d.events.filter(e => e.type === 'todo-add' || e.type === 'todo-complete').length, 0);
 
     render(html`<td colspan="9" style="padding:12px 16px;background:rgba(88,166,255,0.03);border-bottom:1px solid var(--border-color, #30363d);">
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <span style="font-size:12px;color:var(--text-muted);"><strong style="color:var(--text-primary, #c9d1d9);">${totalSessions}</strong> sessions</span>
-        <span style="font-size:12px;color:var(--text-muted);">Avg util: <strong style=${'color:' + contextColor(avgUtil, expandedSessionData.thresholds) + ';'}>${avgUtil.toFixed(1)}%</strong></span>
-        <span style="font-size:12px;color:var(--text-muted);">Saturation: <strong style=${'color:' + (avgSaturation > 30 ? COLORS.red : avgSaturation > 10 ? COLORS.yellow : COLORS.green) + ';'}>${avgSaturation.toFixed(1)}%</strong></span>
+        <span style="font-size:12px;color:var(--text-muted);"><strong style="color:var(--text-primary, #c9d1d9);">${totalSessions}</strong> session${totalSessions === 1 ? '' : 's'}</span>
+        <span style="font-size:12px;color:var(--text-muted);" title=${averages.note}>Avg util: ${averages.util == null
+          ? html`<strong>\u2014</strong>`
+          : html`<strong style=${'color:' + contextColor(averages.util, expandedSessionData.thresholds) + ';'}>${averages.util.toFixed(1)}%</strong>`}</span>
+        <span style="font-size:12px;color:var(--text-muted);" title=${averages.note}>Saturation: ${averages.saturation == null
+          ? html`<strong>\u2014</strong>`
+          : html`<strong style=${'color:' + (averages.saturation > 30 ? COLORS.red : averages.saturation > 10 ? COLORS.yellow : COLORS.green) + ';'}>${averages.saturation.toFixed(1)}%</strong>`}</span>
         <span style="font-size:12px;color:var(--text-muted);">Compactions: <strong style=${'color:' + (totalCompactions > 0 ? COLORS.yellow : 'var(--text-primary, #c9d1d9)') + ';'}>${totalCompactions}</strong></span>
         ${limitedCount > 0 ? html`<span style=${'font-size:12px;color:' + COLORS.red + ';'}><strong>${limitedCount}</strong> limited</span>` : null}
         ${todoEvents > 0 ? html`<span style=${'font-size:12px;color:' + (COLORS.purple ?? COLORS.blue) + ';'}>${todoEvents} todo events</span>` : null}
@@ -345,6 +388,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
               <th style="text-align:center;padding:6px 6px;font-weight:600;">Sat.</th>
               <th style="text-align:center;padding:6px 6px;font-weight:600;">Events</th>
               <th style="text-align:left;padding:6px 6px;font-weight:600;">Token Curve</th>
+              <th style="text-align:left;padding:6px 6px;font-weight:600;" title="What filled this session's prompts, by category">Composition</th>
             </tr>
           </thead>
           <tbody>
@@ -360,7 +404,8 @@ export async function renderContextManagement(container: HTMLElement, currentFil
       </td>`, headerTr);
     summaryTr.after(headerTr);
 
-    // Attach session row click handlers — expand chart inline below the clicked row
+    // Attach session row click handlers — expand chart inline below the clicked row. The row's
+    // expand button (keyboard users) bubbles its click up to this handler.
     for (const row of headerTr.querySelectorAll('.ctx-session-row')) {
       row.addEventListener('click', () => {
         const clickable = (row as HTMLElement).dataset.clickable === 'true';
@@ -374,8 +419,10 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         const existingChart = headerTr.querySelector('.ctx-session-chart-row');
         if (existingChart) {
           destroyChartById('ctxSessionTokenChart');
+          destroyChartById(SESSION_COMPOSITION_CHART_ID);
           existingChart.remove();
         }
+        for (const button of headerTr.querySelectorAll('.ctx-session-expand')) button.setAttribute('aria-expanded', 'false');
 
         // Toggle off if same session
         if (expandedSessionIdx === idx) {
@@ -390,6 +437,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         const pageRelIdx = idx - start;
         const targetRow = innerRows[pageRelIdx] as HTMLElement | null;
         if (!targetRow) return;
+        targetRow.querySelector('.ctx-session-expand')?.setAttribute('aria-expanded', 'true');
 
         const chartRow = document.createElement('tr');
         chartRow.className = 'ctx-session-chart-row';
@@ -400,13 +448,15 @@ export async function renderContextManagement(container: HTMLElement, currentFil
             <span style="font-size:12px;font-weight:600;color:var(--text-primary,#c9d1d9);">${s.date} — ${s.harness}</span>
             <span style="font-size:11px;color:var(--text-muted);">${s.requestCount} reqs, ${s.compactionCount} compactions${todoEvents.length > 0 ? ', ' + todoEvents.length + ' todo events' : ''}</span>
           </div>
-          <div style="position:relative;height:180px;"><${CanvasEl} id=${chartId} height=${180} /></div>
+          ${s.hasPerRequestTokens ? html`<div style="position:relative;height:226px;"><${CanvasEl} id=${chartId} height=${180} /></div>` : null}
+          ${renderSessionCompositionPanel(s)}
         </td>`, chartRow);
         targetRow.after(chartRow);
 
-        if (expandedSessionData) {
+        if (expandedSessionData && s.hasPerRequestTokens) {
           renderSessionTokenChart(chartId, s, expandedSessionData.estimatedContextWindow ?? 1, expandedSessionData.thresholds);
         }
+        renderSessionCompositionChart(s);
         chartRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     }
@@ -582,8 +632,11 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
         title: { display: true, text: 'Utilization %', color: '#8b949e' },
         ticks: { color: '#8b949e' },
         grid: { color: 'rgba(48,54,61,0.6)' },
+        afterFit: alignSessionChartAxis,
       },
       x: {
+        // Offset like the bar chart below so request N lines up in both charts.
+        offset: true,
         ticks: { color: '#8b949e', maxRotation: 0 },
         grid: { color: 'rgba(48,54,61,0.3)' },
       },
@@ -698,6 +751,20 @@ function renderWorkspaceTable(workspaces: WorkspaceContextScore[], page: number,
 
 const SESSION_PAGE_SIZE = 10;
 
+/** Utilization and saturation averaged over the sessions with per-request token data. The rest only carry
+ *  placeholder zeros, so they're left out, like they are from the workspace row; `null` when no session has any. */
+function measuredSessionAverages(sessions: SessionContextDetail[]): { util: number | null; saturation: number | null; note: string | undefined } {
+  const measured = sessions.filter(s => s.hasPerRequestTokens);
+  if (measured.length === 0) {
+    return { util: null, saturation: null, note: 'No session here has per-request token data, so utilization and saturation are unknown.' };
+  }
+  const mean = (value: (s: SessionContextDetail) => number) => measured.reduce((sum, s) => sum + value(s), 0) / measured.length;
+  const note = measured.length < sessions.length
+    ? `Averaged over the ${measured.length} of ${sessions.length} sessions with per-request token data.`
+    : undefined;
+  return { util: mean(s => s.avgUtilization), saturation: mean(s => s.saturation), note };
+}
+
 function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: number, thresholds: ContextVerdictThresholds): ComponentChildren {
   const vc = VERDICT_COLORS[s.verdict] || COLORS.muted;
   const utilBar = (pct: number) => {
@@ -719,19 +786,19 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
     ? html`<span>${compEvts > 0 ? html`<span style=${'color:' + COLORS.yellow + ';'} title=${compEvts + ' compaction(s)'}>${compEvts}C</span>` : null}${compEvts > 0 && todoEvts > 0 ? ' ' : ''}${todoEvts > 0 ? html`<span style=${'color:' + COLORS.blue + ';'} title=${todoEvts + ' todo event(s)'}>${todoEvts}T</span>` : null}</span>`
     : html`<span style="color:var(--text-muted);">-</span>`;
 
-  const clickable = s.hasPerRequestTokens;
+  const clickable = s.hasPerRequestTokens || s.composition != null;
   const cursorStyle = clickable ? 'cursor:pointer;' : 'cursor:default;opacity:0.85;';
-  const sparklineContent = clickable
+  const sparklineContent = s.hasPerRequestTokens
     ? renderSparkline(s.tokenCurve, s.contextWindow || ctxWindow, thresholds)
     : html`<span style="color:var(--text-muted);font-size:10px;" title="Session-level data only — no per-turn breakdown available">—</span>`;
 
-  const utilContent = clickable
+  const utilContent = s.hasPerRequestTokens
     ? utilBar(s.avgUtilization)
     : html`<span style="color:var(--text-muted);" title="No per-turn token data">—</span>`;
-  const satContent = clickable
+  const satContent = s.hasPerRequestTokens
     ? html`<span style=${'color:' + satColor + ';font-weight:' + (s.saturation > 10 ? '600' : '400') + ';'}>${s.saturation.toFixed(1)}%</span>`
     : html`<span style="color:var(--text-muted);">—</span>`;
-  const tokensContent = clickable
+  const tokensContent = s.hasPerRequestTokens
     ? formatNum(s.avgPromptTokens)
     : html`<span style="color:var(--text-muted);">—</span>`;
 
@@ -748,6 +815,9 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
       <td style="text-align:center;padding:6px 6px;">${satContent}</td>
       <td style="text-align:center;padding:6px 6px;font-size:10px;">${evtContent}</td>
       <td style="padding:6px 6px;">${sparklineContent}</td>
+      <td style="padding:6px 6px;">${clickable
+        ? html`<button type="button" class="ctx-session-expand" aria-expanded="false" aria-label=${`Show details for the ${s.harness} session on ${s.date}`}>${compositionMiniBar(s.composition, false)}</button>`
+        : compositionMiniBar(s.composition)}</td>
     </tr>`;
 }
 
