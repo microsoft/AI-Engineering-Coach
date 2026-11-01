@@ -179,6 +179,9 @@ export function executePipeline(
 
   if (rows.length === 0) return EMPTY_EMISSION;
 
+  // No detection logic (no detect block, or one without match:/check:) never triggers.
+  if (!pipeline.matchExpr && !pipeline.checkExpr) return EMPTY_EMISSION;
+
   const ruleCtx = buildRuleContext(rule);
 
   // Compile match filter
