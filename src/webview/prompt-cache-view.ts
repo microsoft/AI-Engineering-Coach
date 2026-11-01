@@ -151,7 +151,7 @@ function causesTable(a: CacheAttribution): ComponentChildren {
   if (a.causes.length === 0) {
     return a.breaks > 0
       ? html`<div class="ctx-comp-note" id="ctxCacheUnlisted">${unlistedNote(a)}</div>`
-      : html`<div class="ctx-comp-note">No cache breaks in this range: every main-agent call reused the previous call’s cache.</div>`;
+      : html`<div class="ctx-comp-note" id="ctxCacheNoBreaks">No cache breaks in this range: no main-agent call re-sent at least 30% (and 10K tokens) of a previous prompt of 20K tokens or more. Smaller misses don’t count as breaks, so the hit ratio shows how much was reused.</div>`;
   }
   return html`<table class="ctx-cache-table" aria-label="Why the cache broke">
     <thead><tr><th scope="col">Cause</th><th scope="col" class="num">Breaks</th><th scope="col" class="num">Rebuilt tokens</th><th scope="col" class="num" title="Share of input cost, from logged prices">Cost</th><th scope="col">Who</th></tr></thead>

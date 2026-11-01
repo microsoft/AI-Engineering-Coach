@@ -212,7 +212,17 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
   // Show loading spinner while sub-tab data is fetched
   render(html`<div class="loading-spinner" style="margin:40px auto;"></div>`, contentEl);
 
-  await renderSubTab(contentEl, effectiveFilter, isCurrent);
+  await dropStaleFailure(renderSubTab(contentEl, effectiveFilter, isCurrent), isCurrent);
+}
+
+/** Only the current render's failure may replace the page with an error; once a newer render owns the page, an
+ *  older render's failure is dropped. */
+async function dropStaleFailure(task: Promise<void>, isCurrent: () => boolean): Promise<void> {
+  try {
+    await task;
+  } catch (error) {
+    if (isCurrent()) throw error;
+  }
 }
 
 /** Render the active sub-tab. Each sub-tab checks `isCurrent` before writing its response into the page. */

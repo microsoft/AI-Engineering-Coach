@@ -533,6 +533,8 @@ function mockSessionTimeline(sessionId) {
 }
 
 function getMockData(method, params) {
+  // e2e: methods listed in window.mockErrorMethods answer with an error, which rejects the RPC.
+  if (window.mockErrorMethods?.includes(method)) return { error: `mock ${method} failure` };
   const labels30 = genLabels(30);
 
   const mocks = {

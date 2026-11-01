@@ -37,6 +37,8 @@ describe('formatPromptCache', () => {
       cacheLifetimes: [{ model: 'claude-opus-5.5', seconds: 300 }],
       returnsAfterExpiry: { expired: 2, of: 5, notMeasured: 1 },
       medianMinutesSinceCacheRefreshAtExpiry: 60,
+      // The remainder isn't only new context: it also holds misses below the break threshold.
+      cacheMissOrigins: [{ origin: 'new-context-and-minor-misses', pct: 33.3 }, { origin: 'rebuilt', pct: 66.7 }],
     });
     const json = JSON.stringify(summary);
     expect(json).not.toContain('secret-session-id');

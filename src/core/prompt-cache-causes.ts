@@ -15,6 +15,7 @@ import type {
   CacheControl,
   CacheIdleBucket,
   CacheIdleSummary,
+  CacheMissOrigin,
   CacheOriginSlice,
   RequestPromptCache,
 } from './types';
@@ -154,6 +155,12 @@ export function addRequestExtras(acc: OriginAcc, cache: RequestPromptCache): voi
 
 export function totalMisses(acc: OriginAcc): number {
   return missesOf(acc.main) + missesOf(acc.subagents) + missesOf(acc.compaction);
+}
+
+/** A miss origin's name outside the dashboard (MCP, reports). `growth` isn't only new context: it also holds
+ *  cached context re-sent in amounts below the break threshold. */
+export function exportedOriginName(origin: CacheMissOrigin): string {
+  return origin === 'growth' ? 'new-context-and-minor-misses' : origin;
 }
 
 /** Where tokens not read from the cache came from. Shares of misses and, with logged rates, of input cost. */

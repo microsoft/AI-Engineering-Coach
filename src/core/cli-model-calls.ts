@@ -8,6 +8,7 @@
  * timeline, the prompt-cache tracker). Add new per-call fields here rather than walking the records again.
  * Only numbers, enum values and the model id are kept; ids, hashes and content are ignored. */
 
+import { extractReasoningEffortFromModelId } from './helpers';
 import type { RelativeRates } from './prompt-cache-usage';
 import { cacheModelName } from './prompt-cache-usage';
 
@@ -105,6 +106,18 @@ function initiatorOf(value: unknown): CliModelCall['initiator'] {
   return value === 'agent' || value === 'sub-agent' ? 'agent' : null;
 }
 
+/** The model id as logged, or the session's model when the record has none. */
+function rawModelId(usage: Record<string, unknown>, fallbackModel: string): string {
+  return typeof usage.model === 'string' && usage.model ? usage.model : fallbackModel;
+}
+
+/** The logged reasoning effort, or the effort some model ids carry as a suffix (`claude-opus-4.7-high`), which
+ *  the model name drops. */
+function reasoningEffortOf(usage: Record<string, unknown>, fallbackModel: string): string | null {
+  if (typeof usage.reasoningEffort === 'string' && usage.reasoningEffort) return usage.reasoningEffort;
+  return extractReasoningEffortFromModelId(rawModelId(usage, fallbackModel));
+}
+
 /** Read one `session.usage_record`. Returns `null` when the record has no positive prompt-token count. */
 export function readCliModelCall(data: Record<string, unknown>, timestamp: number | null, fallbackModel: string): CliModelCall | null {
   const usage = isRecord(data.usage) ? data.usage : undefined;
@@ -125,10 +138,10 @@ export function readCliModelCall(data: Record<string, unknown>, timestamp: numbe
     durationMs,
     startTs: timestamp == null ? null : timestamp - (durationMs ?? 0),
     stream: isMainAgentCall(usage) ? 'main' : 'subagent',
-    model: cacheModelName(typeof usage.model === 'string' && usage.model ? usage.model : fallbackModel),
+    model: cacheModelName(rawModelId(usage, fallbackModel)),
     initiator: initiatorOf(usage.initiator),
     autoModel: usage.isAuto === true,
-    reasoningEffort: typeof usage.reasoningEffort === 'string' && usage.reasoningEffort ? usage.reasoningEffort : null,
+    reasoningEffort: reasoningEffortOf(usage, fallbackModel),
     inputTokens,
     cacheReadTokens: read,
     cacheWriteTokens: write,

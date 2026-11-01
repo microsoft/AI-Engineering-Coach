@@ -204,7 +204,8 @@ export interface CacheCauseSummary {
   alsoSeen: { cause: CacheBreakCause; breaks: number }[];
 }
 
-/** Where tokens that weren't read from the cache came from. */
+/** Where tokens that weren't read from the cache came from. `growth` is what remains after the other origins:
+ *  mostly new context, plus cached context re-sent in amounts below the break threshold. */
 export type CacheMissOrigin = 'growth' | 'cold-start' | 'rebuilt' | 'subagents' | 'compaction';
 
 export interface CacheOriginSlice {

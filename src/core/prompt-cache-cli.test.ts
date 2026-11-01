@@ -360,6 +360,17 @@ describe('Copilot CLI cache breaks from setting changes', () => {
     ]);
     expect(breaksOf(session).map(brk => brk.causes)).toEqual([['reasoning-effort'], ['tools-changed'], ['mode-change'], ['resume']]);
   });
+
+  it('attributes a reasoning-effort change carried only in the model id', () => {
+    const noEffort = { reasoningEffort: undefined };
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 100_000, read: 0, model: 'copilot/claude-opus-4.7-high', extra: noEffort }),
+      call(10, { input: 101_000, read: 0, model: 'copilot/claude-opus-4.7-low', extra: noEffort }),
+    ]);
+    expect(breaksOf(session)).toEqual([expect.objectContaining({ model: 'claude-opus-4.7', causes: ['reasoning-effort'], confidence: 'logged' })]);
+  });
 });
 
 describe('Copilot CLI cache breaks from checkpoint windows', () => {

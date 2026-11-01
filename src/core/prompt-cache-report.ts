@@ -10,6 +10,7 @@
 import type { CacheAttribution, PromptCacheData, Session } from './types';
 import { AnalyzerBase } from './analyzer-base';
 import { analyzePromptCache } from './analyzer-prompt-cache';
+import { exportedOriginName } from './prompt-cache-causes';
 import { toDateStr } from './helpers';
 
 const CONSOLE_METHODS = ['log', 'info', 'debug', 'warn', 'error'] as const;
@@ -61,7 +62,7 @@ function attributionLines(a: CacheAttribution): string[] {
     lines.push(`  ${c.key.padEnd(22)} ${String(c.breaks).padStart(4)} breaks  ${p(c.pctOfRebuilt).padStart(6)} of rebuilt  cost ${p(c.costPct)}  [${c.control}]${segments}`);
   }
   lines.push(`  misses ${m(a.misses)}:`);
-  for (const o of a.origins) lines.push(`    ${o.origin.padEnd(12)} ${p(o.pct).padStart(6)} of misses, ${p(o.costPct)} of input cost`);
+  for (const o of a.origins) lines.push(`    ${exportedOriginName(o.origin).padEnd(28)} ${p(o.pct).padStart(6)} of misses, ${p(o.costPct)} of input cost`);
   const idle = a.idle;
   lines.push(
     `  returns ${idle.returns} with a logged expiry, after expiry ${idle.expiredReturns}; ${idle.unmeasuredReturns} more without a logged expiry`,

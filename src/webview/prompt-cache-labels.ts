@@ -104,7 +104,7 @@ export const CONTROL_META: Record<CacheControl, { label: string; help: string }>
 };
 
 export const ORIGIN_META: Record<CacheMissOrigin, { label: string; color: string; help: string }> = {
-  growth: { label: 'New context', color: COLORS.blue, help: 'Tokens added since the previous call, such as your prompts, replies and tool results. Expected.' },
+  growth: { label: 'New context and minor misses', color: COLORS.blue, help: 'Mostly tokens added since the previous call, such as your prompts, replies and tool results. It also holds cached context re-sent in amounts too small to count as a cache break.' },
   rebuilt: { label: 'Rebuilt after a break', color: COLORS.red, help: 'Context the cache had held but had to be sent again after the cache broke. See the causes for why.' },
   subagents: { label: 'Subagents', color: COLORS.purple, help: 'Subagents build their own context, separate from the main agent\u2019s cache.' },
   compaction: { label: 'Compaction summaries', color: COLORS.yellow, help: 'Model calls that wrote compaction summaries.' },

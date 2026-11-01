@@ -45,6 +45,15 @@ describe('readCliModelCall', () => {
     expect(readCliModelCall(usage({ inputTokens: 5_000 }), LOGGED_AT, 'fallback')).toMatchObject({ inputTokens: 120_000, cacheReadTokens: 100_000, cacheWriteTokens: 15_000 });
     expect(readCliModelCall(usage({ inputTokens: 0 }), LOGGED_AT, 'fallback')).toBeNull();
   });
+
+  it('reads the reasoning effort from the model id when the record doesn’t log it', () => {
+    // The model name drops the effort suffix, so without this a high → low switch would look like no change.
+    expect(readCliModelCall(usage({ model: 'copilot/claude-opus-4.7-high' }), LOGGED_AT, 'fallback')).toMatchObject({ model: 'claude-opus-4.7', reasoningEffort: 'high' });
+    expect(readCliModelCall(usage({ model: undefined }), LOGGED_AT, 'claude-opus-4.7-low')).toMatchObject({ model: 'claude-opus-4.7', reasoningEffort: 'low' });
+    // A logged effort wins, and a model id without a suffix leaves it unknown.
+    expect(readCliModelCall(usage({ model: 'copilot/claude-opus-4.7-high', reasoningEffort: 'medium' }), LOGGED_AT, 'fallback')).toMatchObject({ reasoningEffort: 'medium' });
+    expect(readCliModelCall(usage(), LOGGED_AT, 'fallback')).toMatchObject({ model: 'claude-opus-5.5', reasoningEffort: null });
+  });
 });
 
 /** `copilotUsage` whose token details price each token type per token (cost per batch ÷ batch size). */
