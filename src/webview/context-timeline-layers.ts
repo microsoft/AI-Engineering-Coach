@@ -65,22 +65,35 @@ export function turnEndBuckets(timeline: CallTimeline): Map<number, number> {
   return ends;
 }
 
-/** A point at each turn's end: the context Context Management scores (the turn's last prompt). */
+/** The context at each turn end, per bar and in turn order. Once the timeline groups calls into bars, several
+ *  turns can end in one bar. */
+export function turnEndsByBucket(timeline: CallTimeline, turnEnds: readonly (number | null)[]): number[][] {
+  const byBucket: number[][] = timeline.buckets.map(() => []);
+  for (const [request, index] of turnEndBuckets(timeline)) {
+    const tokens = turnEnds[request];
+    if (tokens != null) byBucket[index].push(tokens);
+  }
+  return byBucket;
+}
+
+const TURN_END_LABEL = 'Context at turn end';
+
+/** A point at each turn's end: the context Context Management scores (the turn's last prompt). A bar where
+ *  several turns ended gets a point for each: the n-th turn end of every bar is one dataset, and the datasets
+ *  share a label, so the chart shows them as one legend entry and the table lists them in one column. */
 export function turnEndLayer(data: SessionTimelineData): CallTimelineLayer {
   const turnEnds = data.context?.turnEnds ?? [];
   return {
     id: 'turns',
     label: 'Turn ends',
-    help: 'The context when each of your turns ended: the prompt of its last main-agent call. Context Management scores utilization from these points.',
+    help: 'The context when each of your turns ended: the prompt of its last main-agent call. Context Management scores utilization from these points. A bar that covers several turns has a point for each.',
     defaultOn: true,
     datasets: timeline => {
-      const values: (number | null)[] = timeline.buckets.map(() => null);
-      for (const [request, index] of turnEndBuckets(timeline)) {
-        const tokens = turnEnds[request];
-        if (tokens != null) values[index] = tokens;
-      }
-      if (!values.some(v => v != null)) return [];
-      return [line('Context at turn end', values, COLORS.cyan, { showLine: false, pointRadius: 3, pointHoverRadius: 5, pointStyle: 'circle' })];
+      const byBucket = turnEndsByBucket(timeline, turnEnds);
+      const depth = byBucket.reduce((max, ends) => Math.max(max, ends.length), 0);
+      // Each dataset gets its own stack, so the points of one bar aren't added up.
+      return Array.from({ length: depth }, (_, n) => line(TURN_END_LABEL, byBucket.map(ends => ends[n] ?? null), COLORS.cyan,
+        { showLine: false, pointRadius: 3, pointHoverRadius: 5, pointStyle: 'circle', stack: `line:${TURN_END_LABEL}:${n}` }));
     },
   };
 }

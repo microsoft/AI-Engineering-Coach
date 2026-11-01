@@ -19,7 +19,7 @@ vi.mock('./shared', () => ({
 }));
 vi.mock('./call-timeline-chart', () => ({ renderCallTimelineChart: mocks.renderChart, callTimelineTable: mocks.table }));
 
-import { compactionLayer, contextLimitLayer, contextPeakLayer, outputLayer, truncationLayer, turnEndBuckets, turnEndLayer } from './context-timeline-layers';
+import { compactionLayer, contextLimitLayer, contextPeakLayer, outputLayer, truncationLayer, turnEndBuckets, turnEndLayer, turnEndsByBucket } from './context-timeline-layers';
 import { closeContextTimeline, contextTimelineLayers, renderContextTimeline } from './context-session-timeline';
 
 const THRESHOLDS: ContextVerdictThresholds = { optimalUtilization: 50, limitedUtilization: 80, adaptive: false, sampleSize: 0 };
@@ -78,6 +78,19 @@ describe('context timeline layers', () => {
     expect(markers.get(2)?.[0].detail).toContain('Automatic compaction');
     const failed = compactionLayer({ ...DATA, context: { ...DATA.context!, compactions: [{ ...DATA.context!.compactions[0], failed: true }] } }).markers!(TIMELINE);
     expect(failed.get(2)?.[0].label).toBe('Compaction failed');
+  });
+
+  it('gives every turn that ends in a grouped bar its own point, in turn order', () => {
+    // One bar of four calls in which turns 1 and 3 end; turn 2 had no main-agent call.
+    const grouped: CallTimeline = { calls: 4, bucketSize: 4, buckets: [{ ...TIMELINE.buckets[0], lastCall: 3, lastRequest: 2 }] };
+    const turnEnds = [300_000, null, 120_000];
+    expect(turnEndsByBucket(grouped, turnEnds)).toEqual([[300_000, 120_000]]);
+    const datasets = turnEndLayer({ ...DATA, context: { ...DATA.context!, turnEnds } }).datasets!(grouped);
+    expect(datasets.map(d => d.data)).toEqual([[300_000], [120_000]]);
+    // One series: a shared label for the legend and the table, but separate stacks, so the points aren't added up.
+    expect(new Set(datasets.map(d => d.label))).toEqual(new Set(['Context at turn end']));
+    expect(new Set(datasets.map(d => d.stack)).size).toBe(2);
+    expect(turnEndLayer({ ...DATA, context: { ...DATA.context!, turnEnds: [null, null, null] } }).datasets!(grouped)).toEqual([]);
   });
 
   it('marks truncated calls and puts output per call on the right-hand axis', () => {
