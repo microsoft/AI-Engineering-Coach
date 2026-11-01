@@ -570,6 +570,6 @@ test.describe('Context Management range bar', () => {
     await setRangeScenario(page, 'boundary-empty', { rangesWithTokens: [], matchingSessions: 3, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
     await navigateToContextHealth(page, 'No Session Data');
     await expect(page.locator('#ctxRangeBar .cons-range-btn')).toHaveCount(0);
-    await expect(page.locator('#ctxRangeBar')).toHaveText('These GitHub Copilot CLI sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization and composition. Try a different harness or a more recent range, or view consumption in the Output tab.');
+    await expect(page.locator('#ctxRangeBar')).toHaveText('These GitHub Copilot CLI sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization or composition. Try a different harness or a more recent range, or view consumption in the Output tab.');
   });
 });

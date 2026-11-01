@@ -135,7 +135,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
         } else if (avail.sessionsWithRequestTokens === 0 && avail.harnessesWithoutRequestTokens.length > 0) {
           // Sessions exist, but none has per-request tokens or composition.
           const harnesses = avail.harnessesWithoutRequestTokens.join(', ');
-          emptyRangeMessage = `These ${harnesses} sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization and composition. Try a different harness or a more recent range, or view consumption in the Output tab.`;
+          emptyRangeMessage = `These ${harnesses} sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization or composition. Try a different harness or a more recent range, or view consumption in the Output tab.`;
         } else {
           emptyRangeMessage = 'No per-request tokens or prompt composition available.';
         }
