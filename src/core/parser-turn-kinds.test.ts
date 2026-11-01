@@ -193,6 +193,15 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
     content: 'Why does <cross_session_message> repeat in notes.md?', attachments: [NOTES],
     transformedContent: '<current_datetime>2026</current_datetime>\nWhy does <cross_session_message> repeat in notes.md (C:\\repo\\notes.md)?',
   }, undefined],
+  ['a typed relay tag with a file the App expanded, with line breaks inside the expansion', {
+    content: 'Explain <cross_session_message> in notes.md', attachments: [NOTES],
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message> in Attached file:\nnotes.md\n(C:\\repo\\notes.md)',
+  }, undefined],
+  ['a typed relay tag with a file whose name and path have spaces, split across lines', {
+    content: 'Explain <cross_session_message> in my notes.md',
+    attachments: [{ type: 'file', displayName: 'my notes.md', path: 'C:\\my  repo\\my notes.md' }],
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message> in Attached file: my\nnotes.md (C:\\my  repo\\my\nnotes.md)',
+  }, undefined],
   ['a typed relay tag in a session reference the App wrote at the end of the typed text', {
     content: 'Why does this repeat in Fix <cross_session_message> parsing',
     transformedContent: `<current_datetime>2026</current_datetime>\nWhy does this repeat in ${SESSION_REF}`,

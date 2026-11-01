@@ -69,20 +69,20 @@ function mapIndex(index: number, starts: readonly number[], otherStarts: readonl
 interface Expansion { start: number; end: number; typed: string }
 
 /**
- * Puts back as typed each mention the App expanded: a reference tag becomes its label, and an attached file's name
- * and path, as in `Attached file: notes.md (C:\repo\notes.md)`, become the name. The name and path come from the
- * message's `attachments`; the label before them is optional. Returns the text and its expansions in order, keeping the
- * first of any that overlap.
+ * Puts back as typed each mention the App expanded in whitespace-collapsed text: a reference tag becomes its label,
+ * and an attached file's name and path, as in `Attached file: notes.md (C:\repo\notes.md)`, become the name. The name
+ * and path come from the message's `attachments`, with their whitespace collapsed too; the label before them is
+ * optional. Returns the text and its expansions in order, keeping the first of any that overlap.
  */
 function unexpandMentions(value: string, attachments: unknown): { text: string; expansions: Expansion[] } {
   const found: Expansion[] = [];
   for (const ref of value.matchAll(COPILOT_REF)) {
-    const label = REF_LABEL.exec(ref[0])?.[1];
+    const label = REF_LABEL.exec(ref[0])?.[1].trim();
     if (label) found.push({ start: ref.index, end: ref.index + ref[0].length, typed: label });
   }
   for (const attachment of Array.isArray(attachments) ? attachments : []) {
-    const name = isRecord(attachment) ? text(attachment.displayName) : '';
-    const filePath = isRecord(attachment) ? text(attachment.path) : '';
+    const name = isRecord(attachment) ? collapseWhitespace(text(attachment.displayName)).text : '';
+    const filePath = isRecord(attachment) ? collapseWhitespace(text(attachment.path)).text : '';
     if (!name || !filePath) continue;
     const expanded = `${name} (${filePath})`;
     for (let at = value.indexOf(expanded); at >= 0; at = value.indexOf(expanded, at + expanded.length)) {
@@ -103,7 +103,7 @@ function unexpandMentions(value: string, attachments: unknown): { text: string; 
 }
 
 /**
- * Where an index of the un-expanded text is in the text as recorded. A span that starts or ends (`isEnd`) inside a
+ * Where an index of the un-expanded text is in the text it came from. A span that starts or ends (`isEnd`) inside a
  * mention's typed text takes its whole expansion.
  */
 function recordedIndex(index: number, expansions: readonly Expansion[], isEnd: boolean): number {
@@ -121,22 +121,22 @@ function recordedIndex(index: number, expansions: readonly Expansion[], isEnd: b
  * What the harness added to a message: `transformedContent` without the typed `content`. The complete typed text must
  * align, with only the changes the harness is known to make: to its whitespace (CRLF line endings, the whitespace
  * around it, and line breaks: it can split a typed line, join typed lines or drop a blank line) and to its mentions,
- * which it expands. So both texts get their mentions put back as typed, the last place the typed text appears in the
- * recorded one is found with any run of whitespace matching any other, and that span, with the expansions in it, is
- * cut from the text as recorded, keeping the lines, quoted elements and fences around it. When the typed text doesn't
- * align whole, as after the harness expanded a slash command, none of it is proven typed, so nothing is cut.
+ * which it expands. So both texts get their whitespace collapsed and their mentions put back as typed, the last place
+ * the typed text appears in the recorded one is found, and that span, with the expansions in it, is cut from the text
+ * as recorded, keeping the lines, quoted elements and fences around it. When the typed text doesn't align whole, as
+ * after the harness expanded a slash command, none of it is proven typed, so nothing is cut.
  */
 function harnessAddedText(data: Record<string, unknown> | undefined): string {
   const transformed = text(data?.transformedContent);
-  const typed = collapseWhitespace(unexpandMentions(text(data?.content), data?.attachments).text).text;
+  const typed = unexpandMentions(collapseWhitespace(text(data?.content)).text, data?.attachments).text;
   if (!typed) return transformed;
-  const { text: unexpanded, expansions } = unexpandMentions(transformed, data?.attachments);
-  const recorded = collapseWhitespace(unexpanded);
-  const found = recorded.text.lastIndexOf(typed);
+  const recorded = collapseWhitespace(transformed);
+  const { text: unexpanded, expansions } = unexpandMentions(recorded.text, data?.attachments);
+  const found = unexpanded.lastIndexOf(typed);
   if (found < 0) return transformed;
-  const start = mapIndex(found, recorded.collapsedAt, recorded.at);
-  const end = mapIndex(found + typed.length - 1, recorded.collapsedAt, recorded.at) + 1;
-  return transformed.slice(0, recordedIndex(start, expansions, false)) + transformed.slice(recordedIndex(end, expansions, true));
+  const start = mapIndex(recordedIndex(found, expansions, false), recorded.collapsedAt, recorded.at);
+  const end = mapIndex(recordedIndex(found + typed.length, expansions, true) - 1, recorded.collapsedAt, recorded.at) + 1;
+  return transformed.slice(0, start) + transformed.slice(end);
 }
 
 /** Where a scan of the text the harness added is: in fenced code (its opening delimiter), or in a quoted element
