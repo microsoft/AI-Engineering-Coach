@@ -149,6 +149,22 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
     content: 'Why does <cross_session_message> wrap it?\nRead @notes.md and fix it.',
     transformedContent: '<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>\nWhy does <cross_session_message> wrap it?\nRead @notes.md (notes.md) and fix it.',
   }, 'relayed'],
+  ['a sender header after typed text with an open tag and a mention the harness expanded', {
+    content: 'What does <details> do here?\nRead @notes.md and fix it.',
+    transformedContent: 'What does <details> do here?\nRead @notes.md (notes.md) and fix it.\nfrom_session_id: s1',
+  }, 'relayed'],
+  ['a relay wrapper after typed text that opens a fence, with a mention the harness expanded', {
+    content: 'Why does this fail?\n```\nRead @notes.md and fix it.',
+    transformedContent: 'Why does this fail?\n```\nRead @notes.md (notes.md) and fix it.\n<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>',
+  }, 'relayed'],
+  ['fenced harness code with a relay header before typed code with a mention the harness expanded', {
+    content: '```\nconst total = 1;\n```\nRead @notes.md and fix it.',
+    transformedContent: '```\nfrom_session_id: abc\n```\n```\nconst total = 1;\n```\nRead @notes.md (notes.md) and fix it.',
+  }, undefined],
+  ['an IDE selection quoting a relay header before typed text with a mention the harness expanded', {
+    content: 'Why does this test fail?\nRead @notes.md and fix it.',
+    transformedContent: '<ide_selection>\nfrom_session_id: abc\n</ide_selection>\nWhy does this test fail?\nRead @notes.md (notes.md) and fix it.',
+  }, undefined],
 ];
 
 describe('cliNonHumanKind', () => {

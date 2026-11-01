@@ -73,30 +73,34 @@ const NOTHING_TYPED: IsTyped = () => false;
 /**
  * For text the harness changed beyond whitespace: a span is typed when its recorded words are words the user typed,
  * next to a word they typed before or after them. That neighbor is the nearest recorded word on that side that is one
- * of the typed words, past any words the harness inserted. A marker the user typed keeps its typed neighbors wherever
- * the harness moved the line breaks or added text; one the harness wrote doesn't.
+ * of the typed words, past any words the harness inserted. Text the user typed keeps its typed neighbors wherever the
+ * harness moved the line breaks or added text; a marker, tag or fence the harness wrote doesn't.
  */
 function typedWithNeighbor(recorded: Collapsed, typed: readonly string[]): IsTyped {
-  const vocabulary = new Set(typed);
+  const positions = new Map<string, number[]>();
+  for (const [k, word] of typed.entries()) {
+    const list = positions.get(word);
+    if (list) list.push(k);
+    else positions.set(word, [k]);
+  }
   const nearestTyped = (from: number, step: number): string | undefined => {
     for (let i = from; i >= 0 && i < recorded.words.length; i += step) {
-      if (vocabulary.has(recorded.words[i])) return recorded.words[i];
+      if (positions.has(recorded.words[i])) return recorded.words[i];
     }
     return undefined;
   };
   return (start, end) => {
     const first = wordAt(start, recorded.at);
+    const candidates = positions.get(recorded.words[first]);
+    if (!candidates) return false;
     const length = wordAt(end - 1, recorded.at) - first + 1;
     const before = nearestTyped(first - 1, -1);
     const after = nearestTyped(first + length, 1);
-    for (let k = 0; k + length <= typed.length; k++) {
-      let same = true;
-      for (let i = 0; i < length && same; i++) same = typed[k + i] === recorded.words[first + i];
-      if (!same) continue;
-      if (k > 0 && typed[k - 1] === before) return true;
-      if (k + length < typed.length && typed[k + length] === after) return true;
-    }
-    return false;
+    return candidates.some(k => {
+      if (k + length > typed.length) return false;
+      for (let i = 1; i < length; i++) if (typed[k + i] !== recorded.words[first + i]) return false;
+      return (k > 0 && typed[k - 1] === before) || (k + length < typed.length && typed[k + length] === after);
+    });
   };
 }
 
@@ -109,7 +113,8 @@ interface HarnessText { text: string; isTyped: IsTyped }
  * join typed lines or drop a blank line), so the typed text is found with any run of whitespace matching any other,
  * and cut from the text as recorded, keeping the lines, quoted elements and fences around it. When the harness changed
  * more than whitespace, for example by adding a file's path after a mention, the typed text can't be found whole: the
- * text stays as it is, and a marker doesn't count when it is typed text with a typed word next to it.
+ * text stays as it is, and text that is typed, with a typed word next to it, is skipped. Its markers don't count, and
+ * its tags and fences quote nothing, as when it is cut.
  */
 function harnessAddedText(data: Record<string, unknown> | undefined): HarnessText {
   const transformed = text(data?.transformedContent);
@@ -129,10 +134,12 @@ function harnessAddedText(data: Record<string, unknown> | undefined): HarnessTex
  *  (its name, and how deep elements of that name nest inside it). */
 interface QuoteState { fence?: string; element?: string; depth: number }
 
-/** True when a line opens, closes or sits in fenced code; updates `state.fence`. As in Markdown, only a fence of the
- *  same character, at least as long and with nothing after it, closes the code. */
-function inFencedCode(line: string, state: QuoteState): boolean {
-  const fence = FENCE.exec(line)?.[1];
+/** True when a line that starts at `at` in the text opens, closes or sits in fenced code; updates `state.fence`. As in
+ *  Markdown, only a fence of the same character, at least as long and with nothing after it, closes the code. A
+ *  delimiter the user typed is text, not a fence. */
+function inFencedCode(line: string, at: number, state: QuoteState, isTyped: IsTyped): boolean {
+  const match = FENCE.exec(line)?.[1];
+  const fence = match && !isTyped(at, at + match.length) ? match : undefined;
   if (!state.fence) {
     if (fence) state.fence = fence;
     return fence !== undefined;
@@ -142,27 +149,25 @@ function inFencedCode(line: string, state: QuoteState): boolean {
 }
 
 /**
- * Walks the element tags on a line that starts at `at` in the text; true at a relay element outside quoted text and
- * typed text. Every element other than the relay wrapper quotes text (an IDE selection, a file, a notification) until
- * its own closing tag, on the same line or a later one, and elements of the same name nest inside it. Updates `state`.
+ * Walks the element tags on a line that starts at `at` in the text; true at a relay element outside quoted text. Every
+ * element other than the relay wrapper quotes text (an IDE selection, a file, a notification) until its own closing
+ * tag, on the same line or a later one, and elements of the same name nest inside it. A tag the user typed is skipped.
+ * Updates `state`.
  */
 function relayElementOnLine(line: string, at: number, state: QuoteState, isTyped: IsTyped): boolean {
   TAG.lastIndex = 0;
   for (let tag = TAG.exec(line); tag; tag = TAG.exec(line)) {
     const [, closing, name, selfClosing] = tag;
-    if (selfClosing) continue;
+    if (selfClosing || isTyped(at + tag.index, at + tag.index + tag[0].length)) continue;
     if (state.element) {
       if (name === state.element) state.depth += closing ? -1 : 1;
       if (state.depth === 0) state.element = undefined;
       continue;
     }
     if (closing) continue;
-    if (!RELAY_ELEMENT.test(name)) {
-      state.element = name;
-      state.depth = 1;
-    } else if (!isTyped(at + tag.index, at + tag.index + tag[0].length)) {
-      return true;
-    }
+    if (RELAY_ELEMENT.test(name)) return true;
+    state.element = name;
+    state.depth = 1;
   }
   return false;
 }
@@ -173,7 +178,7 @@ function lineIsRelayed(raw: string, start: number, state: QuoteState, isTyped: I
   const line = raw.trim();
   const at = start + raw.length - raw.trimStart().length;
   if (!state.element) {
-    if (inFencedCode(line, state)) return false;
+    if (inFencedCode(line, at, state, isTyped)) return false;
     const header = RELAY_ID_HEADER.exec(line);
     if (header && !isTyped(at, at + header[0].length)) return true;
   }
