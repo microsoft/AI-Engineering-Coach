@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('./shared', () => ({
   rpc: mocks.rpc,
   createChart: vi.fn(),
+  createChartFrom: vi.fn(),
   destroyChartById: vi.fn(),
   destroyCharts: vi.fn(),
   trackChart: vi.fn(),
