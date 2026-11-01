@@ -80,3 +80,26 @@ test.describe('Token Types tab', () => {
     await expect(page.locator('#ctxTokenTypesError')).toContainText('Could not load token types');
   });
 });
+
+test.describe('Token Types with a late response', () => {
+  test('keeps Context Management when Token Types answers after the switch', async ({ page }) => {
+    await page.goto(HARNESS_URL);
+    await page.waitForFunction(() => {
+      const content = document.getElementById('content');
+      return content && content.innerHTML.length > 200 && !content.querySelector('.loading-spinner') && !content.querySelector('.error-boundary');
+    }, { timeout: 10000 });
+    await page.evaluate(() => {
+      (window as unknown as { mockResponseDelay: (method: string) => number }).mockResponseDelay = m => (m === 'getTokenTypes' ? 1_000 : 5);
+    });
+    await page.locator('[data-page="config-health"]').first().click();
+    await expect(page.locator('#content')).toContainText('Overall Score');
+    await page.locator('[data-tab="token-types"]').click();
+    await page.locator('[data-tab="context-mgmt"]').click();
+    await expect(page.locator('#content')).toContainText('Context Score');
+    // Token Types answers meanwhile: its response is dropped instead of replacing Context Management.
+    await page.waitForTimeout(1_500);
+    await expect(page.locator('#content')).toContainText('Context Score');
+    await expect(page.locator('#ctxTokenTypes, #ctxTokenTypesError')).toHaveCount(0);
+    expect(await page.evaluate(() => ((window as TokenTypesWindow).tokenTypesRequests ?? []).length)).toBe(1);
+  });
+});
