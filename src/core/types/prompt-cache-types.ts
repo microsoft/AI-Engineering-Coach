@@ -266,9 +266,10 @@ export interface CacheAttribution {
   idle: CacheIdleSummary;
 }
 
-/** Returns that Copilot CLI and Copilot App prompts counted in range when none of their requests in range logged cache
- *  tokens, so there's no `CacheAttribution`: their cache breaks and misses can't be measured, only these returns. Each
- *  is measured against the cache of the call it returned to, which can be outside the range. */
+/** Returns that prompts sent with Copilot CLI or Copilot App counted in range, for those of the two harnesses with no
+ *  request in range that logged cache tokens. Their cache breaks and misses can't be measured, only these returns, and
+ *  they aren't in `CacheAttribution`, which covers only the harnesses it names. Each return is measured against the
+ *  cache of the call it returned to, which can be outside the range. */
 export interface CacheReturnsWithoutData {
   /** Display name, e.g. "Copilot App" or "Copilot App and Copilot CLI". */
   label: string;
@@ -354,10 +355,11 @@ export interface CacheSessionSummary {
 export interface PromptCacheData {
   /** One row per harness with requests in range, including harnesses that don't report cache. */
   harnesses: HarnessPromptCache[];
-  /** Measured break attribution: `null` unless a Copilot CLI or Copilot App request in range logged cache tokens. */
+  /** Measured break attribution for the Copilot CLI and Copilot App harnesses with a request in range that logged cache
+   *  tokens; its returns are theirs only. `null` when neither has one. */
   attribution: CacheAttribution | null;
-  /** The returns Copilot CLI and Copilot App counted when `attribution` is `null`; `null` with an attribution, or
-   *  without returns. */
+  /** The returns of the Copilot CLI and Copilot App harnesses with no request in range that logged cache tokens, apart
+   *  from `attribution`; `null` without such returns. */
   returnsWithoutCacheData: CacheReturnsWithoutData | null;
   models: ModelPromptCache[];
   workspaces: WorkspacePromptCache[];

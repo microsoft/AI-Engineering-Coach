@@ -514,8 +514,9 @@ export function formatPromptCache(data: PromptCacheData) {
       returnsAfterExpiry: { expired: a.idle.expiredReturns, of: a.idle.returns, notMeasured: a.idle.unmeasuredReturns },
       medianMinutesSinceCacheRefreshAtExpiry: a.idle.medianIdleMinutes,
     } : null,
-    // No call of these harnesses in range logged cache tokens, so their breaks and misses are unknown (cacheBreaks is
-    // null); prompts you sent there still returned to earlier calls, which can be outside the range.
+    // Copilot harnesses with no call in range that logged cache tokens: their breaks and misses are unknown, so they
+    // aren't in cacheBreaks, which covers only the harnesses it names. Prompts you sent there still returned to earlier
+    // calls, which can be outside the range.
     returnsWithoutCacheData: r ? {
       harnesses: r.label,
       returnsAfterExpiry: { expired: r.expiredReturns, of: r.returns, notMeasured: r.unmeasuredReturns },

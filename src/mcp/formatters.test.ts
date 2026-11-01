@@ -3,10 +3,15 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { PromptCacheAnalyzer } from '../core/analyzer-prompt-cache';
+import { toDateStr } from '../core/helpers';
 import { createRequest, createSession } from '../core/parser-shared';
 import type { ModelUsage, Session } from '../core/types';
+import { TODAY, returnedAfterExpiryWithoutCacheData, returnedToday } from '../test/copilot-cache-sessions';
 import { formatPromptCache } from './formatters';
 
 describe('formatPromptCache', () => {
@@ -72,6 +77,34 @@ describe('formatPromptCache returns without cache data', () => {
     const summary = formatPromptCache(new PromptCacheAnalyzer([session], new Map()).getPromptCache());
     expect(summary.cacheBreaks).toMatchObject({ returnsAfterExpiry: { expired: 0, of: 1, notMeasured: 0 } });
     expect(summary.returnsWithoutCacheData).toBeNull();
+  });
+});
+
+describe('formatPromptCache with Copilot CLI and Copilot App returns in one range', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length > 0) fs.rmSync(dirs.pop() as string, { recursive: true, force: true });
+  });
+
+  /** Today's summary of sessions parsed from synthetic logs by the real parser. */
+  function todaysSummary(build: (dir: string) => Session[]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-mcp-cache-'));
+    dirs.push(dir);
+    const today = toDateStr(TODAY);
+    return formatPromptCache(new PromptCacheAnalyzer(build(dir), new Map()).getPromptCache({ fromDate: today, toDate: today }));
+  }
+
+  it.each<[string, string, boolean]>([
+    ['Copilot CLI', 'Copilot App', false],
+    ['Copilot App', 'Copilot CLI', true],
+  ])('keeps the %s returns it measured, and reports the %s returns without cache data apart', (measured, apart, measuredIsApp) => {
+    const alone = todaysSummary(dir => [returnedToday(dir, 'measured', measuredIsApp)]);
+    const mixed = todaysSummary(dir => [returnedToday(dir, 'measured', measuredIsApp), returnedAfterExpiryWithoutCacheData(dir, 'apart', !measuredIsApp)]);
+    expect(alone.cacheBreaks).toMatchObject({ harnesses: measured, returnsAfterExpiry: { expired: 0, of: 1, notMeasured: 0 } });
+    expect(alone.returnsWithoutCacheData).toBeNull();
+    // The other harness's expired return changes nothing attributed to the measured harness.
+    expect(mixed.cacheBreaks).toEqual(alone.cacheBreaks);
+    expect(mixed.returnsWithoutCacheData).toEqual({ harnesses: apart, returnsAfterExpiry: { expired: 1, of: 1, notMeasured: 0 } });
   });
 });
 
