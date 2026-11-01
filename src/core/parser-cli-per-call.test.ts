@@ -214,6 +214,19 @@ describe('Copilot CLI turn context when the model changes within a turn', () => 
     ]), 'ws', 'demo');
     expect(session?.requests[0].contextUsage?.contextLimit).toBe(300_000);
   });
+
+  it('carries a compaction\u2019s limit into the call timeline when the calls report none', () => {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-timeline-limit', startTime: iso(0), selectedModel: 'claude-opus-5.5' } },
+      { type: 'user.message', id: 'u1', timestamp: iso(1), data: { content: 'secret prompt' } },
+      call(10, { input: 200_000, limit: null }),
+      compaction(20, 200_000, 40_000, 272_000),
+      call(30, { input: 50_000, limit: null }),
+    ]), 'ws', 'demo');
+    expect(session?.requests[0].contextUsage?.contextLimit).toBe(272_000);
+    // The timeline's limit, which draws the limit and threshold lines, agrees with the turn's from the compaction on.
+    expect(session?.callTimeline?.buckets.map(bucket => bucket.contextLimit ?? null)).toEqual([null, 272_000]);
+  });
 });
 
 describe('Copilot CLI token types of calls that didn\u2019t report their cache', () => {

@@ -89,4 +89,15 @@ describe('TurnContextAccumulator when the model changes within a turn', () => {
     other.addCall(main(50_000, null, 'gpt-6.1-sol'));
     expect(other.result()?.contextLimit).toBeNull();
   });
+
+  it('returns the limit each call is measured against, by the turn\u2019s rule', () => {
+    const acc = new TurnContextAccumulator();
+    expect(acc.addCall(main(10_000, null, 'claude-opus-5.5'))).toBeNull();
+    acc.addLimit(272_000);
+    expect(acc.addCall(main(12_000, null, 'claude-opus-5.5'))).toBe(272_000);
+    expect(acc.addCall(main(14_000, null, 'gpt-6.1-sol'))).toBeNull();
+    expect(acc.addCall(main(16_000, 400_000, 'gpt-6.1-sol'))).toBe(400_000);
+    expect(acc.addCall(main(18_000, null, 'gpt-6.1-sol'))).toBe(400_000);
+    expect(acc.addCall({ stream: 'subagent', inputTokens: 5_000, maxPromptTokens: 128_000 })).toBeNull();
+  });
 });

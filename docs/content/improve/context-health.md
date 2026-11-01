@@ -158,7 +158,7 @@ The chart is the same as the Prompt Cache tab's, with context layers on top. In 
 | Layer | What it shows | Shown by default |
 |---|---|---|
 | **Context** | The largest prompt in each bar, including cached tokens: how full the context window got | Yes |
-| **Limit and thresholds** | The limit Copilot reported, and the utilization at which a session counts as degraded or limited | Yes |
+| **Limit and thresholds** | The limit Copilot reported, by a model call or a compaction, as used for the turn's utilization, and the utilization at which a session counts as degraded or limited | Yes |
 | **Turn ends** | The context when each of your turns ended. Context Management scores utilization from these points. A bar that covers several turns has a point for each | Yes |
 | **Compactions** | When the context was summarized, with its size before and after, and failed compactions | Yes |
 | **Truncated calls** | Model calls that stopped at the output-token limit | Yes |
