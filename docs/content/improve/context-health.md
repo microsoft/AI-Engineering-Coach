@@ -142,7 +142,7 @@ A detailed table with per-session breakdowns for each workspace:
 | Compactions | Number of compaction events |
 | Sessions | Sessions in the workspace |
 
-Click a workspace row to expand inline session-level details with per-session verdicts, token curves, prompt composition, and event counts. The summary above the sessions averages utilization and saturation over the sessions that recorded per-request tokens. Sessions without them, such as sessions of older Copilot CLI builds, show a dash in those columns and are left out of the averages.
+Click a workspace row to expand inline session-level details with per-session verdicts, utilization curves, prompt composition, and event counts. Each curve plots every request's utilization against the same window as the row and the session chart (the turn's reported limit where it has one) and takes the color of its peak. The summary above the sessions averages utilization and saturation over the sessions that recorded per-request tokens. Sessions without them, such as sessions of older Copilot CLI builds, show a dash in those columns and are left out of the averages.
 
 ### Copilot CLI and Copilot App session timeline
 
