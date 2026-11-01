@@ -16,11 +16,14 @@ export interface ChartTableFormat {
   category: (category: ContextCategory) => string;
 }
 
-function chartTable(label: string, columns: string[], rows: ComponentChildren[]): ComponentChildren {
+/** A collapsed "Show the chart as a table" disclosure for the chart above it, laid out like the session timeline's:
+ *  a focusable, labelled scroll region around a captioned table. */
+function chartTable(caption: string, columns: string[], rows: ComponentChildren[]): ComponentChildren {
   return html`<details class="ctx-comp-table">
     <summary>Show the chart as a table</summary>
-    <div class="ctx-comp-table-scroll">
-      <table aria-label=${label}>
+    <div class="ctx-comp-table-scroll" role="region" tabindex="0" aria-label=${caption}>
+      <table>
+        <caption>${caption}</caption>
         <thead><tr>${columns.map(column => html`<th scope="col">${column}</th>`)}</tr></thead>
         <tbody>${rows.length > 0 ? rows : html`<tr><td class="ctx-comp-table-note" colspan=${columns.length}>No values recorded in this range.</td></tr>`}</tbody>
       </table>
