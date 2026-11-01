@@ -73,6 +73,27 @@ describe('Claude Code truncated calls', () => {
       expect(rowTruncation(rows)).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: null });
     });
   });
+
+  it('keeps a stop reason logged before the response\u2019s usage counts', () => {
+    const line = (id: string, ts: string, stopReason: string | null, usage: Record<string, number>): object => ({
+      type: 'assistant', timestamp: ts, sessionId: 'sess-1',
+      message: { id, role: 'assistant', model: 'claude-opus-4-6-20251001', content: [{ type: 'text', text: 'secret answer' }], stop_reason: stopReason, usage },
+    });
+    withClaudeFile([
+      claudeUser('write a long file', '2026-10-28T10:00:00Z'),
+      // A placeholder line with zero tokens logs the stop reason; the usable usage comes on a later line without one.
+      line('msg_1', '2026-10-28T10:00:02Z', 'max_tokens', { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 }),
+      line('msg_1', '2026-10-28T10:00:03Z', null, USAGE),
+      // Usage without cache fields doesn't count the response, but its stop reason is kept.
+      line('msg_2', '2026-10-28T10:00:04Z', 'end_turn', { input_tokens: 10, output_tokens: 5 }),
+      line('msg_2', '2026-10-28T10:00:05Z', null, USAGE),
+      line('msg_3', '2026-10-28T10:00:06Z', null, USAGE),
+    ], (projectsDir) => {
+      const rows = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0].promptCache?.rows ?? [];
+      expect(rows[0]).toMatchObject({ calls: 3, truncatedCalls: 1, stopCalls: 2 });
+      expect(rowTruncation(rows)).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: null });
+    });
+  });
 });
 
 function withOpenCodeStorage(messages: object[], run: (storageDir: string) => void): void {

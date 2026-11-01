@@ -124,8 +124,9 @@ interface ClaudeAssistantData {
   /** Prompt-cache usage per API response (counted once per `message.id`). */
   cache: RequestCacheBuilder;
   responseIds: Set<string>;
-  /** Responses passed to `cache`, and whether each stopped at the output-token limit (`stop_reason: max_tokens`),
-   *  as known so far: `null` until one of the response's lines logs a stop reason. */
+  /** Whether each response stopped at the output-token limit (`stop_reason: max_tokens`), as known so far from any
+   *  of its lines, including lines before its usage counted. `null` for a response passed to `cache` until one of
+   *  its lines logs a stop reason. */
   truncation: Map<string, boolean | null>;
 }
 
@@ -399,6 +400,17 @@ function claudeTruncated(line: ClaudeLine): boolean | null {
   return typeof stopReason === 'string' && stopReason ? stopReason === 'max_tokens' : null;
 }
 
+/** Why a response stopped, as known after this line: truncated once any of its lines logged `max_tokens`, else not
+ *  truncated once any logged another reason, else `null`. Remembered for lines before the response's usage counts,
+ *  so a stop reason logged before the usage isn't lost. */
+function knownTruncation(data: ClaudeAssistantData, line: ClaudeLine, responseId: string): boolean | null {
+  const seen = responseId ? data.truncation.get(responseId) : undefined;
+  const current = claudeTruncated(line);
+  const truncated = seen === true || current === true ? true : seen === false || current === false ? false : null;
+  if (responseId && truncated != null) data.truncation.set(responseId, truncated);
+  return truncated;
+}
+
 /** A later line of a response already counted can still log why it stopped. Claude Code logs the stop reason on
  *  some of a response's lines only, so a response counts toward truncation once any line logs one. */
 function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, responseId: string): void {
@@ -422,6 +434,7 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
     addClaudeStopReason(data, line, responseId);
     return;
   }
+  const truncated = knownTruncation(data, line, responseId);
   const usage = line.message?.usage;
   // Usage without cache fields didn't report cache usage; don't count the response as uncached.
   if (!usage || !reportsCacheUsage(usage)) return;
@@ -429,7 +442,6 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
   const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
   if (sample.input <= 0) return;
-  const truncated = claudeTruncated(line);
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
   if (responseId) {
     data.responseIds.add(responseId);
