@@ -79,7 +79,7 @@ export function renderSessionList(sessions: CacheSessionSummary[], label: string
         <span>${s.date}</span>
         <span class="ctx-cache-session-ws" title=${s.workspaceName}>${s.workspaceName}</span>
         <span class="ctx-cache-muted">${shortHarness(s.harness)}</span>
-        <span class="num">${countText(s.calls, 'call')}</span>
+        <span class="num">${s.reporting === 'per-session' ? 'session totals' : countText(s.calls, 'call')}</span>
         <span class="num">${pctText(s.hitPct)} hit</span>
         <span class="num">${s.breaks == null ? '\u2014' : countText(s.breaks, 'break')}</span>
         <span class="num">${s.rebuiltTokens == null ? `${formatNum(s.misses)} missed` : `${formatNum(s.rebuiltTokens)} rebuilt`}</span>
@@ -91,9 +91,10 @@ export function renderSessionList(sessions: CacheSessionSummary[], label: string
   </ul>`;
 }
 
-function streamText(label: string, totals: SessionCacheLayer['main']): ComponentChildren {
+/** A stream's figures. Session totals (`perSession`) carry no count of model calls. */
+function streamText(label: string, totals: SessionCacheLayer['main'], perSession: boolean): ComponentChildren {
   if (!totals) return null;
-  return html`<li>${label}: <strong>${pctText(totals.hitPct)}</strong> hit over ${totals.calls > 0 ? `${countText(totals.calls, 'call')}, ` : ''}${formatNum(totals.input)} tokens</li>`;
+  return html`<li>${label}: <strong>${pctText(totals.hitPct)}</strong> hit over ${perSession ? '' : `${countText(totals.calls, 'call')}, `}${formatNum(totals.input)} tokens</li>`;
 }
 
 function breakTable(data: SessionTimelineData): ComponentChildren {
@@ -139,8 +140,9 @@ function renderPanel(panel: HTMLElement, data: SessionTimelineData): void {
     button.setAttribute('aria-pressed', String(enabled.has(id)));
     draw();
   };
+  const perSession = data.cache?.reporting === 'per-session';
   render(html`<div class="ctx-cache-session-detail">
-    <ul class="ctx-comp-values">${streamText('Main agent', data.cache?.main ?? null)}${streamText('Subagents', data.cache?.subagents ?? null)}${streamText('Compaction', data.cache?.compaction ?? null)}</ul>
+    <ul class="ctx-comp-values">${streamText('Main agent', data.cache?.main ?? null, perSession)}${streamText('Subagents', data.cache?.subagents ?? null, perSession)}${streamText('Compaction', data.cache?.compaction ?? null, perSession)}</ul>
     ${data.timeline ? html`
       <div class="ctx-cache-layers" role="group" aria-label="Chart layers">
         ${layers.map(layer => html`<button type="button" class="ctx-cache-layer" data-layer=${layer.id} aria-pressed=${String(enabled.has(layer.id))} data-tip=${layer.help} onClick=${toggleLayer}>${layer.label}</button>`)}

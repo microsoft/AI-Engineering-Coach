@@ -316,4 +316,15 @@ describe('PromptCacheAnalyzer sessions and timelines', () => {
     expect(perRequest?.timeline?.buckets.map(b => [b.firstRequest, b.cacheCalls, b.cacheRead])).toEqual([[0, 1, 50_000], [1, 0, 0], [2, 1, 110_000]]);
     expect(a.getSessionTimeline('missing')).toBeNull();
   });
+
+  it('marks a Codex session\u2019s figures as session totals, which count no model calls', () => {
+    const codex = session('codex-1', 'Codex', [request(`${DAY}T11:00:00Z`)], {
+      modelUsage: { 'gpt-6.1-sol': { inputTokens: 20_000, outputTokens: 1_000, cacheReadTokens: 180_000, cacheWriteTokens: 0 } },
+    });
+    const a = analyzer([appSession(), codex]);
+    const rows = a.getPromptCache({ fromDate: DAY }).topSessions.map(s => [s.harness, s.reporting, s.calls]);
+    expect(rows).toEqual(expect.arrayContaining([['Codex', 'per-session', 0], ['GitHub Copilot App', 'per-call', 71]]));
+    expect(a.getPromptCacheSessions('alpha', 'Codex').sessions).toEqual([expect.objectContaining({ sessionId: 'codex-1', reporting: 'per-session', hitPct: 90 })]);
+    expect(a.getSessionTimeline('codex-1')).toMatchObject({ unit: 'requests', timeline: null, cache: { reporting: 'per-session' } });
+  });
 });
