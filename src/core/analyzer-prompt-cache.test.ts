@@ -257,6 +257,26 @@ describe('PromptCacheAnalyzer requests that counted returns without cache rows',
   });
 });
 
+describe('PromptCacheAnalyzer returns of Copilot CLI and Copilot App in one range', () => {
+  /** A request whose calls didn't report their cache, with the returns it counted. */
+  const countsOnly = (id: string, harness: string, counts: Omit<RequestPromptCache, 'rows'>) => session(id, `GitHub ${harness}`, [request(`${DAY}T12:30:00Z`, { rows: [], ...counts })]);
+  /** A Copilot CLI session with cache rows and one return to a call whose cache hadn't expired. */
+  const cliMeasured = () => session('cli-1', 'GitHub Copilot CLI', [request(`${DAY}T11:00:00Z`, { rows: [row('main', [2, 300_000, 150_000, 150_000], { ttlSeconds: 300 })], returns: 1 })]);
+
+  it.each<[string, string, () => Session[], () => Session]>([
+    ['Copilot CLI', 'Copilot App', () => [cliMeasured()], () => countsOnly('app-2', 'Copilot App', { returns: 1, expiredReturns: 1 })],
+    // The measured harness's own returns without cache rows stay in its attribution.
+    ['Copilot App', 'Copilot CLI', () => [appSession(), countsOnly('app-2', 'Copilot App', { returns: 2, expiredReturns: 1, unmeasuredReturns: 1 })], () => countsOnly('cli-2', 'Copilot CLI', { returns: 1, expiredReturns: 1 })],
+  ])('keep the %s attribution as it is, and the %s returns apart under their own label', (measured, apart, measuredSessions, apartSession) => {
+    const alone = analyzer(measuredSessions()).getPromptCache({ fromDate: DAY, toDate: DAY });
+    const mixed = analyzer([...measuredSessions(), apartSession()]).getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(alone.attribution?.label).toBe(measured);
+    expect(alone.returnsWithoutCacheData).toBeNull();
+    expect(mixed.attribution).toEqual(alone.attribution);
+    expect(mixed.returnsWithoutCacheData).toEqual({ label: apart, harnesses: [`GitHub ${apart}`], returns: 1, expiredReturns: 1, unmeasuredReturns: 0 });
+  });
+});
+
 describe('PromptCacheAnalyzer tips', () => {
   function withBreaks(count: number, causes: CacheBreakCause[], extra: Partial<CacheBreak> = {}): Session {
     const s = appSession();

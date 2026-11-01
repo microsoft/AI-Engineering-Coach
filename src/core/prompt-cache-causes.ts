@@ -143,6 +143,20 @@ export function emptyOrigins(): OriginAcc {
   return { main: emptyTotals(), subagents: emptyTotals(), compaction: emptyTotals(), coldStart: 0, coldStartCost: 0, rebuilt: 0, rebuiltCost: 0, returns: 0, expiredReturns: 0, unmeasuredReturns: 0 };
 }
 
+/** Prompts you sent after an earlier main-agent call: those whose expiry was measured, how many of them came after the
+ *  cache had expired, and those whose expiry couldn't be measured (see `RequestPromptCache`). */
+export type ReturnCounts = Pick<OriginAcc, 'returns' | 'expiredReturns' | 'unmeasuredReturns'>;
+
+export function emptyReturns(): ReturnCounts {
+  return { returns: 0, expiredReturns: 0, unmeasuredReturns: 0 };
+}
+
+export function addReturns(acc: ReturnCounts, counts: Partial<ReturnCounts>): void {
+  acc.returns += counts.returns ?? 0;
+  acc.expiredReturns += counts.expiredReturns ?? 0;
+  acc.unmeasuredReturns += counts.unmeasuredReturns ?? 0;
+}
+
 export function addRequestExtras(acc: OriginAcc, cache: RequestPromptCache): void {
   acc.coldStart += cache.coldStart ?? 0;
   acc.coldStartCost += cache.coldStartCost ?? 0;

@@ -29,7 +29,7 @@ import type {
 import { AnalyzerBase } from './analyzer-base';
 import { toDateStr } from './helpers';
 import { addUsage, emptyTotals, mergeTotals, missesOf, pct, toCost, toTotals, type TotalsAcc } from './prompt-cache-totals';
-import { addRequestExtras, buildIdle, buildOrigins, causeKey, controlShares, emptyOrigins, summarizeCauses, totalMisses, type OriginAcc } from './prompt-cache-causes';
+import { addRequestExtras, addReturns, buildIdle, buildOrigins, causeKey, controlShares, emptyOrigins, emptyReturns, summarizeCauses, totalMisses, type OriginAcc, type ReturnCounts } from './prompt-cache-causes';
 import { attributesBreaks, buildSessionTimeline, expectedReporting, sessionTotals, summarizeSession } from './prompt-cache-sessions';
 import { hasCacheRows } from './prompt-cache-usage';
 import { promptCacheTips } from './prompt-cache-tips';
@@ -59,12 +59,13 @@ interface Collected {
   harnesses: Map<string, HarnessAcc>;
   included: Set<SessionRequest>;
   sessions: Set<Session>;
-  /** Sums over the attribution harnesses' requests in range, including the returns of requests without cache rows. */
+  /** Sums over the attribution harnesses' requests in range that logged cache tokens. */
   origin: OriginAcc;
   /** Attribution harnesses with cache rows in range: only they make a measured attribution. */
   attributionHarnesses: Set<string>;
-  /** Attribution harnesses with requests in range that counted returns without cache rows. */
-  returnHarnesses: Set<string>;
+  /** Returns that the attribution harnesses' requests without cache rows counted, per harness. They stay with their
+   *  own harness: in the measured attribution when it has cache rows in range, apart from it otherwise. */
+  countsOnlyReturns: Map<string, ReturnCounts>;
   ttlCalls: Map<string, Map<number, number>>;
   models: Map<string, ModelAcc>;
   workspaces: Map<string, WorkspaceAcc>;
@@ -157,7 +158,7 @@ function addRows(c: Collected, session: Session, request: SessionRequest, cache:
 
 function collectRequests(requests: SessionRequest[], sessionOf: (request: SessionRequest) => Session | undefined): Collected {
   const c: Collected = {
-    harnesses: new Map(), included: new Set(), sessions: new Set(), origin: emptyOrigins(), attributionHarnesses: new Set(), returnHarnesses: new Set(),
+    harnesses: new Map(), included: new Set(), sessions: new Set(), origin: emptyOrigins(), attributionHarnesses: new Set(), countsOnlyReturns: new Map(),
     ttlCalls: new Map(), models: new Map(), workspaces: new Map(), weeks: new Map(), breaks: [], countedBreaks: 0,
   };
   for (const request of requests) {
@@ -172,11 +173,8 @@ function collectRequests(requests: SessionRequest[], sessionOf: (request: Sessio
     if (!cache) continue;
     if (!hasCacheRows(cache)) {
       // Its calls didn't report their cache, so it has no cache data. The returns it counted still count, measured
-      // against the calls they returned to, but on their own they don't make a measured attribution.
-      if (attributesBreaks(session.harness)) {
-        addRequestExtras(c.origin, cache);
-        c.returnHarnesses.add(session.harness);
-      }
+      // against the calls they returned to, but only for its own harness.
+      if (attributesBreaks(session.harness)) addReturns(getOrCreate(c.countsOnlyReturns, session.harness, emptyReturns), cache);
       continue;
     }
     harness.requestsWithData++;
@@ -283,18 +281,32 @@ function buildAttribution(c: Collected): CacheAttribution | null {
     controlPct: controlShares(causes, c.origin.rebuilt),
     misses: totalMisses(c.origin),
     origins: buildOrigins(c.origin, totalCost),
-    idle: buildIdle(c.breaks, c.origin, c.ttlCalls),
+    idle: buildIdle(c.breaks, withCountsOnlyReturns(c), c.ttlCalls),
   };
 }
 
-/** The returns the attribution harnesses counted when none of their requests in range logged cache tokens. Kept apart
- *  from a measured attribution: without cache tokens, breaks and misses can't be measured, so none are claimed. */
+/** The measured harnesses' sums, with the returns their requests without cache rows counted. Another harness's returns
+ *  never join them: they'd change the figures of a harness that didn't make them. */
+function withCountsOnlyReturns(c: Collected): OriginAcc {
+  const acc = { ...c.origin };
+  for (const harness of c.attributionHarnesses) addReturns(acc, c.countsOnlyReturns.get(harness) ?? {});
+  return acc;
+}
+
+/** The returns of the attribution harnesses without cache rows in range, under their own label, whether or not another
+ *  harness has a measured attribution. Without cache tokens their breaks and misses can't be measured, so none are
+ *  claimed. */
 function buildReturnsWithoutCacheData(c: Collected): CacheReturnsWithoutData | null {
-  if (c.attributionHarnesses.size > 0 || c.returnHarnesses.size === 0) return null;
-  const { returns, expiredReturns, unmeasuredReturns } = c.origin;
-  if (returns + unmeasuredReturns === 0) return null;
-  const harnesses = [...c.returnHarnesses].sort();
-  return { label: harnessLabel(harnesses), harnesses, returns, expiredReturns, unmeasuredReturns };
+  const harnesses: string[] = [];
+  const counts = emptyReturns();
+  for (const [harness, returns] of c.countsOnlyReturns) {
+    if (c.attributionHarnesses.has(harness) || returns.returns + returns.unmeasuredReturns === 0) continue;
+    harnesses.push(harness);
+    addReturns(counts, returns);
+  }
+  if (harnesses.length === 0) return null;
+  harnesses.sort();
+  return { label: harnessLabel(harnesses), harnesses, ...counts };
 }
 
 function dominantTtl(ttl: Map<number, number>): number | null {

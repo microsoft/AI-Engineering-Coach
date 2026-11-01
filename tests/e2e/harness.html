@@ -419,7 +419,7 @@ function mockSessionCompositionCli(n) {
   };
 }
 
-/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error' | 'unlisted' | 'returns-only') ---- */
+/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error' | 'unlisted' | 'returns-only' | 'returns-mixed') ---- */
 
 function cacheTotals(calls, input, readPct, writePct) {
   const cacheRead = Math.round(input * readPct / 100);
@@ -516,6 +516,11 @@ function mockPromptCache(mode, params) {
     // Copilot App logged no cache tokens in range, so it has no models, workspaces or trend of its own.
     const others = item => item.harness !== 'GitHub Copilot App';
     Object.assign(data, { models: data.models.filter(others), workspaces: data.workspaces.filter(others), trend: { ...data.trend, series: data.trend.series.filter(others) } });
+  }
+  if (mode === 'returns-mixed') {
+    // Copilot App logged cache tokens in range; Copilot CLI didn't, but a prompt you sent there returned to an earlier call.
+    const cli = { harness: 'GitHub Copilot CLI', reporting: 'per-call', attribution: false, all: null, main: null, subagents: null, compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 2, requestsWithData: 0, sessions: 1, sessionsWithData: 0 };
+    Object.assign(data, { harnesses: [...data.harnesses, cli], returnsWithoutCacheData: { label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], returns: 1, expiredReturns: 1, unmeasuredReturns: 0 } });
   }
   return data;
 }

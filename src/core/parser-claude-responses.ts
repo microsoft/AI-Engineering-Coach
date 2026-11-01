@@ -5,9 +5,11 @@
 
 /* The API responses of one Claude Code request. Claude Code writes one transcript line per content block
  * (thinking, text, each tool use), repeats the response's `usage` on each, and logs why the response stopped on
- * some of them only. The lines of one `message.id` build one record. Once every line of the request is read, its
- * token totals, its context, its prompt-cache calls and its calls without cache data all come from those final
- * records, in order. */
+ * some of them only. The lines of one `message.id` build one record, which counts once: as a prompt-cache call, or
+ * as a call without cache data when none of its lines reports cache usage for a prompt. Once every line of the
+ * request is read, its token totals, its context and its rows come from those final records, in the order their first
+ * usage appears: each call goes on the request's rows with the largest value of each usage field over its lines, the
+ * values the totals count, and the stop reason any of its lines logged. */
 
 import type { CacheStream, CallRow, RequestPromptCache, TurnContextUsage } from './types';
 import { RequestCacheBuilder, cacheModelName, missTokens, type CacheCallSample } from './prompt-cache-usage';
@@ -22,7 +24,7 @@ export interface ClaudeResponseMessage {
   stop_reason?: unknown;
 }
 
-/** What the responses of a request add up to. */
+/** What the responses of a request add to it. */
 export interface ClaudeRequestUsage {
   promptTokens: number;
   completionTokens: number;
@@ -36,6 +38,12 @@ export interface ClaudeRequestUsage {
   callRowsWithoutCacheData?: CallRow[];
 }
 
+/** A response's call: the stream and model of the line that counts it. */
+interface ResponseCall {
+  stream: CacheStream;
+  model: string;
+}
+
 /** Tokens of one response: the largest value of each field over its lines, which normally repeat the same usage. */
 interface ResponseTokens {
   uncached: number;
@@ -46,19 +54,16 @@ interface ResponseTokens {
 
 /** One API response: the lines of one `message.id`, or a single line without an id. */
 interface ClaudeResponse {
-  /** A sub-agent's response, as its first line says. */
-  sidechain: boolean;
-  /** The first model its lines log. */
-  model?: string;
+  /** Its prompt-cache call, from the first of its lines that reported cache tokens for a prompt. Later lines don't
+   *  change it. */
+  cacheCall?: ResponseCall;
+  /** Its call without cache data, unless it gets a prompt-cache call: from the latest of its lines that reported a
+   *  prompt without cache fields. */
+  noCacheCall?: ResponseCall;
   /** `null` until one of its lines logs usage. */
   tokens: ResponseTokens | null;
   /** One of its lines reported cache tokens, even zero ones. */
   cacheReported: boolean;
-  /** One of its lines reported cache tokens and a prompt: the response is a prompt-cache call. */
-  cacheCall: boolean;
-  /** One of its lines reported a prompt without cache fields: unless the response is a prompt-cache call, it counts
-   *  on a row without cache data, so its token types don't depend on its cache. */
-  noCacheCall: boolean;
   /** Stopped at the output-token limit: `true` once one of its lines logs `max_tokens`, `false` once one logs
    *  another reason, `null` while none logs a reason. */
   truncated: boolean | null;
@@ -69,57 +74,41 @@ function count(usage: Record<string, unknown>, key: string): number {
   return typeof value === 'number' ? value : 0;
 }
 
+/** The usage block reports cache tokens, even zero ones. Without them the request's cache fields stay null. */
+function reportsCacheUsage(usage: Record<string, unknown> | undefined): boolean {
+  return typeof usage?.cache_read_input_tokens === 'number' || typeof usage?.cache_creation_input_tokens === 'number';
+}
+
 /** A response's truncation after one of its lines logged `stopReason`. */
 function afterStopReason(truncated: boolean | null, stopReason: unknown): boolean | null {
   if (typeof stopReason !== 'string' || !stopReason) return truncated;
   return truncated === true || stopReason === 'max_tokens';
 }
 
-/** Merge a line's usage into its response. A line decides alone whether it makes the response a prompt-cache call
- *  (cache fields and a prompt) or a call without cache data (a prompt without cache fields): usage without cache
- *  fields didn't report cache usage, so it never counts as uncached. */
-function addUsage(response: ClaudeResponse, usage: Record<string, unknown>): void {
-  const line: ResponseTokens = {
-    uncached: count(usage, 'input_tokens'),
-    cacheRead: count(usage, 'cache_read_input_tokens'),
-    cacheWrite: count(usage, 'cache_creation_input_tokens'),
-    output: count(usage, 'output_tokens'),
-  };
-  const reportsCache = typeof usage.cache_read_input_tokens === 'number' || typeof usage.cache_creation_input_tokens === 'number';
-  response.cacheReported ||= reportsCache;
-  response.cacheCall ||= reportsCache && line.uncached + line.cacheRead + line.cacheWrite > 0;
-  response.noCacheCall ||= !reportsCache && line.uncached > 0;
-  const seen = response.tokens;
-  response.tokens = !seen ? line : {
-    uncached: Math.max(seen.uncached, line.uncached),
-    cacheRead: Math.max(seen.cacheRead, line.cacheRead),
-    cacheWrite: Math.max(seen.cacheWrite, line.cacheWrite),
-    output: Math.max(seen.output, line.output),
-  };
-}
-
-/** A response's call on the request's rows, with its final stop reason: with its cache sums when one of its lines
- *  reported them, else without cache data when one reported a prompt. The transcript's first main-agent call with
- *  cache sums is the session's cold start. */
+/** A response's call on the request's rows, with its final usage and stop reason: with its cache sums when one of its
+ *  lines reported them for a prompt, else without cache data. The transcript's first main-agent call with cache sums
+ *  is the session's cold start. */
 function addResponseCall(cache: RequestCacheBuilder, cacheState: { sawMain: boolean }, response: ClaudeResponse, tokens: ResponseTokens): void {
-  const stream: CacheStream = response.sidechain ? 'subagent' : 'main';
-  const model = cacheModelName(response.model);
   const outputs = stopReasonSample(response.truncated);
-  if (!response.cacheCall) {
-    if (response.noCacheCall) cache.addCallWithoutCacheData(stream, model, { input: tokens.uncached, outputs });
+  const call = response.cacheCall;
+  if (!call) {
+    const noCache = response.noCacheCall;
+    if (noCache) cache.addCallWithoutCacheData(noCache.stream, noCache.model, { input: tokens.uncached, outputs });
     return;
   }
   const sample: CacheCallSample = { input: tokens.uncached + tokens.cacheRead + tokens.cacheWrite, cacheRead: tokens.cacheRead, cacheWrite: tokens.cacheWrite };
-  cache.addCall(stream, model, { ...sample, outputs });
-  if (stream === 'main' && !cacheState.sawMain) {
+  cache.addCall(call.stream, call.model, { ...sample, outputs });
+  if (call.stream === 'main' && !cacheState.sawMain) {
     cacheState.sawMain = true;
     cache.addColdStart(missTokens(sample), undefined);
   }
 }
 
-/** The responses of one request, one record per `message.id`. Lines without usage contribute only their stop reason
- *  and model, so a response takes its place in the sequence with its first usage. */
+/** The responses of one request, one record per `message.id`, in the order their first usage appears. A line adds its
+ *  stop reason to its response, and its usage to the response's tokens; until the response is a prompt-cache call,
+ *  its usage can still make it one, or a call without cache data. */
 export class ClaudeResponseAccumulator {
+  /** Responses with usage, in the order their first usage appears. */
   private readonly responses: ClaudeResponse[] = [];
   private readonly byId = new Map<string, ClaudeResponse>();
 
@@ -133,22 +122,52 @@ export class ClaudeResponseAccumulator {
     if (!message || (!id && !message.usage)) return;
     let response = id ? this.byId.get(id) : undefined;
     if (!response) {
-      response = { sidechain, tokens: null, cacheReported: false, cacheCall: false, noCacheCall: false, truncated: null };
+      response = { tokens: null, cacheReported: false, truncated: null };
       if (id) this.byId.set(id, response);
     }
-    if (response.model === undefined && typeof message.model === 'string' && message.model) response.model = message.model;
     response.truncated = afterStopReason(response.truncated, message.stop_reason);
     if (!message.usage) return;
     if (!response.tokens) this.responses.push(response);
-    addUsage(response, message.usage);
+    this.addUsage(response, message.usage, sidechain ? 'subagent' : 'main', cacheModelName(message.model));
   }
 
-  /** The request's token totals, its context from the calls on its own chain, and its rows, from the final
-   *  responses. `cacheState` spans a transcript's requests: its first main-agent call is the session's cold start. */
+  /** A line's usage: the response keeps the largest value of each field. While the response isn't a prompt-cache
+   *  call, cache tokens and a prompt make it one, with this line's stream and model. A prompt without cache fields
+   *  makes it a call without cache data until then, with the latest such line's stream and model: usage without cache
+   *  fields didn't report cache usage, so it never counts as uncached. */
+  private addUsage(response: ClaudeResponse, usage: Record<string, unknown>, stream: CacheStream, model: string): void {
+    const line: ResponseTokens = {
+      uncached: count(usage, 'input_tokens'),
+      cacheRead: count(usage, 'cache_read_input_tokens'),
+      cacheWrite: count(usage, 'cache_creation_input_tokens'),
+      output: count(usage, 'output_tokens'),
+    };
+    const seen = response.tokens;
+    response.tokens = !seen ? line : {
+      uncached: Math.max(seen.uncached, line.uncached),
+      cacheRead: Math.max(seen.cacheRead, line.cacheRead),
+      cacheWrite: Math.max(seen.cacheWrite, line.cacheWrite),
+      output: Math.max(seen.output, line.output),
+    };
+    const reportsCache = reportsCacheUsage(usage);
+    response.cacheReported ||= reportsCache;
+    // Once a response is a prompt-cache call, its later lines add only their usage and stop reason.
+    if (response.cacheCall) return;
+    if (!reportsCache) {
+      if (line.uncached > 0) response.noCacheCall = { stream, model };
+      return;
+    }
+    if (line.uncached + line.cacheRead + line.cacheWrite > 0) response.cacheCall = { stream, model };
+  }
+
+  /** The request's token totals, its context from the calls on its own chain, and its rows, from the final responses
+   *  in the order their first usage appears. `cacheState` spans a transcript's requests: its first main-agent call is
+   *  the session's cold start. */
   finish(cacheState: { sawMain: boolean }): ClaudeRequestUsage {
     const usage: ClaudeRequestUsage = { promptTokens: 0, completionTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheReported: false };
     const context = new TurnContextAccumulator();
     const cache = new RequestCacheBuilder();
+    const ownStream: CacheStream = this.requestSidechain ? 'subagent' : 'main';
     for (const response of this.responses) {
       const tokens = response.tokens;
       if (!tokens) continue;
@@ -158,10 +177,11 @@ export class ClaudeResponseAccumulator {
       usage.cacheReadTokens += tokens.cacheRead;
       usage.cacheWriteTokens += tokens.cacheWrite;
       usage.cacheReported ||= response.cacheReported;
-      if (response.sidechain === this.requestSidechain) context.addCall({ stream: 'main', inputTokens: prompt, maxPromptTokens: null });
+      // A response with a prompt is a call of one kind or the other, on its line's stream.
+      if ((response.cacheCall ?? response.noCacheCall)?.stream === ownStream) context.addCall({ stream: 'main', inputTokens: prompt, maxPromptTokens: null });
       addResponseCall(cache, cacheState, response, tokens);
     }
-    // Only sub-agent calls logged usage: the turn's own context is unknown, and its prompt tokens are theirs.
+    // Only calls of the other chain logged usage: the turn's own context is unknown, and its prompt tokens are theirs.
     const contextUsage = context.result() ?? (this.responses.length > 0 ? { lastPromptTokens: 0, peakPromptTokens: 0, contextLimit: null, calls: 0 } : undefined);
     const promptCache = cache.take();
     const callRowsWithoutCacheData = cache.takeRowsWithoutCacheData();

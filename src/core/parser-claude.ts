@@ -383,9 +383,9 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
-/** Whether a line is sub-agent work: a sidechain line, or any line of a sub-agent's transcript, marked or not. Read for
- *  a request's prompt and for each line of its responses, so their prompt-cache stream and the request's own chain
- *  agree. */
+/** The stream of a line's response: a sub-agent's for a sidechain line, and for any line of a sub-agent's transcript,
+ *  marked or not. Read for every line of a request's responses, and for its prompt, so the request's own chain agrees
+ *  with their prompt-cache streams. */
 function claudeStream(line: ClaudeLine, cacheState: ClaudeCacheState): 'main' | 'subagent' {
   return cacheState.subagentFile || line.isSidechain ? 'subagent' : 'main';
 }

@@ -178,8 +178,13 @@ describe('context composition chart tables', () => {
     const details = host.querySelector('.ctx-comp-detail details.ctx-comp-table');
     expect(details?.querySelector('summary')?.textContent).toBe('Show the chart as a table');
     expect(details?.hasAttribute('open')).toBe(false);
-    const table = details?.querySelector('table');
-    expect(table?.getAttribute('aria-label')).toBe('Weekly tool-definition share per harness');
+    // The chart points to the table, whose scroll region is a named tab stop.
+    expect(host.querySelector('#ctxCompTrendChart')?.getAttribute('aria-label')).toBe('Weekly tool-definition share per harness. Show the chart as a table, below it, for the values.');
+    const region = details?.querySelector('[role="region"]');
+    expect(region?.getAttribute('tabindex')).toBe('0');
+    expect(region?.getAttribute('aria-label')).toBe('Weekly tool-definition share per harness');
+    const table = region?.querySelector('table');
+    expect(table?.querySelector('caption')?.textContent).toBe('Weekly tool-definition share per harness');
     expect(columnHeaders(table)).toEqual(['Week of', 'Harness', 'Tool definitions', 'System instructions', 'Based on', 'Weighting']);
     expect(tableRows(table)).toEqual([
       ['2026-09-07', 'Local Agent', '60%', '10%', '1 request', 'Prompt tokens'],
@@ -200,8 +205,11 @@ describe('context composition chart tables', () => {
     const host = document.createElement('div');
     document.body.replaceChildren(host);
     render(renderSessionCompositionPanel(sessionDetail()), host);
-    const table = host.querySelector('.ctx-comp-session details.ctx-comp-table table');
-    expect(table?.getAttribute('aria-label')).toBe('Prompt composition per request');
+    expect(host.querySelector('#ctxSessionCompositionChart')?.getAttribute('aria-label')).toBe('Prompt composition per request, 100% stacked. Show the chart as a table, below it, for the values.');
+    const region = host.querySelector('.ctx-comp-session details.ctx-comp-table [role="region"]');
+    expect(region?.getAttribute('aria-label')).toBe('Prompt composition per request');
+    const table = region?.querySelector('table');
+    expect(table?.querySelector('caption')?.textContent).toBe('Prompt composition per request');
     expect(columnHeaders(table)).toEqual(['Request', 'Prompt', 'Tool definitions', 'Conversation']);
     expect(tableRows(table)).toEqual([
       ['Request 1', 'Refactor the parser', '10%', '90%'],
