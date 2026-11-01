@@ -278,6 +278,32 @@ test.describe('Context Composition', () => {
     await expect(cliButton).toHaveAttribute('aria-expanded', 'false');
     await expect(page.locator('.ctx-session-chart-row')).toHaveCount(0);
   });
+
+  test('reads the weekly tool-definition shares from the keyboard, without hover', async ({ page }) => {
+    await page.locator('.ctx-comp-detail details.ctx-comp-table summary').focus();
+    await page.keyboard.press('Enter');
+    // Found by role and name, so the table is in the accessibility tree once opened.
+    const table = page.getByRole('table', { name: 'Weekly tool-definition share per harness' });
+    await expect(table.locator('thead th')).toHaveText(['Week of', 'Harness', 'Tool definitions', 'System instructions', 'Based on', 'Weighting']);
+    const rows = table.locator('tbody tr');
+    await expect(rows).toHaveCount(11);
+    await expect(rows.nth(0).locator('th, td')).toHaveText(['2026-04-13', 'GitHub Copilot CLI', '11%', '5.8%', '140 turns', 'Prompt tokens']);
+    await expect(rows.nth(1).locator('th, td')).toHaveText(['2026-04-13', 'Local Agent', '41%', '12%', '110 requests', 'Prompt tokens']);
+    // Local Agent (Insiders) recorded nothing in the first week, so its first row is the second week's.
+    await expect(rows.nth(4).locator('th, td')).toHaveText(['2026-04-20', 'Local Agent (Insiders)', '44%', '10%', '50 requests', 'Prompt tokens']);
+  });
+
+  test('reads each request\u2019s composition from the keyboard, without hover', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    await page.locator('.ctx-session-row').nth(0).locator('.ctx-session-expand').focus();
+    await page.keyboard.press('Enter');
+    await page.locator('.ctx-session-chart-row details.ctx-comp-table summary').focus();
+    await page.keyboard.press('Enter');
+    const table = page.getByRole('table', { name: 'Prompt composition per request' });
+    await expect(table.locator('thead th')).toHaveText(['Request', 'Prompt', 'System instructions', 'Tool definitions', 'Messages', 'Tool results', 'Files']);
+    await expect(table.locator('tbody tr')).toHaveCount(28);
+    await expect(table.locator('tbody tr').nth(0).locator('th, td')).toHaveText(['Request 1', 'Request 1', '12%', '60%', '19%', '8.0%', '1.0%']);
+  });
 });
 
 test.describe('Context Composition without a session in range', () => {

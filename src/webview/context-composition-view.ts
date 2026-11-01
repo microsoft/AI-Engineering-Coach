@@ -10,6 +10,7 @@ import type {
   CompositionBreakdown,
   CompositionSlice,
   CompositionSource,
+  CompositionTrendSeries,
   ContextCategory,
   ContextCompositionData,
   HarnessComposition,
@@ -19,6 +20,7 @@ import type {
 } from '../core/types';
 import { COLORS, createChart, destroyChartById, formatNum, harnessColor, rpc } from './shared';
 import { html, ComponentChildren } from './render';
+import { perRequestTable, trendTable, type ChartTableFormat } from './context-composition-tables';
 
 const GUIDE_URL = 'https://docs.github.com/en/copilot/tutorials/optimize-ai-usage';
 export const COMPOSITION_TREND_CHART_ID = 'ctxCompTrendChart';
@@ -67,6 +69,9 @@ function pctText(pct: number): string {
 export function countText(n: number, noun: string): string {
   return `${formatNum(n)} ${noun}${n === 1 ? '' : 's'}`;
 }
+
+/** Formatting for the "Show the chart as a table" tables, the same as the tooltips they stand in for. */
+const TABLE_FORMAT: ChartTableFormat = { pct: pctText, count: countText, category: category => CATEGORY_META[category].label };
 
 function sliceTip(slice: CompositionSlice, unit: string): string {
   const tokens = slice.tokens == null ? '' : ` \u00b7 \u2248${formatNum(slice.tokens)} tokens${unit}`;
@@ -275,6 +280,21 @@ function weightingNote(data: ContextCompositionData): string {
   return parts.join(' ');
 }
 
+/** The harnesses the weekly chart draws: those with a tool-definition share in some week. */
+function trendSeries(data: ContextCompositionData): CompositionTrendSeries[] {
+  return data.trend.series.filter(s => s.toolDefinitions.some(v => v != null));
+}
+
+/** What a harness's weekly samples are: Copilot CLI turns or VS Code requests. */
+function sampleNouns(data: ContextCompositionData): Map<string, string> {
+  return new Map(data.harnesses.map(h => [h.harness, h.source === 'copilot-cli' ? 'turn' : 'request']));
+}
+
+/** The categories the per-request chart draws: those with a share in some request. */
+function perRequestCategories(detail: SessionCompositionDetail): ContextCategory[] {
+  return CATEGORY_ORDER.filter(category => detail.perRequest.some(entry => (entry?.[category] ?? 0) > 0));
+}
+
 /** The Context Composition section of the Context Management tab. */
 export function renderCompositionSection(data: ContextCompositionData): ComponentChildren {
   const reporting = data.harnesses.filter(h => h.breakdown != null);
@@ -294,7 +314,8 @@ export function renderCompositionSection(data: ContextCompositionData): Componen
       <div class="chart-wrap">
         <div class="chart-title">Tool-definition share by week ${infoTip('Weekly share of prompt tokens spent on tool definitions, per harness. A week whose requests recorded no prompt size counts each request equally, and its tooltip says \u201cequal weight\u201d. Watch it drop after you disable MCP servers or switch to smaller tool sets.', 'About the tool-definition trend')}</div>
         ${data.trend.labels.length > 1
-          ? html`<div style="position:relative;height:200px;"><canvas id=${COMPOSITION_TREND_CHART_ID} role="img" aria-label="Weekly tool-definition share per harness"></canvas></div>`
+          ? html`<div style="position:relative;height:200px;"><canvas id=${COMPOSITION_TREND_CHART_ID} role="img" aria-label="Weekly tool-definition share per harness"></canvas></div>
+            ${trendTable(data.trend.labels, trendSeries(data), sampleNouns(data), TABLE_FORMAT)}`
           : html`<div class="ctx-comp-note">Not enough weekly data for a trend yet.</div>`}
       </div>
       <div class="chart-wrap">
@@ -311,8 +332,8 @@ export function renderCompositionSection(data: ContextCompositionData): Componen
 export function renderCompositionTrendChart(data: ContextCompositionData): void {
   destroyChartById(COMPOSITION_TREND_CHART_ID);
   if (data.trend.labels.length <= 1 || !document.getElementById(COMPOSITION_TREND_CHART_ID)) return;
-  const series = data.trend.series.filter(s => s.toolDefinitions.some(v => v != null));
-  const nouns = new Map(data.harnesses.map(h => [h.harness, h.source === 'copilot-cli' ? 'turn' : 'request']));
+  const series = trendSeries(data);
+  const nouns = sampleNouns(data);
   createChart(COMPOSITION_TREND_CHART_ID, 'line', {
     labels: data.trend.labels,
     datasets: series.map((s, i) => ({
@@ -377,7 +398,8 @@ export function renderSessionCompositionPanel(s: SessionContextDetail, chartId =
     ${detail.breakdown ? html`
       ${compositionBar(detail.breakdown.slices, 'Session prompt composition', { unit })}
       ${sessionLegend(detail.breakdown.slices, unit)}` : null}
-    ${hasPerRequest ? html`<div class="ctx-comp-session-chart"><canvas id=${chartId} role="img" aria-label="Prompt composition per request, 100% stacked"></canvas></div>` : null}
+    ${hasPerRequest ? html`<div class="ctx-comp-session-chart"><canvas id=${chartId} role="img" aria-label="Prompt composition per request, 100% stacked"></canvas></div>
+      ${perRequestTable(s, detail, perRequestCategories(detail), TABLE_FORMAT)}` : null}
     ${detail.systemSegments.length > 0 ? html`<div class="ctx-comp-session-sub">
       <div class="ctx-comp-session-title">System prompt (latest checkpoint)${detail.toolCount == null ? '' : ` \u00b7 ${detail.toolCount} tools sent${detail.toolTokens == null ? '' : `, \u2248${formatNum(detail.toolTokens)} tokens`}`}</div>
       <ul class="ctx-comp-values">${detail.systemSegments.map(segment => html`<li><code>${segment.name}</code> <strong>\u2248${formatNum(segment.tokens)}</strong></li>`)}</ul>
@@ -397,7 +419,7 @@ export function renderSessionCompositionChart(s: SessionContextDetail, chartId =
   destroyChartById(chartId);
   const detail = s.composition;
   if (!detail || !document.getElementById(chartId)) return;
-  const categories = CATEGORY_ORDER.filter(category => detail.perRequest.some(entry => (entry?.[category] ?? 0) > 0));
+  const categories = perRequestCategories(detail);
   createChart(chartId, 'bar', {
     labels: detail.perRequest.map((_, i) => `R${i + 1}`),
     datasets: categories.map(category => ({

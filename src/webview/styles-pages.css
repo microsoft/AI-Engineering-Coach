@@ -1953,6 +1953,18 @@
 .ctx-comp-snapshot { margin-bottom: 8px; }
 /* Same horizontal inset as the token chart's .chart-wrap (16px padding + 1px border) so request bars line up. */
 .ctx-comp-session-chart { position: relative; height: 140px; margin-top: 8px; padding: 0 17px; }
+/* "Show the chart as a table": the chart's values for keyboard and screen-reader users. */
+.ctx-comp-table { margin-top: 6px; font-size: 11px; }
+.ctx-comp-table summary { width: fit-content; cursor: pointer; color: var(--text-muted); }
+.ctx-comp-table summary:hover, .ctx-comp-table[open] summary { color: var(--text); }
+.ctx-comp-table summary:focus-visible { outline: 1px solid var(--focus-border, #58a6ff); outline-offset: 2px; }
+.ctx-comp-table-scroll { overflow-x: auto; margin-top: 6px; }
+.ctx-comp-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ctx-comp-table th, .ctx-comp-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.ctx-comp-table thead th { color: var(--text-muted); font-weight: 600; }
+.ctx-comp-table th[scope="row"] { text-align: left; font-weight: 400; }
+.ctx-comp-table td.ctx-comp-table-text { min-width: 160px; max-width: 360px; text-align: left; white-space: normal; }
+.ctx-comp-table td.ctx-comp-table-note { text-align: left; color: var(--text-muted); }
 .ctx-comp-snapshot-head { font-size: 11px; color: var(--text-muted); margin-bottom: 3px; }
 @media (max-width: 800px) {
   .ctx-comp-row { grid-template-columns: 1fr; gap: 4px; }

@@ -82,6 +82,8 @@ The section shows:
 
 Click a session in the per-workspace table to see its composition. For VS Code sessions, a per-request chart lines up with the token curve. For Copilot CLI sessions, the panel also lists the system-prompt segments from the latest checkpoint and the context when each compaction started, including tokens the CLI didn't attribute.
 
+You don't have to hover the charts: **Show the chart as a table**, under the weekly chart and each per-request chart, lists every value their tooltips show. For each week and harness, that's the shares, the requests (Copilot CLI: turns) behind them and how they're weighted; for each request, its prompt and category shares. It opens from the keyboard, and screen readers read it as a table.
+
 #### Where the data comes from
 
 | Harness | Source | What you get |
