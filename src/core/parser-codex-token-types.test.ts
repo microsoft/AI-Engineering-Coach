@@ -99,6 +99,20 @@ describe('Codex token types', () => {
       expect(parseCodexSessions(sessionsDir)[0].requests[0].contextUsage).toEqual({ lastPromptTokens: 9_000, peakPromptTokens: 9_000, contextLimit: null, calls: 1 });
     });
   });
+
+  it('leaves reasoning unknown when a later snapshot omits it, rather than setting it against a later output total', () => {
+    withCodexFile([
+      ...HEADER,
+      { type: 'event_msg', timestamp: '2026-10-30T10:00:00Z', payload: { type: 'user_message', message: 'think hard' } },
+      tokenCount('2026-10-30T10:00:05Z', usage(20_000, 0, 1_000, 600), usage(20_000, 0, 1_000, 600)),
+      // A later cumulative snapshot without reasoning_output_tokens: 600 of 2,000 output tokens would be a stale 30%.
+      { type: 'event_msg', timestamp: '2026-10-30T10:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 45_000, cached_input_tokens: 0, output_tokens: 2_000, total_tokens: 47_000 } } } },
+    ], (sessionsDir) => {
+      const usage = parseCodexSessions(sessionsDir)[0].modelUsage?.['gpt-5.3-codex'];
+      expect(usage).toMatchObject({ outputTokens: 2_000 });
+      expect(usage).not.toHaveProperty('reasoningTokens');
+    });
+  });
 });
 
 describe('Codex turn context when the model changes within a turn', () => {
