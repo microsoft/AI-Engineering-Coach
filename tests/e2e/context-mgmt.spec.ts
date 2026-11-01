@@ -371,3 +371,34 @@ test.describe('Context Management workspace expansion summary', () => {
     await expect(summary.locator('span', { hasText: /^Saturation:/ })).toHaveText('Saturation: \u2014');
   });
 });
+
+type RangeAvailability = { rangesWithTokens: number[]; matchingSessions: number; sessionsWithRequestTokens: number; harnessesWithoutRequestTokens: string[] };
+type RangeScenarioWindow = Window & { mockCompositionMode?: string; mockRangeAvailability?: RangeAvailability };
+
+/** Makes the harness answer like the analyzer does for a scenario: `availability` for the range bar, `mode` for the tab's data. */
+async function setRangeScenario(page: Page, mode: string, availability: RangeAvailability) {
+  await page.addInitScript(([m, a]) => {
+    const w = window as RangeScenarioWindow;
+    w.mockCompositionMode = m;
+    w.mockRangeAvailability = a;
+  }, [mode, availability] as const);
+}
+
+test.describe('Context Management range bar', () => {
+  test('opens the only range that holds Copilot CLI composition recorded without promptTokens', async ({ page }) => {
+    // The analyzer's answer for a Copilot CLI-only workspace whose composition-bearing turns are 60 days old.
+    await setRangeScenario(page, 'cli-older', { rangesWithTokens: [90], matchingSessions: 1, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
+    await navigateToContextHealth(page, 'Context Composition');
+    const buttons = page.locator('#ctxRangeBar .cons-range-btn');
+    await expect(buttons).toHaveText(['Last 3 months']);
+    await expect(buttons.first()).toHaveClass(/\bactive\b/);
+    await expect(page.locator('.ctx-comp-row[data-harness="GitHub Copilot CLI"] .ctx-comp-bar')).toBeVisible();
+    await expect(page.locator('#content')).not.toContainText('No Session Data');
+    // Its sessions open from the keyboard.
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="cli-project"]');
+    await workspace.locator('.ctx-comp-ws-toggle').focus();
+    await page.keyboard.press('Enter');
+    await expect(workspace.locator('.ctx-comp-ws-session')).toHaveCount(1);
+    await expect(workspace.locator('.ctx-comp-ws-session')).toContainText('GitHub Copilot CLI');
+  });
+});
