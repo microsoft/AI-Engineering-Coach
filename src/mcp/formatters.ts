@@ -9,6 +9,7 @@
  * so the LLM can synthesize rather than parse.
  */
 
+import { exportedOriginName } from '../core/prompt-cache-causes';
 import type { Analyzer } from '../core/analyzer';
 import type { ContextCompositionData, DateFilter, PromptCacheData } from '../core/types';
 
@@ -506,7 +507,7 @@ export function formatPromptCache(data: PromptCacheData) {
       rebuiltYouCanChangePct: a.controlPct.you,
       rebuiltPartlyYoursPct: a.controlPct.partly,
       causes: a.causes.slice(0, 6).map(c => ({ cause: c.key, who: c.control, breaks: c.breaks, rebuiltPct: c.pctOfRebuilt, inputCostPct: c.costPct })),
-      cacheMissOrigins: a.origins.map(o => ({ origin: o.origin, pct: o.pct, inputCostPct: o.costPct })),
+      cacheMissOrigins: a.origins.map(o => ({ origin: exportedOriginName(o.origin), pct: o.pct, inputCostPct: o.costPct })),
       cacheLifetimes: a.idle.ttlByModel.map(t => ({ model: t.model, seconds: t.ttlSeconds })),
       returnsAfterExpiry: { expired: a.idle.expiredReturns, of: a.idle.returns, notMeasured: a.idle.unmeasuredReturns },
       medianMinutesSinceCacheRefreshAtExpiry: a.idle.medianIdleMinutes,

@@ -228,4 +228,23 @@ test.describe('Context Health sub-tabs with late responses', () => {
     const loads = await page.evaluate(() => (window as unknown as { promptCacheRequests: { method: string }[] }).promptCacheRequests.filter(r => r.method === 'getPromptCache').length);
     expect(loads).toBe(1);
   });
+
+  test('drops a late Context Quality failure instead of replacing Prompt Cache with an error', async ({ page }) => {
+    await openWithSlow(page, 'getConfigHealth');
+    await page.evaluate(() => { (window as unknown as { mockErrorMethods: string[] }).mockErrorMethods = ['getConfigHealth']; });
+    await page.locator('[data-page="config-health"]').first().click();
+    await page.locator('[data-tab="prompt-cache"]').click();
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    // Context Quality's load fails meanwhile; the failure belongs to a render the user has left.
+    await page.waitForTimeout(1_500);
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    await expect(page.locator('#content .error-boundary')).toHaveCount(0);
+  });
+
+  test('still shows the error when the selected tab fails to load', async ({ page }) => {
+    await openWithSlow(page, 'getConfigHealth');
+    await page.evaluate(() => { (window as unknown as { mockErrorMethods: string[] }).mockErrorMethods = ['getConfigHealth']; });
+    await page.locator('[data-page="config-health"]').first().click();
+    await expect(page.locator('#content .error-boundary')).toContainText('mock getConfigHealth failure');
+  });
 });
