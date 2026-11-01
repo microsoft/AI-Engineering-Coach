@@ -131,6 +131,65 @@ test.describe('Anti-Patterns', () => {
     await expect(finding.getByRole('link', { name: 'View example', exact: true })).toHaveCount(1);
     await expect(finding.locator('.occ-session-link')).toHaveCSS('color', 'rgb(55, 148, 255)');
   });
+
+  test('shows a rule that could not be evaluated as not evaluated, and its group score as incomplete', async ({ page }) => {
+    const failure = { ruleId: 'broken-rule', ruleName: 'Broken Rule', group: 'prompt-quality', error: 'Parse error at position 0: Unexpected token' };
+    await page.evaluate(failure => {
+      const root = window as MockWindow;
+      const original = root.getMockData;
+      const rule = (id: string, name: string) => ({
+        id, name, group: 'prompt-quality', severity: 'high', scope: 'requests', requiresIdeContext: false, description: `${name}.`,
+        descriptionTemplate: '', suggestionTemplate: '', exampleTemplate: '', thresholds: {}, tags: [], source: 'personal',
+        sourceFilePath: '', version: 1, rawSource: '',
+      });
+      const preview = (ruleId: string, ruleName: string) => ({
+        ruleId, ruleName, triggered: false, occurrences: 0, total: 1, pct: 0, severity: 'high', group: 'prompt-quality',
+        previewDescription: 'Not triggered with current data.', previewExamples: [],
+      });
+      root.getMockData = (method, params) => {
+        const base = original(method, params) as AntiPatternData;
+        if (method === 'getAntiPatterns') {
+          return {
+            ...base,
+            patterns: base.patterns.filter(p => p.group !== 'prompt-quality'),
+            groupScores: base.groupScores.map(g => g.group === 'prompt-quality'
+              ? { ...g, score: 100, topIssue: null, improvements: [], patternCount: 0, failedRules: [failure] } : g),
+            failedRules: [failure],
+          };
+        }
+        if (method !== 'getRuleEditor') return base;
+        return {
+          rules: [rule('broken-rule', 'Broken Rule'), rule('clean-rule', 'Clean Rule')],
+          previews: [
+            { ...preview('broken-rule', 'Broken Rule'), previewDescription: `Not evaluated: ${failure.error}`, error: failure.error },
+            preview('clean-rule', 'Clean Rule'),
+          ],
+          layers: [], pending: [],
+        };
+      };
+    }, failure);
+    await page.locator('#sidebar [data-page="anti-patterns"]').click();
+
+    const card = page.locator('.ap-score-card[data-group="prompt-quality"]');
+    await expect(card).toContainText('Incomplete: 1 rule not evaluated (Broken Rule)');
+    await expect(card).not.toContainText('No issues detected');
+    const group = page.locator('.ap-group-details').first();
+    await group.locator('summary').first().click();
+    await expect(group.locator('.ap-group-incomplete')).toContainText("Incomplete: 1 rule couldn't be evaluated");
+    await expect(group.locator('.ap-group-incomplete')).toContainText(`Broken Rule (broken-rule): ${failure.error}`);
+    await expect(group).not.toContainText('All checks passing');
+
+    await page.locator('.ap-tab[data-tab="rules"]').click();
+    const broken = page.locator('.rule-card[data-rule-id="broken-rule"]');
+    await expect(broken).toHaveClass(/rule-card-failed/);
+    await expect(broken).toContainText(`Not evaluated: ${failure.error}`);
+    await expect(page.locator('.rule-card[data-rule-id="clean-rule"]')).toHaveClass(/rule-card-clean/);
+    await broken.click();
+    const stats = page.locator('#rule-detail-content .rule-preview-stats');
+    await expect(stats).toContainText('NOT EVALUATED');
+    await expect(stats).not.toContainText('CLEAN');
+    await expect(page.locator('#rule-detail-content .rule-preview-desc')).toHaveText(`Not evaluated: ${failure.error}`);
+  });
 });
 
 type HarnessWindow = MockWindow & { mockResponseDelay?: (method: string) => number };

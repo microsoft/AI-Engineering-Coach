@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { AntiPattern, OccurrenceDetail, PracticeGroup, Session, SessionRequest } from './types';
-import type { DetectionRule, DetectorEmission, RuleTemplateVars } from './types';
+import type { DetectionRule, DetectorEmission, RuleFailure, RuleTemplateVars } from './types';
 import { getAllRules } from './rule-engine';
 import { registerAllBuiltinRules, loadPersonalRules, registerAllBuiltinMetrics } from './rule-loader';
 import { fillTemplate } from './rule-parser';
@@ -27,7 +27,8 @@ export interface DetectorDefinition {
   group: PracticeGroup;
   requiresIdeContext?: boolean;
   rule?: DetectionRule;
-  run: (ctx: DetectorContext) => AntiPattern | null;
+  /** The rule's anti-pattern when it triggers, null when it doesn't, or why it couldn't be evaluated. */
+  run: (ctx: DetectorContext) => AntiPattern | RuleFailure | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -233,11 +234,12 @@ function parseIsoWeek(wk: string): Date {
 const loggedFailures = new Set<string>();
 
 /**
- * The rule's emission, or null when its detection logic throws, such as a `match:` expression that doesn't parse. A
- * broken personal or project rule then counts as not triggered instead of stopping every other rule, and the reason
- * goes to the Output log (runtimeDebug) once per rule and message.
+ * The rule's emission, or why it couldn't be evaluated when its detection logic throws, such as a `match:` expression
+ * that doesn't parse. A broken personal or project rule then doesn't stop the other rules: it is reported as not
+ * evaluated, neither triggered nor clean, and the reason also goes to the Output log (runtimeDebug) once per rule and
+ * message.
  */
-function emitOrSkip(pipeline: Pipeline, rule: DetectionRule, ctx: DetectorContext): DetectorEmission | null {
+function emitOrFail(pipeline: Pipeline, rule: DetectionRule, ctx: DetectorContext): DetectorEmission | RuleFailure {
   try {
     return executePipeline(pipeline, rule, ctx);
   } catch (error) {
@@ -247,7 +249,7 @@ function emitOrSkip(pipeline: Pipeline, rule: DetectionRule, ctx: DetectorContex
       loggedFailures.add(key);
       runtimeDebug('detectors', 'rule-skipped', `${rule.id}: ${message}`);
     }
-    return null;
+    return { ruleId: rule.id, ruleName: rule.name, group: rule.group, error: message };
   }
 }
 
@@ -265,8 +267,9 @@ function buildRegistry(): DetectorDefinition[] {
       requiresIdeContext: rule.requiresIdeContext,
       rule,
       run: (ctx) => {
-        const emission = emitOrSkip(pipeline, rule, ctx);
-        if (!emission || !checkPipelineTrigger(pipeline, emission, rule)) return null;
+        const emission = emitOrFail(pipeline, rule, ctx);
+        if ('error' in emission) return emission;
+        if (!checkPipelineTrigger(pipeline, emission, rule)) return null;
         return emissionToAntiPattern(emission, rule);
       },
     });
@@ -294,14 +297,32 @@ export function getActiveDetectors(skipIdeDetectors: boolean): DetectorDefinitio
   return registry.filter(detector => !skipIdeDetectors || !detector.requiresIdeContext);
 }
 
+/** What the active rules found: the anti-patterns of the triggered rules, and the rules that couldn't be evaluated. */
+export interface DetectionResult {
+  patterns: AntiPattern[];
+  failures: RuleFailure[];
+}
+
+/** Run every active rule. A rule whose detection logic throws is in `failures`; the other rules still run. */
+export function detectAntiPatterns(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): DetectionResult {
+  const result: DetectionResult = { patterns: [], failures: [] };
+  for (const detector of getActiveDetectors(skipIdeDetectors)) {
+    const outcome = detector.run({ reqs, sessions, skipIdeDetectors });
+    if (!outcome) continue;
+    if ('error' in outcome) result.failures.push(outcome);
+    else result.patterns.push(outcome);
+  }
+  return result;
+}
+
+/** The anti-patterns of the triggered rules. Use detectAntiPatterns to also know which rules couldn't be evaluated. */
 export function runDetectors(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): AntiPattern[] {
-  return getActiveDetectors(skipIdeDetectors)
-    .map(detector => detector.run({ reqs, sessions, skipIdeDetectors }))
-    .filter((pattern): pattern is AntiPattern => pattern !== null);
+  return detectAntiPatterns(reqs, sessions, skipIdeDetectors).patterns;
 }
 
 /**
- * Run emitters only (no trigger evaluation). Used by rule-engine preview.
+ * Run emitters only (no trigger evaluation). Used by rule-engine preview. A rule that couldn't be evaluated has no
+ * emission; detectAntiPatterns reports why.
  */
 export function runEmitters(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): Map<string, DetectorEmission> {
   const rules = getAllRules();
@@ -310,8 +331,8 @@ export function runEmitters(reqs: SessionRequest[], sessions: Session[], skipIde
     if (skipIdeDetectors && rawRule.requiresIdeContext) continue;
     const rule = resolveInheritance(rawRule);
     const pipeline = parsePipeline(rule);
-    const emission = emitOrSkip(pipeline, rule, { reqs, sessions, skipIdeDetectors });
-    if (emission) results.set(rule.id, emission);
+    const emission = emitOrFail(pipeline, rule, { reqs, sessions, skipIdeDetectors });
+    if (!('error' in emission)) results.set(rule.id, emission);
   }
   return results;
 }

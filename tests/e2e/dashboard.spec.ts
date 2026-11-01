@@ -73,4 +73,29 @@ test.describe('Dashboard', () => {
     const content = await page.textContent('#content');
     expect(content).toContain('AI LoC');
   });
+
+  test('marks a practice score as incomplete when one of its rules could not be evaluated', async ({ page }) => {
+    await page.evaluate(() => {
+      const root = window as unknown as { getMockData: (method: string, params: Record<string, unknown>) => unknown };
+      const original = root.getMockData;
+      const failure = { ruleId: 'broken-rule', ruleName: 'Broken Rule', group: 'tool-mastery', error: 'Parse error at position 0' };
+      root.getMockData = (method, params) => {
+        const base = original(method, params) as { groupScores: Array<{ group: string }> };
+        if (method !== 'getAntiPatterns') return base;
+        return {
+          ...base,
+          groupScores: base.groupScores.map(g => g.group === 'tool-mastery'
+            ? { ...g, topIssue: null, improvements: [], patternCount: 0, failedRules: [failure] } : g),
+          failedRules: [failure],
+        };
+      };
+    });
+    await page.locator('[data-page="timeline"]').first().click();
+    await page.locator('[data-page="dashboard"]').first().click();
+
+    const card = page.locator('.ap-score-card[data-nav-hint="tool-mastery"]');
+    await expect(card).toContainText('Incomplete: 1 rule not evaluated (Broken Rule)');
+    await expect(card).not.toContainText('No issues detected');
+    await expect(page.locator('.ap-score-card[data-nav-hint="prompt-quality"]')).not.toContainText('Incomplete');
+  });
 });

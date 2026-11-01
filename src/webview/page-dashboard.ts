@@ -8,7 +8,7 @@
 import { DateFilter, DailyActivity, PRACTICE_GROUPS, AntiPatternData, WorkflowOptimizationData, SkillTriageResult, CatalogDiscoverResult, CatalogTriageResult, GroupScore, CodeProductionData } from '../core/types';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { rpc, rpcAllSettled, createChart, formatNum, COLORS, PALETTE, harnessColor, destroyChartById, scoreColor, scoreLabel } from './shared';
-import { html, render, CanvasEl, ScoreRing, PctBadge } from './render';
+import { html, render, CanvasEl, ScoreRing, PctBadge, IncompleteScoreTip } from './render';
 import { clearSkillCache, setSkillCache, getSkillCache } from './skill-cache';
 
 // Module-level view state — survives filter/harness changes.
@@ -74,11 +74,13 @@ function PracticeCard({ g }: { g: GroupScore }) {
           <div class="ap-score-deltas"><${PctBadge} pct=${g.wowPct} label="WoW" /><${PctBadge} pct=${g.momPct} label="MoM" /></div>
         </div>
       </div>
+      <${IncompleteScoreTip} failed=${g.failedRules} />
       ${g.improvements.length > 0
         ? html`<div class="ap-score-tip ap-improvements">${g.improvements.slice(0, 2).map(i => html`<span>${i}</span>`)}</div>`
         : g.topIssue
           ? html`<div class="ap-score-tip">${g.topIssue}</div>`
-          : html`<div class="ap-score-tip muted">${g.patternCount > 0 ? g.patternCount + ' finding' + (g.patternCount !== 1 ? 's' : '') : 'No issues detected'}</div>`}
+          : g.patternCount === 0 && g.failedRules?.length ? null
+            : html`<div class="ap-score-tip muted">${g.patternCount > 0 ? g.patternCount + ' finding' + (g.patternCount !== 1 ? 's' : '') : 'No issues detected'}</div>`}
     </a>`;
 }
 
@@ -185,7 +187,7 @@ function renderDashboardSkillFinder(skillCache: ReturnType<typeof getSkillCache>
 
 export async function renderDashboard(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const emptyDaily: DailyActivity = { labels: [], values: [], sessions: [], loc: [], workspaces: [], byHarness: [] };
-  const emptyAntiPatterns: AntiPatternData = { patterns: [], totalOccurrences: 0, weeklyTrend: { labels: [], counts: [] }, groupScores: [], weeklyScores: { labels: [], series: [] } };
+  const emptyAntiPatterns: AntiPatternData = { patterns: [], totalOccurrences: 0, weeklyTrend: { labels: [], counts: [] }, groupScores: [], weeklyScores: { labels: [], series: [] }, failedRules: [] };
   const emptyCodeProd: CodeProductionData = { summary: { totalAiLoc: 0, totalUserLoc: 0, totalLoc: 0, totalRemovedAiLoc: 0, totalNetAiLoc: 0, aiBlocks: 0, userBlocks: 0, aiRatio: 0, locCost2010: 0, costPerLoc: 0 }, byLanguage: { labels: [], aiLoc: [], userLoc: [] }, dailyTimeline: { labels: [], aiLoc: [], removedLoc: [], userLoc: [] }, byWorkspace: { labels: [], aiLoc: [], userLoc: [] }, dailyByWorkspace: {}, dailyRemovedByWorkspace: {}, dailyByModel: {}, dailyRemovedByModel: {}, dailyByHarness: {}, dailyRemovedByHarness: {} };
   const [stats, daily, wsBreakdown, harnessBreakdown, antiPatterns, codeProd] = await rpcAllSettled([
     rpc<{ totalSessions: number; totalWorkspaces: number; totalRequests: number }>('getStats', currentFilter as Record<string, unknown>),

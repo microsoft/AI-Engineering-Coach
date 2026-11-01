@@ -215,4 +215,18 @@ export interface RulePreviewStats {
   group: PracticeGroup;
   previewDescription: string;
   previewExamples: string[];
+  /** Set when the rule couldn't be evaluated (see RuleFailure): why. The rule is then neither triggered nor clean. */
+  error?: string;
+}
+
+/**
+ * A rule that couldn't be evaluated: running its detection logic threw, for example because a `match:` expression
+ * doesn't parse. It is neither triggered nor clean, and the other rules still run.
+ */
+export interface RuleFailure {
+  ruleId: string;
+  ruleName: string;
+  group: PracticeGroup;
+  /** Why, such as `Parse error at position 0: ...`. */
+  error: string;
 }

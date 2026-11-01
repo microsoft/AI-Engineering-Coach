@@ -10,7 +10,7 @@
  */
 
 import type { Analyzer } from '../core/analyzer';
-import type { DateFilter } from '../core/types';
+import type { AntiPatternData, DateFilter } from '../core/types';
 
 /* ---- helpers ---- */
 
@@ -44,6 +44,11 @@ function sparkline(values: number[], maxLen = 14): string {
   return v.map(n => chars[Math.min(Math.floor((n / max) * 7), 7)]).join('');
 }
 
+/** Rules that couldn't be evaluated: the anti-patterns and group scores leave them out, so they're incomplete. */
+function notEvaluated(ap: AntiPatternData) {
+  return ap.failedRules.map(rule => ({ rule: rule.ruleName, group: rule.group, error: rule.error }));
+}
+
 /* ---- tool formatters ---- */
 
 export function formatSummary(analyzer: Analyzer, f?: DateFilter) {
@@ -74,6 +79,7 @@ export function formatSummary(analyzer: Analyzer, f?: DateFilter) {
         5,
       ).map(p => ({ name: p.name, severity: p.severity, occurrences: p.occurrences, group: p.group, suggestion: p.suggestion })),
       groupScores: ap.groupScores.map(g => ({ group: g.group, score: g.score, topIssue: g.topIssue })),
+      notEvaluated: notEvaluated(ap),
     },
   };
 }
@@ -266,6 +272,7 @@ export function formatPatterns(analyzer: Analyzer, f?: DateFilter) {
           suggestion: p.suggestion,
           trend: trend(p.weeklyHist.counts),
         })),
+      notEvaluated: notEvaluated(ap),
     },
     recommendations: recs.map(r => ({
       check: r.name,

@@ -93,6 +93,7 @@ const antiPatterns: AntiPatternData = {
   weeklyTrend: { labels: [], counts: [] },
   groupScores: [],
   weeklyScores: { labels: [], series: [] },
+  failedRules: [],
   patterns: [
     {
       id: 'low-context',

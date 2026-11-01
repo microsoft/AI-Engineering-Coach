@@ -5,14 +5,14 @@
 
 /* Recommendations + anti-pattern detection analytics */
 
-import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPattern, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation } from './types';
+import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation } from './types';
 import { toDateStr, normalizeModel, modelMultiplier, extToLang } from './helpers';
 import { LONG_SESSION_REQS } from './constants';
 import { AnalyzerBase } from './analyzer-base';
 import {
   computeWeeklyTrend, computeWeeklyScores,
 } from './detectors';
-import { getDetectorGroupCounts, runDetectors } from './detector-registry';
+import { detectAntiPatterns, getDetectorGroupCounts, type DetectionResult } from './detector-registry';
 import { SEVERITY_PENALTIES } from './detectors/scoring';
 
 function scoreToStatus(score: number): 'good' | 'needs-improvement' | 'critical' {
@@ -246,12 +246,12 @@ export class PatternsAnalyzer extends AnalyzerBase {
     });
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
-    const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors);
-    patterns.push(...contribution.patterns);
-    return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors, contribution.weekly);
+    const detection = detectAntiPatterns(enrichedReqs, sessions, skipIdeDetectors);
+    detection.patterns.push(...contribution.patterns);
+    return this.buildAntiPatternResult(detection, reqs, skipIdeDetectors, contribution.weekly);
   }
 
-  private buildAntiPatternResult(patterns: AntiPattern[], reqs: SessionRequest[], skipIdeDetectors: boolean, weekly: WeeklyPatternObservation[]): AntiPatternData {
+  private buildAntiPatternResult({ patterns, failures: failedRules }: DetectionResult, reqs: SessionRequest[], skipIdeDetectors: boolean, weekly: WeeklyPatternObservation[]): AntiPatternData {
     const groupOrder: Record<string, number> = { 'prompt-quality': 0, 'session-hygiene': 1, 'code-review': 2, 'tool-mastery': 3 };
     patterns.sort((a, b) => (groupOrder[a.group] ?? 9) - (groupOrder[b.group] ?? 9) || b.occurrences - a.occurrences);
 
@@ -307,15 +307,16 @@ export class PatternsAnalyzer extends AnalyzerBase {
         improvements.push(`Score up ${momPct}% compared to last month.`);
       }
 
-      // If no patterns detected, that's a strong positive
-      if (gPatterns.length === 0) {
+      // If no patterns detected, that's a strong positive -- unless a rule couldn't be evaluated
+      const groupFailures = failedRules.filter(failure => failure.group === group);
+      if (gPatterns.length === 0 && groupFailures.length === 0) {
         improvements.push('All checks passing -- no anti-patterns detected.');
       }
 
-      return { group, score, wowPct, momPct, topIssue, improvements, patternCount: gPatterns.length };
+      return { group, score, wowPct, momPct, topIssue, improvements, patternCount: gPatterns.length, failedRules: groupFailures };
     });
 
-    return { patterns, totalOccurrences, weeklyTrend, groupScores, weeklyScores };
+    return { patterns, totalOccurrences, weeklyTrend, groupScores, weeklyScores, failedRules };
   }
 
   getProjectOverview(f?: DateFilter): ProjectOverviewData {

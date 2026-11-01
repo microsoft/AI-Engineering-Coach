@@ -23,7 +23,7 @@ import {
   getRule,
   evaluateRule,
 } from '../core/rule-engine';
-import { runDetectors, runEmitters } from '../core/detector-registry';
+import { detectAntiPatterns, runDetectors, runEmitters } from '../core/detector-registry';
 import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from '../core/rule-pipeline';
 import { parseRule, serializeRule } from '../core/rule-parser';
 import { getRuleLayerInfo, getPersonalRulesDir, getProjectRulesDir } from '../core/rule-loader';
@@ -811,9 +811,9 @@ const rpcHandlers: TypedRpcHandlers = {
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
     const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
-    const detectorResults = runDetectors(reqs, sessions, skipIde);
+    const { patterns: detectorResults, failures } = detectAntiPatterns(reqs, sessions, skipIde);
     const emissions = runEmitters(reqs, sessions, skipIde);
-    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions);
+    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions, failures);
     const rules = getAllRules().map(r => ({
       id: r.id,
       name: r.name,
@@ -884,9 +884,9 @@ const rpcHandlers: TypedRpcHandlers = {
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
     const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
-    const detectorResults = runDetectors(reqs, sessions, skipIde);
+    const { patterns: detectorResults, failures } = detectAntiPatterns(reqs, sessions, skipIde);
     const emissions = runEmitters(reqs, sessions, skipIde);
-    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions);
+    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions, failures);
     return previews.find(p => p.ruleId === ruleId) || { ruleId, triggered: false, occurrences: 0, total: 0, pct: 0, severity: rule.severity, group: rule.group, previewDescription: 'No data.', previewExamples: [] };
   },
 

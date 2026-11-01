@@ -14,6 +14,7 @@
 
 import { h, render as preactRender, type VNode, type ComponentChildren } from 'preact';
 import htm from 'htm';
+import type { RuleFailure } from '../core/types/rule-types';
 
 /* Trusted Types: Preact's dangerouslySetInnerHTML (used only for the static SVG
  * icons in svg-icons.ts) writes innerHTML internally, which the browser routes
@@ -92,6 +93,13 @@ export function PctBadge({ pct, label, title }: { pct: number; label: string; ti
   const cls = pct > 0 ? 'trend-improving' : 'trend-worsening';
   const sign = pct > 0 ? '+' : '';
   return html`<span class="trend-badge ${cls}" title=${title}>${sign}${pct}% ${label}</span>`;
+}
+
+/** Marks a practice score as incomplete: it leaves out rules that couldn't be evaluated. Nothing when all rules ran. */
+export function IncompleteScoreTip({ failed }: { failed?: RuleFailure[] }) {
+  if (!failed?.length) return null;
+  const why = failed.map(rule => `${rule.ruleName}: ${rule.error}`).join('\n');
+  return html`<div class="ap-score-tip ap-incomplete" title=${why}>Incomplete: ${failed.length === 1 ? '1 rule' : `${failed.length} rules`} not evaluated (${failed.map(rule => rule.ruleName).join(', ')})</div>`;
 }
 
 export function ErrorMsg({ message }: { message: string }) {

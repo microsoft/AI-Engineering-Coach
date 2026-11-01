@@ -78,6 +78,13 @@ Each finding includes:
 
 Week-over-week (WoW) and month-over-month (MoM) trend indicators appear on each score card, so you can see whether your practices are improving or regressing.
 
+## Rules that can't be evaluated
+
+When a personal or project rule's detection logic can't run, for example because a `match:` expression doesn't
+parse, the other rules still run. The rule's practice group is marked **Incomplete** on its score card and in its
+findings, with the rule and the error, instead of reporting that all checks pass. The rule's card in the
+[Rule Editor](rule-editor.md) shows **Not evaluated**.
+
 ## Curiosity checks
 
 Curiosity appears inside **Prompt Quality**, alongside the existing findings.

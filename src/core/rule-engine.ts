@@ -14,6 +14,7 @@
  */
 
 import { DetectionRule, DetectorEmission, RulePreviewStats, RuleEvalResult, RuleTemplateVars, AntiPattern, PracticeGroup, Session, SessionRequest  } from './types';
+import type { RuleFailure } from './types';
 import { parseRule, fillTemplate, serializeRule } from './rule-parser';
 import { patchThresholds } from './rule-thresholds';
 import { warnCore } from './log';
@@ -292,7 +293,8 @@ export function evaluateRule(
 
 /**
  * Get preview stats for all rules against current data.
- * Used by the Rule Editor to show how many items each rule would flag.
+ * Used by the Rule Editor to show how many items each rule would flag. A rule in `failures` couldn't be evaluated: its
+ * preview has the `error` and says it wasn't evaluated, instead of reading as clean.
  */
 export function getRulePreviewStats(
   reqs: SessionRequest[],
@@ -300,16 +302,19 @@ export function getRulePreviewStats(
   skipIdeDetectors: boolean,
   detectorResults: AntiPattern[],
   emissions?: Map<string, DetectorEmission>,
+  failures: RuleFailure[] = [],
 ): RulePreviewStats[] {
   const allRules = getAllRules();
   const resultMap = new Map<string, AntiPattern>();
   for (const r of detectorResults) resultMap.set(r.id, r);
+  const failureMap = new Map(failures.map(failure => [failure.ruleId, failure]));
 
   return allRules
     .filter(rule => !skipIdeDetectors || !rule.requiresIdeContext)
     .map(rule => {
       const emission = emissions?.get(rule.id);
       const result = resultMap.get(rule.id);
+      const failure = failureMap.get(rule.id);
       const total = emission?.total ?? (rule.scope === 'sessions' ? sessions.length : reqs.length);
       const occurrences = emission?.count ?? result?.occurrences ?? 0;
       const pct = total > 0 ? (occurrences / total) * 100 : 0;
@@ -323,8 +328,11 @@ export function getRulePreviewStats(
         pct: Math.round(pct * 10) / 10,
         severity: rule.severity,
         group: rule.group,
-        previewDescription: result?.description ?? 'Not triggered with current data.',
+        previewDescription: failure
+          ? `Not evaluated: ${failure.error}`
+          : result?.description ?? 'Not triggered with current data.',
         previewExamples: result?.examples ?? [],
+        ...(failure && { error: failure.error }),
       };
     });
 }

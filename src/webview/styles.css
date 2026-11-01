@@ -708,6 +708,8 @@ h2 {
 }
 .ap-improvements span:last-child { margin-bottom: 0; }
 
+.ap-incomplete { color: var(--accent-orange); }
+
 .trend-badge {
   display: inline-block;
   font-size: 10px;
@@ -810,6 +812,14 @@ h2 {
   padding: 0 18px 14px;
   margin: 0;
 }
+
+.ap-group-incomplete {
+  font-size: 13px;
+  color: var(--accent-orange);
+  padding: 0 18px 14px;
+}
+.ap-group-incomplete ul { margin: 6px 0 0 18px; }
+.ap-group-incomplete li { color: var(--text-muted); }
 
 /* ---- Anti-pattern finding cards ---- */
 .ap-finding {
