@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
   openExternal: vi.fn<(uri: { toString(): string }) => Promise<boolean>>(),
   /** Clicks Cancel on the update's progress notification. */
   cancelProgress: undefined as (() => void) | undefined,
+  windowStateListeners: new Set<(state: { focused: boolean; active: boolean }) => void>(),
+  onDidChangeWindowState(listener: (state: { focused: boolean; active: boolean }) => void) {
+    this.windowStateListeners.add(listener);
+    return { dispose: () => this.windowStateListeners.delete(listener) };
+  },
 }));
 
 vi.mock('vscode', () => {
@@ -62,6 +67,7 @@ vi.mock('vscode', () => {
       showErrorMessage: mocks.showErrorMessage,
       withProgress: (_options: unknown, task: (progress: { report: () => void }, cancel: typeof token) => unknown) =>
         task({ report: () => {} }, token),
+      onDidChangeWindowState: (listener: (state: { focused: boolean; active: boolean }) => void) => mocks.onDidChangeWindowState(listener),
     },
     commands: { executeCommand: mocks.executeCommand, registerCommand: mocks.registerCommand },
     workspace: {
@@ -169,6 +175,11 @@ function installCalls() {
   return mocks.executeCommand.mock.calls.filter(([command]) => command === 'workbench.extensions.installExtension');
 }
 
+/** The user switches back to the windows, which VS Code reports as a focus change. */
+function focusWindows(): void {
+  for (const listener of mocks.windowStateListeners) listener({ focused: true, active: true });
+}
+
 beforeEach(async () => {
   vi.stubGlobal('fetch', () => { throw new Error('Network access is disabled in unit tests'); });
   vi.clearAllMocks();
@@ -182,6 +193,7 @@ beforeEach(async () => {
   mocks.showErrorMessage.mockResolvedValue(undefined);
   mocks.openExternal.mockResolvedValue(true);
   mocks.cancelProgress = undefined;
+  mocks.windowStateListeners.clear();
   downloads = await fs.mkdtemp(path.join(os.tmpdir(), 'aec-update-test-'));
   services = [];
 });
@@ -670,6 +682,32 @@ describe('installed marker', () => {
     expect(service.getStatus()).toEqual({ state: 'none' });
     await service.checkNow();
     expect(fetch.mock.calls[0][1]?.headers).not.toHaveProperty('If-None-Match');
+  });
+});
+
+describe('changes made in another window', () => {
+  it('show once this window is focused again, even without automatic checks', async () => {
+    const store = sharedStore();
+    const bytes = fakeVsix(512);
+    const fetch = serve({
+      [API]: () => jsonResponse(releaseJson('0.4.0', { bytes })),
+      [VSIX_URL]: () => new Response(null, { status: 302, headers: { location: STORAGE_URL } }),
+      [STORAGE_URL]: () => new Response(bytes),
+    });
+    // Dev builds never check on their own, so no timer would ever refresh this window.
+    const devBuild = { version: '0.2.0', dev: true };
+    const here = createService(fetch, { store, build: devBuild });
+    here.start();
+    await here.checkNow();
+    expect(here.getStatus()).toMatchObject({ state: 'available', latest: '0.4.0' });
+    const elsewhere = createService(fetch, { store, build: devBuild });
+    elsewhere.start();
+    mocks.showInformationMessage.mockResolvedValueOnce('Update');
+    await elsewhere.checkNow();
+    expect(installCalls()).toHaveLength(1);
+    expect(here.getStatus()).toMatchObject({ state: 'available' });
+    focusWindows();
+    expect(here.getStatus()).toEqual({ state: 'installed', latest: '0.4.0' });
   });
 });
 

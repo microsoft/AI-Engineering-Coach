@@ -123,6 +123,8 @@ export class UpdateService implements vscode.Disposable {
         this.reschedule(true);
       }
     }));
+    // globalState has no change event, so catch up with other windows' checks, installs and skips on focus.
+    this.disposables.push(vscode.window.onDidChangeWindowState(state => { if (state.focused) this.refresh(); }));
     void this.purgeStaleDownloads();
     this.refresh();
     this.reschedule(true);
