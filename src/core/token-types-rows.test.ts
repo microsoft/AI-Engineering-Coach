@@ -50,6 +50,21 @@ describe('truncation over the calls that logged why they stopped', () => {
     expect(rows[0]).not.toHaveProperty('stopCalls');
     expect(rowTruncation(rows)).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: null });
   });
+
+  it('keeps the content-filter stops of calls that logged no stop reason', () => {
+    const filterOnly = rowsOf([
+      ['main', cliCall({ outputTokens: 900, contentFilterTriggered: true })],
+      ['main', cliCall({ outputTokens: 900, contentFilterTriggered: false })],
+    ]);
+    expect(filterOnly[0]).toMatchObject({ filteredCalls: 1 });
+    expect(filterOnly[0]).not.toHaveProperty('truncatedCalls');
+    // Truncation isn't reported, but the filter count is.
+    expect(rowTruncation(filterOnly)).toEqual({ calls: null, truncatedCalls: null, filteredCalls: 1 });
+
+    // Next to rows that logged stop reasons, the filter counts of both add up.
+    const stops = rowsOf([['main', cliCall({ outputTokens: 900, finishReason: 'length', contentFilterTriggered: false })]]);
+    expect(rowTruncation([...stops, ...filterOnly])).toEqual({ calls: 1, truncatedCalls: 1, filteredCalls: 1 });
+  });
 });
 
 describe('reasoning over the calls that logged it, by effort', () => {

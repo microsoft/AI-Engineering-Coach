@@ -98,21 +98,28 @@ export function rowReasoning(rows: ModelCallRow[]): TokenTypesReasoning | null {
   };
 }
 
-/** Truncated (and, where logged, content-filtered) calls, over the calls that logged why they stopped. `null`
- *  when no row logged it. */
+/** Truncated calls, over the calls that logged why they stopped, and content-filtered calls, over the calls that
+ *  logged the filter. The two are counted independently: a call can log one without the other. `null` when no
+ *  row logged either. */
 export function rowTruncation(rows: ModelCallRow[]): TokenTypesTruncation | null {
-  let calls = 0, truncated = 0, filtered = 0, filterLogged = false;
+  let calls = 0, truncated = 0, filtered = 0, stopLogged = false, filterLogged = false;
   for (const row of rows) {
-    if (row.truncatedCalls == null) continue;
-    calls += row.stopCalls ?? row.calls;
-    truncated += row.truncatedCalls;
+    if (row.truncatedCalls != null) {
+      stopLogged = true;
+      calls += row.stopCalls ?? row.calls;
+      truncated += row.truncatedCalls;
+    }
     if (row.filteredCalls != null) {
       filterLogged = true;
       filtered += row.filteredCalls;
     }
   }
-  if (calls === 0) return null;
-  return { calls, truncatedCalls: truncated, filteredCalls: filterLogged ? filtered : null };
+  if (!stopLogged && !filterLogged) return null;
+  return {
+    calls: stopLogged ? calls : null,
+    truncatedCalls: stopLogged ? truncated : null,
+    filteredCalls: filterLogged ? filtered : null,
+  };
 }
 
 /** Nearest-rank percentile of ascending values. */

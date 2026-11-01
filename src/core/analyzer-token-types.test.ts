@@ -208,6 +208,15 @@ describe('analyzeTokenTypes from per-call rows', () => {
     const rare = session('GitHub Copilot CLI', [req({ promptCache: { rows: [row({ calls: 12_000, truncatedCalls: 7 })] } })]);
     expect(analyze([rare]).tips.some(t => t.includes('output-token limit'))).toBe(false);
   });
+
+  it('keeps the content-filter count of calls that logged no stop reason, without a truncation tip', () => {
+    const filterOnly: ModelCallRow = { stream: 'main', model: 'claude-opus-5.5', calls: 300, input: 1, cacheRead: 0, cacheWrite: 0, filteredCalls: 12 };
+    const data = analyze([session('GitHub Copilot CLI', [req({ promptCache: { rows: [filterOnly] } })])]);
+    expect(data.sources.map(s => s.source)).toEqual(['copilot-cli']);
+    expect(data.sources[0].truncation).toEqual({ calls: null, truncatedCalls: null, filteredCalls: 12 });
+    expect(data.tips).toEqual([]);
+    expect(data.coverage).toEqual({ requests: 1, requestsWithData: 1 });
+  });
 });
 
 describe('sessionTokenTypes', () => {

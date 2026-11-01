@@ -242,9 +242,11 @@ function reasoningTip(label: string, reasoning: TokenTypesReasoning): string | n
 }
 
 function truncationTip(label: string, truncation: TokenTypesTruncation): string | null {
-  const share = pct(truncation.truncatedCalls, truncation.calls) ?? 0;
-  if (truncation.truncatedCalls < TIP_MIN_TRUNCATED || share < TIP_TRUNCATED_PCT) return null;
-  return `${truncation.truncatedCalls} of ${truncation.calls} ${label} model calls (${share}%) stopped at the output-token limit, so their answers were cut off. Ask for smaller steps, such as one file or one function at a time.`;
+  const { calls, truncatedCalls } = truncation;
+  if (calls == null || truncatedCalls == null) return null;
+  const share = pct(truncatedCalls, calls) ?? 0;
+  if (truncatedCalls < TIP_MIN_TRUNCATED || share < TIP_TRUNCATED_PCT) return null;
+  return `${truncatedCalls} of ${calls} ${label} model calls (${share}%) stopped at the output-token limit, so their answers were cut off. Ask for smaller steps, such as one file or one function at a time.`;
 }
 
 function tokenTypesTips(sources: SourceTokenTypes[]): string[] {
@@ -293,7 +295,7 @@ export function analyzeTokenTypes(
     .sort((a, b) => b.requests - a.requests || a.harness.localeCompare(b.harness));
   const requestsWithData = requests.filter(request =>
     (request.subagentRuns?.length ?? 0) > 0 || hasPerCallOutputs(request) || requestCompactions(request).some(e => e.tokensUsed != null)
-    || (request.promptCache?.rows.some(row => row.truncatedCalls != null) ?? false),
+    || (request.promptCache?.rows.some(row => row.truncatedCalls != null || row.filteredCalls != null) ?? false),
   ).length;
 
   return {

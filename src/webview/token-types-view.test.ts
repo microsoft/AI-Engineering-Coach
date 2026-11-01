@@ -90,6 +90,17 @@ describe('Token Types views', () => {
     expect(el.querySelector('[data-type="truncation"] .ctx-tt-kpi-value')?.textContent).toBe('2');
   });
 
+  it('shows content-filter stops when no call logged why it stopped, with truncation not reported', () => {
+    const el = document.createElement('div');
+    render(renderSourcePanel({ ...CLI, truncation: { calls: null, truncatedCalls: null, filteredCalls: 3 } }), el);
+    const chip = el.querySelector('[data-type="truncation"]');
+    expect(chip?.classList.contains('muted')).toBe(true);
+    expect(chip?.querySelector('.ctx-tt-kpi-value')?.textContent).toBe('Not reported');
+    expect(el.querySelector('#ctxTtTruncation')?.closest('section')?.textContent)
+      .toContain('The content filter stopped 3 model calls. No call logged why it stopped, so truncated calls aren\u2019t reported.');
+    expect(el.textContent).not.toContain('null');
+  });
+
   it('renders the session strip from the per-session summary', () => {
     const el = document.createElement('div');
     render(renderSessionStrip({

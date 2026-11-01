@@ -130,11 +130,13 @@ export interface TokenTypesSubagents {
   shareOfAllTokensPct: number | null;
 }
 
+/** Truncated and content-filtered calls. Each count is `null` when no call logged it: a call can log the content
+ *  filter without a stop reason, or the reverse. */
 export interface TokenTypesTruncation {
-  /** Calls that logged why they stopped. */
-  calls: number;
-  /** Of those, calls that stopped at the output-token limit. */
-  truncatedCalls: number;
+  /** Calls that logged why they stopped; `null` when none did. */
+  calls: number | null;
+  /** Of those, calls that stopped at the output-token limit; `null` when no call logged why it stopped. */
+  truncatedCalls: number | null;
   /** Calls stopped or changed by the content filter, of the calls that logged it; `null` when none did. */
   filteredCalls: number | null;
 }

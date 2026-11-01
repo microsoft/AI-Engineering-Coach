@@ -75,11 +75,17 @@ function busiestModel(latency: LatencyByModel[] | null): LatencyByModel | null {
   return latency?.length ? [...latency].sort((a, b) => b.calls - a.calls)[0] : null;
 }
 
+/** Truncated calls of the calls that logged why they stopped; not reported when none did. */
+function truncationChip(truncation: TokenTypesTruncation | null): ComponentChildren {
+  const truncated = truncation?.truncatedCalls;
+  const calls = truncation?.calls;
+  return chip('truncation', truncated == null ? null : String(truncated), calls == null ? '' : `of ${formatNum(calls)} calls`);
+}
+
 export function renderKpis(source: SourceTokenTypes): ComponentChildren {
   const reasoning = source.reasoning?.main ?? null;
   const compaction = source.compaction;
   const subagents = source.subagents;
-  const truncation = source.truncation;
   const latency = busiestModel(source.latency);
   return html`<div class="ctx-tt-kpis" role="group" aria-label=${`${source.label} token types`}>
     ${chip('reasoning', reasoning?.sharePct == null ? null : pctText(reasoning.sharePct), 'of output tokens')}
@@ -87,7 +93,7 @@ export function renderKpis(source: SourceTokenTypes): ComponentChildren {
       compaction?.shareOfMainInputPct == null ? 'compactions' : 'of main-agent input')}
     ${chip('subagents', subagents == null ? null : subagents.shareOfAllTokensPct == null ? formatNum(subagents.totalTokens) : pctText(subagents.shareOfAllTokensPct),
       subagents?.shareOfAllTokensPct == null ? `tokens in ${subagents?.runs ?? 0} runs` : 'of all tokens')}
-    ${chip('truncation', truncation == null ? null : String(truncation.truncatedCalls), truncation ? `of ${formatNum(truncation.calls)} calls` : '')}
+    ${truncationChip(source.truncation)}
     ${chip('latency', latency?.ttftP50Ms == null ? null : durationText(latency.ttftP50Ms), latency ? `first token, median, ${latency.model}` : '')}
   </div>`;
 }
@@ -147,12 +153,21 @@ export function renderSubagents(subagents: TokenTypesSubagents | null): Componen
   </section>`;
 }
 
+/** Truncated calls, and content-filter stops; a harness can log the filter without a stop reason. */
+function truncationText({ calls, truncatedCalls, filteredCalls }: TokenTypesTruncation): string {
+  if (calls == null || truncatedCalls == null) {
+    const filtered = filteredCalls ?? 0;
+    return `The content filter stopped ${filtered} model call${filtered === 1 ? '' : 's'}. No call logged why it stopped, so truncated calls aren\u2019t reported.`;
+  }
+  const pct = calls > 0 ? (truncatedCalls / calls) * 100 : 0;
+  return `${truncatedCalls} of ${formatNum(calls)} model calls (${pctText(pct)}) stopped at the output-token limit${filteredCalls ? `; the content filter stopped ${filteredCalls}` : ''}.`;
+}
+
 export function renderTruncation(truncation: TokenTypesTruncation | null): ComponentChildren {
   if (!truncation) return null;
-  const pct = truncation.calls > 0 ? (truncation.truncatedCalls / truncation.calls) * 100 : 0;
   return html`<section class="ctx-tt-section" aria-labelledby="ctxTtTruncation">
     <h4 id="ctxTtTruncation">Truncated calls ${infoTip(TOKEN_TYPE_META.truncation.help, 'About truncated calls')}</h4>
-    <p class="ctx-tt-line">${truncation.truncatedCalls} of ${formatNum(truncation.calls)} model calls (${pctText(pct)}) stopped at the output-token limit${truncation.filteredCalls ? `; the content filter stopped ${truncation.filteredCalls}` : ''}.</p>
+    <p class="ctx-tt-line">${truncationText(truncation)}</p>
   </section>`;
 }
 
