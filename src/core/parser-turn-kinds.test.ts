@@ -96,6 +96,59 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
   ['a relay header in a tilde fence', { content: 'Why?', transformedContent: '~~~\nfrom_session_id: abc\n~~~\nWhy?' }, undefined],
   ['a relay header after a tilde fence closes', { content: 'Run it.', transformedContent: '~~~\ncode\n~~~\nfrom_session_id: s1\nRun it.' }, 'relayed'],
   ['typed text the harness reworded', { content: 'from_date: 2026-01-01\n\nWhy is the total wrong?', transformedContent: 'from_date: 2026-01-01\nWhy is the total wrong?' }, undefined],
+  ['a typed relay tag on a line the harness split', {
+    content: 'Explain <cross_session_message> and why it exists.',
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nand why it exists.',
+  }, undefined],
+  ['a typed relay tag the harness split, after an IDE selection of the same text', {
+    content: 'Explain <cross_session_message> and why it exists.',
+    transformedContent: '<ide_selection>\nExplain <cross_session_message> and why it exists.\n</ide_selection>\nExplain <cross_session_message>\nand why it exists.',
+  }, undefined],
+  ['typed lines with a relay tag that the harness joined', {
+    content: 'Explain <cross_session_message>\nand why it exists.',
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message> and why it exists.',
+  }, undefined],
+  ['a typed sender ID header that a split moved to the start of a line', {
+    content: 'Why is from_session_id: abc repeated?',
+    transformedContent: '<current_datetime>2026</current_datetime>\nWhy is\nfrom_session_id: abc repeated?',
+  }, undefined],
+  ['a typed sender ID header the harness joined with the next typed line', {
+    content: 'from_session_id: abc\nWhy is this ID repeated?',
+    transformedContent: '<current_datetime>2026</current_datetime>\nfrom_session_id: abc Why is this ID repeated?',
+  }, undefined],
+  ['the relay wrapper before typed text the harness split', {
+    content: 'Run the tests and report back.',
+    transformedContent: '<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nRun the tests\nand report back.',
+  }, 'relayed'],
+  ['a sender header before typed lines the harness joined', {
+    content: 'Run the tests\nand report back.', transformedContent: 'from_session_id: s1\nRun the tests and report back.',
+  }, 'relayed'],
+  ['a sender header after typed text with an open tag', {
+    content: 'What does <details> do here?', transformedContent: 'What does <details> do here?\nfrom_session_id: s1',
+  }, 'relayed'],
+  ['a sender header after typed text with an open tag that the harness split', {
+    content: 'What does <details> do here?', transformedContent: 'What does <details>\ndo here?\nfrom_session_id: s1',
+  }, 'relayed'],
+  ['a typed relay tag on a split line of typed text the harness also added to', {
+    content: 'Explain <cross_session_message> and why it exists.\nRead @notes.md and fix it.',
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nand why it exists.\nRead @notes.md (notes.md) and fix it.',
+  }, undefined],
+  ['a typed sender ID header that a split moved to the start of a line the harness also added to', {
+    content: 'Read @notes.md and tell me why from_session_id: abc repeats.',
+    transformedContent: '<current_datetime>2026</current_datetime>\nRead @notes.md (notes.md) and tell me why\nfrom_session_id: abc repeats.',
+  }, undefined],
+  ['a typed sender ID header right after a mention the harness expanded, moved to the start of a line', {
+    content: 'Explain the header after @log.txt from_session_id:',
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain the header after @log.txt (log.txt)\nfrom_session_id:',
+  }, undefined],
+  ['the relay wrapper before typed text the harness added to', {
+    content: 'Run the tests.\nRead @notes.md and fix it.',
+    transformedContent: '<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nRun the tests.\nRead @notes.md (notes.md) and fix it.',
+  }, 'relayed'],
+  ['the relay wrapper before typed text that names it, which the harness added to', {
+    content: 'Why does <cross_session_message> wrap it?\nRead @notes.md and fix it.',
+    transformedContent: '<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>\nWhy does <cross_session_message> wrap it?\nRead @notes.md (notes.md) and fix it.',
+  }, 'relayed'],
 ];
 
 describe('cliNonHumanKind', () => {

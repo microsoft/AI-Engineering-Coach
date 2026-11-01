@@ -28,22 +28,101 @@ const TAG = /<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>/g;
 /** A fenced-code delimiter: three or more backticks or tildes. */
 const FENCE = /^(`{3,}|~{3,})/;
 
-/** The text the harness added to a message, and the typed lines it couldn't take out of it. */
-interface HarnessText { text: string; typedLines: ReadonlySet<string> }
+/** Text with each run of whitespace collapsed to one space: its words, and where each starts in the original text
+ *  (`at`) and in the collapsed text (`collapsedAt`). */
+interface Collapsed { text: string; words: string[]; at: number[]; collapsedAt: number[] }
+
+function collapseWhitespace(value: string): Collapsed {
+  const words: string[] = [];
+  const at: number[] = [];
+  const collapsedAt: number[] = [];
+  let length = 0;
+  for (const word of value.matchAll(/\S+/g)) {
+    if (words.length > 0) length++;
+    at.push(word.index);
+    collapsedAt.push(length);
+    words.push(word[0]);
+    length += word[0].length;
+  }
+  return { text: words.join(' '), words, at, collapsedAt };
+}
+
+/** The word an index falls in, given where each word starts. */
+function wordAt(index: number, starts: readonly number[]): number {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (starts[middle] <= index) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+/** Maps an index inside a word to the other text, given where each word starts in this one and in the other. */
+function mapIndex(index: number, starts: readonly number[], otherStarts: readonly number[]): number {
+  const word = wordAt(index, starts);
+  return otherStarts[word] + index - starts[word];
+}
+
+/** True when the span from `start` to `end` of the text the harness added lies in text the user typed. */
+type IsTyped = (start: number, end: number) => boolean;
+
+const NOTHING_TYPED: IsTyped = () => false;
 
 /**
- * What the harness added to a message: `transformedContent` without the typed `content`, compared without CRLF line
- * endings or surrounding whitespace, which the harness may change. When the harness reflowed the typed text, so it
- * can't be found whole, the text stays as it is, keeping the quoted elements and fences around the typed lines, and
- * the typed lines come back so that markers on them don't count.
+ * For text the harness changed beyond whitespace: a span is typed when its recorded words are words the user typed,
+ * next to a word they typed before or after them. That neighbor is the nearest recorded word on that side that is one
+ * of the typed words, past any words the harness inserted. A marker the user typed keeps its typed neighbors wherever
+ * the harness moved the line breaks or added text; one the harness wrote doesn't.
+ */
+function typedWithNeighbor(recorded: Collapsed, typed: readonly string[]): IsTyped {
+  const vocabulary = new Set(typed);
+  const nearestTyped = (from: number, step: number): string | undefined => {
+    for (let i = from; i >= 0 && i < recorded.words.length; i += step) {
+      if (vocabulary.has(recorded.words[i])) return recorded.words[i];
+    }
+    return undefined;
+  };
+  return (start, end) => {
+    const first = wordAt(start, recorded.at);
+    const length = wordAt(end - 1, recorded.at) - first + 1;
+    const before = nearestTyped(first - 1, -1);
+    const after = nearestTyped(first + length, 1);
+    for (let k = 0; k + length <= typed.length; k++) {
+      let same = true;
+      for (let i = 0; i < length && same; i++) same = typed[k + i] === recorded.words[first + i];
+      if (!same) continue;
+      if (k > 0 && typed[k - 1] === before) return true;
+      if (k + length < typed.length && typed[k + length] === after) return true;
+    }
+    return false;
+  };
+}
+
+/** The text the harness added to a message, and which of its spans the user typed when it couldn't take them out. */
+interface HarnessText { text: string; isTyped: IsTyped }
+
+/**
+ * What the harness added to a message: `transformedContent` without the typed `content`. The harness may change the
+ * typed text's whitespace (CRLF line endings, the whitespace around it, and line breaks: it can split a typed line,
+ * join typed lines or drop a blank line), so the typed text is found with any run of whitespace matching any other,
+ * and cut from the text as recorded, keeping the lines, quoted elements and fences around it. When the harness changed
+ * more than whitespace, for example by adding a file's path after a mention, the typed text can't be found whole: the
+ * text stays as it is, and a marker doesn't count when it is typed text with a typed word next to it.
  */
 function harnessAddedText(data: Record<string, unknown> | undefined): HarnessText {
-  const transformed = text(data?.transformedContent).replaceAll('\r\n', '\n');
-  const typed = text(data?.content).replaceAll('\r\n', '\n').trim();
-  if (!typed) return { text: transformed, typedLines: new Set() };
-  const at = transformed.lastIndexOf(typed);
-  if (at >= 0) return { text: transformed.slice(0, at) + transformed.slice(at + typed.length), typedLines: new Set() };
-  return { text: transformed, typedLines: new Set(typed.split('\n').map(line => line.trim()).filter(Boolean)) };
+  const transformed = text(data?.transformedContent);
+  const typed = collapseWhitespace(text(data?.content));
+  if (!typed.text) return { text: transformed, isTyped: NOTHING_TYPED };
+  const recorded = collapseWhitespace(transformed);
+  const found = recorded.text.lastIndexOf(typed.text);
+  if (found >= 0) {
+    const start = mapIndex(found, recorded.collapsedAt, recorded.at);
+    const end = mapIndex(found + typed.text.length - 1, recorded.collapsedAt, recorded.at) + 1;
+    return { text: transformed.slice(0, start) + transformed.slice(end), isTyped: NOTHING_TYPED };
+  }
+  return { text: transformed, isTyped: typedWithNeighbor(recorded, typed.words) };
 }
 
 /** Where a scan of the text the harness added is: in fenced code (its opening delimiter), or in a quoted element
@@ -63,11 +142,11 @@ function inFencedCode(line: string, state: QuoteState): boolean {
 }
 
 /**
- * Walks the element tags on a line; true at a relay element outside quoted text when `markers` is set. Every
- * element other than the relay wrapper quotes text (an IDE selection, a file, a notification) until its own closing
- * tag, on the same line or a later one, and elements of the same name nest inside it. Updates `state`.
+ * Walks the element tags on a line that starts at `at` in the text; true at a relay element outside quoted text and
+ * typed text. Every element other than the relay wrapper quotes text (an IDE selection, a file, a notification) until
+ * its own closing tag, on the same line or a later one, and elements of the same name nest inside it. Updates `state`.
  */
-function relayElementOnLine(line: string, state: QuoteState, markers: boolean): boolean {
+function relayElementOnLine(line: string, at: number, state: QuoteState, isTyped: IsTyped): boolean {
   TAG.lastIndex = 0;
   for (let tag = TAG.exec(line); tag; tag = TAG.exec(line)) {
     const [, closing, name, selfClosing] = tag;
@@ -81,31 +160,37 @@ function relayElementOnLine(line: string, state: QuoteState, markers: boolean): 
     if (!RELAY_ELEMENT.test(name)) {
       state.element = name;
       state.depth = 1;
-    } else if (markers) {
+    } else if (!isTyped(at + tag.index, at + tag.index + tag[0].length)) {
       return true;
     }
   }
   return false;
 }
 
-/** True when a line the user didn't type carries a relay marker outside quoted text and fenced code. Markers after
- *  a quoted element closes still count. Updates `state` for the next line. */
-function lineIsRelayed(raw: string, state: QuoteState, typedLines: ReadonlySet<string>): boolean {
+/** True when a line that starts at `start` in the text carries a relay marker outside quoted text, fenced code and
+ *  typed text. Markers after a quoted element closes still count. Updates `state` for the next line. */
+function lineIsRelayed(raw: string, start: number, state: QuoteState, isTyped: IsTyped): boolean {
   const line = raw.trim();
-  const markers = !typedLines.has(line);
+  const at = start + raw.length - raw.trimStart().length;
   if (!state.element) {
     if (inFencedCode(line, state)) return false;
-    if (markers && RELAY_ID_HEADER.test(line)) return true;
+    const header = RELAY_ID_HEADER.exec(line);
+    if (header && !isTyped(at, at + header[0].length)) return true;
   }
-  return relayElementOnLine(line, state, markers);
+  return relayElementOnLine(line, at, state, isTyped);
 }
 
 /** True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
  *  sender ID header, outside the text it quotes. */
 function isRelayed(data: Record<string, unknown> | undefined): boolean {
-  const { text: added, typedLines } = harnessAddedText(data);
+  const { text: added, isTyped } = harnessAddedText(data);
   const state: QuoteState = { depth: 0 };
-  return added.split('\n').some(line => lineIsRelayed(line, state, typedLines));
+  let start = 0;
+  for (const line of added.split('\n')) {
+    if (lineIsRelayed(line, start, state, isTyped)) return true;
+    start += line.length + 1;
+  }
+  return false;
 }
 
 /**

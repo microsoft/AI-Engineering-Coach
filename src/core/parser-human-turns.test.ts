@@ -14,6 +14,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { DashboardAnalyzer } from './analyzer-dashboard';
 import { detectCuriosity } from './curiosity';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { harnessFromPath, parseSessionFile } from './parser-vscode';
@@ -86,6 +87,34 @@ describe('Copilot CLI and Copilot App', () => {
       expect(requests.map(request => request.userEventId)).toEqual(turns.map((_, index) => `u${index}`));
       expect(kinds(requests)).toEqual(turns.map(([, , kind]) => kind));
       expect(curiosity(requests)).toEqual(turns.map(([, , , kind]) => kind));
+    }
+  });
+});
+
+describe('Copilot CLI and Copilot App on the Activity Patterns calendar', () => {
+  it('keeps prompts whose line breaks the harness moved, through both parser paths', async () => {
+    const reflowed: Array<[Record<string, unknown>, NonHumanKind | undefined]> = [
+      // A typed line the harness split, then typed lines it joined: the tag is the user's text, not a relay wrapper.
+      [{ content: 'Explain <cross_session_message> and why it exists.', transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nand why it exists.' }, undefined],
+      [{ content: 'Explain <cross_session_message>\nand why it exists.', transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message> and why it exists.' }, undefined],
+      // The same reflows after a relay wrapper or sender ID header the harness added.
+      [{ content: 'Run the tests and report back.', transformedContent: '<cross_session_message>\nfrom_session_id: s-1\n</cross_session_message>\nRun the tests\nand report back.' }, 'relayed'],
+      [{ content: 'Run the tests\nand report back.', transformedContent: 'from_session_id: s-1\nRun the tests and report back.' }, 'relayed'],
+    ];
+    // One turn a day at local noon, so each calendar day holds one turn in any time zone.
+    const noon = (index: number) => new Date(2026, 8, 28 + index, 12);
+    const events: object[] = [{ type: 'session.start', timestamp: noon(0).toISOString(), data: { sessionId: 'cli-reflow' } }];
+    for (const [index, [data]] of reflowed.entries()) {
+      events.push({ type: 'user.message', id: `u${index}`, timestamp: noon(index).toISOString(), data });
+      events.push({ type: 'assistant.message', timestamp: new Date(noon(index).getTime() + 500).toISOString(), data: { content: 'Done.' } });
+    }
+    const file = path.join(tempRoot('cli-reflow'), 'events.jsonl');
+    writeLines(file, events);
+    for (const session of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {
+      expect(kinds(session?.requests ?? [])).toEqual(reflowed.map(([, kind]) => kind));
+      const calendar = new DashboardAnalyzer(session ? [session] : [], new Map()).getCalendarActivity();
+      expect(calendar.days.map(day => [day.date, day.requests])).toEqual([['2026-09-28', 1], ['2026-09-29', 1]]);
+      expect(calendar.turnBasis).toEqual({ humanTurns: 2, automatedTurns: 2, automatedByKind: { relayed: 2 } });
     }
   });
 });

@@ -221,8 +221,10 @@ session (the harness's relay wrapper or a sender ID header such as
 `from_session_id`, outside quoted blocks such as an IDE selection, or a VS Code
 delegation), a parent agent (Claude Code sidechain transcripts, Codex sub-agent
 sessions, OpenCode child sessions), harness-written meta lines, compaction
-summaries, and command output. Activity Patterns and the time-based rules leave
-out the same turns. Harness prompts without such markers count as human turns.
+summaries, and command output. A relay wrapper or sender ID header that you
+typed stays yours, even when the harness moved your prompt's line breaks or
+added text to it. Activity Patterns and the time-based rules leave out the same
+turns. Harness prompts without such markers count as human turns.
 Inline code identifiers inside prose questions are retained; standalone code
 and quoted or code-formatted questions are still excluded.
 
