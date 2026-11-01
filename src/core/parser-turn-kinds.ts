@@ -28,9 +28,15 @@ const TAG = /<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>/g;
 /** A fenced-code delimiter: three or more backticks or tildes. */
 const FENCE = /^(`{3,}|~{3,})/;
 
-/** Text with each run of whitespace collapsed to one space: its words, and where each starts in the original text
- *  (`at`) and in the collapsed text (`collapsedAt`). */
-interface Collapsed { text: string; words: string[]; at: number[]; collapsedAt: number[] }
+/** A reference tag the App writes for a typed mention of a repository, issue or session; its label is the typed text. */
+const COPILOT_REF = /<copilot-ref(?:\s+[\w-]+="[^"]*")*\s*\/>/g;
+const REF_LABEL = /\slabel="([^"]+)"/;
+/** The label the App writes before an attached file's name and path. */
+const ATTACHED_FILE = 'Attached file: ';
+
+/** Text with each run of whitespace collapsed to one space, and where each word starts in the original text (`at`)
+ *  and in the collapsed text (`collapsedAt`). */
+interface Collapsed { text: string; at: number[]; collapsedAt: number[] }
 
 function collapseWhitespace(value: string): Collapsed {
   const words: string[] = [];
@@ -44,11 +50,11 @@ function collapseWhitespace(value: string): Collapsed {
     words.push(word[0]);
     length += word[0].length;
   }
-  return { text: words.join(' '), words, at, collapsedAt };
+  return { text: words.join(' '), at, collapsedAt };
 }
 
-/** The word an index falls in, given where each word starts. */
-function wordAt(index: number, starts: readonly number[]): number {
+/** Maps an index inside a word to the other text, given where each word starts in this one and in the other. */
+function mapIndex(index: number, starts: readonly number[], otherStarts: readonly number[]): number {
   let low = 0;
   let high = starts.length - 1;
   while (low < high) {
@@ -56,90 +62,91 @@ function wordAt(index: number, starts: readonly number[]): number {
     if (starts[middle] <= index) low = middle;
     else high = middle - 1;
   }
-  return low;
+  return otherStarts[low] + index - starts[low];
 }
 
-/** Maps an index inside a word to the other text, given where each word starts in this one and in the other. */
-function mapIndex(index: number, starts: readonly number[], otherStarts: readonly number[]): number {
-  const word = wordAt(index, starts);
-  return otherStarts[word] + index - starts[word];
-}
-
-/** True when the span from `start` to `end` of the text the harness added lies in text the user typed. */
-type IsTyped = (start: number, end: number) => boolean;
-
-const NOTHING_TYPED: IsTyped = () => false;
+/** A mention the App expanded: the span the expansion takes, and the text the user typed for it. */
+interface Expansion { start: number; end: number; typed: string }
 
 /**
- * For text the harness changed beyond whitespace: a span is typed when its recorded words are words the user typed,
- * next to a word they typed before or after them. That neighbor is the nearest recorded word on that side that is one
- * of the typed words, past any words the harness inserted. Text the user typed keeps its typed neighbors wherever the
- * harness moved the line breaks or added text; a marker, tag or fence the harness wrote doesn't.
+ * Puts back as typed each mention the App expanded: a reference tag becomes its label, and an attached file's name
+ * and path, as in `Attached file: notes.md (C:\repo\notes.md)`, become the name. The name and path come from the
+ * message's `attachments`; the label before them is optional. Returns the text and its expansions in order, keeping the
+ * first of any that overlap.
  */
-function typedWithNeighbor(recorded: Collapsed, typed: readonly string[]): IsTyped {
-  const positions = new Map<string, number[]>();
-  for (const [k, word] of typed.entries()) {
-    const list = positions.get(word);
-    if (list) list.push(k);
-    else positions.set(word, [k]);
+function unexpandMentions(value: string, attachments: unknown): { text: string; expansions: Expansion[] } {
+  const found: Expansion[] = [];
+  for (const ref of value.matchAll(COPILOT_REF)) {
+    const label = REF_LABEL.exec(ref[0])?.[1];
+    if (label) found.push({ start: ref.index, end: ref.index + ref[0].length, typed: label });
   }
-  const nearestTyped = (from: number, step: number): string | undefined => {
-    for (let i = from; i >= 0 && i < recorded.words.length; i += step) {
-      if (positions.has(recorded.words[i])) return recorded.words[i];
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const name = isRecord(attachment) ? text(attachment.displayName) : '';
+    const filePath = isRecord(attachment) ? text(attachment.path) : '';
+    if (!name || !filePath) continue;
+    const expanded = `${name} (${filePath})`;
+    for (let at = value.indexOf(expanded); at >= 0; at = value.indexOf(expanded, at + expanded.length)) {
+      const labelled = at >= ATTACHED_FILE.length && value.startsWith(ATTACHED_FILE, at - ATTACHED_FILE.length);
+      found.push({ start: labelled ? at - ATTACHED_FILE.length : at, end: at + expanded.length, typed: name });
     }
-    return undefined;
-  };
-  return (start, end) => {
-    const first = wordAt(start, recorded.at);
-    const candidates = positions.get(recorded.words[first]);
-    if (!candidates) return false;
-    const length = wordAt(end - 1, recorded.at) - first + 1;
-    const before = nearestTyped(first - 1, -1);
-    const after = nearestTyped(first + length, 1);
-    return candidates.some(k => {
-      if (k + length > typed.length) return false;
-      for (let i = 1; i < length; i++) if (typed[k + i] !== recorded.words[first + i]) return false;
-      return (k > 0 && typed[k - 1] === before) || (k + length < typed.length && typed[k + length] === after);
-    });
-  };
+  }
+  const expansions: Expansion[] = [];
+  let unexpanded = '';
+  let cursor = 0;
+  for (const expansion of found.sort((a, b) => a.start - b.start)) {
+    if (expansion.start < cursor) continue;
+    expansions.push(expansion);
+    unexpanded += value.slice(cursor, expansion.start) + expansion.typed;
+    cursor = expansion.end;
+  }
+  return { text: unexpanded + value.slice(cursor), expansions };
 }
 
-/** The text the harness added to a message, and which of its spans the user typed when it couldn't take them out. */
-interface HarnessText { text: string; isTyped: IsTyped }
+/**
+ * Where an index of the un-expanded text is in the text as recorded. A span that starts or ends (`isEnd`) inside a
+ * mention's typed text takes its whole expansion.
+ */
+function recordedIndex(index: number, expansions: readonly Expansion[], isEnd: boolean): number {
+  let shift = 0;
+  for (const { start, end, typed } of expansions) {
+    const at = start - shift;
+    if (isEnd ? index <= at : index < at) break;
+    if (isEnd ? index <= at + typed.length : index < at + typed.length) return isEnd ? end : start;
+    shift += end - start - typed.length;
+  }
+  return index + shift;
+}
 
 /**
- * What the harness added to a message: `transformedContent` without the typed `content`. The harness may change the
- * typed text's whitespace (CRLF line endings, the whitespace around it, and line breaks: it can split a typed line,
- * join typed lines or drop a blank line), so the typed text is found with any run of whitespace matching any other,
- * and cut from the text as recorded, keeping the lines, quoted elements and fences around it. When the harness changed
- * more than whitespace, for example by adding a file's path after a mention, the typed text can't be found whole: the
- * text stays as it is, and text that is typed, with a typed word next to it, is skipped. Its markers don't count, and
- * its tags and fences quote nothing, as when it is cut.
+ * What the harness added to a message: `transformedContent` without the typed `content`. The complete typed text must
+ * align, with only the changes the harness is known to make: to its whitespace (CRLF line endings, the whitespace
+ * around it, and line breaks: it can split a typed line, join typed lines or drop a blank line) and to its mentions,
+ * which it expands. So both texts get their mentions put back as typed, the last place the typed text appears in the
+ * recorded one is found with any run of whitespace matching any other, and that span, with the expansions in it, is
+ * cut from the text as recorded, keeping the lines, quoted elements and fences around it. When the typed text doesn't
+ * align whole, as after the harness expanded a slash command, none of it is proven typed, so nothing is cut.
  */
-function harnessAddedText(data: Record<string, unknown> | undefined): HarnessText {
+function harnessAddedText(data: Record<string, unknown> | undefined): string {
   const transformed = text(data?.transformedContent);
-  const typed = collapseWhitespace(text(data?.content));
-  if (!typed.text) return { text: transformed, isTyped: NOTHING_TYPED };
-  const recorded = collapseWhitespace(transformed);
-  const found = recorded.text.lastIndexOf(typed.text);
-  if (found >= 0) {
-    const start = mapIndex(found, recorded.collapsedAt, recorded.at);
-    const end = mapIndex(found + typed.text.length - 1, recorded.collapsedAt, recorded.at) + 1;
-    return { text: transformed.slice(0, start) + transformed.slice(end), isTyped: NOTHING_TYPED };
-  }
-  return { text: transformed, isTyped: typedWithNeighbor(recorded, typed.words) };
+  const typed = collapseWhitespace(unexpandMentions(text(data?.content), data?.attachments).text).text;
+  if (!typed) return transformed;
+  const { text: unexpanded, expansions } = unexpandMentions(transformed, data?.attachments);
+  const recorded = collapseWhitespace(unexpanded);
+  const found = recorded.text.lastIndexOf(typed);
+  if (found < 0) return transformed;
+  const start = mapIndex(found, recorded.collapsedAt, recorded.at);
+  const end = mapIndex(found + typed.length - 1, recorded.collapsedAt, recorded.at) + 1;
+  return transformed.slice(0, recordedIndex(start, expansions, false)) + transformed.slice(recordedIndex(end, expansions, true));
 }
 
 /** Where a scan of the text the harness added is: in fenced code (its opening delimiter), or in a quoted element
  *  (its name, and how deep elements of that name nest inside it). */
 interface QuoteState { fence?: string; element?: string; depth: number }
 
-/** True when a line that starts at `at` in the text opens, closes or sits in fenced code; updates `state.fence`. As in
- *  Markdown, only a fence of the same character, at least as long and with nothing after it, closes the code. A
- *  delimiter the user typed is text, not a fence. */
-function inFencedCode(line: string, at: number, state: QuoteState, isTyped: IsTyped): boolean {
-  const match = FENCE.exec(line)?.[1];
-  const fence = match && !isTyped(at, at + match.length) ? match : undefined;
+/** True when a line opens, closes or sits in fenced code; updates `state.fence`. As in Markdown, only a fence of the
+ *  same character, at least as long and with nothing after it, closes the code. */
+function inFencedCode(line: string, state: QuoteState): boolean {
+  const fence = FENCE.exec(line)?.[1];
   if (!state.fence) {
     if (fence) state.fence = fence;
     return fence !== undefined;
@@ -149,16 +156,15 @@ function inFencedCode(line: string, at: number, state: QuoteState, isTyped: IsTy
 }
 
 /**
- * Walks the element tags on a line that starts at `at` in the text; true at a relay element outside quoted text. Every
- * element other than the relay wrapper quotes text (an IDE selection, a file, a notification) until its own closing
- * tag, on the same line or a later one, and elements of the same name nest inside it. A tag the user typed is skipped.
- * Updates `state`.
+ * Walks the element tags on a line; true at a relay element outside quoted text. Every element other than the relay
+ * wrapper quotes text (an IDE selection, a file, a notification) until its own closing tag, on the same line or a
+ * later one, and elements of the same name nest inside it. Updates `state`.
  */
-function relayElementOnLine(line: string, at: number, state: QuoteState, isTyped: IsTyped): boolean {
+function relayElementOnLine(line: string, state: QuoteState): boolean {
   TAG.lastIndex = 0;
   for (let tag = TAG.exec(line); tag; tag = TAG.exec(line)) {
     const [, closing, name, selfClosing] = tag;
-    if (selfClosing || isTyped(at + tag.index, at + tag.index + tag[0].length)) continue;
+    if (selfClosing) continue;
     if (state.element) {
       if (name === state.element) state.depth += closing ? -1 : 1;
       if (state.depth === 0) state.element = undefined;
@@ -172,30 +178,22 @@ function relayElementOnLine(line: string, at: number, state: QuoteState, isTyped
   return false;
 }
 
-/** True when a line that starts at `start` in the text carries a relay marker outside quoted text, fenced code and
- *  typed text. Markers after a quoted element closes still count. Updates `state` for the next line. */
-function lineIsRelayed(raw: string, start: number, state: QuoteState, isTyped: IsTyped): boolean {
+/** True when a line carries a relay marker outside quoted text and fenced code. Markers after a quoted element closes
+ *  still count. Updates `state` for the next line. */
+function lineIsRelayed(raw: string, state: QuoteState): boolean {
   const line = raw.trim();
-  const at = start + raw.length - raw.trimStart().length;
   if (!state.element) {
-    if (inFencedCode(line, at, state, isTyped)) return false;
-    const header = RELAY_ID_HEADER.exec(line);
-    if (header && !isTyped(at, at + header[0].length)) return true;
+    if (inFencedCode(line, state)) return false;
+    if (RELAY_ID_HEADER.test(line)) return true;
   }
-  return relayElementOnLine(line, at, state, isTyped);
+  return relayElementOnLine(line, state);
 }
 
 /** True when the harness relayed the message from another session: it wrapped it in a relay element, or added a
  *  sender ID header, outside the text it quotes. */
 function isRelayed(data: Record<string, unknown> | undefined): boolean {
-  const { text: added, isTyped } = harnessAddedText(data);
   const state: QuoteState = { depth: 0 };
-  let start = 0;
-  for (const line of added.split('\n')) {
-    if (lineIsRelayed(line, start, state, isTyped)) return true;
-    start += line.length + 1;
-  }
-  return false;
+  return harnessAddedText(data).split('\n').some(line => lineIsRelayed(line, state));
 }
 
 /**

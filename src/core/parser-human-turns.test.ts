@@ -23,7 +23,7 @@ import { parseCodexSessions } from './parser-codex';
 import { parseOpenCodeSessions } from './parser-opencode';
 import { parseXcodeDatabases, parseXcodeDatabasesAsync } from './parser-xcode';
 import { setCuriosityDetector } from './parser-shared';
-import type { NonHumanKind, SessionRequest } from './types';
+import type { NonHumanKind, Session, SessionRequest } from './types';
 
 const roots: string[] = [];
 
@@ -91,9 +91,32 @@ describe('Copilot CLI and Copilot App', () => {
   });
 });
 
+/** The relay wrapper and sender ID header the harness writes before a message from another session. */
+const RELAY_WRAPPER = '<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\n';
+
+/** Logs the turns a day apart at local noon, so each calendar day holds one turn in any time zone, and parses the log
+ *  through both parser paths. */
+async function parseDailyTurns(turns: ReadonlyArray<Record<string, unknown>>): Promise<Array<Session | null>> {
+  const noon = (index: number) => new Date(2026, 8, 28 + index, 12);
+  const events: object[] = [{ type: 'session.start', timestamp: noon(0).toISOString(), data: { sessionId: 'cli-daily' } }];
+  for (const [index, data] of turns.entries()) {
+    events.push({ type: 'user.message', id: `u${index}`, timestamp: noon(index).toISOString(), data });
+    events.push({ type: 'assistant.message', timestamp: new Date(noon(index).getTime() + 500).toISOString(), data: { content: 'Done.' } });
+  }
+  const file = path.join(tempRoot('cli-daily'), 'events.jsonl');
+  writeLines(file, events);
+  return [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')];
+}
+
+/** A parsed session's turn kinds, and the Activity Patterns calendar's days and turn basis for it. */
+function calendarOf(session: Session | null) {
+  const calendar = new DashboardAnalyzer(session ? [session] : [], new Map()).getCalendarActivity();
+  return { kinds: kinds(session?.requests ?? []), days: calendar.days.map(day => [day.date, day.requests]), basis: calendar.turnBasis };
+}
+
 describe('Copilot CLI and Copilot App on the Activity Patterns calendar', () => {
   it('keeps prompts whose line breaks the harness moved, through both parser paths', async () => {
-    const reflowed: Array<[Record<string, unknown>, NonHumanKind | undefined]> = [
+    const turns: Array<[Record<string, unknown>, NonHumanKind | undefined]> = [
       // A typed line the harness split, then typed lines it joined: the tag is the user's text, not a relay wrapper.
       [{ content: 'Explain <cross_session_message> and why it exists.', transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nand why it exists.' }, undefined],
       [{ content: 'Explain <cross_session_message>\nand why it exists.', transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message> and why it exists.' }, undefined],
@@ -101,20 +124,38 @@ describe('Copilot CLI and Copilot App on the Activity Patterns calendar', () => 
       [{ content: 'Run the tests and report back.', transformedContent: '<cross_session_message>\nfrom_session_id: s-1\n</cross_session_message>\nRun the tests\nand report back.' }, 'relayed'],
       [{ content: 'Run the tests\nand report back.', transformedContent: 'from_session_id: s-1\nRun the tests and report back.' }, 'relayed'],
     ];
-    // One turn a day at local noon, so each calendar day holds one turn in any time zone.
-    const noon = (index: number) => new Date(2026, 8, 28 + index, 12);
-    const events: object[] = [{ type: 'session.start', timestamp: noon(0).toISOString(), data: { sessionId: 'cli-reflow' } }];
-    for (const [index, [data]] of reflowed.entries()) {
-      events.push({ type: 'user.message', id: `u${index}`, timestamp: noon(index).toISOString(), data });
-      events.push({ type: 'assistant.message', timestamp: new Date(noon(index).getTime() + 500).toISOString(), data: { content: 'Done.' } });
+    for (const session of await parseDailyTurns(turns.map(([data]) => data))) {
+      expect(calendarOf(session)).toEqual({
+        kinds: turns.map(([, kind]) => kind),
+        days: [['2026-09-28', 1], ['2026-09-29', 1]],
+        basis: { humanTurns: 2, automatedTurns: 2, automatedByKind: { relayed: 2 } },
+      });
     }
-    const file = path.join(tempRoot('cli-reflow'), 'events.jsonl');
-    writeLines(file, events);
-    for (const session of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {
-      expect(kinds(session?.requests ?? [])).toEqual(reflowed.map(([, kind]) => kind));
-      const calendar = new DashboardAnalyzer(session ? [session] : [], new Map()).getCalendarActivity();
-      expect(calendar.days.map(day => [day.date, day.requests])).toEqual([['2026-09-28', 1], ['2026-09-29', 1]]);
-      expect(calendar.turnBasis).toEqual({ humanTurns: 2, automatedTurns: 2, automatedByKind: { relayed: 2 } });
+  });
+
+  it('keeps a relayed message relayed when the prompt names its wrapper and sender, through both parser paths', async () => {
+    const notes = { type: 'file', displayName: 'notes.md', path: 'C:\\repo\\notes.md' };
+    const repo = '<copilot-ref kind="repo" target-id="r1" label="microsoft/AI-Engineering-Coach" />';
+    const typed = 'Explain <cross_session_message> from_session_id: s1 please. Read notes.md and fix it.';
+    const app = (text: string) => text.replace('Read notes.md', 'Read Attached file: notes.md (C:\\repo\\notes.md)');
+    const turns: Array<[Record<string, unknown>, NonHumanKind | undefined]> = [
+      // The review's case: a relay whose typed text names its wrapper and sender, with a change the harness isn't known to make.
+      [{
+        content: 'Explain <cross_session_message> from_session_id: s1 please. Read @notes.md and fix it.',
+        transformedContent: '<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nExplain <cross_session_message> from_session_id: s1 please. Read @notes.md (notes.md) and fix it.',
+      }, 'relayed'],
+      // The same relay with a file and a repository the App expanded, then the same prompts typed, with a split line.
+      [{ content: typed, attachments: [notes], transformedContent: `${RELAY_WRAPPER}${app(typed)}` }, 'relayed'],
+      [{ content: 'Explain <cross_session_message> from_session_id: s1 in microsoft/AI-Engineering-Coach.', transformedContent: `${RELAY_WRAPPER}Explain <cross_session_message> from_session_id: s1 in ${repo}.` }, 'relayed'],
+      [{ content: typed, attachments: [notes], transformedContent: `<current_datetime>2026</current_datetime>\n${app(typed).replace(' from_session_id', '\nfrom_session_id')}` }, undefined],
+      [{ content: 'Explain <cross_session_message> from_session_id: s1 in microsoft/AI-Engineering-Coach.', transformedContent: `<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nfrom_session_id: s1 in ${repo}.` }, undefined],
+    ];
+    for (const session of await parseDailyTurns(turns.map(([data]) => data))) {
+      expect(calendarOf(session)).toEqual({
+        kinds: turns.map(([, kind]) => kind),
+        days: [['2026-10-01', 1], ['2026-10-02', 1]],
+        basis: { humanTurns: 2, automatedTurns: 3, automatedByKind: { relayed: 3 } },
+      });
     }
   });
 });

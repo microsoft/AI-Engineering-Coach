@@ -222,9 +222,12 @@ session (the harness's relay wrapper or a sender ID header such as
 delegation), a parent agent (Claude Code sidechain transcripts, Codex sub-agent
 sessions, OpenCode child sessions), harness-written meta lines, compaction
 summaries, and command output. A relay wrapper or sender ID header that you
-typed stays yours, even when the harness moved your prompt's line breaks or
-added text to it. Activity Patterns and the time-based rules leave out the same
-turns. Harness prompts without such markers count as human turns.
+typed stays yours when the harness only moved your prompt's line breaks or
+expanded its mentions of repositories, issues, sessions and attached files. If
+the harness changed your prompt in another way, such as expanding a slash
+command, the whole recorded text is checked. Activity Patterns and the
+time-based rules leave out the same turns. Harness prompts without such markers
+count as human turns.
 Inline code identifiers inside prose questions are retained; standalone code
 and quoted or code-formatted questions are still excluded.
 

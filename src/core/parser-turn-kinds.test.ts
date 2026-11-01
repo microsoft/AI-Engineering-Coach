@@ -12,6 +12,14 @@ import {
 } from './parser-turn-kinds';
 import type { NonHumanKind } from './types';
 
+/** A file the user attached in the Copilot App: its name in the typed text, and the name and path where the App
+ *  expanded it. */
+const NOTES = { type: 'file', displayName: 'notes.md', path: 'C:\\repo\\notes.md' };
+const NOTES_EXPANDED = 'Attached file: notes.md (C:\\repo\\notes.md)';
+/** References the App writes for typed mentions of a repository and a session; the label is the typed text. */
+const REPO_REF = '<copilot-ref kind="repo" target-id="r1" label="microsoft/AI-Engineering-Coach" />';
+const SESSION_REF = '<copilot-ref kind="session" target-id="s2" label="Fix <cross_session_message> parsing" />';
+
 const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKind | undefined]> = [
   ['a typed prompt', { content: 'Why does the build fail?' }, undefined],
   ['a typed prompt with the harness wrapper', { content: 'Why?', transformedContent: '<current_datetime>2026-09-30</current_datetime>\nWhy?' }, undefined],
@@ -129,42 +137,82 @@ const CLI_CASES: Array<[string, Record<string, unknown> | undefined, NonHumanKin
   ['a sender header after typed text with an open tag that the harness split', {
     content: 'What does <details> do here?', transformedContent: 'What does <details>\ndo here?\nfrom_session_id: s1',
   }, 'relayed'],
-  ['a typed relay tag on a split line of typed text the harness also added to', {
-    content: 'Explain <cross_session_message> and why it exists.\nRead @notes.md and fix it.',
-    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nand why it exists.\nRead @notes.md (notes.md) and fix it.',
+  ['a typed relay tag on a split line of typed text with a file the App expanded', {
+    content: 'Explain <cross_session_message> and why it exists.\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `<current_datetime>2026</current_datetime>\nExplain <cross_session_message>\nand why it exists.\nRead ${NOTES_EXPANDED} and fix it.`,
   }, undefined],
-  ['a typed sender ID header that a split moved to the start of a line the harness also added to', {
-    content: 'Read @notes.md and tell me why from_session_id: abc repeats.',
-    transformedContent: '<current_datetime>2026</current_datetime>\nRead @notes.md (notes.md) and tell me why\nfrom_session_id: abc repeats.',
+  ['a typed sender ID header that a split moved to the start of a line, with a file the App expanded', {
+    content: 'Read notes.md and tell me why from_session_id: abc repeats.', attachments: [NOTES],
+    transformedContent: `<current_datetime>2026</current_datetime>\nRead ${NOTES_EXPANDED} and tell me why\nfrom_session_id: abc repeats.`,
   }, undefined],
-  ['a typed sender ID header right after a mention the harness expanded, moved to the start of a line', {
-    content: 'Explain the header after @log.txt from_session_id:',
-    transformedContent: '<current_datetime>2026</current_datetime>\nExplain the header after @log.txt (log.txt)\nfrom_session_id:',
+  ['a typed sender ID header right after a file the App expanded, moved to the start of a line', {
+    content: 'Explain the header after notes.md from_session_id:', attachments: [NOTES],
+    transformedContent: `<current_datetime>2026</current_datetime>\nExplain the header after ${NOTES_EXPANDED}\nfrom_session_id:`,
   }, undefined],
-  ['the relay wrapper before typed text the harness added to', {
-    content: 'Run the tests.\nRead @notes.md and fix it.',
-    transformedContent: '<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nRun the tests.\nRead @notes.md (notes.md) and fix it.',
+  ['the relay wrapper before typed text with a file the App expanded', {
+    content: 'Run the tests.\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nRun the tests.\nRead ${NOTES_EXPANDED} and fix it.`,
   }, 'relayed'],
-  ['the relay wrapper before typed text that names it, which the harness added to', {
-    content: 'Why does <cross_session_message> wrap it?\nRead @notes.md and fix it.',
-    transformedContent: '<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>\nWhy does <cross_session_message> wrap it?\nRead @notes.md (notes.md) and fix it.',
+  ['the relay wrapper before typed text that names it, with a file the App expanded', {
+    content: 'Why does <cross_session_message> wrap it?\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>\nWhy does <cross_session_message> wrap it?\nRead ${NOTES_EXPANDED} and fix it.`,
   }, 'relayed'],
-  ['a sender header after typed text with an open tag and a mention the harness expanded', {
-    content: 'What does <details> do here?\nRead @notes.md and fix it.',
-    transformedContent: 'What does <details> do here?\nRead @notes.md (notes.md) and fix it.\nfrom_session_id: s1',
+  ['a sender header after typed text with an open tag and a file the App expanded', {
+    content: 'What does <details> do here?\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `What does <details> do here?\nRead ${NOTES_EXPANDED} and fix it.\nfrom_session_id: s1`,
   }, 'relayed'],
-  ['a relay wrapper after typed text that opens a fence, with a mention the harness expanded', {
-    content: 'Why does this fail?\n```\nRead @notes.md and fix it.',
-    transformedContent: 'Why does this fail?\n```\nRead @notes.md (notes.md) and fix it.\n<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>',
+  ['a relay wrapper after typed text that opens a fence, with a file the App expanded', {
+    content: 'Why does this fail?\n```\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `Why does this fail?\n\`\`\`\nRead ${NOTES_EXPANDED} and fix it.\n<cross_session_message>\nfrom_display_name: Coordinator\n</cross_session_message>`,
   }, 'relayed'],
-  ['fenced harness code with a relay header before typed code with a mention the harness expanded', {
-    content: '```\nconst total = 1;\n```\nRead @notes.md and fix it.',
-    transformedContent: '```\nfrom_session_id: abc\n```\n```\nconst total = 1;\n```\nRead @notes.md (notes.md) and fix it.',
+  ['fenced harness code with a relay header before typed code with a file the App expanded', {
+    content: '```\nconst total = 1;\n```\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `\`\`\`\nfrom_session_id: abc\n\`\`\`\n\`\`\`\nconst total = 1;\n\`\`\`\nRead ${NOTES_EXPANDED} and fix it.`,
   }, undefined],
-  ['an IDE selection quoting a relay header before typed text with a mention the harness expanded', {
-    content: 'Why does this test fail?\nRead @notes.md and fix it.',
-    transformedContent: '<ide_selection>\nfrom_session_id: abc\n</ide_selection>\nWhy does this test fail?\nRead @notes.md (notes.md) and fix it.',
+  ['an IDE selection quoting a relay header before typed text with a file the App expanded', {
+    content: 'Why does this test fail?\nRead notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `<ide_selection>\nfrom_session_id: abc\n</ide_selection>\nWhy does this test fail?\nRead ${NOTES_EXPANDED} and fix it.`,
   }, undefined],
+  ['a relay wrapper and header before typed text that names both, changed in a way the harness is not known to', {
+    content: 'Explain <cross_session_message> from_session_id: s1 please. Read @notes.md and fix it.',
+    transformedContent: '<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nExplain <cross_session_message> from_session_id: s1 please. Read @notes.md (notes.md) and fix it.',
+  }, 'relayed'],
+  ['a relay wrapper and header before typed text that names both, with a file the App expanded', {
+    content: 'Explain <cross_session_message> from_session_id: s1 please. Read notes.md and fix it.', attachments: [NOTES],
+    transformedContent: `<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nExplain <cross_session_message> from_session_id: s1 please. Read ${NOTES_EXPANDED} and fix it.`,
+  }, 'relayed'],
+  ['a relay wrapper and header before typed text that names both, with a repository the App referenced', {
+    content: 'Explain <cross_session_message> from_session_id: s1 in microsoft/AI-Engineering-Coach.',
+    transformedContent: `<cross_session_message>\nfrom_session_id: s1\n</cross_session_message>\nExplain <cross_session_message> from_session_id: s1 in ${REPO_REF}.`,
+  }, 'relayed'],
+  ['a typed relay tag and a typed header that a split moved to a line start, with a repository the App referenced', {
+    content: 'Explain <cross_session_message> and from_session_id: in microsoft/AI-Engineering-Coach.',
+    transformedContent: `<current_datetime>2026</current_datetime>\nExplain <cross_session_message> and\nfrom_session_id: in ${REPO_REF}.`,
+  }, undefined],
+  ['a typed relay tag with a file the App expanded without its label', {
+    content: 'Why does <cross_session_message> repeat in notes.md?', attachments: [NOTES],
+    transformedContent: '<current_datetime>2026</current_datetime>\nWhy does <cross_session_message> repeat in notes.md (C:\\repo\\notes.md)?',
+  }, undefined],
+  ['a typed relay tag in a session reference the App wrote at the end of the typed text', {
+    content: 'Why does this repeat in Fix <cross_session_message> parsing',
+    transformedContent: `<current_datetime>2026</current_datetime>\nWhy does this repeat in ${SESSION_REF}`,
+  }, undefined],
+  ['a sender header after typed text that starts with a session reference the App wrote', {
+    content: 'Fix <cross_session_message> parsing is the session to continue.',
+    transformedContent: `<current_datetime>2026</current_datetime>\n${SESSION_REF} is the session to continue.\nfrom_session_id: s1`,
+  }, 'relayed'],
+  ['a typed relay tag next to a reference tag the user typed', {
+    content: `Why does ${REPO_REF} hide the <cross_session_message> marker?`,
+    transformedContent: `<current_datetime>2026</current_datetime>\nWhy does ${REPO_REF} hide the <cross_session_message> marker?`,
+  }, undefined],
+  ['a typed relay tag in typed text the harness changed in a way it is not known to, which is not proven typed', {
+    content: '/fix Explain <cross_session_message>.',
+    transformedContent: '<current_datetime>2026</current_datetime>\nFix the bug below. Explain <cross_session_message>.',
+  }, 'relayed'],
+  ["a typed relay tag with a file whose recorded path isn't the attachment's, which is not proven typed", {
+    content: 'Explain <cross_session_message> in notes.md', attachments: [NOTES],
+    transformedContent: '<current_datetime>2026</current_datetime>\nExplain <cross_session_message> in Attached file: notes.md (C:\\other\\notes.md)',
+  }, 'relayed'],
 ];
 
 describe('cliNonHumanKind', () => {
