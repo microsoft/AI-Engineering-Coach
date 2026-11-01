@@ -338,6 +338,9 @@ export interface CacheSessionSummary {
   date: string;
   workspaceName: string;
   harness: string;
+  /** How the session's cache usage is logged. `per-session` (Codex) has only session totals, so `calls` is 0 and
+   *  isn't a count of model calls. */
+  reporting: CacheReporting;
   calls: number;
   hitPct: number | null;
   breaks: number | null;

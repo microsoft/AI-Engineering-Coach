@@ -8,6 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseClaudeSessions } from './parser-claude';
+import { createRequest, createSession } from './parser-shared';
 import { promptCacheReport } from './prompt-cache-report';
 
 const roots: string[] = [];
@@ -49,5 +50,16 @@ describe('promptCacheReport', () => {
     expect(report).toContain('hit 90.0%');
     expect(report).toMatch(/\n1 parser diagnostic not shown, because they can name sessions and files\n/);
     for (const secret of ['secret-session-id', 'secret-workspace', 'secret prompt', projects]) expect(report).not.toContain(secret);
+  });
+
+  it('reports Codex session totals without a count of model calls', () => {
+    const codex = createSession({
+      sessionId: 'c', workspaceId: 'ws', workspaceName: 'w', harness: 'Codex',
+      requests: [createRequest({ messageText: 'prompt', responseText: '', timestamp: Date.parse('2026-10-20T11:00:00Z') })],
+      modelUsage: { 'gpt-6.1-sol': { inputTokens: 20_000, outputTokens: 1_000, cacheReadTokens: 180_000, cacheWriteTokens: 0 } },
+    });
+    const report = promptCacheReport(() => [codex]).join('\n');
+    expect(report).toContain('Codex [per-session]: 1/1 requests\n  session totals; input 0.2M\n  hit 90.0%');
+    expect(report).not.toMatch(/calls 0/);
   });
 });
