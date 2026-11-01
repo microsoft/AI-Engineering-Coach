@@ -97,8 +97,9 @@ function closeWorkspacePanels(toggles: HTMLButtonElement[]): void {
   }
 }
 
-/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches sessions of
- *  older Copilot CLI builds, which the utilization table omits because they log no per-turn prompt size.
+/** Wire the workspace "Sessions" buttons to an inline per-session drill-down. This also reaches Copilot CLI
+ *  workspaces whose sessions in the range all come from older builds, which the utilization table omits because
+ *  those builds log no per-turn prompt size.
  *  Sessions are matched like the card's requests: any session with a request in range counts.
  *  `timelineInTable`: the workspace table is shown too, so a context timeline here mentions it. */
 export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter, timelineInTable = false): void {
