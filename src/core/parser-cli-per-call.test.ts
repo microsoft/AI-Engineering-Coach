@@ -40,6 +40,7 @@ interface CallOptions {
   input: number;
   subagent?: boolean;
   limit?: number | null;
+  model?: string;
   output?: number;
   reasoning?: number;
   finish?: string;
@@ -54,7 +55,7 @@ function call(at: number, o: CallOptions): Record<string, unknown> {
     timestamp: iso(at),
     data: {
       usage: {
-        model: o.subagent ? 'claude-haiku-4.5' : 'claude-opus-5.5',
+        model: o.model ?? (o.subagent ? 'claude-haiku-4.5' : 'claude-opus-5.5'),
         reasoningEffort: o.subagent ? 'low' : 'high',
         initiator: o.subagent ? 'sub-agent' : 'agent',
         interactionType: o.subagent ? 'conversation-subagent' : 'conversation-agent',
@@ -112,6 +113,17 @@ describe('Copilot CLI per-call token types', () => {
     expect(second.contextUsage).toEqual({ lastPromptTokens: 70_000, peakPromptTokens: 70_000, contextLimit: 300_000, calls: 1 });
     // promptTokens keeps its meaning (not logged per request by the CLI).
     expect(first.promptTokens).toBeNull();
+  });
+
+  it('measures a turn against a limit of its last call\u2019s model only, when the model changes within the turn', () => {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-model-switch', startTime: iso(0), selectedModel: 'claude-opus-5.5' } },
+      { type: 'user.message', id: 'u1', timestamp: iso(1), data: { content: 'secret prompt' } },
+      call(10, { input: 100_000 }),
+      // Another model, with no limit logged: the first model's 968K must not be reported for it.
+      call(20, { input: 150_000, limit: null, model: 'gpt-6.1-sol' }),
+    ]), 'ws', 'demo');
+    expect(session?.requests[0].contextUsage).toEqual({ lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: null, calls: 2 });
   });
 
   it('places each compaction at the next main-agent call of the call timeline', () => {

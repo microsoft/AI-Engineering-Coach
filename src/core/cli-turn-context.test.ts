@@ -6,8 +6,8 @@
 import { describe, it, expect } from 'vitest';
 import { TurnContextAccumulator, type ContextCall } from './cli-turn-context';
 
-function main(inputTokens: number, maxPromptTokens: number | null = 968_000): ContextCall {
-  return { stream: 'main', inputTokens, maxPromptTokens };
+function main(inputTokens: number, maxPromptTokens: number | null = 968_000, model?: string): ContextCall {
+  return { stream: 'main', inputTokens, maxPromptTokens, ...(model ? { model } : {}) };
 }
 
 describe('TurnContextAccumulator', () => {
@@ -48,5 +48,33 @@ describe('TurnContextAccumulator', () => {
     acc.addCall(main(Number.NaN));
     acc.addLimit(300_000);
     expect(acc.result()).toBeUndefined();
+  });
+});
+
+describe('TurnContextAccumulator when the model changes within a turn', () => {
+  it('applies a reported limit only to calls of the model that reported it', () => {
+    const acc = new TurnContextAccumulator();
+    acc.addCall(main(100_000, 968_000, 'claude-opus-5.5'));
+    // The model changes within the turn and its call reports no limit: the other model's 968K doesn't apply.
+    acc.addCall(main(150_000, null, 'gpt-6.1-sol'));
+    expect(acc.result()?.contextLimit).toBeNull();
+    // Back on the first model, its own limit applies again.
+    acc.addCall(main(160_000, null, 'claude-opus-5.5'));
+    expect(acc.result()?.contextLimit).toBe(968_000);
+  });
+
+  it('applies a compaction limit only to the model whose context it compacted', () => {
+    const acc = new TurnContextAccumulator();
+    acc.addCall(main(10_000, null, 'gpt-6.1-sol'));
+    acc.addLimit(272_000);
+    expect(acc.result()?.contextLimit).toBe(272_000);
+    acc.addCall(main(12_000, null, 'claude-opus-5.5'));
+    expect(acc.result()?.contextLimit).toBeNull();
+
+    // A compaction logged before a turn's first call compacted the context of the previous call's model.
+    acc.take();
+    acc.addLimit(200_000);
+    acc.addCall(main(30_000, null, 'claude-opus-5.5'));
+    expect(acc.result()?.contextLimit).toBe(200_000);
   });
 });
