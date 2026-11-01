@@ -163,6 +163,7 @@ A cache break is a main-agent call that couldn't reuse most of the previous call
 |---|---|---|
 | **Came back after the cache expired** | You started the call after the previous call's cache had expired | You |
 | **Cache expired while the agent waited** | The same, but the agent continued on its own after a long-running tool or background agent | Partly |
+| **Cache expired, caller not logged** | The same, but the call doesn't log whether you or the agent made it | Unknown |
 | **Resumed an earlier session** | The session was resumed | You |
 | **Switched model** | The call used a different model. A model can't reuse another model's cache | You |
 | **Automatic model selection switched model** | The same, when automatic model selection picked the new model | Harness |
@@ -176,14 +177,14 @@ A cache break is a main-agent call that couldn't reuse most of the previous call
 
 Causes often occur together. Resuming an old session, for example, usually also means that the cache expired. Each break is counted once, under its first logged cause in this order: compaction, model switch, cache expiry, reasoning effort, tool set, mode switch, and resume. A break with no logged cause is counted under a system-prompt or tool-schema change seen between checkpoints, if there was one.
 
-Most causes are logged on the call itself or in an event since the previous call. System-prompt and tool-schema changes are visible only between two usage checkpoints, which are written periodically rather than on every call. Breaks explained only by such a change are marked as attributed from a **checkpoint window**: the change happened somewhere in that window.
+Most causes are logged on the call itself or in an event since the previous call. System-prompt and tool-schema changes are visible only between two usage checkpoints of the same model, which are written periodically rather than on every call. Such a change explains only breaks on that model, and breaks explained only by it are marked as attributed from a **checkpoint window**: the change happened somewhere in that window.
 
 Each session lists its first 100 breaks. Later breaks still count toward rebuilt tokens and break rates, but their causes aren't listed, so their rebuilt tokens count as unknown in who can change the cause.
 
 Two cards break the misses down further:
 
 - **Where cache misses come from** -- Prompt tokens not read from the cache, by origin: new context such as your prompts and tool results (expected), context rebuilt after a break, subagents (which build their own context), compaction summaries, and the first call of each session. In parentheses, the share of the input cost.
-- **Cache lifetime and expiry** -- The cache lifetime your logs show for each model, how often you came back after the cache had expired, and, for each expiry break, the time since the cache was last refreshed in multiples of the lifetime, split into you away and the agent waiting. A call refreshes the cache when it starts, so this time runs from the previous call's start to the next call's start, and the cache had expired exactly when it's longer than the lifetime. The logged lifetimes, for example 5 or 30 minutes, can differ from general documentation.
+- **Cache lifetime and expiry** -- The cache lifetime your logs show for each model, how often you came back after the cache had expired, and, for each expiry break, the time since the cache was last refreshed in multiples of the lifetime, split into you away and the agent waiting. A call refreshes the cache when it starts, so this time runs from the previous call's start to the next call's start, and the cache had expired exactly when it's longer than the lifetime. The logged lifetimes, for example 5 or 30 minutes, can differ from general documentation. A return counts only when the previous call logged when its cache expires; the card says how many didn't. Expiry breaks whose call doesn't log who made it aren't split.
 
 Below them, **Cache hit ratio by week** shows a line per harness, and **By model** lists each model's hit ratio, write share, breaks per 100 calls, and cache lifetime. **Sessions that rebuilt the most** and **By workspace** lead to individual sessions.
 

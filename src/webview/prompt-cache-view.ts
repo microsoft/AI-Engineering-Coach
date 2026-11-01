@@ -6,7 +6,7 @@
 /* Sections of the Prompt Cache tab: key figures, prompt tokens per harness, why the cache broke, where
  * cache misses come from, cache lifetime and expiry, and breakdowns by model and week. */
 
-import type { CacheAttribution, CacheCauseSummary, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData } from '../core/types';
+import type { CacheAttribution, CacheCauseSummary, CacheIdleSummary, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData } from '../core/types';
 import { CACHE_MAX_BREAKS_PER_SESSION } from '../core/constants';
 import { createChart, destroyChartById, formatNum, harnessColor } from './shared';
 import { html, type ComponentChildren } from './render';
@@ -178,6 +178,18 @@ function originsCard(a: CacheAttribution): ComponentChildren {
   </div>`;
 }
 
+/** How often you came back after the cache expired, over the returns whose previous call logged its expiry. */
+function returnsText(idle: CacheIdleSummary): ComponentChildren {
+  const unmeasured = idle.unmeasuredReturns;
+  if (idle.returns === 0) {
+    return unmeasured > 0
+      ? `${countText(unmeasured, 'return came', 'returns came')} after a call that didn’t log when its cache expires, so expiry can’t be measured.`
+      : 'No returns to an earlier call in this range.';
+  }
+  const rest = unmeasured > 0 ? ` ${countText(unmeasured, 'more return came', 'more returns came')} after a call that didn’t log when its cache expires, so ${unmeasured === 1 ? 'it isn’t' : 'they aren’t'} counted.` : '';
+  return html`You came back after the cache expired in <strong>${formatNum(idle.expiredReturns)}</strong> of ${formatNum(idle.returns)} returns (${pctText((idle.expiredReturns / idle.returns) * 100)}).${rest}`;
+}
+
 function idleCard(a: CacheAttribution): ComponentChildren {
   const { idle } = a;
   const max = Math.max(1, ...idle.buckets.map(b => b.user + b.agent));
@@ -186,7 +198,7 @@ function idleCard(a: CacheAttribution): ComponentChildren {
     <ul class="ctx-cache-list">
       ${idle.ttlByModel.map(t => html`<li><code>${t.model}</code><strong>${durationText(t.ttlSeconds)}</strong><span class="ctx-cache-muted">${countText(t.calls, 'call')}</span></li>`)}
     </ul>
-    <p class="ctx-cache-idle-stat">${idle.returns > 0 ? html`You came back after the cache expired in <strong>${formatNum(idle.expiredReturns)}</strong> of ${formatNum(idle.returns)} returns (${pctText((idle.expiredReturns / idle.returns) * 100)}).` : 'No returns to an earlier call in this range.'}
+    <p class="ctx-cache-idle-stat" id="ctxCacheReturns">${returnsText(idle)}
       ${idle.medianIdleMinutes == null ? '' : ` At an expiry break, the cache had last been refreshed ${durationText(idle.medianIdleMinutes * 60)} earlier (median).`}</p>
     <div class="ctx-cache-idle" role="table" aria-label="Expiry breaks by time since the cache was last refreshed, in multiples of the cache lifetime">
       ${idle.buckets.map(b => html`<div class="ctx-cache-idle-row" role="row">
@@ -197,7 +209,7 @@ function idleCard(a: CacheAttribution): ComponentChildren {
         <span role="cell" class="ctx-cache-muted">${b.user} / ${b.agent}</span>
       </div>`)}
     </div>
-    <div class="ctx-cache-muted">Expiry breaks by time since the cache was last refreshed. Bars: you away / agent waiting.</div>
+    <div class="ctx-cache-muted">Expiry breaks by time since the cache was last refreshed. Bars: you away / agent waiting; expiries whose call doesn’t log who made it aren’t split.</div>
   </div>`;
 }
 

@@ -75,6 +75,7 @@ test.describe('Prompt Cache tab', () => {
     await expect(attribution.locator('[data-origin="rebuilt"]')).toContainText('54%');
     await expect(attribution.locator('[data-origin="rebuilt"]')).toContainText('(25% of cost)');
     await expect(attribution).toContainText('You came back after the cache expired in 78 of 450 returns');
+    await expect(attribution.locator('#ctxCacheReturns')).toContainText('3 more returns came after a call that didn\u2019t log when its cache expires, so they aren\u2019t counted.');
     await expect(attribution).toContainText('At an expiry break, the cache had last been refreshed 51 min earlier (median).');
     await expect(attribution.locator('.ctx-cache-list').last()).toContainText('claude-opus-5.5');
     await expect(attribution.locator('.ctx-cache-list').last()).toContainText('5 min');
@@ -184,5 +185,47 @@ test.describe('Prompt Cache tab states', () => {
     await openPromptCache(page, 'unlisted', 'Why the cache broke');
     await expect(page.locator('#ctxCacheUnlisted')).toContainText('5 cache breaks in this range aren\u2019t listed, because each session lists only its first 100 breaks.');
     await expect(page.locator('#ctxCacheAttribution')).not.toContainText('every main-agent call reused');
+  });
+});
+
+test.describe('Context Health sub-tabs with late responses', () => {
+  /** Opens the dashboard with one RPC method answering after a second. */
+  async function openWithSlow(page: Page, method: string) {
+    await page.goto(HARNESS_URL);
+    await page.waitForFunction(() => {
+      const content = document.getElementById('content');
+      return content && content.innerHTML.length > 200 && !content.querySelector('.loading-spinner') && !content.querySelector('.error-boundary');
+    }, { timeout: 10000 });
+    await page.evaluate(slow => {
+      (window as unknown as { mockResponseDelay: (method: string) => number }).mockResponseDelay = m => (m === slow ? 1_000 : 5);
+    }, method);
+  }
+
+  test('keeps Prompt Cache when Context Quality answers after the switch', async ({ page }) => {
+    await openWithSlow(page, 'getConfigHealth');
+    await page.locator('[data-page="config-health"]').first().click();
+    await page.locator('[data-tab="prompt-cache"]').click();
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    // Context Quality's response arrives meanwhile and is dropped.
+    await page.waitForTimeout(1_500);
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    await expect(page.locator('#content')).not.toContainText('Overall Score');
+  });
+
+  test('keeps Prompt Cache when a Context Management range check answers after the switch', async ({ page }) => {
+    await openWithSlow(page, 'getContextRangeAvailability');
+    await page.locator('[data-page="config-health"]').first().click();
+    await expect(page.locator('#content')).toContainText('Overall Score');
+    await page.locator('[data-tab="context-mgmt"]').click();
+    await page.locator('[data-tab="prompt-cache"]').click();
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    const ranges = page.locator('#ctxRangeBar .cons-range-btn');
+    await expect(ranges).toHaveCount(5);
+    // The range check for Context Management arrives meanwhile; it must not redraw the bar or the tab.
+    await page.waitForTimeout(1_500);
+    await expect(ranges).toHaveCount(5);
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    const loads = await page.evaluate(() => (window as unknown as { promptCacheRequests: { method: string }[] }).promptCacheRequests.filter(r => r.method === 'getPromptCache').length);
+    expect(loads).toBe(1);
   });
 });

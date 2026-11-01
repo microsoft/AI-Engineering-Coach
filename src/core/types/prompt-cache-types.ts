@@ -53,9 +53,13 @@ export interface RequestPromptCache {
   /** Main-agent prompt tokens rebuilt after cache breaks (Copilot CLI and Copilot App). */
   rebuilt?: number;
   rebuiltCost?: number;
-  /** Main-agent calls you started after an earlier call, and how many started after its cache had expired. */
+  /** Main-agent calls you started after an earlier call that logged when its cache expires, and how many
+   *  started after that cache had expired. */
   returns?: number;
   expiredReturns?: number;
+  /** Main-agent calls you started after an earlier call that didn't log when its cache expires. Expiry can't
+   *  be measured for them, so they aren't in `returns`. */
+  unmeasuredReturns?: number;
 }
 
 /** Why the prompt cache broke, as logged by Copilot CLI and Copilot App. */
@@ -161,12 +165,13 @@ export interface HarnessPromptCache {
   sessionsWithData: number;
 }
 
-/** A cause row in the tab. TTL expiry is split by who made the call after the idle time, a model switch by
- *  whether automatic model selection made it, and a system-prompt change by whether your instructions or
- *  memory changed. */
+/** A cause row in the tab. TTL expiry is split by who made the call after the idle time (`ttl-unknown` when
+ *  the call doesn't log it), a model switch by whether automatic model selection made it, and a system-prompt
+ *  change by whether your instructions or memory changed. */
 export type CacheCauseKey =
   | 'ttl-user'
   | 'ttl-agent'
+  | 'ttl-unknown'
   | 'resume'
   | 'model-switch'
   | 'model-auto'
@@ -221,10 +226,14 @@ export interface CacheIdleBucket {
 export interface CacheIdleSummary {
   /** Logged cache lifetime per model, most main-agent calls first. */
   ttlByModel: { model: string; ttlSeconds: number; calls: number }[];
-  /** Main-agent calls you started after an earlier call, and how many started after its cache expired. */
+  /** Main-agent calls you started after an earlier call that logged when its cache expires, and how many
+   *  started after it had expired. */
   returns: number;
   expiredReturns: number;
-  /** Cache-expiry breaks by the time since the cache was last refreshed (see `CacheBreak.idleSeconds`). */
+  /** Such calls after an earlier call that didn't log when its cache expires: not in `returns`. */
+  unmeasuredReturns: number;
+  /** Cache-expiry breaks by the time since the cache was last refreshed (see `CacheBreak.idleSeconds`), split
+   *  by who made the call; breaks whose call doesn't log that are left out of the split. */
   buckets: CacheIdleBucket[];
   /** Median time since the cache was last refreshed, over cache-expiry breaks. */
   medianIdleMinutes: number | null;
