@@ -71,6 +71,8 @@ interface ClaudeLine {
    *  interactive (cli, claude-desktop) vs programmatic (everything else). */
   entrypoint?: string;
   /** True on subagent lines (`<sessionId>/subagents/agent-*.jsonl` files).
+   *  Not every Claude Code build writes it there, so the prompt cache also
+   *  reads the file's own classification (`ClaudeCacheState.subagentFile`).
    *  Carried through so callers can roll subagent requests up into the
    *  parent session rather than treating them as standalone sessions. */
   isSidechain?: boolean;
@@ -128,6 +130,9 @@ interface ClaudeAssistantData {
 /** Session-wide prompt-cache state across Claude requests. */
 interface ClaudeCacheState {
   sawMain: boolean;
+  /** The file is a sub-agent's transcript (`isClaudeSubagentFile`): every call in it is sub-agent work, whether or
+   *  not its lines are marked `isSidechain`. */
+  subagentFile: boolean;
 }
 
 const CLAUDE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'MultiEditTool']);
@@ -263,6 +268,12 @@ function countClaudeImages(line: ClaudeLine): number {
   return imageReferencesFromContent(line.message?.content).length;
 }
 
+/** Claude Code writes each sub-agent's transcript to `<sessionId>/subagents/agent-*.jsonl`, beside the session's
+ *  own `<sessionId>.jsonl`. */
+export function isClaudeSubagentFile(filePath: string): boolean {
+  return path.basename(path.dirname(filePath)) === 'subagents';
+}
+
 function claudeTranscriptKey(filePath: string): string {
   const resolved = path.resolve(filePath);
   return createHash('sha256').update(process.platform === 'win32' ? resolved.toLowerCase() : resolved).digest('hex').slice(0, 32);
@@ -389,7 +400,8 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
-/** Count each API response's cache usage once, as the main agent or a sub-agent (sidechain). */
+/** Count each API response's cache usage once, as the main agent or a sub-agent (a sidechain line, or any line of a
+ *  sub-agent's transcript). */
 function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
   const usage = line.message?.usage;
   // Usage without cache fields didn't report cache usage; don't count the response as uncached.
@@ -402,7 +414,7 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
   if (sample.input <= 0) return;
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
   if (responseId) data.responseIds.add(responseId);
-  const stream = line.isSidechain ? 'subagent' : 'main';
+  const stream = cacheState.subagentFile || line.isSidechain ? 'subagent' : 'main';
   data.cache.addCall(stream, cacheModelName(line.message?.model), sample);
   if (stream === 'main' && !cacheState.sawMain) {
     cacheState.sawMain = true;
@@ -607,7 +619,7 @@ function parseClaudeProjectSessions(
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const filePath = path.join(projPath, entry.name);
-    const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, editLocIndex);
+    const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
@@ -619,6 +631,7 @@ function parseClaudeProjectSessions(
   // merge its requests into the parent rather than emitting it as its own
   // session. Orphans (subagent dir whose parent session is missing) become
   // standalone programmatic sessions — they're still GHCP-spawned work.
+  // Either way, every call in the file is sub-agent work, marked or not.
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const subagentDir = path.join(projPath, entry.name, 'subagents');
@@ -638,7 +651,7 @@ function parseClaudeProjectSessions(
     for (const subEntry of subagentEntries) {
       if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
       const filePath = path.join(subagentDir, subEntry.name);
-      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, editLocIndex);
+      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
       if (!subSession) continue;
       const sourceId = parent?.sessionId ?? entry.name;
       const files = sessionFiles.get(sourceId) ?? [];
@@ -836,11 +849,12 @@ function buildClaudeRequest(
   return request;
 }
 
+/** Parse one transcript file. `subagentFile`: the file is a sub-agent's transcript (see `isClaudeSubagentFile`). */
 export function parseClaudeSessionFile(
   filePath: string,
   wsId: string,
   wsName: string,
-  editLocIndex?: EditLocIndex,
+  { editLocIndex, subagentFile = false }: { editLocIndex?: EditLocIndex; subagentFile?: boolean } = {},
 ): Session | null {
   assertTrustedPath(filePath);
   let raw: string;
@@ -858,7 +872,7 @@ export function parseClaudeSessionFile(
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
   const transcriptKey = claudeTranscriptKey(filePath);
   const requests: SessionRequest[] = [];
-  const cacheState: ClaudeCacheState = { sawMain: false };
+  const cacheState: ClaudeCacheState = { sawMain: false, subagentFile };
   let cwd = '';
   let firstTs: number | null = null;
   let lastTs: number | null = null;
