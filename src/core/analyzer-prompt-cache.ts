@@ -166,8 +166,12 @@ function collectRequests(requests: SessionRequest[], sessionOf: (request: Sessio
     const cache = request.promptCache;
     if (!cache) continue;
     if (!hasCacheRows(cache)) {
-      // Its calls didn't report their cache, so it has no cache data; the returns it counted still go to the card.
-      if (attributesBreaks(session.harness)) addRequestExtras(c.origin, cache);
+      // Its calls didn't report their cache, so it has no cache data, but the returns it counted still go to the
+      // lifetime card, even when the calls they returned to are outside the range.
+      if (attributesBreaks(session.harness)) {
+        addRequestExtras(c.origin, cache);
+        c.attributionHarnesses.add(session.harness);
+      }
       continue;
     }
     harness.requestsWithData++;

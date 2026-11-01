@@ -201,6 +201,17 @@ function returnsText(idle: CacheIdleSummary): ComponentChildren {
   return html`You came back after the cache expired in <strong>${formatNum(idle.expiredReturns)}</strong> of ${formatNum(idle.returns)} returns (${pctText((idle.expiredReturns / idle.returns) * 100)}).${rest}`;
 }
 
+/** For a range without cache data: the returns its prompts counted, measured against the calls they returned to,
+ *  which can be outside the range. `null` without any. */
+export function renderReturnsWithoutCacheData(a: CacheAttribution | null): ComponentChildren {
+  if (!a || a.idle.returns + a.idle.unmeasuredReturns === 0) return null;
+  return html`<div class="chart-wrap ctx-cache-card" id="ctxCacheEmptyReturns">
+    <div class="chart-title">Cache lifetime and expiry</div>
+    <p class="ctx-cache-idle-stat">${returnsText(a.idle)}</p>
+    <div class="ctx-cache-muted">No call in this range logged cache tokens, so only your returns are shown. Each is measured against the cache of the call it returned to, which can be outside the range.</div>
+  </div>`;
+}
+
 function idleCard(a: CacheAttribution): ComponentChildren {
   const { idle } = a;
   const max = Math.max(1, ...idle.buckets.map(b => b.user + b.agent));

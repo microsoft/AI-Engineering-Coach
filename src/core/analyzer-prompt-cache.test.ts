@@ -224,6 +224,15 @@ describe('PromptCacheAnalyzer requests that counted returns without cache rows',
     expect(a.getPromptCacheSessions('ws-alpha', undefined, { fromDate: DAY }).sessions.map(s => s.sessionId)).toEqual(['app-1']);
     expect(a.getSessionTimeline('app-2')).toBeNull();
   });
+
+  it('show their returns on the lifetime card even when the range holds no cache data', () => {
+    const countsOnly = session('app-2', 'GitHub Copilot App', [request(`${DAY}T12:00:00Z`, { rows: [], returns: 1, expiredReturns: 1 })]);
+    const data = analyzer([countsOnly]).getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(data.harnesses).toEqual([expect.objectContaining({ harness: 'GitHub Copilot App', all: null, requestsWithData: 0 })]);
+    expect(data.coverage).toEqual({ requestsWithData: 0, totalRequests: 1, sessionsWithData: 0, totalSessions: 1 });
+    expect(data.attribution).toMatchObject({ label: 'Copilot App', mainCalls: 0, breaks: 0, idle: { returns: 1, expiredReturns: 1, unmeasuredReturns: 0 } });
+    expect(data.tips).toEqual([]);
+  });
 });
 
 describe('PromptCacheAnalyzer tips', () => {

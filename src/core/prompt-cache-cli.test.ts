@@ -12,6 +12,7 @@ import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { PromptCacheAnalyzer } from './analyzer-prompt-cache';
+import { toDateStr } from './helpers';
 import { SessionSchema } from './schemas';
 import { stripSingleSession } from './parser-shared';
 import type { Session } from './types';
@@ -387,6 +388,14 @@ describe('Copilot CLI returns on a call that didn\u2019t report its cache', () =
     expect(data.attribution?.idle).toMatchObject({ returns: 1, expiredReturns: 1, unmeasuredReturns: 1 });
     expect(data.coverage).toEqual({ requestsWithData: 1, totalRequests: 4, sessionsWithData: 1, totalSessions: 2 });
     expect(analyzer.getSessionTimeline('cli-unreported')?.cache ?? null).toBeNull();
+  });
+
+  it('reach the lifetime card when the range holds the return but not the call it returned to', () => {
+    const session = returning(86_400, true);
+    const day = toDateStr(BASE + 86_400_000);
+    const data = new PromptCacheAnalyzer([session], new Map()).getPromptCache({ fromDate: day, toDate: day });
+    expect(data.coverage).toEqual({ requestsWithData: 0, totalRequests: 1, sessionsWithData: 0, totalSessions: 1 });
+    expect(data.attribution?.idle).toMatchObject({ returns: 1, expiredReturns: 1, unmeasuredReturns: 0 });
   });
 });
 

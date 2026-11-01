@@ -16,6 +16,7 @@ import {
   renderHarnessRows,
   renderKpis,
   renderModelTable,
+  renderReturnsWithoutCacheData,
   renderTrendChart,
   renderTrendPanel,
   tokenLegend,
@@ -42,6 +43,7 @@ function renderEmpty(data: PromptCacheData): ComponentChildren {
         ? 'No requests in this range.'
         : 'No model call in this range logged prompt-cache tokens. Recent Copilot App and Copilot CLI builds, Claude Code, OpenCode and Codex log them; VS Code doesn\u2019t. Try a longer range.'}
     </div>
+    ${renderReturnsWithoutCacheData(data.attribution)}
     ${data.harnesses.length > 0 ? renderHarnessRows(data) : null}
   </div>`;
 }
