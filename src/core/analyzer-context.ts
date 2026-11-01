@@ -26,7 +26,7 @@ import {
   WorkspaceContextSessionsData,
 } from './types';
 import { toDateStr } from './helpers';
-import { analyzeComposition, buildSessionCompositionDetail } from './analyzer-composition';
+import { analyzeComposition, buildSessionCompositionDetail, hasPromptComposition } from './analyzer-composition';
 import {
   estimateContextWindow,
   requestCompactions,
@@ -886,8 +886,13 @@ export class ContextAnalyzer extends AnalyzerBase {
   /**
    * Returns which time-range buttons are useful in the Context Management
    * sub-tab — a range is included only if it captures *strictly more*
-   * token-bearing requests than the smaller ranges before it. The smallest
-   * non-empty range is always included so the bar isn't empty when data exists.
+   * requests with per-request tokens or composition than the smaller ranges
+   * before it. The smallest non-empty range is always included so the bar
+   * isn't empty when data exists.
+   *
+   * Composition counts because the tab charts it too, and Copilot CLI records
+   * its prompt size with the composition while leaving `promptTokens` null.
+   * The diagnostics below still count per-request tokens only.
    *
    * Honours non-date filter dimensions (workspace, harness) so the available
    * ranges accurately mirror what the user would see after applying them.
@@ -899,6 +904,7 @@ export class ContextAnalyzer extends AnalyzerBase {
    * granularity that Context Management requires.
    */
   getContextRangeAvailability(f?: DateFilter): {
+    /** Ranges that add requests with per-request tokens or composition (named before composition existed). */
     rangesWithTokens: number[];
     /** Number of sessions matching the non-date filter dimensions. */
     matchingSessions: number;
@@ -925,6 +931,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         timestamps.push(r.timestamp);
         sessionHasReqTokens = true;
       }
+      pushCompositionOnlyTimestamps(s, timestamps);
       if (sessionHasReqTokens) sessionsWithRequestTokens++;
       const prev = harnessHasTokens.get(s.harness);
       harnessHasTokens.set(s.harness, prev === true ? true : sessionHasReqTokens);
@@ -951,5 +958,13 @@ export class ContextAnalyzer extends AnalyzerBase {
       }
     }
     return { rangesWithTokens: result, matchingSessions, sessionsWithRequestTokens, harnessesWithoutRequestTokens };
+  }
+}
+
+/** Adds the timestamps of the session's requests that carry composition but no per-request tokens. They add a
+ *  range for the composition the tab charts, but they aren't per-request token data. */
+function pushCompositionOnlyTimestamps(session: Session, timestamps: number[]): void {
+  for (const r of session.requests) {
+    if (r.timestamp != null && (r.promptTokens == null || r.promptTokens <= 0) && hasPromptComposition(r)) timestamps.push(r.timestamp);
   }
 }

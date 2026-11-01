@@ -101,7 +101,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
   // yield no extra token data. Refresh on every render so reindexed data
   // is reflected immediately.
   let visibleRanges = ALL_RANGES;
-  let emptyRangeMessage = 'No token-bearing context data available.';
+  let emptyRangeMessage = 'No per-request tokens or prompt composition available.';
   if (activeSubTab === 'context-mgmt') {
     try {
       const avail = await rpc<{
@@ -133,11 +133,11 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
             ? `No sessions found for ${currentFilter.harness}.`
             : 'No sessions match the current filter.';
         } else if (avail.sessionsWithRequestTokens === 0 && avail.harnessesWithoutRequestTokens.length > 0) {
-          // Sessions exist, but none have per-request token data.
+          // Sessions exist, but none has per-request tokens or composition.
           const harnesses = avail.harnessesWithoutRequestTokens.join(', ');
-          emptyRangeMessage = `These ${harnesses} sessions log only session-aggregated tokens, not per-turn tokens (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management requires per-turn data to chart utilization. Try a different harness or a more recent range, or view consumption in the Output tab.`;
+          emptyRangeMessage = `These ${harnesses} sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization and composition. Try a different harness or a more recent range, or view consumption in the Output tab.`;
         } else {
-          emptyRangeMessage = 'No token-bearing context data available.';
+          emptyRangeMessage = 'No per-request tokens or prompt composition available.';
         }
       }
     } catch {

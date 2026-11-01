@@ -43,6 +43,11 @@ export function expectedReporting(harness: string): CacheReporting {
   return reportsSessionTotals(harness) ? 'per-session' : 'none';
 }
 
+/** How a session with cache data logged it: Codex only as session totals, the other harnesses per call. */
+function sessionReporting(session: Session): CacheReporting {
+  return reportsSessionTotals(session.harness) ? 'per-session' : 'per-call';
+}
+
 /** Codex session totals as a main-stream accumulator; `null` when the session has none. Usage that didn't log
  *  cached-token counts isn't a cache measurement, so it doesn't count as reported (a 0% hit ratio). */
 export function sessionTotals(session: Session): TotalsAcc | null {
@@ -154,6 +159,7 @@ export function summarizeSession(session: Session): CacheSessionSummary | null {
     date: sessionDate(session),
     workspaceName: session.workspaceName,
     harness: session.harness,
+    reporting: sessionReporting(session),
     calls: all.calls,
     hitPct: pct(all.cacheRead, all.input),
     breaks: attributed ? breaks.length + (session.promptCache?.omittedBreaks ?? 0) : null,
@@ -168,7 +174,7 @@ function cacheLayer(session: Session): SessionCacheLayer | null {
   const { streams, hasData } = sessionStreams(session);
   if (!hasData) return null;
   return {
-    reporting: reportsSessionTotals(session.harness) ? 'per-session' : 'per-call',
+    reporting: sessionReporting(session),
     main: toTotals(streams.main),
     subagents: toTotals(streams.subagent),
     compaction: toTotals(streams.compaction),

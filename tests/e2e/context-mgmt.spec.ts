@@ -416,6 +416,32 @@ test.describe('Context Composition', () => {
     await expect(cliButton).toHaveAttribute('aria-expanded', 'false');
     await expect(page.locator('.ctx-session-chart-row')).toHaveCount(0);
   });
+
+  test('reads the weekly tool-definition shares from the keyboard, without hover', async ({ page }) => {
+    await page.locator('.ctx-comp-detail details.ctx-comp-table summary').focus();
+    await page.keyboard.press('Enter');
+    // Found by role and name, so the table is in the accessibility tree once opened.
+    const table = page.getByRole('table', { name: 'Weekly tool-definition share per harness' });
+    await expect(table.locator('thead th')).toHaveText(['Week of', 'Harness', 'Tool definitions', 'System instructions', 'Based on', 'Weighting']);
+    const rows = table.locator('tbody tr');
+    await expect(rows).toHaveCount(11);
+    await expect(rows.nth(0).locator('th, td')).toHaveText(['2026-04-13', 'GitHub Copilot CLI', '11%', '5.8%', '140 turns', 'Prompt tokens']);
+    await expect(rows.nth(1).locator('th, td')).toHaveText(['2026-04-13', 'Local Agent', '41%', '12%', '110 requests', 'Prompt tokens']);
+    // Local Agent (Insiders) recorded nothing in the first week, so its first row is the second week's.
+    await expect(rows.nth(4).locator('th, td')).toHaveText(['2026-04-20', 'Local Agent (Insiders)', '44%', '10%', '50 requests', 'Prompt tokens']);
+  });
+
+  test('reads each request\u2019s composition from the keyboard, without hover', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    await page.locator('.ctx-session-row').nth(0).locator('.ctx-session-expand').focus();
+    await page.keyboard.press('Enter');
+    await page.locator('.ctx-session-chart-row details.ctx-comp-table summary').focus();
+    await page.keyboard.press('Enter');
+    const table = page.getByRole('table', { name: 'Prompt composition per request' });
+    await expect(table.locator('thead th')).toHaveText(['Request', 'Prompt', 'System instructions', 'Tool definitions', 'Messages', 'Tool results', 'Files']);
+    await expect(table.locator('tbody tr')).toHaveCount(28);
+    await expect(table.locator('tbody tr').nth(0).locator('th, td')).toHaveText(['Request 1', 'Request 1', '12%', '60%', '19%', '8.0%', '1.0%']);
+  });
 });
 
 test.describe('Context Composition without a session in range', () => {
@@ -507,5 +533,43 @@ test.describe('Context Management workspace expansion summary', () => {
     await expect(util).toHaveText('Avg util: \u2014');
     await expect(util).toHaveAttribute('title', 'No session here has per-request token data, so utilization and saturation are unknown.');
     await expect(summary.locator('span', { hasText: /^Saturation:/ })).toHaveText('Saturation: \u2014');
+  });
+});
+
+type RangeAvailability = { rangesWithTokens: number[]; matchingSessions: number; sessionsWithRequestTokens: number; harnessesWithoutRequestTokens: string[] };
+type RangeScenarioWindow = Window & { mockCompositionMode?: string; mockRangeAvailability?: RangeAvailability };
+
+/** Makes the harness answer like the analyzer does for a scenario: `availability` for the range bar, `mode` for the tab's data. */
+async function setRangeScenario(page: Page, mode: string, availability: RangeAvailability) {
+  await page.addInitScript(([m, a]) => {
+    const w = window as RangeScenarioWindow;
+    w.mockCompositionMode = m;
+    w.mockRangeAvailability = a;
+  }, [mode, availability] as const);
+}
+
+test.describe('Context Management range bar', () => {
+  test('opens the only range that holds Copilot CLI composition recorded without promptTokens', async ({ page }) => {
+    // The analyzer's answer for a Copilot CLI-only workspace whose composition-bearing turns are 60 days old.
+    await setRangeScenario(page, 'cli-older', { rangesWithTokens: [90], matchingSessions: 1, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
+    await navigateToContextHealth(page, 'Context Composition');
+    const buttons = page.locator('#ctxRangeBar .cons-range-btn');
+    await expect(buttons).toHaveText(['Last 3 months']);
+    await expect(buttons.first()).toHaveClass(/\bactive\b/);
+    await expect(page.locator('.ctx-comp-row[data-harness="GitHub Copilot CLI"] .ctx-comp-bar')).toBeVisible();
+    await expect(page.locator('#content')).not.toContainText('No Session Data');
+    // Its sessions open from the keyboard.
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="cli-project"]');
+    await workspace.locator('.ctx-comp-ws-toggle').focus();
+    await page.keyboard.press('Enter');
+    await expect(workspace.locator('.ctx-comp-ws-session')).toHaveCount(1);
+    await expect(workspace.locator('.ctx-comp-ws-session')).toContainText('GitHub Copilot CLI');
+  });
+
+  test('explains an empty range bar when no request recorded per-request tokens or composition', async ({ page }) => {
+    await setRangeScenario(page, 'boundary-empty', { rangesWithTokens: [], matchingSessions: 3, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
+    await navigateToContextHealth(page, 'No Session Data');
+    await expect(page.locator('#ctxRangeBar .cons-range-btn')).toHaveCount(0);
+    await expect(page.locator('#ctxRangeBar')).toHaveText('These GitHub Copilot CLI sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization and composition. Try a different harness or a more recent range, or view consumption in the Output tab.');
   });
 });
