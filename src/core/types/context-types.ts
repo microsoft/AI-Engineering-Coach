@@ -80,6 +80,7 @@ export interface CompositionTrendSeries {
   harness: string;
   toolDefinitions: (number | null)[];
   systemInstructions: (number | null)[];
+  /** Requests (Copilot CLI: turns) behind each weekly share, like `CompositionBreakdown.samples`. */
   samples: number[];
 }
 

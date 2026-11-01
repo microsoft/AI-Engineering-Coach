@@ -307,7 +307,7 @@ describe('context composition tips', () => {
   });
 });
 
-describe('context composition tips with mixed prompt sizes', () => {
+describe('context composition with mixed prompt sizes', () => {
   const heavy: PromptComposition['shares'] = { systemInstructions: 25, toolDefinitions: 55, messages: 0, toolResults: 20, files: 0 };
   const compositionTips = (sessions: Session[]) => new Analyzer(sessions).getContextManagement().tips
     .filter(tip => /^(System instructions|Tool definitions|Tool results|Conversation history)/.test(tip));
@@ -326,6 +326,21 @@ describe('context composition tips with mixed prompt sizes', () => {
       'Tool definitions take 55% of y',
       'System instructions take 25% o',
     ]);
+  });
+
+  it('counts only the requests that shape each weekly share in the trend', () => {
+    const data = composition([
+      sess('Local Agent', 'api', [
+        req(MONDAY, vscodeComposition(60, 10_000)),
+        ...[1, 2, 3].map(i => req(MONDAY + i, vscodeComposition(20, null))),
+        ...[1, 2].map(i => req(MONDAY + 7 * DAY + i, vscodeComposition(30, null))),
+      ]),
+    ]);
+    const [series] = data.trend.series;
+    // Week 1 is token-weighted, so its three requests without a prompt size are left out of both the share
+    // and the count; week 2 recorded no prompt size, so both of its requests count equally.
+    expect(series.toolDefinitions).toEqual([60, 30]);
+    expect(series.samples).toEqual([1, 2]);
   });
 });
 

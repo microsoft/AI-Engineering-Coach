@@ -312,6 +312,7 @@ export function renderCompositionTrendChart(data: ContextCompositionData): void 
   destroyChartById(COMPOSITION_TREND_CHART_ID);
   if (data.trend.labels.length <= 1 || !document.getElementById(COMPOSITION_TREND_CHART_ID)) return;
   const series = data.trend.series.filter(s => s.toolDefinitions.some(v => v != null));
+  const nouns = new Map(data.harnesses.map(h => [h.harness, h.source === 'copilot-cli' ? 'turn' : 'request']));
   createChart(COMPOSITION_TREND_CHART_ID, 'line', {
     labels: data.trend.labels,
     datasets: series.map((s, i) => ({
@@ -337,7 +338,7 @@ export function renderCompositionTrendChart(data: ContextCompositionData): void 
             const s = series[item.datasetIndex];
             if (!s || item.parsed.y == null) return '';
             const system = s.systemInstructions[item.dataIndex];
-            return `${s.harness}: tools ${pctText(item.parsed.y)}${system == null ? '' : ` \u00b7 system ${pctText(system)}`} \u00b7 ${s.samples[item.dataIndex]} requests`;
+            return `${s.harness}: tools ${pctText(item.parsed.y)}${system == null ? '' : ` \u00b7 system ${pctText(system)}`} \u00b7 ${countText(s.samples[item.dataIndex], nouns.get(s.harness) ?? 'request')}`;
           },
         },
       },

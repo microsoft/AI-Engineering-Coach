@@ -177,7 +177,7 @@ function buildTrend(samples: Sample[]): CompositionTrend {
         harness,
         toolDefinitions: breakdowns.map(b => shareOf(b, 'toolDefinitions')),
         systemInstructions: breakdowns.map(b => shareOf(b, 'systemInstructions')),
-        samples: perWeek.map(week => week.length),
+        samples: breakdowns.map(b => b?.samples ?? 0),
       };
     });
   return { labels, series };
