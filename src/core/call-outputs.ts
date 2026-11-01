@@ -131,12 +131,20 @@ export function thinSamples(values: number[], max = MAX_LATENCY_SAMPLES): number
   return Array.from({ length: max }, (_, i) => values[Math.round(i * step)]);
 }
 
-/** Before a row is stored: thin its latency samples, and drop the denominators and the effort split when the
- *  row-level fields already say the same (every call logged the value, at one effort), so most rows keep
- *  their size. */
+/** Before a row is stored: thin its latency samples, keeping how many calls they stand for when fewer are kept
+ *  (`ttftCalls`, `durationCalls`), and drop the denominators and the effort split when the row-level fields already
+ *  say the same (every call logged the value, at one effort), so most rows keep their size. */
 export function finishRowOutputs(row: CallRow): void {
-  if (row.ttftMs) row.ttftMs = thinSamples(row.ttftMs);
-  if (row.durationMs) row.durationMs = thinSamples(row.durationMs);
+  if (row.ttftMs) {
+    const logged = row.ttftMs.length;
+    row.ttftMs = thinSamples(row.ttftMs);
+    if (row.ttftMs.length < logged) row.ttftCalls = logged;
+  }
+  if (row.durationMs) {
+    const logged = row.durationMs.length;
+    row.durationMs = thinSamples(row.durationMs);
+    if (row.durationMs.length < logged) row.durationCalls = logged;
+  }
   if (row.stopCalls === row.calls) delete row.stopCalls;
   const parts = row.reasoningByEffort;
   if (parts?.length === 1 && parts[0].calls === row.calls && parts[0].outputTokens === row.outputTokens

@@ -115,6 +115,8 @@ const callRowShape = {
   filteredCalls: z.number().int().min(0).optional(),
   ttftMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
   durationMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
+  ttftCalls: z.number().int().min(0).optional(),
+  durationCalls: z.number().int().min(0).optional(),
 };
 
 const CallRowSchema = z.object(callRowShape).strict();

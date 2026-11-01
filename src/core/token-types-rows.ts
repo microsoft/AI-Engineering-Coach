@@ -6,8 +6,9 @@
 /* Row-based token types: reasoning share by effort, truncated calls and model-call latency, summed over the
  * per-request rows (`CallRow`, filled by call-outputs.ts): the rows of calls that reported their cache usage and
  * the rows of calls that didn't, so token types never depend on cache data. Ratios are ratios of sums over the
- * calls that logged each value; latency percentiles are over the stored per-call samples. Compaction-summary
- * rows are left out: compaction has its own figures (`CompactionEvent.tokensUsed`). */
+ * calls that logged each value; latency percentiles are over the stored per-call samples, each weighted by the
+ * calls it stands for. Compaction-summary rows are left out: compaction has its own figures
+ * (`CompactionEvent.tokensUsed`). */
 
 import type {
   CallRow,
@@ -128,42 +129,56 @@ export function rowTruncation(rows: CallRow[]): TokenTypesTruncation | null {
   };
 }
 
-/** Nearest-rank percentile of ascending values. */
-export function percentile(sorted: number[], p: number): number | null {
-  if (sorted.length === 0) return null;
-  const rank = Math.ceil((p / 100) * sorted.length);
-  return sorted[Math.min(sorted.length - 1, Math.max(0, rank - 1))];
+/** A latency sample and the calls it stands for: more than one when its row's samples were thinned. */
+interface WeightedSample {
+  value: number;
+  weight: number;
 }
 
-function ascending(values: number[]): number[] {
-  return [...values].sort((a, b) => a - b);
+/** A row's latency samples, each weighted by the calls it stands for (`ttftCalls` or `durationCalls` over the samples
+ *  kept), so thinning doesn't change a row's weight among rows. A row without the count weighs each sample once. */
+export function latencySamples(values: number[] | undefined, calls: number | undefined): WeightedSample[] {
+  if (!values?.length) return [];
+  const weight = Math.max(calls ?? 0, values.length) / values.length;
+  return values.map(value => ({ value, weight }));
+}
+
+/** Nearest-rank percentile of weighted samples: the smallest value whose cumulative weight reaches p% of the total.
+ *  With every weight 1, it is the nearest-rank percentile of the values. `null` without samples. */
+export function weightedPercentile(samples: readonly WeightedSample[], p: number): number | null {
+  const sorted = [...samples].sort((a, b) => a.value - b.value);
+  const total = sorted.reduce((sum, sample) => sum + sample.weight, 0);
+  if (sorted.length === 0 || total <= 0) return null;
+  const target = (p / 100) * total;
+  let cumulative = 0;
+  for (const sample of sorted) {
+    cumulative += sample.weight;
+    if (cumulative >= target) return sample.value;
+  }
+  return sorted[sorted.length - 1].value;
 }
 
 /** First-token time and call duration by model, most calls first. `null` when no row logged latency. */
 export function rowLatency(rows: CallRow[]): LatencyByModel[] | null {
-  const models = new Map<string, { calls: number; ttft: number[]; duration: number[] }>();
+  const models = new Map<string, { calls: number; ttft: WeightedSample[]; duration: WeightedSample[] }>();
   for (const row of rows) {
     if (!row.ttftMs?.length && !row.durationMs?.length) continue;
     const entry = models.get(row.model) ?? { calls: 0, ttft: [], duration: [] };
     entry.calls += row.calls;
-    entry.ttft.push(...(row.ttftMs ?? []));
-    entry.duration.push(...(row.durationMs ?? []));
+    entry.ttft.push(...latencySamples(row.ttftMs, row.ttftCalls));
+    entry.duration.push(...latencySamples(row.durationMs, row.durationCalls));
     models.set(row.model, entry);
   }
   if (models.size === 0) return null;
   return [...models]
-    .map(([model, entry]) => {
-      const ttft = ascending(entry.ttft);
-      const duration = ascending(entry.duration);
-      return {
-        model,
-        calls: entry.calls,
-        ttftP50Ms: percentile(ttft, 50),
-        ttftP90Ms: percentile(ttft, 90),
-        durationP50Ms: percentile(duration, 50),
-        durationP90Ms: percentile(duration, 90),
-      };
-    })
+    .map(([model, entry]) => ({
+      model,
+      calls: entry.calls,
+      ttftP50Ms: weightedPercentile(entry.ttft, 50),
+      ttftP90Ms: weightedPercentile(entry.ttft, 90),
+      durationP50Ms: weightedPercentile(entry.duration, 50),
+      durationP90Ms: weightedPercentile(entry.duration, 90),
+    }))
     .sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model))
     .slice(0, MAX_LATENCY_MODELS);
 }

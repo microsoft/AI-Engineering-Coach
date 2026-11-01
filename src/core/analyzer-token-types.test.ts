@@ -270,4 +270,13 @@ describe('sessionTokenTypes', () => {
     expect(sessionTokenTypes(session('Local Agent', [req()]))).toBeNull();
     expect(sessionTokenTypes(session('GitHub Copilot CLI', [req()]))).toBeNull();
   });
+
+  it('weights each turn\u2019s thinned first-token samples by its calls in the median', () => {
+    // One turn of 256 calls at 10 s, thinned to 128 samples, and 200 single-call turns at 1 s: the median call is 10 s.
+    const turn = (calls: number, ttftMs: number[], ttftCalls?: number): SessionRequest => req({ promptCache: { rows: [{
+      stream: 'main', model: 'claude-opus-5.5', calls, input: 1, cacheRead: 0, cacheWrite: 0, ttftMs, ...(ttftCalls ? { ttftCalls } : {}),
+    }] } });
+    const cli = session('GitHub Copilot CLI', [turn(256, Array.from({ length: 128 }, () => 10_000), 256), ...Array.from({ length: 200 }, () => turn(1, [1_000]))]);
+    expect(sessionTokenTypes(cli)?.ttftMedianMs).toBe(10_000);
+  });
 });

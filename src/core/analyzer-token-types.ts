@@ -34,14 +34,15 @@ import { compactionKind } from './cli-compaction';
 import {
   callRows,
   hasPerCallOutputs,
+  latencySamples,
   mainTokens,
   pct,
-  percentile,
   reasoningShare,
   requestCallRows,
   rowLatency,
   rowReasoning,
   rowTruncation,
+  weightedPercentile,
 } from './token-types-rows';
 
 const SOURCE_ORDER: readonly TokenTypesSource[] = ['copilot-cli', 'codex', 'claude', 'opencode'];
@@ -323,7 +324,7 @@ export function sessionTokenTypes(session: Session): SessionTokenTypes | null {
   const types = summarizeSubagents(runs)?.byType ?? [];
   const compactions = session.requests.flatMap(requestCompactions).filter(event => event.tokensUsed != null);
   const truncation = source === 'codex' ? null : rowTruncation(rows);
-  const ttft = rows.filter(row => row.stream === 'main').flatMap(row => row.ttftMs ?? []).sort((a, b) => a - b);
+  const ttft = rows.filter(row => row.stream === 'main').flatMap(row => latencySamples(row.ttftMs, row.ttftCalls));
   const strip: SessionTokenTypes = {
     reasoningPct: reasoning?.main?.sharePct ?? null,
     effort: topEffort(reasoning),
@@ -335,7 +336,7 @@ export function sessionTokenTypes(session: Session): SessionTokenTypes | null {
     compactionTimeMs: compactions.reduce((sum, event) => sum + event.durationMs, 0),
     truncatedCalls: truncation?.truncatedCalls ?? null,
     calls: truncation?.calls ?? null,
-    ttftMedianMs: percentile(ttft, 50),
+    ttftMedianMs: weightedPercentile(ttft, 50),
   };
   const empty = strip.reasoningPct == null && strip.subagentRuns === 0 && strip.compactionCalls === 0
     && strip.truncatedCalls == null && strip.ttftMedianMs == null;

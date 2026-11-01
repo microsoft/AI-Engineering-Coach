@@ -321,6 +321,6 @@ Insights at the top of the tab apply these tips to your own numbers.
 - Sub-agent tokens are what Copilot reported when each run finished: input, including cached tokens, plus output. They're counted for the turn that launched the run, also when it finished later. Runs that were still going aren't counted.
 - The shares for compaction and sub-agents count only turns that log per-call usage, where the main agent's tokens are known.
 - Each ratio counts only the model calls that logged its parts. The reasoning share uses the calls that logged reasoning tokens, and the truncation rate the calls that logged why they stopped. A call that didn't log a value isn't counted as zero. Content-filter stops count even when their calls didn't log why they stopped; if no call logged it, truncated calls show as not reported.
-- Latency percentiles use up to 128 evenly spaced calls per model and turn, and pool the main agent and sub-agents for each model.
+- Latency percentiles use up to 128 evenly spaced calls per model and turn, each standing for the calls it represents, so a turn with many calls weighs as much as its calls. They pool the main agent and sub-agents for each model.
 - Only tokens and ratios are shown. AI credits aren't.
 - These figures are for your own coaching, not for evaluating anyone's performance.
