@@ -1253,6 +1253,19 @@ describe('getContextRangeAvailability', () => {
     expect(out.harnessesWithoutRequestTokens).toEqual(['GitHub Copilot CLI']);
   });
 
+  it('counts a Copilot CLI turn with per-turn context and composition as token data', () => {
+    const sessions = [sess({ harness: 'GitHub Copilot CLI', requests: [
+      req({
+        requestId: 'r1', promptTokens: null, timestamp: NOW - 60 * DAY, promptComposition: cliComposition({ toolDefinitions: 10, conversation: 90 }),
+        contextUsage: { lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: 968_000, calls: 3 },
+      }),
+    ] })];
+    const out = new Analyzer(sessions).getContextRangeAvailability({ harness: 'GitHub Copilot CLI' });
+    expect(out.rangesWithTokens).toEqual([90]);
+    expect(out.sessionsWithRequestTokens).toBe(1);
+    expect(out.harnessesWithoutRequestTokens).toEqual([]);
+  });
+
   it('ignores composition the card cannot show', () => {
     const sessions = [sess({ harness: 'GitHub Copilot CLI', requests: [
       req({ requestId: 'r1', promptTokens: null, timestamp: NOW - 5 * DAY, promptComposition: cliComposition({}) }),

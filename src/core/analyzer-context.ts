@@ -962,9 +962,10 @@ export class ContextAnalyzer extends AnalyzerBase {
 }
 
 /** Adds the timestamps of the session's requests that carry composition but no per-request tokens. They add a
- *  range for the composition the tab charts, but they aren't per-request token data. */
+ *  range for the composition the tab charts, but they aren't per-request token data. A request with tokens, the
+ *  prompt of its last model call included (`requestContextTokens`), is already counted. */
 function pushCompositionOnlyTimestamps(session: Session, timestamps: number[]): void {
   for (const r of session.requests) {
-    if (r.timestamp != null && (r.promptTokens == null || r.promptTokens <= 0) && hasPromptComposition(r)) timestamps.push(r.timestamp);
+    if (r.timestamp != null && requestContextTokens(r) <= 0 && hasPromptComposition(r)) timestamps.push(r.timestamp);
   }
 }
