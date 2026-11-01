@@ -67,6 +67,8 @@ AI-Engineering-Coach/
 | End-to-end (Playwright) | `npm run test:e2e` |
 | Package the VSIX | `npm run package` (see [skills/package-extension.md](skills/package-extension.md)) |
 | Bundle-size budget | `npm run check-size` |
+| Prepare a release (version + notes) | `npm run release:prepare -- <patch\|minor\|major\|x.y.z>` (see [skills/cut-release.md](skills/cut-release.md)) |
+| Print a release's notes | `npm run release:notes -- <x.y.z>` |
 
 CI runs `npm run check` (typecheck + lint + spellcheck + knip + test) plus the size check on
 every PR. Run those locally before pushing.
@@ -82,6 +84,7 @@ Available today:
 
 - [`skills/update-docs.md`](skills/update-docs.md) — author or update a Hugo doc page.
 - [`skills/package-extension.md`](skills/package-extension.md) — produce an installable `.vsix`.
+- [`skills/cut-release.md`](skills/cut-release.md) — bump the version, finalize release notes, and tag a release.
 
 ## Rule and metric authoring
 
@@ -187,6 +190,11 @@ body and an optional `# Tests` block. See [`docs/AUTHORING_RULES.md`](docs/AUTHO
 - **Inclusive language.** Prefer allowlist/denylist, primary/replica, etc.
 - **Author over generate.** Rules and skills are markdown — write them by hand or via the Rule
   Editor, not as opaque generated artifacts.
+- **Release notes in the same PR.** A user-visible change adds a bullet under `## [Unreleased]`
+  in [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog types: Added, Changed, Deprecated, Removed,
+  Fixed, Security). Summarize the notable, user-facing change with its PR or issue number, don't
+  paste a git log, and mark breaking changes with `**Breaking:**`. Only a release PR changes
+  `version` (see [skills/cut-release.md](skills/cut-release.md)).
 
 ## Boundaries
 

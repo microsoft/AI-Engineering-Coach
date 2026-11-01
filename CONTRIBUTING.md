@@ -20,8 +20,10 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 4. **Run tests**: `npm test`
 5. **Lint**: `npm run lint`
 6. If you've added code, add tests that cover your changes.
-7. Ensure the test suite passes and linting is clean.
-8. Submit a **pull request**.
+7. If users will notice the change, describe it under `## [Unreleased]` in
+   [`CHANGELOG.md`](CHANGELOG.md). Don't change `version`; see [Releases](#releases).
+8. Ensure the test suite passes and linting is clean.
+9. Submit a **pull request**.
 
 ## Reporting Issues
 
@@ -52,11 +54,14 @@ script, and installs that VSIX into a disposable VS Code installation. It never 
 your normal editor. To test an already-built artifact without rebuilding it, use:
 
 ```sh
-npm run test:vscode -- --vsix ai-engineer-coach-0.1.0.vsix
+npm run test:vscode -- --vsix ai-engineer-coach-<version>.vsix
 ```
 
-Substitute the filename produced by `npm run package` when the package version changes.
+Use the file name that `npm run package` printed.
 The runner records the package's SHA-256 hash and checks that the artifact did not change.
+It also checks the build stamp: the installed `dist/build-info.json` must match the manifest
+version (and `GITHUB_SHA` in CI), the packaged changelog must have a section for that version,
+and the dashboard footer and the `runtime.log` activate line must show the same stamp.
 CI and releases pass the exact package path this way; publishing happens only after the
 browser and desktop suites pass, and the release uses that same VSIX.
 
@@ -151,6 +156,22 @@ Use the shared [E2E action](.github/actions/e2e/action.yml) for pipeline changes
 and compatibility runs do not acquire different setup procedures. Investigate failures using
 the saved screenshots and logs; do not bypass the release gate or disable an operating-system
 security feature globally to get a green run.
+
+## Releases
+
+Versions are `major.minor.patch` only, with even minor versions for stable releases and odd minor
+versions for pre-releases. Feature pull requests add their notes under `## [Unreleased]` in
+[`CHANGELOG.md`](CHANGELOG.md) and leave `version` alone. A maintainer cuts a release with
+`npm run release:prepare` in a release pull request, then pushes the `v<version>` tag, which
+publishes the GitHub Release with the VSIX, its SHA-256 checksum, and the notes. See
+[`skills/cut-release.md`](skills/cut-release.md) for the steps.
+
+Every build is stamped with its version, commit, and build time, so branch builds that share a
+version can still be told apart. The bottom of the dashboard sidebar shows the stamp, marked
+**dev** unless it's a tagged release, and so do the `[extension] activate` line in
+`~/.copilot-analytics-cache/runtime.log` and `dist/build-info.json` in the installed extension.
+`code --install-extension` refuses to replace a newer installed version with an older one; add
+`--force` to go back to an older build.
 
 ## Security
 

@@ -7,14 +7,16 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { describe, it } from 'mocha';
 import { Dashboard } from '../dashboard';
-import { fixturePaths, scenarioContext } from '../fixtures';
+import { activateLinePattern, fixturePaths, readInstalledBuild, scenarioContext } from '../fixtures';
 
 describe('Packaged VSIX without session logs', () => {
   it('shows the no-data explanation instead of hanging or reading another profile', async () => {
     const dashboard = new Dashboard();
     await dashboard.open();
     await dashboard.waitForText('.error p', 'No AI coding session logs found.');
-    const runtime = await fs.readFile(fixturePaths(scenarioContext().root).runtimeLog, 'utf8');
+    const { root } = scenarioContext();
+    const runtime = await fs.readFile(fixturePaths(root).runtimeLog, 'utf8');
+    assert.match(runtime, activateLinePattern(await readInstalledBuild(root)));
     assert.match(runtime, /logs-dirs-found[^\n]*count=0 external=false/);
     assert.match(runtime, /loadData-no-dirs/);
     assert.doesNotMatch(runtime, /parse-complete|uncaught-exception|unhandled-rejection/);

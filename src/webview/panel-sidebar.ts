@@ -4,13 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { BUILD_INFO, formatBuildDetails, formatBuildTooltip } from '../core/build-info';
 import { loadSidebarStats } from '../core/cache';
 import { getNonce, escapeHtmlAttr } from './panel-shared';
 
-// Injected by esbuild at build time (see esbuild.mjs `define`). Falls back to ''
-// when run unbundled (tests), so the UI shows "dev build".
-declare const __BUILD_TIME__: string;
-const BUILD_TIME = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : '';
+/** Commands the sidebar's buttons may run; anything else posted by the webview is ignored. */
+const SIDEBAR_COMMANDS = new Set(['aiEngineerCoach.open', 'aiEngineerCoach.reload', 'aiEngineerCoach.showReleaseNotes']);
 
 export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   public static instance: DashboardSidebarProvider | undefined;
@@ -32,9 +31,10 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.renderHtml(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage((msg: { command: string }) => {
-      if (msg.command === 'aiEngineerCoach.open' || msg.command === 'aiEngineerCoach.reload') {
-        void vscode.commands.executeCommand(msg.command);
+    webviewView.webview.onDidReceiveMessage((msg: unknown) => {
+      const command = typeof msg === 'object' && msg !== null ? (msg as { command?: unknown }).command : undefined;
+      if (typeof command === 'string' && SIDEBAR_COMMANDS.has(command)) {
+        void vscode.commands.executeCommand(command);
       }
     });
   }
@@ -47,7 +47,6 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   private renderHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'sidebar.css'));
-    const buildLabel = BUILD_TIME ? new Date(BUILD_TIME).toLocaleString() : 'dev build';
     const stats = loadSidebarStats();
     const statsHtml = stats
       ? `
@@ -73,7 +72,8 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
 <div id="content">${statsHtml}</div>
 <button id="open">Explore AI Insights</button>
 <button id="reload" class="secondary">Sync Sessions</button>
-<p class="sidebar-note">Build ${buildLabel}</p>
+<p class="sidebar-note sidebar-build" id="build-info" title="${escapeHtmlAttr(formatBuildTooltip(BUILD_INFO))}">${escapeHtmlAttr(formatBuildDetails(BUILD_INFO))}</p>
+<button id="whatsNew" class="link">What's new</button>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   document.getElementById('open').addEventListener('click', function() {
@@ -81,6 +81,9 @@ export class DashboardSidebarProvider implements vscode.WebviewViewProvider {
   });
   document.getElementById('reload').addEventListener('click', function() {
     vscode.postMessage({ command: 'aiEngineerCoach.reload' });
+  });
+  document.getElementById('whatsNew').addEventListener('click', function() {
+    vscode.postMessage({ command: 'aiEngineerCoach.showReleaseNotes' });
   });
 </script>
 </body>

@@ -1,0 +1,10 @@
+# Categories for GitHub's automatically generated release notes. The release workflow
+# (.github/workflows/release.yml) puts the matching CHANGELOG.md section above this list.
+changelog:
+  categories:
+    - title: Dependency updates
+      labels:
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"
