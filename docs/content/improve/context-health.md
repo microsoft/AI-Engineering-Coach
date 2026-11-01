@@ -82,6 +82,8 @@ The section shows:
 
 Click a session in the per-workspace table to see its composition. For VS Code sessions, a per-request chart lines up with the token curve. For Copilot CLI sessions, the panel also lists the system-prompt segments from the latest checkpoint and the context when each compaction started, including tokens the CLI didn't attribute.
 
+You don't have to hover the charts: **Show the chart as a table**, under the weekly chart and each per-request chart, lists every value their tooltips show. For each week and harness, that's the shares, the requests (Copilot CLI: turns) behind them and how they're weighted; for each request, its prompt and category shares. It opens from the keyboard, and screen readers read it as a table.
+
 #### Where the data comes from
 
 | Harness | Source | What you get |
@@ -105,6 +107,7 @@ GitHub's [Optimizing your AI usage](https://docs.github.com/en/copilot/tutorials
 
 - VS Code records composition only for the last model call of each request, while Copilot CLI records every main-agent call. Pooled together, Copilot CLI would dominate every figure, so the two are never combined: key figures and workspace rows are shown for each separately.
 - Composition counts the requests sent in the selected range, while context utilization counts sessions by their last activity. A session that continues past the end of the range adds composition but no utilization. If no session's last activity falls in the range, the tab shows only Context Composition.
+- The time-range buttons offer each range that adds requests with per-request token counts or composition data, so a range whose only data is Copilot CLI composition can still be selected.
 - VS Code rounds each category to a whole percent, so shares can add up to 98-101%. Small rounding differences are rescaled; a larger shortfall shows as Other / unattributed.
 - Copilot CLI's system-prompt size comes from the latest checkpoint and is applied to every call in a turn, so the split between system instructions and conversation is an estimate. Tool-definition tokens are counted per call.
 - The tool-definition total in Copilot CLI's `session.shutdown` event isn't used, because it disagrees with the per-call counts.

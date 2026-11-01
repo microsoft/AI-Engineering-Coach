@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { CompositionBreakdown, ContextCompositionData, HarnessComposition, WorkspaceComposition } from '../core/types';
-import { renderCompositionSection, renderCompositionTrendChart } from './context-composition-view';
+import type { CompositionBreakdown, ContextCompositionData, HarnessComposition, SessionContextDetail, WorkspaceComposition } from '../core/types';
+import { renderCompositionSection, renderCompositionTrendChart, renderSessionCompositionPanel } from './context-composition-view';
 import { render } from './render';
 import { createChart } from './shared';
 
@@ -131,5 +131,91 @@ describe('context composition weekly trend tooltip', () => {
     expect(label({ datasetIndex: 0, dataIndex: 0, parsed: { y: 60 } })).toBe('Local Agent: tools 60% \u00b7 system 10% \u00b7 1 request');
     expect(label({ datasetIndex: 0, dataIndex: 1, parsed: { y: 40 } })).toBe('Local Agent: tools 40% \u00b7 3 requests \u00b7 equal weight');
     expect(label({ datasetIndex: 1, dataIndex: 1, parsed: { y: 9 } })).toBe('GitHub Copilot CLI: tools 9.0% \u00b7 system 5.0% \u00b7 2 turns');
+  });
+});
+
+/** Each body row's cells, header cells included. */
+function tableRows(table: Element | null | undefined): string[][] {
+  return [...(table?.querySelectorAll('tbody tr') ?? [])].map(row => [...row.children].map(cell => cell.textContent?.trim() ?? ''));
+}
+
+function columnHeaders(table: Element | null | undefined): string[] {
+  return [...(table?.querySelectorAll('thead th') ?? [])].map(th => th.textContent ?? '');
+}
+
+/** Two weeks where Local Agent's second week is equal-weight and Copilot CLI only has the second. */
+function withTrend(): ContextCompositionData {
+  const data = mixed();
+  data.harnesses.push({ ...harness('GitHub Copilot CLI', breakdown('tokens', 3, 10), 3), source: 'copilot-cli' });
+  data.trend = {
+    labels: ['2026-09-07', '2026-09-14'],
+    series: [
+      { harness: 'Local Agent', toolDefinitions: [60, 40], systemInstructions: [10, null], samples: [1, 3], weighting: ['tokens', 'requests'] },
+      { harness: 'GitHub Copilot CLI', toolDefinitions: [null, 9], systemInstructions: [null, 5], samples: [0, 2], weighting: [null, 'tokens'] },
+    ],
+  };
+  return data;
+}
+
+function sessionDetail(): SessionContextDetail {
+  return {
+    sessionId: 'cli-1', date: '2026-09-30', harness: 'GitHub Copilot CLI', requestCount: 2, requestsWithTokens: 0,
+    avgPromptTokens: 0, maxPromptTokens: 0, avgUtilization: 0, peakUtilization: 0, contextWindow: 0, compactionCount: 0,
+    tokenCurve: [null, null], saturation: 0, costEfficiency: null, verdict: 'optimal', events: [],
+    requestQueries: ['Refactor the parser', 'Add tests'], hasPerRequestTokens: false,
+    composition: {
+      source: 'copilot-cli',
+      breakdown: { slices: [{ category: 'toolDefinitions', pct: 10, tokens: 30_000 }, { category: 'conversation', pct: 90, tokens: 270_000 }], weighting: 'tokens', samples: 1, avgPromptTokens: 300_000 },
+      perRequest: [{ toolDefinitions: 10, conversation: 90 }, null],
+      systemSegments: [], toolCount: null, toolTokens: null, compactions: [],
+    },
+  };
+}
+
+describe('context composition chart tables', () => {
+  it('lists the weekly chart values a tooltip shows in a table, one row per week and harness', () => {
+    const host = show(withTrend());
+    const details = host.querySelector('.ctx-comp-detail details.ctx-comp-table');
+    expect(details?.querySelector('summary')?.textContent).toBe('Show the chart as a table');
+    expect(details?.hasAttribute('open')).toBe(false);
+    const table = details?.querySelector('table');
+    expect(table?.getAttribute('aria-label')).toBe('Weekly tool-definition share per harness');
+    expect(columnHeaders(table)).toEqual(['Week of', 'Harness', 'Tool definitions', 'System instructions', 'Based on', 'Weighting']);
+    expect(tableRows(table)).toEqual([
+      ['2026-09-07', 'Local Agent', '60%', '10%', '1 request', 'Prompt tokens'],
+      ['2026-09-14', 'Local Agent', '40%', '\u2014', '3 requests', 'Equal weight'],
+      ['2026-09-14', 'GitHub Copilot CLI', '9.0%', '5.0%', '2 turns', 'Prompt tokens'],
+    ]);
+    // The week and harness head each row, so a screen reader announces them with every value.
+    expect([...(table?.querySelectorAll('tbody tr:first-child th') ?? [])].map(th => th.getAttribute('scope'))).toEqual(['row', 'row']);
+  });
+
+  it('adds no weekly table when there is no weekly chart', () => {
+    const host = show(mixed());
+    expect(host.querySelector('.ctx-comp-detail')?.textContent).toContain('Not enough weekly data for a trend yet.');
+    expect(host.querySelector('.ctx-comp-table')).toBeNull();
+  });
+
+  it('lists each request of the per-request chart, numbered like its tooltip, with its prompt and shares', () => {
+    const host = document.createElement('div');
+    document.body.replaceChildren(host);
+    render(renderSessionCompositionPanel(sessionDetail()), host);
+    const table = host.querySelector('.ctx-comp-session details.ctx-comp-table table');
+    expect(table?.getAttribute('aria-label')).toBe('Prompt composition per request');
+    expect(columnHeaders(table)).toEqual(['Request', 'Prompt', 'Tool definitions', 'Conversation']);
+    expect(tableRows(table)).toEqual([
+      ['Request 1', 'Refactor the parser', '10%', '90%'],
+      ['Request 2', 'Add tests', 'No composition recorded'],
+    ]);
+  });
+
+  it('adds no per-request table when no request recorded composition', () => {
+    const s = sessionDetail();
+    if (s.composition) s.composition.perRequest = [];
+    const host = document.createElement('div');
+    document.body.replaceChildren(host);
+    render(renderSessionCompositionPanel(s), host);
+    expect(host.querySelector('.ctx-comp-session')).not.toBeNull();
+    expect(host.querySelector('.ctx-comp-table')).toBeNull();
   });
 });

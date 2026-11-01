@@ -349,6 +349,36 @@ function mockContextComposition(empty) {
   };
 }
 
+/* window.mockCompositionMode = 'cli-older': a Copilot CLI-only workspace whose turns are 60 days old. Like every
+ * Copilot CLI turn they carry composition but no promptTokens, so only a range reaching back 60 days has data. */
+function mockCliOlderContextManagement(filter) {
+  const turnsDate = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+  const inRange = !filter?.fromDate || filter.fromDate <= turnsDate;
+  const breakdown = compositionBreakdown(CLI_MIX, 12, 290000);
+  const harness = inRange
+    ? { harness: 'GitHub Copilot CLI', source: 'copilot-cli', breakdown, totalRequests: 12, requestsWithData: 12, sessions: 1, sessionsWithData: 1, toolHeavyPct: 0, avgToolDefinitionTokens: 27550, maxAvailableTools: 64 }
+    : null;
+  return {
+    overallScore: 0,
+    estimatedContextWindow: 128000,
+    thresholds: { optimalUtilization: 45, limitedUtilization: 80, adaptive: false, sampleSize: 0 },
+    workspaces: [], trend: [], workspaceTrend: [],
+    totalCompactions: 0, fullCompactions: 0, simpleCompactions: 0, sessionsWithTokenData: 0,
+    totalSessions: inRange ? 1 : 0,
+    antiPatterns: [], tips: [],
+    composition: {
+      sources: harness ? [{ source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown, requestsWithData: 12, toolHeavyPct: 0, avgToolDefinitionTokens: 27550, maxAvailableTools: 64 }] : [],
+      harnesses: harness ? [harness] : [],
+      workspaces: harness ? [{ workspaceId: 'cli-project', workspaceName: 'cli-project', source: 'copilot-cli', label: 'Copilot CLI', harnesses: ['GitHub Copilot CLI'], breakdown }] : [],
+      trend: { labels: [], series: [] },
+      systemSegments: [],
+      systemSegmentSessions: 0,
+      coverage: { requestsWithData: inRange ? 12 : 0, totalRequests: inRange ? 12 : 0, sessionsWithData: inRange ? 1 : 0, totalSessions: inRange ? 1 : 0 },
+      toolHeavyThreshold: 50,
+    },
+  };
+}
+
 function mockSessionCompositionVsCode(n) {
   const perRequest = Array.from({ length: n }, (_, i) => {
     const toolDefinitions = Math.max(20, 60 - i * 1.4);
@@ -670,6 +700,7 @@ function getMockData(method, params) {
     }),
 
     getContextManagement: () => {
+      if (window.mockCompositionMode === 'cli-older') return mockCliOlderContextManagement(params?.filter);
       const mode = window.mockCompositionMode;
       // 'boundary*': the only sessions in range continue past it, so utilization (keyed on last activity) is empty.
       const noSessions = mode === 'boundary' || mode === 'boundary-empty';
@@ -713,7 +744,8 @@ function getMockData(method, params) {
       ]
     }),
 
-    getContextRangeAvailability: () => ({
+    // window.mockRangeAvailability: what the analyzer reports for the e2e scenario, e.g. only [90] for 'cli-older'.
+    getContextRangeAvailability: () => window.mockRangeAvailability ?? ({
       rangesWithTokens: [30, 90, 180],
       matchingSessions: 127,
       sessionsWithRequestTokens: 89,

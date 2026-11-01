@@ -92,7 +92,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
   // yield no extra token data. Refresh on every render so reindexed data
   // is reflected immediately.
   let visibleRanges = ALL_RANGES;
-  let emptyRangeMessage = 'No token-bearing context data available.';
+  let emptyRangeMessage = 'No per-request tokens or prompt composition available.';
   if (activeSubTab === 'context-mgmt') {
     try {
       const avail = await rpc<{
@@ -124,11 +124,11 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
             ? `No sessions found for ${currentFilter.harness}.`
             : 'No sessions match the current filter.';
         } else if (avail.sessionsWithRequestTokens === 0 && avail.harnessesWithoutRequestTokens.length > 0) {
-          // Sessions exist, but none have per-request token data.
+          // Sessions exist, but none has per-request tokens or composition.
           const harnesses = avail.harnessesWithoutRequestTokens.join(', ');
-          emptyRangeMessage = `${harnesses} only emits session-aggregated tokens, not per-request — Context Management requires per-request data to chart utilization. Try a different harness, or view consumption in the Output tab.`;
+          emptyRangeMessage = `${harnesses} recorded neither per-request tokens nor prompt composition, which Context Management needs to chart utilization and composition. Try a different harness, or view consumption in the Output tab.`;
         } else {
-          emptyRangeMessage = 'No token-bearing context data available.';
+          emptyRangeMessage = 'No per-request tokens or prompt composition available.';
         }
       }
     } catch {
