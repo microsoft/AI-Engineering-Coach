@@ -294,10 +294,10 @@ Unlike Context Quality and Context Management, Token Types offers every range, i
 
 | Harness | Source | What you get |
 |---|---|---|
-| GitHub Copilot App and Copilot CLI | `session.usage_record`, `session.compaction_complete`, and `subagent.started` and `subagent.completed` in `events.jsonl` | All five. Reasoning, truncation, and latency need per-call usage, which older builds don't log. Compactions and sub-agent runs come from every build that logs them |
+| GitHub Copilot App and Copilot CLI | `session.usage_record`, `session.compaction_complete`, and `subagent.started` and `subagent.completed` in `events.jsonl` | All five. Reasoning, truncation, and latency need per-call usage, which older builds don't log. A call counts whether or not it logs its cache tokens. Compactions and sub-agent runs come from every build that logs them |
 | Codex | `token_count` events | Reasoning, from the session's reasoning output tokens. No split by effort |
-| Claude Code | `stop_reason` on each API response | Truncated calls, counting each response once, from the first of its lines that logs a stop reason. Thinking is billed as output and not reported separately |
-| OpenCode | `finish` on each assistant message | Truncated calls. Its reasoning count depends on the model provider, so it isn't compared |
+| Claude Code | `stop_reason` on each API response | Truncated calls, counting each response once, from the first of its lines that logs a stop reason, whether or not the response logs cache tokens. Thinking is billed as output and not reported separately |
+| OpenCode | `finish` on each assistant message | Truncated calls, whether or not a message logs cache tokens. Its reasoning count depends on the model provider, so it isn't compared |
 | VS Code, Xcode | Not logged | Shown as "Not reported". Request response times are under [Activity Patterns](/measure/patterns/) |
 
 Token types hold only token counts, durations, reasoning effort, model names, and sub-agent types. Prompts, summaries, checkpoint paths, tool names, and custom agent names are never stored.

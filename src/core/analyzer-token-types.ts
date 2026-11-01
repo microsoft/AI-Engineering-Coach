@@ -38,6 +38,7 @@ import {
   pct,
   percentile,
   reasoningShare,
+  requestCallRows,
   rowLatency,
   rowReasoning,
   rowTruncation,
@@ -295,7 +296,7 @@ export function analyzeTokenTypes(
     .sort((a, b) => b.requests - a.requests || a.harness.localeCompare(b.harness));
   const requestsWithData = requests.filter(request =>
     (request.subagentRuns?.length ?? 0) > 0 || hasPerCallOutputs(request) || requestCompactions(request).some(e => e.tokensUsed != null)
-    || (request.promptCache?.rows.some(row => row.truncatedCalls != null || row.filteredCalls != null) ?? false),
+    || requestCallRows(request).some(row => row.truncatedCalls != null || row.filteredCalls != null),
   ).length;
 
   return {

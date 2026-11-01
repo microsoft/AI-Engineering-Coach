@@ -13,7 +13,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { parseClaudeSessions } from './parser-claude';
 import { parseOpenCodeSessions } from './parser-opencode';
-import { rowTruncation } from './token-types-rows';
+import { callRows, rowTruncation } from './token-types-rows';
 import type { ModelCallRow } from './types';
 
 function withClaudeFiles(files: Record<string, object[]>, run: (projectsDir: string) => void): void {
@@ -126,6 +126,31 @@ describe('Claude Code sub-agent transcripts\u2019 truncated calls', () => {
   });
 });
 
+describe('Claude Code responses that didn\u2019t report their cache', () => {
+  const line = (id: string, ts: string, stopReason: string | null, usage: Record<string, number> = { input_tokens: 10, output_tokens: 64_000 }): object => ({
+    type: 'assistant', timestamp: ts, sessionId: 'sess-1',
+    message: { id, role: 'assistant', model: 'claude-opus-4-6-20251001', content: [{ type: 'text', text: 'secret answer' }], stop_reason: stopReason, usage },
+  });
+
+  it('count their stop reason on a row without cache data, unless a later line reports the cache', () => {
+    withClaudeFile([
+      claudeUser('write a long file', '2026-10-28T10:00:00Z'),
+      // No line of msg_1 reports cache usage; its stop reason comes on a later line.
+      line('msg_1', '2026-10-28T10:00:02Z', null),
+      line('msg_1', '2026-10-28T10:00:03Z', 'max_tokens'),
+      // msg_2 reports its cache on a later line, so it counts once, as cache data.
+      line('msg_2', '2026-10-28T10:00:04Z', null),
+      line('msg_2', '2026-10-28T10:00:05Z', 'end_turn', USAGE),
+    ], (projectsDir) => {
+      const [request] = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(request.promptCache?.rows.map(row => [row.stream, row.calls, row.truncatedCalls])).toEqual([['main', 1, 0]]);
+      expect(request.callRowsWithoutCacheData).toEqual([expect.objectContaining({ stream: 'main', calls: 1, input: 10, truncatedCalls: 1 })]);
+      expect(request.callRowsWithoutCacheData?.[0]).not.toHaveProperty('cacheRead');
+      expect(rowTruncation(callRows([request]))).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: null });
+    });
+  });
+});
+
 function withOpenCodeStorage(messages: object[], run: (storageDir: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-truncation-test-'));
   const storageDir = path.join(root, 'storage');
@@ -165,6 +190,15 @@ describe('OpenCode truncated calls', () => {
       const rows = parseOpenCodeSessions(storageDir)[0].requests[0].promptCache?.rows ?? [];
       expect(rows[0]).toMatchObject({ calls: 2, truncatedCalls: 1, stopCalls: 1 });
       expect(rowTruncation(rows)).toEqual({ calls: 1, truncatedCalls: 1, filteredCalls: null });
+    });
+  });
+
+  it('counts the finish reason of a message without cache tokens on a row without cache data', () => {
+    const noCache = { id: 'a2', sessionID: 'sess-oc', role: 'assistant', parentID: 'u1', modelID: 'big-pickle', finish: 'length', time: { created: 1700000002000 }, tokens: { input: 1_000, output: 4_000, reasoning: 900 } };
+    withOpenCodeStorage([user, assistant('a1', 1700000001000, 'stop'), noCache], (storageDir) => {
+      const [request] = parseOpenCodeSessions(storageDir)[0].requests;
+      expect(request.promptCache?.rows.map(row => [row.calls, row.truncatedCalls])).toEqual([[1, 0]]);
+      expect(request.callRowsWithoutCacheData).toEqual([{ stream: 'main', model: 'big-pickle', calls: 1, input: 1_000, truncatedCalls: 1 }]);
     });
   });
 });

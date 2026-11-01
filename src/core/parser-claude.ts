@@ -130,6 +130,16 @@ interface ClaudeAssistantData {
    *  of its lines, including lines before its usage counted. `null` for a response passed to `cache` until one of
    *  its lines logs a stop reason. */
   truncation: Map<string, boolean | null>;
+  /** Responses whose usage hasn't reported cache usage on any line yet, by `message.id`. Each counts as a call
+   *  without cache data when the request ends, unless a later line reports its cache. */
+  withoutCacheData: Map<string, ClaudeCall>;
+}
+
+/** A response's call, as it will count on the request's rows. */
+interface ClaudeCall {
+  stream: 'main' | 'subagent';
+  model: string;
+  input: number;
 }
 
 /** Session-wide prompt-cache state across Claude requests. */
@@ -453,8 +463,12 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
   }
   const truncated = knownTruncation(data, line, responseId);
   const usage = line.message?.usage;
+  if (!usage) return;
   // Usage without cache fields didn't report cache usage; don't count the response as uncached.
-  if (!usage || !reportsCacheUsage(usage)) return;
+  if (!reportsCacheUsage(usage)) {
+    addClaudeCallWithoutCacheData(data, line, responseId, cacheState);
+    return;
+  }
   const cacheRead = getNumberField(usage, 'cache_read_input_tokens');
   const cacheWrite = getNumberField(usage, 'cache_creation_input_tokens');
   const sample = { input: getNumberField(usage, 'input_tokens') + cacheRead + cacheWrite, cacheRead, cacheWrite };
@@ -462,6 +476,7 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
   // Only a line with usable usage counts the response, so a later line of it can still supply the usage.
   if (responseId) {
     data.responseIds.add(responseId);
+    data.withoutCacheData.delete(responseId);
     data.truncation.set(responseId, truncated);
   }
   const stream = claudeStream(line, cacheState);
@@ -470,6 +485,26 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
     cacheState.sawMain = true;
     data.cache.addColdStart(missTokens(sample), undefined);
   }
+}
+
+/** A response whose usage has no cache fields still counts, with its stop reason, on a row without cache data, so
+ *  its token types don't depend on its cache. A later line of a response can still report the cache, so one with an
+ *  id waits for the end of the request (`flushClaudeCallsWithoutCacheData`); one without counts now. */
+function addClaudeCallWithoutCacheData(data: ClaudeAssistantData, line: ClaudeLine, responseId: string, cacheState: ClaudeCacheState): void {
+  const input = getNumberField(line.message?.usage, 'input_tokens');
+  if (input <= 0) return;
+  const call: ClaudeCall = { stream: claudeStream(line, cacheState), model: cacheModelName(line.message?.model), input };
+  if (responseId) data.withoutCacheData.set(responseId, call);
+  else data.cache.addCallWithoutCacheData(call.stream, call.model, { input, outputs: stopReasonSample(claudeTruncated(line)) });
+}
+
+/** At the end of a request, the responses that never reported cache usage count without cache data, with the stop
+ *  reason any of their lines logged. */
+function flushClaudeCallsWithoutCacheData(data: ClaudeAssistantData): void {
+  for (const [responseId, call] of data.withoutCacheData) {
+    data.cache.addCallWithoutCacheData(call.stream, call.model, { input: call.input, outputs: stopReasonSample(data.truncation.get(responseId) ?? null) });
+  }
+  data.withoutCacheData.clear();
 }
 
 function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, lastTs: number | null, cacheState: ClaudeCacheState): ClaudeAssistantData {
@@ -495,6 +530,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
     cache: new RequestCacheBuilder(),
     responseIds: new Set(),
     truncation: new Map(),
+    withoutCacheData: new Map(),
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);
@@ -548,6 +584,7 @@ function collectClaudeAssistantData(lines: ClaudeLine[], startIndex: number, las
     i++;
   }
 
+  flushClaudeCallsWithoutCacheData(data);
   data.nextIndex = i;
   return data;
 }
@@ -869,6 +906,7 @@ function buildClaudeRequest(
   const skills = new Set(assistantData.skillsUsed);
   for (const name of extractSkillsFromRefs(uniqueRefs)) skills.add(name);
   const promptCache = assistantData.cache.take();
+  const callRowsWithoutCacheData = assistantData.cache.takeRowsWithoutCacheData();
   const request = createRequest({
     requestId,
     userEventId: line.uuid,
@@ -895,6 +933,7 @@ function buildClaudeRequest(
     reasoningEffort: extractReasoningEffortFromModelId(assistantData.model),
     curiosity: line.isSidechain || line.isMeta || line.isCompactSummary ? { kind: 'excluded', excerpts: [] } : undefined,
     ...(promptCache ? { promptCache } : {}),
+    ...(callRowsWithoutCacheData ? { callRowsWithoutCacheData } : {}),
   });
   mergeRequestEditLoc(editLocIndex, requestId, assistantData.editLocs);
   return request;

@@ -5,17 +5,18 @@
 
 /* Prompt-cache tracker for Copilot CLI and Copilot App sessions. It consumes model calls in order (from
  * `cli-model-calls.ts`) plus compaction, mode, resume and usage-checkpoint events, and records:
- *   - per-request cache usage (main agent, sub-agents, compaction summaries);
+ *   - per-request cache usage (main agent, sub-agents, compaction summaries), and the token types of every call,
+ *     including calls that didn't report their cache (rows without cache data);
  *   - cache breaks: a main-agent call that couldn't reuse most of the previous call's cached prompt,
  *     with the logged cause and how many tokens were rebuilt.
  * Checkpoint hashes and tool names are compared in memory only and never stored. */
 
-import type { CacheBreak, CacheBreakCause, RequestPromptCache, SessionPromptCache } from './types';
+import type { CacheBreak, CacheBreakCause, CallRow, RequestPromptCache, SessionPromptCache } from './types';
 import type { CliModelCall } from './cli-model-calls';
 import { relativeRates } from './cli-model-calls';
 import { cliOutputSample } from './call-outputs';
 import { AUTO_COMPACTION_TRIGGERS, MANUAL_COMPACTION_TRIGGERS } from './cli-compaction';
-import { RequestCacheBuilder, cacheModelName, callCost, missTokens, type CacheCallSample } from './prompt-cache-usage';
+import { RequestCacheBuilder, cacheModelName, callCost, missTokens, type CacheCallSample, type CallSample } from './prompt-cache-usage';
 import {
   CACHE_BREAK_MIN_LOST,
   CACHE_BREAK_MIN_LOST_SHARE,
@@ -124,15 +125,18 @@ function compactionFailed(data: Record<string, unknown>): boolean {
   return data.success === false || (typeof data.outcome === 'string' && data.outcome.toLowerCase() === 'failed');
 }
 
+/** What a call adds to its row whether or not it reported its cache: its prompt tokens, effort and token types. */
+function callSampleOf(call: CliModelCall): CallSample {
+  return { input: call.inputTokens, reasoningEffort: call.reasoningEffort, outputs: cliOutputSample(call) };
+}
+
 function sampleOf(call: CliModelCall): CacheCallSample {
   return {
-    input: call.inputTokens,
+    ...callSampleOf(call),
     cacheRead: call.cacheReadTokens,
     cacheWrite: call.cacheWriteTokens,
     rates: call.rates,
     ttlSeconds: call.cacheTtlSeconds,
-    reasoningEffort: call.reasoningEffort,
-    outputs: cliOutputSample(call),
   };
 }
 
@@ -216,6 +220,8 @@ export class CliCacheTracker {
       if (lastMain && call.initiator === 'user') this.request.addReturn(expired);
     }
     if (!call.cacheReported) {
+      // Its token types still count, on a row without cache fields: its cache usage stays unknown, not zero.
+      this.request.addCallWithoutCacheData(call.stream, call.model, callSampleOf(call));
       // The cached prompt can't be compared across a call that didn't report its cache.
       if (call.stream === 'main') this.previous = null;
       return;
@@ -354,6 +360,11 @@ export class CliCacheTracker {
   /** Cache usage since the previous call; attach it to the request being flushed. */
   takeRequest(): RequestPromptCache | undefined {
     return this.request.take();
+  }
+
+  /** Rows of the calls since the previous request that didn't report their cache; attach them with `takeRequest`. */
+  takeRowsWithoutCacheData(): CallRow[] | undefined {
+    return this.request.takeRowsWithoutCacheData();
   }
 
   finish(): SessionPromptCache | undefined {

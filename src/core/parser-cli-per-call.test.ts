@@ -13,6 +13,9 @@ import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { SessionSchema } from './schemas';
+import { Analyzer } from './analyzer';
+import { cacheHitPct } from './prompt-cache-usage';
+import { callRows, rowTruncation } from './token-types-rows';
 
 const tempDirs: string[] = [];
 const BASE = Date.parse('2026-10-28T09:00:00Z');
@@ -47,6 +50,14 @@ interface CallOptions {
   filter?: boolean;
   ttft?: number;
   duration?: number;
+  /** How the call logs its cache: reported (default), without cache fields, or with `cacheDetailsReported: false`. */
+  cache?: 'reported' | 'missing' | 'not-reported';
+}
+
+function cacheFields(o: CallOptions): Record<string, unknown> {
+  if (o.cache === 'missing') return {};
+  if (o.cache === 'not-reported') return { cacheReadTokens: 0, cacheWriteTokens: 0, cacheDetailsReported: false };
+  return { cacheReadTokens: Math.round(o.input * 0.9), cacheWriteTokens: Math.round(o.input * 0.1), cacheDetailsReported: true };
 }
 
 function call(at: number, o: CallOptions): Record<string, unknown> {
@@ -62,9 +73,7 @@ function call(at: number, o: CallOptions): Record<string, unknown> {
         inputTokens: o.input,
         outputTokens: o.output ?? 100,
         ...(o.reasoning == null ? {} : { reasoningTokens: o.reasoning }),
-        cacheReadTokens: Math.round(o.input * 0.9),
-        cacheWriteTokens: Math.round(o.input * 0.1),
-        cacheDetailsReported: true,
+        ...cacheFields(o),
         ...(o.limit === null ? {} : { maxPromptTokens: o.limit ?? 968_000 }),
         maxOutputTokens: 32_000,
         finishReason: o.finish ?? 'tool_calls',
@@ -194,5 +203,46 @@ describe('Copilot CLI turn context when the model changes within a turn', () => 
       call(50, { input: 25_000, limit: null, model: 'gpt-6.1-sol' }),
     ]), 'ws', 'demo');
     expect(session?.requests.map(r => r.contextUsage?.contextLimit)).toEqual([null, 400_000]);
+  });
+});
+
+describe('Copilot CLI token types of calls that didn\u2019t report their cache', () => {
+  /** The reviewer's record: input 100,000, output 1,000, reasoning 600, `finishReason: length`, first token after
+   *  3,000 ms and 6,000 ms in all. */
+  const record = (cache: CallOptions['cache']) => call(10, { input: 100_000, output: 1_000, reasoning: 600, finish: 'length', ttft: 3_000, duration: 6_000, cache });
+  const parse = (...calls: Array<Record<string, unknown>>) => parseCLIEventsFile(writeEvents([
+    { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-no-cache', startTime: iso(0), selectedModel: 'claude-opus-5.5' } },
+    { type: 'user.message', id: 'u1', timestamp: iso(1), data: { content: 'secret prompt' } },
+    ...calls,
+  ]), 'ws', 'demo');
+
+  it.each([['without cache fields', 'missing'], ['with cacheDetailsReported: false', 'not-reported']] as const)('are recorded %s, with no cache data', (_, cache) => {
+    const session = parse(record(cache));
+    const [request] = session?.requests ?? [];
+    expect(request.promptCache).toBeUndefined();
+    expect(request.callRowsWithoutCacheData).toEqual([{
+      stream: 'main', model: 'claude-opus-5.5', calls: 1, reasoningEffort: 'high', input: 100_000,
+      outputTokens: 1_000, reasoningTokens: 600, truncatedCalls: 1, filteredCalls: 0, ttftMs: [3_000], durationMs: [6_000],
+    }]);
+    expect(session && SessionSchema.safeParse(session).success).toBe(true);
+
+    const data = new Analyzer(session ? [session] : []).getTokenTypes();
+    expect(data.sources).toHaveLength(1);
+    expect(data.sources[0]).toMatchObject({
+      source: 'copilot-cli',
+      reasoning: { main: { outputTokens: 1_000, reasoningTokens: 600, sharePct: 60 } },
+      truncation: { calls: 1, truncatedCalls: 1, filteredCalls: 0 },
+      latency: [{ model: 'claude-opus-5.5', calls: 1, ttftP50Ms: 3_000, durationP50Ms: 6_000 }],
+    });
+    expect(data.coverage).toEqual({ requests: 1, requestsWithData: 1 });
+  });
+
+  it('leave the cache figures to the calls that reported them, and add to the token types of the turn', () => {
+    const [request] = parse(call(5, { input: 100_000 }), record('missing'))?.requests ?? [];
+    // The hit ratio stays the reporting call's 90%: the other call's prompt doesn't count as uncached.
+    expect(request.promptCache?.rows).toEqual([expect.objectContaining({ stream: 'main', calls: 1, input: 100_000, cacheRead: 90_000 })]);
+    expect(cacheHitPct(request.promptCache?.rows ?? [])).toBe(90);
+    expect(request.callRowsWithoutCacheData).toEqual([expect.objectContaining({ stream: 'main', calls: 1, input: 100_000, outputTokens: 1_000 })]);
+    expect(rowTruncation(callRows([request]))).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: 0 });
   });
 });

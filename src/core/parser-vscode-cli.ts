@@ -247,10 +247,13 @@ function flushTurn(state: CLIParseState): void {
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
 
-/** Attach the turn's prompt-cache usage, context and composition (deferred until a system-prompt size is known). */
+/** Attach the turn's prompt-cache usage and the rows of its calls without cache data, its context and its composition
+ *  (deferred until a system-prompt size is known). */
 function attachTurnUsage(state: CLIParseState, turn: TurnState, request: SessionRequest): void {
   const promptCache = state.cache.takeRequest();
   if (promptCache) request.promptCache = promptCache;
+  const callRowsWithoutCacheData = state.cache.takeRowsWithoutCacheData();
+  if (callRowsWithoutCacheData) request.callRowsWithoutCacheData = callRowsWithoutCacheData;
   const contextUsage = state.context.take();
   if (contextUsage) request.contextUsage = contextUsage;
   if (turn.usage.calls > 0) {

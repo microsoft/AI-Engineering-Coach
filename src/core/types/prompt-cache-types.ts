@@ -20,9 +20,10 @@ export interface EffortReasoning {
   reasoningTokens: number;
 }
 
-/** Sums over the model calls a request made on one stream with one model. Neutral: prompt-cache fields
- *  today; other per-call sums can be added. */
-export interface ModelCallRow {
+/** Sums over the model calls a request made on one stream with one model: what every call logs, and its token
+ *  types. Calls that reported their cache usage are `ModelCallRow`s; the others are `CallRow`s, without cache fields,
+ *  so their cache usage stays unknown rather than zero. */
+export interface CallRow {
   stream: CacheStream;
   model: string;
   calls: number;
@@ -30,24 +31,6 @@ export interface ModelCallRow {
   reasoningEffort?: string;
   /** Prompt tokens, including tokens read from and written to the cache. */
   input: number;
-  cacheRead: number;
-  cacheWrite: number;
-  /** Input cost of the calls that logged prices, in the harness's price unit (Copilot: nano-AIU, one unit for
-   *  every model, so costs add up across models): Σ (uncached + cacheRead × read rate + cacheWrite × write
-   *  rate) × input price. Only percentages are shown. */
-  cost?: number;
-  /** The part of `cost` spent on tokens not read from the cache (uncached and written tokens). */
-  missCost?: number;
-  /** What the same prompts would have cost uncached: Σ prompt tokens × input price. */
-  baselineCost?: number;
-  /** Prompt tokens of the calls that logged prices (the base of the rated share). */
-  ratedInput?: number;
-  /** Cache lifetime the harness logged for these calls, in seconds. */
-  ttlSeconds?: number;
-  /** Main-agent cache breaks on these calls (Copilot CLI and Copilot App), including breaks beyond the
-   *  per-session cap on listed `CacheBreak`s. Break counts and rates come from here, so they follow the
-   *  date filter. */
-  cacheBreaks?: number;
   /* Token types (see call-outputs.ts). Each is absent when the harness doesn't log it per call. */
   /** Output tokens, including reasoning (Copilot CLI and Copilot App). */
   outputTokens?: number;
@@ -67,6 +50,28 @@ export interface ModelCallRow {
   ttftMs?: number[];
   /** Duration of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
   durationMs?: number[];
+}
+
+/** A `CallRow` of calls that reported their cache usage, with their cache sums. */
+export interface ModelCallRow extends CallRow {
+  cacheRead: number;
+  cacheWrite: number;
+  /** Input cost of the calls that logged prices, in the harness's price unit (Copilot: nano-AIU, one unit for
+   *  every model, so costs add up across models): Σ (uncached + cacheRead × read rate + cacheWrite × write
+   *  rate) × input price. Only percentages are shown. */
+  cost?: number;
+  /** The part of `cost` spent on tokens not read from the cache (uncached and written tokens). */
+  missCost?: number;
+  /** What the same prompts would have cost uncached: Σ prompt tokens × input price. */
+  baselineCost?: number;
+  /** Prompt tokens of the calls that logged prices (the base of the rated share). */
+  ratedInput?: number;
+  /** Cache lifetime the harness logged for these calls, in seconds. */
+  ttlSeconds?: number;
+  /** Main-agent cache breaks on these calls (Copilot CLI and Copilot App), including breaks beyond the
+   *  per-session cap on listed `CacheBreak`s. Break counts and rates come from here, so they follow the
+   *  date filter. */
+  cacheBreaks?: number;
 }
 
 /** Prompt-cache usage of one request (a Copilot CLI turn, a Claude Code or an OpenCode request). */

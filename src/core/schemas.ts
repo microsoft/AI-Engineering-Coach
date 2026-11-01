@@ -96,20 +96,12 @@ const tokenSchema = z.number().min(0);
 const modelNameSchema = z.string().max(64);
 const cacheBreakCauseSchema = z.enum(['compaction', 'model-switch', 'ttl-expired', 'reasoning-effort', 'tools-changed', 'system-prompt', 'mode-change', 'resume']);
 
-export const ModelCallRowSchema = z.object({
+const callRowShape = {
   stream: z.enum(['main', 'subagent', 'compaction']),
   model: modelNameSchema,
   calls: z.number().int().min(0),
   reasoningEffort: z.string().max(16).optional(),
   input: tokenSchema,
-  cacheRead: tokenSchema,
-  cacheWrite: tokenSchema,
-  cost: tokenSchema.optional(),
-  missCost: tokenSchema.optional(),
-  baselineCost: tokenSchema.optional(),
-  ratedInput: tokenSchema.optional(),
-  ttlSeconds: tokenSchema.optional(),
-  cacheBreaks: z.number().int().min(0).optional(),
   outputTokens: tokenSchema.optional(),
   reasoningTokens: tokenSchema.optional(),
   reasoningByEffort: z.array(z.object({
@@ -123,6 +115,20 @@ export const ModelCallRowSchema = z.object({
   filteredCalls: z.number().int().min(0).optional(),
   ttftMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
   durationMs: z.array(tokenSchema).max(MAX_LATENCY_SAMPLES).optional(),
+};
+
+const CallRowSchema = z.object(callRowShape).strict();
+
+export const ModelCallRowSchema = z.object({
+  ...callRowShape,
+  cacheRead: tokenSchema,
+  cacheWrite: tokenSchema,
+  cost: tokenSchema.optional(),
+  missCost: tokenSchema.optional(),
+  baselineCost: tokenSchema.optional(),
+  ratedInput: tokenSchema.optional(),
+  ttlSeconds: tokenSchema.optional(),
+  cacheBreaks: z.number().int().min(0).optional(),
 }).strict();
 
 export const RequestPromptCacheSchema = z.object({
@@ -215,6 +221,7 @@ export const SessionRequestSchema = z.object({
   compaction: CompactionEventSchema.nullable(),
   promptComposition: PromptCompositionSchema.optional(),
   promptCache: RequestPromptCacheSchema.optional(),
+  callRowsWithoutCacheData: z.array(CallRowSchema).max(16).optional(),
   todoSnapshot: z.array(TodoItemSchema).nullable(),
   workType: z.string(),
   userEventId: z.string().optional(),
