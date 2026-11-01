@@ -7,13 +7,16 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Analyzer } from './analyzer';
 import { invalidateDetectorRegistry, runDetectors, runEmitters } from './detector-registry';
 import { createRequest, createSession } from './parser-shared';
 import { clearLayerRules, createRuleFromMarkdown, getRule, registerPersonalRuleSource, removeUserRule } from './rule-engine';
 import { executePipeline, parsePipeline, resolveInheritance } from './rule-pipeline';
-import { setOutputHook } from './runtime-debug';
+import { runtimeDebug } from './runtime-debug';
+
+// Keeps the skipped rules out of the developer's runtime.log; the log-once test reads the calls instead.
+vi.mock('./runtime-debug', async importOriginal => ({ ...await importOriginal<typeof import('./runtime-debug')>(), runtimeDebug: vi.fn() }));
 
 const BUILT_IN_IDS = fs.readdirSync(path.join(__dirname, 'rules')).filter(file => file.endsWith('.md')).map(file => file.slice(0, -3));
 
@@ -50,7 +53,7 @@ describe('a personal rule whose detection logic does not parse', () => {
     clearLayerRules('personal');
     removeUserRule('broken-rule');
     invalidateDetectorRegistry();
-    setOutputHook(null);
+    vi.mocked(runtimeDebug).mockClear();
   });
 
   function addRules(): void {
@@ -86,9 +89,8 @@ describe('a personal rule whose detection logic does not parse', () => {
   });
 
   it('goes to the Output log once per rule and message, and again after the registry is invalidated', () => {
-    const output: string[] = [];
-    setOutputHook(line => output.push(line));
-    const skipped = () => output.filter(line => line.includes('[detectors] rule-skipped') && line.includes('broken-rule: Parse error'));
+    const skipped = () => vi.mocked(runtimeDebug).mock.calls.filter(([scope, message, detail]) =>
+      scope === 'detectors' && message === 'rule-skipped' && typeof detail === 'string' && detail.startsWith('broken-rule: Parse error'));
     addRules();
 
     runEmitters(reqs, sessions, false);

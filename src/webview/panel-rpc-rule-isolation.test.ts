@@ -5,13 +5,16 @@
 
 /* The rule list and previews keep loading when a personal rule's detection logic doesn't parse; Test Rule shows why. */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Analyzer } from '../core/analyzer';
 import type { ParseResult } from '../core/cache';
 import { invalidateDetectorRegistry } from '../core/detector-registry';
 import { createRequest, createSession } from '../core/parser-shared';
 import { clearLayerRules, registerPersonalRuleSource } from '../core/rule-engine';
 import { getRpcHandler } from './panel-rpc';
+
+// Keeps the skipped rule out of the developer's runtime.log.
+vi.mock('../core/runtime-debug', async importOriginal => ({ ...await importOriginal<typeof import('../core/runtime-debug')>(), runtimeDebug: vi.fn() }));
 
 interface Preview { ruleId: string; triggered: boolean; occurrences: number; total: number }
 
