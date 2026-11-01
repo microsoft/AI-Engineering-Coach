@@ -100,3 +100,18 @@ describe('Codex token types', () => {
     });
   });
 });
+
+describe('Codex turn context when the model changes within a turn', () => {
+  it('keeps a reported window with the model that reported it', () => {
+    withCodexFile([
+      ...HEADER,
+      { type: 'event_msg', timestamp: '2026-10-30T10:00:00Z', payload: { type: 'user_message', message: 'big task' } },
+      tokenCount('2026-10-30T10:00:05Z', usage(20_000, 0, 500, 300), usage(20_000, 0, 500, 300)),
+      // Another model within the turn, whose call reports no window: gpt-5.3-codex's 272K doesn't apply to it.
+      { type: 'turn_context', payload: { model: 'gpt-6.1-sol', effort: 'high' } },
+      tokenCount('2026-10-30T10:00:10Z', usage(50_000, 0, 900, 500), usage(30_000, 0, 400, 200), null),
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].contextUsage).toEqual({ lastPromptTokens: 30_000, peakPromptTokens: 30_000, contextLimit: null, calls: 2 });
+    });
+  });
+});

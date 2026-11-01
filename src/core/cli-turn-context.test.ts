@@ -77,4 +77,16 @@ describe('TurnContextAccumulator when the model changes within a turn', () => {
     acc.addCall(main(30_000, null, 'claude-opus-5.5'));
     expect(acc.result()?.contextLimit).toBe(200_000);
   });
+
+  it('applies a compaction logged before the session\u2019s first call to the selected model only', () => {
+    const acc = new TurnContextAccumulator();
+    acc.addLimit(300_000, 'claude-opus-5.5');
+    acc.addCall(main(50_000, null, 'claude-opus-5.5'));
+    expect(acc.result()?.contextLimit).toBe(300_000);
+
+    const other = new TurnContextAccumulator();
+    other.addLimit(300_000, 'claude-opus-5.5');
+    other.addCall(main(50_000, null, 'gpt-6.1-sol'));
+    expect(other.result()?.contextLimit).toBeNull();
+  });
 });
