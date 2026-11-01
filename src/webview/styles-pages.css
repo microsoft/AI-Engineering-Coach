@@ -1100,6 +1100,8 @@
   display: flex; justify-content: flex-end; gap: 0.5rem;
   padding: 10px 16px; border-top: 1px solid var(--border);
 }
+/* Save and Test wait for the rule's source to load, and Test for a running test. */
+.rule-editor-footer .rule-btn:disabled { opacity: 0.55; cursor: default; }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
