@@ -288,6 +288,8 @@ A figure a harness doesn't log shows **Not reported**, never zero. The sections 
 
 The **What each harness reports** table shows, for every harness with requests in the range, which figures it logs.
 
+Unlike Context Quality and Context Management, Token Types offers every range, including **All time**. It shows the figures from every log that has them, such as truncated calls in Claude Code and OpenCode logs and reasoning in Codex logs from before April 2026.
+
 #### Where the data comes from
 
 | Harness | Source | What you get |

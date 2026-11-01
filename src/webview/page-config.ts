@@ -33,6 +33,10 @@ let currentProvisionRows: ContextProvisionDetailRow[] = [];
 
 type ContextSubTab = 'config-quality' | 'context-mgmt' | 'prompt-cache' | 'token-types';
 
+/** Sub-tabs that ignore TOKEN_DATA_AVAILABLE_FROM. They don't use per-request prompt sizes: they show what each
+ *  harness logged, including Claude Code, OpenCode and Codex logs from before the cutoff, and mark the rest. */
+const CUTOFF_EXEMPT_TABS: ReadonlySet<ContextSubTab> = new Set<ContextSubTab>(['prompt-cache', 'token-types']);
+
 /** Track the active sub-tab so we can restore it on re-render */
 let activeSubTab: ContextSubTab = 'config-quality';
 
@@ -64,10 +68,11 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
   // Context Management analyze token-driven signals, so any range whose
   // nominal start lies before the cutoff is greyed out with an explanatory
   // tooltip. As time advances and post-cutoff data fills the longer ranges,
-  // the disabled buttons re-enable automatically. Prompt Cache is exempt: it
-  // shows cache tokens wherever a harness logged them, including Claude Code,
-  // OpenCode and Codex logs from before the cutoff.
-  const cutoffApplies = activeSubTab !== 'prompt-cache';
+  // the disabled buttons re-enable automatically. Prompt Cache and Token Types
+  // are exempt (CUTOFF_EXEMPT_TABS): they show cache tokens and token types
+  // wherever a harness logged them, including Claude Code, OpenCode and Codex
+  // logs from before the cutoff.
+  const cutoffApplies = !CUTOFF_EXEMPT_TABS.has(activeSubTab);
   function rangeStartDate(days: number): string {
     if (days === 0) return '0001-01-01';
     const d = new Date();

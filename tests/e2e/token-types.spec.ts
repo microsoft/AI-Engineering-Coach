@@ -81,6 +81,26 @@ test.describe('Token Types tab', () => {
   });
 });
 
+test.describe('Token Types date range', () => {
+  test('offers All time without Context Health\u2019s token-data cutoff, which Context Quality keeps', async ({ page }) => {
+    await openTokenTypes(page);
+    const allTime = page.locator('#ctxRangeBar .cons-range-btn[data-range="0"]');
+    await expect(allTime).toBeEnabled();
+    await allTime.click();
+    await expect(allTime).toHaveClass(/\bactive\b/);
+    // All time asks for every request, including those from before the cutoff, such as older Claude Code logs.
+    await expect.poll(() => page.evaluate(() => {
+      const loads = (window as TokenTypesWindow).tokenTypesRequests ?? [];
+      return loads.length > 1 ? loads[loads.length - 1].filter?.fromDate ?? 'none' : 'pending';
+    })).toBe('none');
+    await expect(page.locator('#ctxTokenTypes')).toBeVisible();
+
+    await page.locator('[data-tab="config-quality"]').click();
+    await expect(page.locator('#content')).toContainText('Overall Score');
+    await expect(allTime).toBeDisabled();
+  });
+});
+
 test.describe('Token Types with a late response', () => {
   test('keeps Context Management when Token Types answers after the switch', async ({ page }) => {
     await page.goto(HARNESS_URL);
