@@ -12,7 +12,7 @@ import {
   AntiPatternData, WorkLifeBalanceResult, StatsResult, HarnessComparisonData,
   WorkflowOptimizationData, ConfigHealthData, FlowStateData, Workspace,
   CalendarActivityData, ProjectOverviewData, ContextManagementData, InsightsData,
-  ParserCoverageData, ParserPreviewData,
+  ParserCoverageData, ParserPreviewData, SessionRangeMatch,
 } from './types';
 import { DashboardAnalyzer } from './analyzer-dashboard';
 import { ProductionAnalyzer } from './analyzer-production';
@@ -189,8 +189,8 @@ export class Analyzer {
   getFlowState(f?: DateFilter): FlowStateData { return this.flow.getFlowState(f); }
 
   getContextManagement(f?: DateFilter): ContextManagementData { return this.context.getContextManagement(f); }
-  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter): ReturnType<ContextAnalyzer['getWorkspaceContextSessions']> {
-    return this.context.getWorkspaceContextSessions(workspaceId, f);
+  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter, rangeMatch?: SessionRangeMatch): ReturnType<ContextAnalyzer['getWorkspaceContextSessions']> {
+    return this.context.getWorkspaceContextSessions(workspaceId, f, rangeMatch);
   }
   getContextRangeAvailability(f?: DateFilter): {
     rangesWithTokens: number[];
