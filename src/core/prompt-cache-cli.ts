@@ -129,6 +129,14 @@ export function isCacheBreak(previousInput: number, cacheRead: number): boolean 
   return previousInput - cacheRead >= Math.max(CACHE_BREAK_MIN_LOST, CACHE_BREAK_MIN_LOST_SHARE * previousInput);
 }
 
+/** Whether the previous main-agent call's cache had expired when `call` started. The cache lifetime counts from
+ *  the previous call's start, and `call` reads the cache when it starts; the record itself is logged when the call
+ *  finishes. `null` when either time is missing, or when the previous call didn't report its cache. */
+function expiredBefore(previous: CliModelCall, call: CliModelCall): boolean | null {
+  if (!previous.cacheReported || previous.cacheExpiresAt == null || call.startTs == null) return null;
+  return call.startTs > previous.cacheExpiresAt;
+}
+
 /** Causes logged on the call itself or in events since the previous main-agent call. */
 function loggedCauses(previous: CliModelCall, call: CliModelCall, expired: boolean, signals: ReadonlySet<Signal>): Set<CacheBreakCause> {
   const logged = new Set<CacheBreakCause>();
@@ -157,7 +165,10 @@ function finalize(pending: PendingBreak): CacheBreak {
 
 export class CliCacheTracker {
   private readonly request = new RequestCacheBuilder();
+  /** The previous main-agent call, while it reported its cache: the cached prompt the next call can reuse. */
   private previous: CliModelCall | null = null;
+  /** The previous main-agent call, whether or not it reported its cache: a prompt you send returns to it. */
+  private lastMain: CliModelCall | null = null;
   /** A main-agent call has reported its cache, so the session has cache data. */
   private sawMain = false;
   private readonly signals = new Set<Signal>();
@@ -169,6 +180,8 @@ export class CliCacheTracker {
 
   /** A model call, in log order. `callIndex` is its index in the session's call timeline (main agent only). */
   onCall(call: CliModelCall, callIndex: number | null, requestIndex: number): void {
+    const lastMain = this.lastMain;
+    if (call.stream === 'main') this.lastMain = call;
     if (!call.cacheReported) {
       // The cached prompt can't be compared across a call that didn't report its cache.
       if (call.stream === 'main') this.previous = null;
@@ -179,19 +192,15 @@ export class CliCacheTracker {
     if (call.stream !== 'main') return;
     const cost = callCost(sample);
     const previous = this.previous;
+    const expired = lastMain ? expiredBefore(lastMain, call) : null;
+    if (lastMain && call.initiator === 'user') this.request.addReturn(expired);
     if (!this.sawMain) {
       // Cache data starts here. Its misses are the session's start only on the first main-agent call: after
       // calls that didn't report their cache, nothing says what this call could have reused.
       this.sawMain = true;
       if (callIndex === 0) this.request.addColdStart(missTokens(sample), cost?.missCost);
-    } else if (previous) {
-      // The cache lifetime counts from the previous call's start, and this call reads the cache when it
-      // starts; the record itself is logged when the call finishes. Unknown when either time is missing.
-      const expired = previous.cacheExpiresAt != null && call.startTs != null ? call.startTs > previous.cacheExpiresAt : null;
-      if (call.initiator === 'user') this.request.addReturn(expired);
-      if (isCacheBreak(previous.inputTokens, call.cacheReadTokens)) {
-        this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost });
-      }
+    } else if (previous && isCacheBreak(previous.inputTokens, call.cacheReadTokens)) {
+      this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost });
     }
     this.previous = call;
     this.signals.clear();
