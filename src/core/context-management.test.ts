@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Analyzer } from './analyzer';
-import { Session, SessionRequest, CompactionEvent, ContextManagementData } from './types';
+import { Session, SessionRequest, CompactionEvent, ContextManagementData, PromptComposition } from './types';
 import { createRequest, createSession } from './parser-shared';
 import {
   CONTEXT_WINDOW_DEFAULT,
@@ -1241,5 +1241,54 @@ describe('getContextRangeAvailability', () => {
     expect(out.matchingSessions).toBe(0);
     expect(out.sessionsWithRequestTokens).toBe(0);
     expect(out.harnessesWithoutRequestTokens).toEqual([]);
+  });
+
+  const cliComposition = (shares: PromptComposition['shares']): PromptComposition => ({ source: 'copilot-cli', shares, promptTokens: 300_000, calls: 3 });
+
+  it('counts Copilot CLI turns that carry composition but no promptTokens, without counting them as token data', () => {
+    const sessions = [sess({ harness: 'GitHub Copilot CLI', requests: [
+      req({ requestId: 'r1', promptTokens: null, timestamp: NOW - 60 * DAY, promptComposition: cliComposition({ toolDefinitions: 10, systemInstructions: 5, conversation: 85 }) }),
+    ] })];
+    const out = new Analyzer(sessions).getContextRangeAvailability({ harness: 'GitHub Copilot CLI' });
+    // The composition is 60 days old, so "Last 3 months" is the only range that shows it.
+    expect(out.rangesWithTokens).toEqual([90]);
+    expect(out.matchingSessions).toBe(1);
+    expect(out.sessionsWithRequestTokens).toBe(0);
+    expect(out.harnessesWithoutRequestTokens).toEqual(['GitHub Copilot CLI']);
+  });
+
+  it('adds the ranges that only composition reaches to the token-bearing ones', () => {
+    const sessions = [
+      sess({ harness: 'Local Agent', requests: [req({ requestId: 'r1', promptTokens: 1000, timestamp: NOW - 5 * DAY })] }),
+      sess({ harness: 'GitHub Copilot CLI', requests: [
+        req({ requestId: 'r2', promptTokens: null, timestamp: NOW - 200 * DAY, promptComposition: cliComposition({ toolDefinitions: 10, conversation: 90 }) }),
+      ] }),
+    ];
+    const out = new Analyzer(sessions).getContextRangeAvailability();
+    expect(out.rangesWithTokens).toEqual([30, 365]);
+    expect(out.sessionsWithRequestTokens).toBe(1);
+    expect(out.harnessesWithoutRequestTokens).toEqual(['GitHub Copilot CLI']);
+  });
+
+  it('counts a Copilot CLI turn with per-turn context and composition as token data', () => {
+    const sessions = [sess({ harness: 'GitHub Copilot CLI', requests: [
+      req({
+        requestId: 'r1', promptTokens: null, timestamp: NOW - 60 * DAY, promptComposition: cliComposition({ toolDefinitions: 10, conversation: 90 }),
+        contextUsage: { lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: 968_000, calls: 3 },
+      }),
+    ] })];
+    const out = new Analyzer(sessions).getContextRangeAvailability({ harness: 'GitHub Copilot CLI' });
+    expect(out.rangesWithTokens).toEqual([90]);
+    expect(out.sessionsWithRequestTokens).toBe(1);
+    expect(out.harnessesWithoutRequestTokens).toEqual([]);
+  });
+
+  it('ignores composition the card cannot show', () => {
+    const sessions = [sess({ harness: 'GitHub Copilot CLI', requests: [
+      req({ requestId: 'r1', promptTokens: null, timestamp: NOW - 5 * DAY, promptComposition: cliComposition({}) }),
+      req({ requestId: 'r2', promptTokens: null, timestamp: NOW - 60 * DAY, promptComposition: cliComposition({ toolDefinitions: 0, conversation: 0 }) }),
+      req({ requestId: 'r3', promptTokens: null, timestamp: null, promptComposition: cliComposition({ conversation: 100 }) }),
+    ] })];
+    expect(new Analyzer(sessions).getContextRangeAvailability().rangesWithTokens).toEqual([]);
   });
 });

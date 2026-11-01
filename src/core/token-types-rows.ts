@@ -4,14 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 /* Row-based token types: reasoning share by effort, truncated calls and model-call latency, summed over the
- * shared per-request rows (`ModelCallRow`, filled by call-outputs.ts). Ratios are ratios of sums over the
+ * per-request rows (`CallRow`, filled by call-outputs.ts): the rows of calls that reported their cache usage and
+ * the rows of calls that didn't, so token types never depend on cache data. Ratios are ratios of sums over the
  * calls that logged each value; latency percentiles are over the stored per-call samples. Compaction-summary
  * rows are left out: compaction has its own figures (`CompactionEvent.tokensUsed`). */
 
 import type {
+  CallRow,
   EffortReasoning,
   LatencyByModel,
-  ModelCallRow,
   ReasoningByEffort,
   ReasoningShare,
   SessionRequest,
@@ -35,11 +36,16 @@ export function reasoningShare(outputTokens: number, reasoningTokens: number): R
   return { outputTokens, reasoningTokens, sharePct: pct(Math.min(reasoningTokens, outputTokens), outputTokens) };
 }
 
+/** Every row of a request's calls, whether or not they reported their cache usage, compaction summaries included. */
+export function requestCallRows(request: SessionRequest): CallRow[] {
+  return [...request.promptCache?.rows ?? [], ...request.callRowsWithoutCacheData ?? []];
+}
+
 /** Rows of the requests' main-agent and sub-agent calls. */
-export function callRows(requests: Iterable<SessionRequest>): ModelCallRow[] {
-  const rows: ModelCallRow[] = [];
+export function callRows(requests: Iterable<SessionRequest>): CallRow[] {
+  const rows: CallRow[] = [];
   for (const request of requests) {
-    for (const row of request.promptCache?.rows ?? []) if (row.stream !== 'compaction') rows.push(row);
+    for (const row of requestCallRows(request)) if (row.stream !== 'compaction') rows.push(row);
   }
   return rows;
 }
@@ -47,15 +53,15 @@ export function callRows(requests: Iterable<SessionRequest>): ModelCallRow[] {
 /** The request logged per-call output for its main agent (Copilot CLI and Copilot App builds with
  *  `session.usage_record`). */
 export function hasPerCallOutputs(request: SessionRequest): boolean {
-  return request.promptCache?.rows.some(row => row.stream === 'main' && row.outputTokens != null) ?? false;
+  return requestCallRows(request).some(row => row.stream === 'main' && row.outputTokens != null);
 }
 
-export function effortOf(row: ModelCallRow): Effort {
+export function effortOf(row: CallRow): Effort {
   return effortKey(row.reasoningEffort);
 }
 
 /** A row's reasoning by effort, over the calls that logged both output and reasoning tokens. */
-export function reasoningParts(row: ModelCallRow): EffortReasoning[] {
+export function reasoningParts(row: CallRow): EffortReasoning[] {
   if (row.outputTokens == null || row.reasoningTokens == null) return [];
   return row.reasoningByEffort
     ?? [{ effort: effortOf(row), calls: row.calls, outputTokens: row.outputTokens, reasoningTokens: row.reasoningTokens }];
@@ -63,7 +69,7 @@ export function reasoningParts(row: ModelCallRow): EffortReasoning[] {
 
 /** Reasoning share of output for the main agent and sub-agents, and by reasoning effort. Only calls that logged
  *  reasoning tokens count, in both parts of the share. `null` without any such call. */
-export function rowReasoning(rows: ModelCallRow[]): TokenTypesReasoning | null {
+export function rowReasoning(rows: CallRow[]): TokenTypesReasoning | null {
   const streams = new Map<CallStream, { output: number; reasoning: number }>();
   const byEffort = new Map<string, ReasoningByEffort>();
   for (const row of rows) {
@@ -101,7 +107,7 @@ export function rowReasoning(rows: ModelCallRow[]): TokenTypesReasoning | null {
 /** Truncated calls, over the calls that logged why they stopped, and content-filtered calls, over the calls that
  *  logged the filter. The two are counted independently: a call can log one without the other. `null` when no
  *  row logged either. */
-export function rowTruncation(rows: ModelCallRow[]): TokenTypesTruncation | null {
+export function rowTruncation(rows: CallRow[]): TokenTypesTruncation | null {
   let calls = 0, truncated = 0, filtered = 0, stopLogged = false, filterLogged = false;
   for (const row of rows) {
     if (row.truncatedCalls != null) {
@@ -134,7 +140,7 @@ function ascending(values: number[]): number[] {
 }
 
 /** First-token time and call duration by model, most calls first. `null` when no row logged latency. */
-export function rowLatency(rows: ModelCallRow[]): LatencyByModel[] | null {
+export function rowLatency(rows: CallRow[]): LatencyByModel[] | null {
   const models = new Map<string, { calls: number; ttft: number[]; duration: number[] }>();
   for (const row of rows) {
     if (!row.ttftMs?.length && !row.durationMs?.length) continue;
@@ -163,7 +169,7 @@ export function rowLatency(rows: ModelCallRow[]): LatencyByModel[] | null {
 }
 
 /** Main-agent input and output tokens of rows that logged per-call output. */
-export function mainTokens(rows: ModelCallRow[]): { input: number; output: number } {
+export function mainTokens(rows: CallRow[]): { input: number; output: number } {
   let input = 0, output = 0;
   for (const row of rows) {
     if (row.stream !== 'main' || row.outputTokens == null) continue;

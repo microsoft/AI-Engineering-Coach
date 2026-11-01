@@ -212,6 +212,51 @@ describe('PromptCacheAnalyzer attribution', () => {
   });
 });
 
+describe('PromptCacheAnalyzer requests that counted returns without cache rows', () => {
+  /** A Copilot App request whose calls didn't report their cache, with the returns it counted. */
+  const countsOnly = (id: string, counts: Omit<RequestPromptCache, 'rows'>) => session(id, 'GitHub Copilot App', [request(`${DAY}T12:00:00Z`, { rows: [], ...counts })]);
+
+  it('add their returns to the lifetime card of a measured attribution, but no cache data', () => {
+    const a = analyzer([appSession(), countsOnly('app-2', { returns: 2, expiredReturns: 1, unmeasuredReturns: 1 })]);
+    const data = a.getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(data.attribution?.idle).toMatchObject({ returns: 6, expiredReturns: 2, unmeasuredReturns: 3 });
+    expect(data.returnsWithoutCacheData).toBeNull();
+    expect(data.coverage).toEqual({ requestsWithData: 2, totalRequests: 3, sessionsWithData: 1, totalSessions: 2 });
+    expect(data.workspaces).toEqual([expect.objectContaining({ workspaceName: 'alpha', sessions: 1 })]);
+    expect(a.getPromptCacheSessions('ws-alpha', undefined, { fromDate: DAY }).sessions.map(s => s.sessionId)).toEqual(['app-1']);
+    expect(a.getSessionTimeline('app-2')).toBeNull();
+  });
+
+  it('keep their returns apart, with no attribution, when no Copilot request in range logged cache tokens', () => {
+    const claude = session('claude-1', 'Claude', [request(`${DAY}T11:00:00Z`, { rows: [row('main', [2, 100_000, 50_000, 50_000])] })]);
+    const data = analyzer([countsOnly('app-2', { returns: 1, expiredReturns: 1 }), claude]).getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(data.harnesses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ harness: 'GitHub Copilot App', all: null, breaks: null, breaksPer100: null, requestsWithData: 0 }),
+      expect.objectContaining({ harness: 'Claude', requestsWithData: 1 }),
+    ]));
+    // Breaks and misses can't be measured without cache tokens: no attribution claims zero of them.
+    expect(data.attribution).toBeNull();
+    expect(data.returnsWithoutCacheData).toEqual({ label: 'Copilot App', harnesses: ['GitHub Copilot App'], returns: 1, expiredReturns: 1, unmeasuredReturns: 0 });
+    expect(data.coverage).toEqual({ requestsWithData: 1, totalRequests: 2, sessionsWithData: 1, totalSessions: 2 });
+    expect(data.tips).toEqual([]);
+  });
+
+  it('name only the harnesses whose returns they hold', () => {
+    const cli = session('cli-1', 'GitHub Copilot CLI', [request(`${DAY}T12:30:00Z`, { rows: [], unmeasuredReturns: 2 })]);
+    const data = analyzer([countsOnly('app-2', { returns: 1 }), cli]).getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(data.returnsWithoutCacheData).toEqual({
+      label: 'Copilot App and Copilot CLI', harnesses: ['GitHub Copilot App', 'GitHub Copilot CLI'], returns: 1, expiredReturns: 0, unmeasuredReturns: 2,
+    });
+  });
+
+  it('are ignored for harnesses that don\u2019t attribute breaks', () => {
+    const claude = session('claude-1', 'Claude', [request(`${DAY}T11:00:00Z`, { rows: [], returns: 1 })]);
+    const data = analyzer([claude]).getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(data.attribution).toBeNull();
+    expect(data.returnsWithoutCacheData).toBeNull();
+  });
+});
+
 describe('PromptCacheAnalyzer tips', () => {
   function withBreaks(count: number, causes: CacheBreakCause[], extra: Partial<CacheBreak> = {}): Session {
     const s = appSession();
@@ -270,5 +315,16 @@ describe('PromptCacheAnalyzer sessions and timelines', () => {
     expect(perRequest).toMatchObject({ unit: 'requests', cache: { reporting: 'per-call', breaks: [] } });
     expect(perRequest?.timeline?.buckets.map(b => [b.firstRequest, b.cacheCalls, b.cacheRead])).toEqual([[0, 1, 50_000], [1, 0, 0], [2, 1, 110_000]]);
     expect(a.getSessionTimeline('missing')).toBeNull();
+  });
+
+  it('marks a Codex session\u2019s figures as session totals, which count no model calls', () => {
+    const codex = session('codex-1', 'Codex', [request(`${DAY}T11:00:00Z`)], {
+      modelUsage: { 'gpt-6.1-sol': { inputTokens: 20_000, outputTokens: 1_000, cacheReadTokens: 180_000, cacheWriteTokens: 0 } },
+    });
+    const a = analyzer([appSession(), codex]);
+    const rows = a.getPromptCache({ fromDate: DAY }).topSessions.map(s => [s.harness, s.reporting, s.calls]);
+    expect(rows).toEqual(expect.arrayContaining([['Codex', 'per-session', 0], ['GitHub Copilot App', 'per-call', 71]]));
+    expect(a.getPromptCacheSessions('alpha', 'Codex').sessions).toEqual([expect.objectContaining({ sessionId: 'codex-1', reporting: 'per-session', hitPct: 90 })]);
+    expect(a.getSessionTimeline('codex-1')).toMatchObject({ unit: 'requests', timeline: null, cache: { reporting: 'per-session' } });
   });
 });

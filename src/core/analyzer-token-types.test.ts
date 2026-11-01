@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { analyzeTokenTypes, sessionTokenTypes, tokenTypesSource } from './analyzer-token-types';
 import { createRequest, createSession } from './parser-shared';
-import type { CompactionEvent, ModelCallRow, Session, SessionRequest, SubagentRun } from './types';
+import type { CallRow, CompactionEvent, ModelCallRow, Session, SessionRequest, SubagentRun } from './types';
 
 function compaction(overrides: Partial<CompactionEvent> = {}): CompactionEvent {
   return {
@@ -216,6 +216,33 @@ describe('analyzeTokenTypes from per-call rows', () => {
     expect(data.sources[0].truncation).toEqual({ calls: null, truncatedCalls: null, filteredCalls: 12 });
     expect(data.tips).toEqual([]);
     expect(data.coverage).toEqual({ requests: 1, requestsWithData: 1 });
+  });
+});
+
+describe('analyzeTokenTypes for calls that didn\u2019t report their cache', () => {
+  /** The reviewer's Copilot CLI record as a row without cache data: input 100,000, output 1,000, reasoning 600,
+   *  stopped at the output-token limit, first token after 3,000 ms and 6,000 ms in all. */
+  const withoutCache: CallRow = {
+    stream: 'main', model: 'claude-opus-5.5', calls: 1, reasoningEffort: 'high', input: 100_000,
+    outputTokens: 1_000, reasoningTokens: 600, truncatedCalls: 1, ttftMs: [3_000], durationMs: [6_000],
+  };
+
+  it('reports their token types and counts their turn as covered', () => {
+    const data = analyze([session('GitHub Copilot CLI', [req({ callRowsWithoutCacheData: [withoutCache] })])]);
+    expect(data.sources).toHaveLength(1);
+    expect(data.sources[0]).toMatchObject({
+      source: 'copilot-cli',
+      reasoning: { main: { outputTokens: 1_000, reasoningTokens: 600, sharePct: 60 } },
+      truncation: { calls: 1, truncatedCalls: 1, filteredCalls: null },
+      latency: [{ model: 'claude-opus-5.5', calls: 1, ttftP50Ms: 3_000, durationP50Ms: 6_000 }],
+    });
+    expect(data.coverage).toEqual({ requests: 1, requestsWithData: 1 });
+  });
+
+  it('sums them with the calls of the turn that did', () => {
+    const data = analyze([session('GitHub Copilot CLI', [req({ promptCache: { rows: [row()] }, callRowsWithoutCacheData: [withoutCache] })])]);
+    expect(data.sources[0].reasoning?.main).toEqual({ outputTokens: 21_000, reasoningTokens: 12_600, sharePct: 60 });
+    expect(data.sources[0].truncation).toEqual({ calls: 11, truncatedCalls: 1, filteredCalls: 0 });
   });
 });
 

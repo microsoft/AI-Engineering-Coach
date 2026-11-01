@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { CallTimeline } from './call-timeline-types';
-import type { RequestPromptCache, SessionPromptCache } from './prompt-cache-types';
+import type { CallRow, RequestPromptCache, SessionPromptCache } from './prompt-cache-types';
 
 export interface ToolConfirmation {
   toolId: string;
@@ -177,6 +177,10 @@ export interface SessionRequest {
   /** Prompt-cache usage of the request's model calls, when the harness logs it per call
    *  (Copilot CLI and Copilot App, Claude Code, OpenCode). */
   promptCache?: RequestPromptCache;
+  /** The request's model calls that didn't report their cache usage, one row per stream and model: a Copilot CLI or
+   *  Copilot App record without cache tokens or with `cacheDetailsReported: false`, a Claude Code response or an
+   *  OpenCode message without cache fields. `promptCache` leaves them out; their token types count here. */
+  callRowsWithoutCacheData?: CallRow[];
   /** Final TODO list state at the end of this request (from manage_todo_list tool calls) */
   todoSnapshot: TodoItem[] | null;
   /** Precomputed work-type classification (feature, bug fix, refactor, etc.) */

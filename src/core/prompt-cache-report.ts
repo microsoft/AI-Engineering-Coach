@@ -7,7 +7,7 @@
  * It holds only aggregates: counts, percentages, token sums, model names, cause names and system-prompt
  * segment names. It never holds workspace names, session ids, file paths or prompt text. */
 
-import type { CacheAttribution, PromptCacheData, Session } from './types';
+import type { CacheAttribution, CacheReturnsWithoutData, PromptCacheData, Session } from './types';
 import { AnalyzerBase } from './analyzer-base';
 import { analyzePromptCache } from './analyzer-prompt-cache';
 import { exportedOriginName } from './prompt-cache-causes';
@@ -42,7 +42,10 @@ function harnessLines(data: PromptCacheData): string[] {
     const t = h.all;
     lines.push(`${h.harness} [${h.reporting}${h.attribution ? ', attributed' : ''}]: ${h.requestsWithData}/${h.totalRequests} requests`);
     if (!t) continue;
-    lines.push(`  calls ${t.calls} (main ${h.main?.calls ?? 0}, subagent ${h.subagents?.calls ?? 0}, compaction ${h.compaction?.calls ?? 0}); input ${m(t.input)}`);
+    // Session totals (Codex) carry no count of model calls.
+    lines.push(h.reporting === 'per-session'
+      ? `  session totals; input ${m(t.input)}`
+      : `  calls ${t.calls} (main ${h.main?.calls ?? 0}, subagent ${h.subagents?.calls ?? 0}, compaction ${h.compaction?.calls ?? 0}); input ${m(t.input)}`);
     lines.push(`  hit ${p(t.hitPct)} (main ${p(h.main?.hitPct)}, subagent ${p(h.subagents?.hitPct)}); written ${p(t.writePct)}; uncached ${p(t.uncachedPct)}`);
     if (h.cost) {
       const saved = h.cost.savedPct >= 0 ? `caching cut input cost by ${p(h.cost.savedPct)}` : `caching cost more than it saved: input cost ${p(-h.cost.savedPct)} above no caching`;
@@ -74,6 +77,13 @@ function attributionLines(a: CacheAttribution): string[] {
     `  lifetimes: ${idle.ttlByModel.map(t => `${t.model} ${t.ttlSeconds}s (${t.calls} calls)`).join(', ')}`,
   );
   return lines;
+}
+
+function returnsOnlyLines(r: CacheReturnsWithoutData): string[] {
+  return [
+    '',
+    `Returns without cache data (${r.label}): ${r.returns} with a logged expiry, after expiry ${r.expiredReturns}; ${r.unmeasuredReturns} more without a logged expiry`,
+  ];
 }
 
 function breakdownLines(data: PromptCacheData): string[] {
@@ -111,6 +121,7 @@ export function promptCacheReport(parse: () => Session[], fromDate?: string): st
     '',
     ...harnessLines(data),
     ...(data.attribution ? attributionLines(data.attribution) : []),
+    ...(data.returnsWithoutCacheData ? returnsOnlyLines(data.returnsWithoutCacheData) : []),
     ...breakdownLines(data),
   ];
 }

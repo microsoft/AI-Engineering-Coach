@@ -6,9 +6,10 @@
 /* Output-side fields of a model call: output and reasoning tokens, the reported context limit, why the call
  * stopped, and its latency. Copilot CLI and Copilot App read them from `session.usage_record` in the same
  * pass as the other per-call fields (see cli-model-calls.ts); Claude Code and OpenCode supply the subset
- * they log. They are summed onto the shared per-request rows (`ModelCallRow`) by `RequestCacheBuilder`. */
+ * they log. `RequestCacheBuilder` sums them onto the per-request rows (`CallRow`), whether or not the call reported
+ * its cache usage. */
 
-import type { EffortReasoning, ModelCallRow } from './types';
+import type { CallRow, EffortReasoning } from './types';
 import { canonicalizeReasoningEffort } from './helpers';
 
 export type CliFinishReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'other';
@@ -91,7 +92,7 @@ export function effortKey(raw: string | null | undefined): EffortReasoning['effo
   return canonicalizeReasoningEffort(raw) ?? 'unknown';
 }
 
-function addEffortReasoning(row: ModelCallRow, effort: string | null | undefined, output: number, reasoning: number): void {
+function addEffortReasoning(row: CallRow, effort: string | null | undefined, output: number, reasoning: number): void {
   const key = effortKey(effort);
   const parts = (row.reasoningByEffort ??= []);
   let part = parts.find(p => p.effort === key);
@@ -106,7 +107,7 @@ function addEffortReasoning(row: ModelCallRow, effort: string | null | undefined
 
 /** Add one call's output-side fields to its row. A field stays absent until a call logs it. `effort` is the
  *  call's reasoning effort: the row keeps reasoning per effort until `finishRowOutputs`. */
-export function addRowOutputs(row: ModelCallRow, sample: CallOutputSample, effort?: string | null): void {
+export function addRowOutputs(row: CallRow, sample: CallOutputSample, effort?: string | null): void {
   if (sample.outputTokens != null) row.outputTokens = (row.outputTokens ?? 0) + sample.outputTokens;
   if (sample.reasoningTokens != null) row.reasoningTokens = (row.reasoningTokens ?? 0) + sample.reasoningTokens;
   if (sample.outputTokens != null && sample.reasoningTokens != null) addEffortReasoning(row, effort, sample.outputTokens, sample.reasoningTokens);
@@ -117,7 +118,7 @@ export function addRowOutputs(row: ModelCallRow, sample: CallOutputSample, effor
 }
 
 /** Count a call that logged why it stopped: `stopCalls` is the denominator of `truncatedCalls`. */
-export function addStopReason(row: ModelCallRow, truncated: boolean): void {
+export function addStopReason(row: CallRow, truncated: boolean): void {
   row.truncatedCalls = (row.truncatedCalls ?? 0) + (truncated ? 1 : 0);
   row.stopCalls = (row.stopCalls ?? 0) + 1;
 }
@@ -133,7 +134,7 @@ export function thinSamples(values: number[], max = MAX_LATENCY_SAMPLES): number
 /** Before a row is stored: thin its latency samples, and drop the denominators and the effort split when the
  *  row-level fields already say the same (every call logged the value, at one effort), so most rows keep
  *  their size. */
-export function finishRowOutputs(row: ModelCallRow): void {
+export function finishRowOutputs(row: CallRow): void {
   if (row.ttftMs) row.ttftMs = thinSamples(row.ttftMs);
   if (row.durationMs) row.durationMs = thinSamples(row.durationMs);
   if (row.stopCalls === row.calls) delete row.stopCalls;

@@ -49,6 +49,33 @@ describe('formatPromptCache', () => {
   });
 });
 
+describe('formatPromptCache returns without cache data', () => {
+  it('reports Copilot returns apart, with no cache breaks, when only another harness logged cache tokens', () => {
+    const at = Date.parse('2026-10-20T11:00:00Z');
+    // The Copilot App call didn't report its cache, but its prompt returned to an earlier call whose cache had expired.
+    const app = createSession({
+      sessionId: 'a', workspaceId: 'ws', workspaceName: 'w', harness: 'GitHub Copilot App',
+      requests: [createRequest({ messageText: 'prompt', responseText: '', timestamp: at, promptCache: { rows: [], returns: 1, expiredReturns: 1 } })],
+    });
+    const claude = createSession({
+      sessionId: 'c', workspaceId: 'ws', workspaceName: 'w', harness: 'Claude',
+      requests: [createRequest({ messageText: 'prompt', responseText: '', timestamp: at, promptCache: { rows: [{ stream: 'main', model: 'claude-sonnet-5', calls: 1, input: 31_010, cacheRead: 30_000, cacheWrite: 1_000 }] } })],
+    });
+    const summary = formatPromptCache(new PromptCacheAnalyzer([app, claude], new Map()).getPromptCache());
+    expect(summary.cacheBreaks).toBeNull();
+    expect(summary.returnsWithoutCacheData).toEqual({ harnesses: 'Copilot App', returnsAfterExpiry: { expired: 1, of: 1, notMeasured: 0 } });
+    expect(summary.harnesses).toEqual(expect.arrayContaining([expect.objectContaining({ harness: 'GitHub Copilot App', reported: false, breaksPer100Calls: null })]));
+  });
+
+  it('leaves them out when the Copilot calls in range logged cache tokens', () => {
+    const request = createRequest({ messageText: 'prompt', responseText: '', timestamp: Date.parse('2026-10-20T11:00:00Z'), promptCache: { rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 1, input: 100_000, cacheRead: 90_000, cacheWrite: 10_000 }], returns: 1 } });
+    const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'w', harness: 'GitHub Copilot App', requests: [request] });
+    const summary = formatPromptCache(new PromptCacheAnalyzer([session], new Map()).getPromptCache());
+    expect(summary.cacheBreaks).toMatchObject({ returnsAfterExpiry: { expired: 0, of: 1, notMeasured: 0 } });
+    expect(summary.returnsWithoutCacheData).toBeNull();
+  });
+});
+
 describe('formatPromptCache harness rows', () => {
   it('calls a harness reported only when requests in range carried cache data', () => {
     // An older Copilot App build logs no per-call usage: the harness would log the cache per call, but didn't.

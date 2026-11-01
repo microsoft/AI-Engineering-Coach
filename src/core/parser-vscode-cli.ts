@@ -247,10 +247,13 @@ function flushTurn(state: CLIParseState): void {
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
 
-/** Attach the turn's prompt-cache usage, context and composition (deferred until a system-prompt size is known). */
+/** Attach the turn's prompt-cache usage and the rows of its calls without cache data, its context and its composition
+ *  (deferred until a system-prompt size is known). */
 function attachTurnUsage(state: CLIParseState, turn: TurnState, request: SessionRequest): void {
   const promptCache = state.cache.takeRequest();
   if (promptCache) request.promptCache = promptCache;
+  const callRowsWithoutCacheData = state.cache.takeRowsWithoutCacheData();
+  if (callRowsWithoutCacheData) request.callRowsWithoutCacheData = callRowsWithoutCacheData;
   const contextUsage = state.context.take();
   if (contextUsage) request.contextUsage = contextUsage;
   if (turn.usage.calls > 0) {
@@ -344,7 +347,7 @@ const MAX_COMPACTION_SNAPSHOTS = 50;
 
 function handleCompactionStart(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
-  state.cache.onCompaction();
+  state.cache.onCompactionStart(eventTime(ev));
   setSystemTokens(state, data.systemTokens);
   const currentTokens = finiteNumber(data.currentTokens);
   const systemTokens = finiteNumber(data.systemTokens);
@@ -530,8 +533,8 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
   addAssistantToolRequests(turn, data.toolRequests);
 }
 
-function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState): void {
-  state.cache.onCompaction(data);
+function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
+  state.cache.onCompactionComplete(data, at);
   setSystemTokens(state, data.systemTokens);
   const event = readCliCompaction(data);
   state.context.addLimit(event.tokenLimit);
@@ -660,7 +663,7 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       if (state.turn) state.turn.isCanceled = true;
       return;
     case 'session.compaction_complete':
-      handleCompactionComplete(ev.data || {}, state);
+      handleCompactionComplete(ev.data || {}, state, eventTime(ev));
       return;
     case 'subagent.started':
       state.subagents.start(ev.data || {}, state.turn ? state.requests.length : null);

@@ -105,6 +105,11 @@ function toSample(request: SessionRequest, session: Session): Sample | null {
   };
 }
 
+/** True when the request carries composition the card can show, like the requests `toSample` keeps. */
+export function hasPromptComposition(request: SessionRequest): boolean {
+  return request.promptComposition != null && normalizeShares(request.promptComposition.shares) != null;
+}
+
 /** Token-weighted when prompt sizes are known (requests without one are left out), else request-weighted.
  *  A sample's prompt size is its average per model call, so it weighs `basis × calls`: every Copilot CLI
  *  call counts, and the average prompt is per call. VS Code records one call per request. */

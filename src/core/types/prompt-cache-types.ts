@@ -20,9 +20,10 @@ export interface EffortReasoning {
   reasoningTokens: number;
 }
 
-/** Sums over the model calls a request made on one stream with one model. Neutral: prompt-cache fields
- *  today; other per-call sums can be added. */
-export interface ModelCallRow {
+/** Sums over the model calls a request made on one stream with one model: what every call logs, and its token
+ *  types. Calls that reported their cache usage are `ModelCallRow`s; the others are `CallRow`s, without cache fields,
+ *  so their cache usage stays unknown rather than zero. */
+export interface CallRow {
   stream: CacheStream;
   model: string;
   calls: number;
@@ -30,24 +31,6 @@ export interface ModelCallRow {
   reasoningEffort?: string;
   /** Prompt tokens, including tokens read from and written to the cache. */
   input: number;
-  cacheRead: number;
-  cacheWrite: number;
-  /** Input cost of the calls that logged prices, in the harness's price unit (Copilot: nano-AIU, one unit for
-   *  every model, so costs add up across models): Σ (uncached + cacheRead × read rate + cacheWrite × write
-   *  rate) × input price. Only percentages are shown. */
-  cost?: number;
-  /** The part of `cost` spent on tokens not read from the cache (uncached and written tokens). */
-  missCost?: number;
-  /** What the same prompts would have cost uncached: Σ prompt tokens × input price. */
-  baselineCost?: number;
-  /** Prompt tokens of the calls that logged prices (the base of the rated share). */
-  ratedInput?: number;
-  /** Cache lifetime the harness logged for these calls, in seconds. */
-  ttlSeconds?: number;
-  /** Main-agent cache breaks on these calls (Copilot CLI and Copilot App), including breaks beyond the
-   *  per-session cap on listed `CacheBreak`s. Break counts and rates come from here, so they follow the
-   *  date filter. */
-  cacheBreaks?: number;
   /* Token types (see call-outputs.ts). Each is absent when the harness doesn't log it per call. */
   /** Output tokens, including reasoning (Copilot CLI and Copilot App). */
   outputTokens?: number;
@@ -69,9 +52,32 @@ export interface ModelCallRow {
   durationMs?: number[];
 }
 
+/** A `CallRow` of calls that reported their cache usage, with their cache sums. */
+export interface ModelCallRow extends CallRow {
+  cacheRead: number;
+  cacheWrite: number;
+  /** Input cost of the calls that logged prices, in the harness's price unit (Copilot: nano-AIU, one unit for
+   *  every model, so costs add up across models): Σ (uncached + cacheRead × read rate + cacheWrite × write
+   *  rate) × input price. Only percentages are shown. */
+  cost?: number;
+  /** The part of `cost` spent on tokens not read from the cache (uncached and written tokens). */
+  missCost?: number;
+  /** What the same prompts would have cost uncached: Σ prompt tokens × input price. */
+  baselineCost?: number;
+  /** Prompt tokens of the calls that logged prices (the base of the rated share). */
+  ratedInput?: number;
+  /** Cache lifetime the harness logged for these calls, in seconds. */
+  ttlSeconds?: number;
+  /** Main-agent cache breaks on these calls (Copilot CLI and Copilot App), including breaks beyond the
+   *  per-session cap on listed `CacheBreak`s. Break counts and rates come from here, so they follow the
+   *  date filter. */
+  cacheBreaks?: number;
+}
+
 /** Prompt-cache usage of one request (a Copilot CLI turn, a Claude Code or an OpenCode request). */
 export interface RequestPromptCache {
-  /** One row per stream and model, main agent first. */
+  /** One row per stream and model, main agent first. Empty when none of the request's calls reported its cache,
+   *  but it counted returns. */
   rows: ModelCallRow[];
   /** Main-agent prompt tokens not read from the cache on the session's first model call. */
   coldStart?: number;
@@ -80,12 +86,12 @@ export interface RequestPromptCache {
   /** Main-agent prompt tokens rebuilt after cache breaks (Copilot CLI and Copilot App). */
   rebuilt?: number;
   rebuiltCost?: number;
-  /** Main-agent calls you started after an earlier call that logged when its cache expires, and how many
-   *  started after that cache had expired. */
+  /** Main-agent calls you started after an earlier main-agent call that logged when its cache expires, and how many
+   *  started after that cache had expired. Counted whether or not the returning call itself reported its cache. */
   returns?: number;
   expiredReturns?: number;
-  /** Main-agent calls you started after an earlier call that didn't log when its cache expires. Expiry can't
-   *  be measured for them, so they aren't in `returns`. */
+  /** Main-agent calls you started after an earlier main-agent call that didn't log when its cache expires, including
+   *  one that didn't report its cache at all. Expiry can't be measured for them, so they aren't in `returns`. */
   unmeasuredReturns?: number;
 }
 
@@ -255,11 +261,12 @@ export interface CacheIdleBucket {
 export interface CacheIdleSummary {
   /** Logged cache lifetime per model, most main-agent calls first. */
   ttlByModel: { model: string; ttlSeconds: number; calls: number }[];
-  /** Main-agent calls you started after an earlier call that logged when its cache expires, and how many
-   *  started after it had expired. */
+  /** Main-agent calls you started after an earlier main-agent call that logged when its cache expires, and how many
+   *  started after it had expired. Includes returns whose own call didn't report its cache. */
   returns: number;
   expiredReturns: number;
-  /** Such calls after an earlier call that didn't log when its cache expires: not in `returns`. */
+  /** Such calls after an earlier call that didn't log when its cache expires, or didn't report its cache: not in
+   *  `returns`. */
   unmeasuredReturns: number;
   /** Cache-expiry breaks by the time since the cache was last refreshed (see `CacheBreak.idleSeconds`), split
    *  by who made the call; breaks whose call doesn't log that are left out of the split. */
@@ -289,6 +296,19 @@ export interface CacheAttribution {
   misses: number;
   origins: CacheOriginSlice[];
   idle: CacheIdleSummary;
+}
+
+/** Returns that Copilot CLI and Copilot App prompts counted in range when none of their requests in range logged cache
+ *  tokens, so there's no `CacheAttribution`: their cache breaks and misses can't be measured, only these returns. Each
+ *  is measured against the cache of the call it returned to, which can be outside the range. */
+export interface CacheReturnsWithoutData {
+  /** Display name, e.g. "Copilot App" or "Copilot App and Copilot CLI". */
+  label: string;
+  harnesses: string[];
+  /** As in `CacheIdleSummary`. */
+  returns: number;
+  expiredReturns: number;
+  unmeasuredReturns: number;
 }
 
 export interface ModelPromptCache {
@@ -350,6 +370,9 @@ export interface CacheSessionSummary {
   date: string;
   workspaceName: string;
   harness: string;
+  /** How the session's cache usage is logged. `per-session` (Codex) has only session totals, so `calls` is 0 and
+   *  isn't a count of model calls. */
+  reporting: CacheReporting;
   calls: number;
   hitPct: number | null;
   breaks: number | null;
@@ -363,7 +386,11 @@ export interface CacheSessionSummary {
 export interface PromptCacheData {
   /** One row per harness with requests in range, including harnesses that don't report cache. */
   harnesses: HarnessPromptCache[];
+  /** Measured break attribution: `null` unless a Copilot CLI or Copilot App request in range logged cache tokens. */
   attribution: CacheAttribution | null;
+  /** The returns Copilot CLI and Copilot App counted when `attribution` is `null`; `null` with an attribution, or
+   *  without returns. */
+  returnsWithoutCacheData: CacheReturnsWithoutData | null;
   models: ModelPromptCache[];
   workspaces: WorkspacePromptCache[];
   trend: PromptCacheTrend;

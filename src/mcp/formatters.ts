@@ -485,6 +485,7 @@ function formatComposition(composition: ContextCompositionData) {
 /** Prompt-cache efficiency per harness and, where logged, why the cache broke. Percentages, not amounts. */
 export function formatPromptCache(data: PromptCacheData) {
   const a = data.attribution;
+  const r = data.returnsWithoutCacheData;
   return {
     harnesses: data.harnesses.map(h => ({
       harness: h.harness,
@@ -512,6 +513,12 @@ export function formatPromptCache(data: PromptCacheData) {
       cacheLifetimes: a.idle.ttlByModel.map(t => ({ model: t.model, seconds: t.ttlSeconds })),
       returnsAfterExpiry: { expired: a.idle.expiredReturns, of: a.idle.returns, notMeasured: a.idle.unmeasuredReturns },
       medianMinutesSinceCacheRefreshAtExpiry: a.idle.medianIdleMinutes,
+    } : null,
+    // No call of these harnesses in range logged cache tokens, so their breaks and misses are unknown (cacheBreaks is
+    // null); prompts you sent there still returned to earlier calls, which can be outside the range.
+    returnsWithoutCacheData: r ? {
+      harnesses: r.label,
+      returnsAfterExpiry: { expired: r.expiredReturns, of: r.returns, notMeasured: r.unmeasuredReturns },
     } : null,
     tips: data.tips,
   };

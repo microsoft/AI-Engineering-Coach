@@ -95,6 +95,8 @@ The section shows:
 
 Click a session in the per-workspace table to see its composition. For VS Code sessions, a per-request chart lines up with the token curve. For Copilot CLI sessions, the panel also lists the system-prompt segments from the latest checkpoint and the context when each compaction started, including tokens the CLI didn't attribute.
 
+You don't have to hover the charts: **Show the chart as a table**, under the weekly chart and each per-request chart, lists every value their tooltips show. For each week and harness, that's the shares, the requests (Copilot CLI: turns) behind them and how they're weighted; for each request, its prompt and category shares. It opens from the keyboard, and screen readers read it as a table.
+
 #### Where the data comes from
 
 | Harness | Source | What you get |
@@ -118,6 +120,7 @@ GitHub's [Optimizing your AI usage](https://docs.github.com/en/copilot/tutorials
 
 - VS Code records composition only for the last model call of each request, while Copilot CLI records every main-agent call. Pooled together, Copilot CLI would dominate every figure, so the two are never combined: key figures and workspace rows are shown for each separately.
 - Composition counts the requests sent in the selected range, while context utilization counts sessions by their last activity. A session that continues past the end of the range adds composition but no utilization. If no session's last activity falls in the range, the tab shows only Context Composition.
+- The time-range buttons offer each range that adds requests with per-request token counts or composition data, so a range whose only data is Copilot CLI composition can still be selected.
 - VS Code rounds each category to a whole percent, so shares can add up to 98-101%. Small rounding differences are rescaled; a larger shortfall shows as Other / unattributed.
 - Copilot CLI's system-prompt size comes from the latest checkpoint and is applied to every call in a turn, so the split between system instructions and conversation is an estimate. Tool-definition tokens are counted per call.
 - The tool-definition total in Copilot CLI's `session.shutdown` event isn't used, because it disagrees with the per-call counts.
@@ -208,7 +211,7 @@ A cache break is a main-agent call that couldn't reuse most of the previous call
 | **Tool set changed** | The number or size of the tool definitions changed, for example when MCP servers were turned on or off, or a checkpoint shows changed tool schemas | Partly |
 | **Instructions or memory changed** | A checkpoint shows that your instruction files or memories changed in the system prompt | You |
 | **System prompt updated by the harness** | A checkpoint shows that parts the harness maintains changed, such as workspace or environment context | Harness |
-| **Compaction** | The conversation was compacted, so the cache was rebuilt from the summary | Harness |
+| **Compaction** | A compaction finished before the call started, so the cache was rebuilt from the summary. A compaction that failed isn't a cause, and neither is one still running when the call started, unless the log never shows a compaction finishing after that call | Harness |
 | **No logged cause** | Nothing logged explains the break | Unknown |
 
 Causes often occur together. Resuming an old session, for example, usually also means that the cache expired. Each break is counted once, under its first logged cause in this order: compaction, model switch, cache expiry, reasoning effort, tool set, mode switch, and resume. A break with no logged cause is counted under a system-prompt or tool-schema change seen between checkpoints, if there was one.
@@ -220,7 +223,7 @@ Each session lists its first 100 breaks. Later breaks still count toward rebuilt
 Two cards break the misses down further:
 
 - **Where cache misses come from** -- Prompt tokens not read from the cache, by origin: new context such as your prompts and tool results, together with minor misses (cached context re-sent in amounts too small to count as a break); context rebuilt after a break; subagents (which build their own context); compaction summaries; and the first call of each session. In parentheses, the share of the input cost.
-- **Cache lifetime and expiry** -- The cache lifetime your logs show for each model, how often you came back after the cache had expired, and, for each expiry break, the time since the cache was last refreshed in multiples of the lifetime, split into you away and the agent waiting. A call refreshes the cache when it starts, so this time runs from the previous call's start to the next call's start, and the cache had expired exactly when it's longer than the lifetime. The logged lifetimes, for example 5 or 30 minutes, can differ from general documentation. A return counts only when the previous call logged when its cache expires; the card says how many didn't. Expiry breaks whose call doesn't log who made it aren't split.
+- **Cache lifetime and expiry** -- The cache lifetime your logs show for each model, how often you came back after the cache had expired, and, for each expiry break, the time since the cache was last refreshed in multiples of the lifetime, split into you away and the agent waiting. A call refreshes the cache when it starts, so this time runs from the previous call's start to the next call's start, and the cache had expired exactly when it's longer than the lifetime. The logged lifetimes, for example 5 or 30 minutes, can differ from general documentation. A return counts as soon as you send a prompt after an earlier main-agent call, even if your own call logged no cache details, but its expiry is measured only when that earlier call logged when its cache expires; the card says how many returns came after a call that didn't, including calls that logged no cache details at all. Expiry breaks whose call doesn't log who made it aren't split. When no Copilot App or Copilot CLI call in the range logged cache tokens, but prompts you sent there returned to earlier calls, this card shows only those returns, measured against the calls they returned to, which can be outside the range. Their cache breaks and misses can't be measured, so none are shown for these harnesses, even when other harnesses logged cache tokens in the range.
 
 Below them, **Cache hit ratio by week** shows a line per harness; **Show the chart as a table**, below the chart, lists each week's hit ratio, breaks per 100 calls, and main-agent calls per harness. **By model** lists each model's hit ratio, write share, breaks per 100 calls, and cache lifetime. **Sessions that rebuilt the most** and **By workspace** lead to individual sessions.
 
@@ -237,9 +240,9 @@ Claude Code and OpenCode sessions show one bar per request and no breaks. Codex 
 | Harness | Source | What you get |
 |---|---|---|
 | GitHub Copilot App and Copilot CLI | `session.usage_record` and `session.usage_checkpoint`, plus compaction, mode-change, and resume events, in `events.jsonl` | Cache tokens, cache lifetime and expiry, and the logged prices for every model call of the main agent, subagents, and compaction summaries, plus cache breaks and their causes. Older builds that don't log per-call usage show no cache data |
-| Claude Code | `usage` on each API response | Cache read and write tokens for every response. Claude Code repeats a response's usage on each of its content blocks, so each response is counted once |
+| Claude Code | `usage` on each API response | Cache read and write tokens for every response. Claude Code repeats a response's usage on each of its content blocks, so each response is counted once. A sub-agent's transcript counts toward subagents even when its lines aren't marked as a sidechain |
 | OpenCode | Token counts of each assistant message | Cache read and write tokens of every assistant message |
-| Codex | Session token totals | The hit ratio, from cached input tokens. OpenAI's cache has no separate cache writes. Logs that carry no cached-token counts show no cache data rather than a 0% hit ratio |
+| Codex | Session token totals | The hit ratio, from cached input tokens. OpenAI's cache has no separate cache writes. Logs that carry no cached-token counts show no cache data rather than a 0% hit ratio. Its sessions show "session totals" where other harnesses count model calls |
 | VS Code, Xcode | Not logged | Shown as "Not reported by this harness". Nothing is estimated |
 
 Prompt-cache data holds only token counts, timestamps, cache lifetimes, model names, cause types, and system-prompt segment names. Fingerprints of system-prompt segments and tool schemas are compared in memory to spot changes and are never stored, and neither are tool names or schemas.
@@ -296,10 +299,10 @@ Unlike Context Quality and Context Management, Token Types offers every range, i
 
 | Harness | Source | What you get |
 |---|---|---|
-| GitHub Copilot App and Copilot CLI | `session.usage_record`, `session.compaction_complete`, and `subagent.started` and `subagent.completed` in `events.jsonl` | All five. Reasoning, truncation, and latency need per-call usage, which older builds don't log. Compactions and sub-agent runs come from every build that logs them |
+| GitHub Copilot App and Copilot CLI | `session.usage_record`, `session.compaction_complete`, and `subagent.started` and `subagent.completed` in `events.jsonl` | All five. Reasoning, truncation, and latency need per-call usage, which older builds don't log. A call counts whether or not it logs its cache tokens. Compactions and sub-agent runs come from every build that logs them |
 | Codex | `token_count` events | Reasoning, from the session's reasoning output tokens. No split by effort |
-| Claude Code | `stop_reason` on each API response | Truncated calls, counting each response once, from the first of its lines that logs a stop reason. Thinking is billed as output and not reported separately |
-| OpenCode | `finish` on each assistant message | Truncated calls. Its reasoning count depends on the model provider, so it isn't compared |
+| Claude Code | `stop_reason` on each API response | Truncated calls, counting each response once, from the first of its lines that logs a stop reason, whether or not the response logs cache tokens. Thinking is billed as output and not reported separately |
+| OpenCode | `finish` on each assistant message | Truncated calls, whether or not a message logs cache tokens. Its reasoning count depends on the model provider, so it isn't compared |
 | VS Code, Xcode | Not logged | Shown as "Not reported". Request response times are under [Activity Patterns](/measure/patterns/) |
 
 Token types hold only token counts, durations, reasoning effort, model names, and sub-agent types. Prompts, summaries, checkpoint paths, tool names, and custom agent names are never stored.
