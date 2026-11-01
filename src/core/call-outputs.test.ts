@@ -116,8 +116,7 @@ describe('row outputs through the request builder', () => {
         outputs: cliOutputSample({ ...readCallOutputs({ ...USAGE, finishReason: i === 7 ? 'length' : 'stop' }), durationMs: 5_000 + i }),
       });
     }
-    builder.addCall('subagent', 'claude-haiku-4.5', { input: 10_000, cacheRead: 0, cacheWrite: 0, outputs: stopReasonSample(false) });
-    builder.addTruncated('subagent', 'claude-haiku-4.5');
+    builder.addCall('subagent', 'claude-haiku-4.5', { input: 10_000, cacheRead: 0, cacheWrite: 0, outputs: stopReasonSample(true) });
     const taken = builder.take();
     const [main, sub] = taken?.rows ?? [];
     expect(main).toMatchObject({ calls: 200, outputTokens: 360_000, reasoningTokens: 220_000, truncatedCalls: 1, filteredCalls: 0 });

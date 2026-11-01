@@ -8,7 +8,7 @@
 
 import type { CacheStream, CallRow, ModelCallRow, RequestPromptCache } from './types';
 import { normalizeModel } from './helpers';
-import { addRowOutputs, addStopReason, finishRowOutputs, type CallOutputSample } from './call-outputs';
+import { addRowOutputs, finishRowOutputs, type CallOutputSample } from './call-outputs';
 
 /** Prices a harness logged for one call: the input price per token, in the harness's price unit (one unit for
  *  every model, so costs add up across models with different prices), and the cache read and cache write
@@ -182,18 +182,6 @@ export class RequestCacheBuilder {
   addBreak(model: string): void {
     const row = this.row('main', model);
     row.cacheBreaks = (row.cacheBreaks ?? 0) + 1;
-  }
-
-  /** A call already passed to `addCall` turned out to stop at the output-token limit. For harnesses that log
-   *  why a response stopped on a later line than its usage (Claude Code). */
-  addTruncated(stream: CacheStream, model: string): void {
-    const row = this.row(stream, model);
-    row.truncatedCalls = (row.truncatedCalls ?? 0) + 1;
-  }
-
-  /** A call already passed to `addCall` without a stop reason logged one on a later line (Claude Code). */
-  addStopReason(stream: CacheStream, model: string, truncated: boolean): void {
-    addStopReason(this.row(stream, model), truncated);
   }
 
   addColdStart(tokens: number, cost: number | undefined): void {

@@ -118,7 +118,7 @@ export function addRowOutputs(row: CallRow, sample: CallOutputSample, effort?: s
 }
 
 /** Count a call that logged why it stopped: `stopCalls` is the denominator of `truncatedCalls`. */
-export function addStopReason(row: CallRow, truncated: boolean): void {
+function addStopReason(row: CallRow, truncated: boolean): void {
   row.truncatedCalls = (row.truncatedCalls ?? 0) + (truncated ? 1 : 0);
   row.stopCalls = (row.stopCalls ?? 0) + 1;
 }
