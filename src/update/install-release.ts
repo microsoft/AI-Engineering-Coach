@@ -126,6 +126,8 @@ async function installRelease(release: UpdateCandidate, options: InstallReleaseO
         // Cancel may have been clicked while the file was written; the installer can't be stopped.
         controller.signal.throwIfAborted();
         await beforeInstall?.();
+        // …or while `beforeInstall` ran.
+        controller.signal.throwIfAborted();
         await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(file));
       } finally {
         cancellation.dispose();

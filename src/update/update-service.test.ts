@@ -140,12 +140,12 @@ function createService(
   fetch: typeof globalThis.fetch,
   options: {
     store?: Map<string, unknown>; build?: { version: string; dev: boolean }; mode?: number; extensionPath?: string;
-    random?: () => number; downloadDir?: () => Promise<string>;
+    random?: () => number; downloadDir?: () => Promise<string>; now?: () => number;
   } = {},
 ): Service {
   const service = new UpdateService(fakeContext(options.store, options.mode, options.extensionPath), {
     fetch,
-    now: () => Date.now(),
+    now: options.now ?? (() => Date.now()),
     random: options.random ?? (() => 0),
     build: options.build ?? RELEASE_BUILD,
     downloadDir: options.downloadDir ?? inDownloads,
@@ -389,8 +389,8 @@ describe('Check for Updates', () => {
     const vsix = (install[1] as { fsPath: string }).fsPath;
     expect(path.dirname(vsix)).toBe(downloads);
     expect(path.basename(vsix)).toMatch(/^ai-engineer-coach-0\.4\.0-[0-9a-f]{12}\.vsix$/);
-    // The package is gone; the record of the install stays for other windows.
-    expect(await fs.readdir(downloads)).toEqual(['installed.json']);
+    // The package is gone; the ended turn and the record of the install stay for other windows.
+    expect((await fs.readdir(downloads)).sort()).toEqual(['install.1.lock', 'installed.json']);
     expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
       'AI Engineer Coach v0.4.0 is installed. Reload the window to start using it.', 'Reload Window');
     expect(mocks.executeCommand).toHaveBeenCalledWith('workbench.action.reloadWindow');
@@ -423,7 +423,23 @@ describe('Check for Updates', () => {
     service.start();
     await service.checkNow();
     expect(installCalls()).toHaveLength(0);
-    expect(await fs.readdir(downloads)).toEqual([]);
+    expect(await fs.readdir(downloads)).toEqual(['install.1.lock']);
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(service.getStatus()).toMatchObject({ state: 'available', latest: '0.4.0' });
+  });
+
+  it('installs nothing when Cancel is clicked while the lock is confirmed', async () => {
+    mocks.showInformationMessage.mockResolvedValueOnce('Update');
+    // While the progress notification can be cancelled, only the lock's confirmation reads the clock.
+    const now = () => {
+      mocks.cancelProgress?.();
+      return Date.now();
+    };
+    const service = createService(serveLatest(() => '0.4.0'), { now });
+    service.start();
+    await service.checkNow();
+    expect(installCalls()).toHaveLength(0);
+    expect(await fs.readdir(downloads)).toEqual(['install.1.lock']);
     expect(mocks.showErrorMessage).not.toHaveBeenCalled();
     expect(service.getStatus()).toMatchObject({ state: 'available', latest: '0.4.0' });
   });
@@ -454,7 +470,7 @@ describe('Check for Updates', () => {
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
       "Couldn't install AI Engineer Coach v0.4.0: the download's SHA-256 checksum doesn't match the release.", 'Open Release Page');
     expect(mocks.openExternal.mock.calls.map(([uri]) => uri.toString())).toEqual([RELEASE_PAGE]);
-    expect(await fs.readdir(downloads)).toEqual([]);
+    expect(await fs.readdir(downloads)).toEqual(['install.1.lock']);
     expect(service.getStatus()).toMatchObject({ state: 'available', latest: '0.4.0' });
   });
 
@@ -470,7 +486,7 @@ describe('Check for Updates', () => {
     await service.checkNow();
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
       "Couldn't install AI Engineer Coach v0.4.0: Extension is not allowed.", 'Open Release Page');
-    expect(await fs.readdir(downloads)).toEqual([]);
+    expect(await fs.readdir(downloads)).toEqual(['install.1.lock']);
   });
 
   it('sends releases that are not immutable to the release page', async () => {
