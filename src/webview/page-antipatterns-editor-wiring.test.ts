@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseRule } from '../core/rule-parser';
 import { renderAntiPatterns } from './page-antipatterns';
 import { openRuleEditor } from './page-antipatterns-editor';
+import { html, render } from './render';
 
 const mocks = vi.hoisted(() => {
   (globalThis as { acquireVsCodeApi?: () => unknown }).acquireVsCodeApi = () => ({
@@ -281,7 +282,7 @@ describe('Rule Editor Save and Test without the rule\'s source', () => {
 });
 
 describe('Rule Editor Save answering late', () => {
-  it('leaves an editor opened during the save open', async () => {
+  it('leaves an editor opened during the save open, as it was', async () => {
     const page = await renderPage();
     showDetail(page, A);
     await editShownRule(page, A);
@@ -290,10 +291,27 @@ describe('Rule Editor Save answering late', () => {
     click(page, '#rule-back-btn');
     showDetail(page, B);
     await editShownRule(page, B);
+    el<HTMLInputElement>(page, '#rf-version').value = '2';
 
     await answer('saveRule', { ok: true }, { ruleId: A });
+    expect(calls('getRuleEditor')).toHaveLength(2);
     expect(el(page, '#rule-editor-modal').style.display).toBe('flex');
     expect(formId(page)).toBe(B);
+    expect(el<HTMLInputElement>(page, '#rf-version').value).toBe('2');
+  });
+
+  it('doesn\'t report a failed save when the save answers after another page was shown', async () => {
+    const page = await renderPage();
+    showDetail(page, A);
+    await editShownRule(page, A);
+    click(page, '#rule-editor-save');
+    // What the dashboard does when another page is shown.
+    render(null, page);
+    page.textContent = '';
+    render(html`<h1>Dashboard</h1>`, page);
+
+    await answer('saveRule', { ok: true }, { ruleId: A });
+    expect(alert).not.toHaveBeenCalled();
   });
 });
 

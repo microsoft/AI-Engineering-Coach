@@ -422,7 +422,8 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
             </div>
             <div class="rule-form-field">
               <label>Version</label>
-              <input type="number" id="rf-version" value="1" min="1" />
+              <!-- No value prop: a save renders the page again, and Preact would reset an open editor's version. -->
+              <input type="number" id="rf-version" min="1" />
             </div>
           </div>
           <div class="rule-form-field">

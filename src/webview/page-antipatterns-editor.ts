@@ -147,7 +147,8 @@ function enableSaveAndTest(container: HTMLElement, enabled: boolean): void {
 }
 
 function closeRuleEditor(container: HTMLElement): void {
-  container.querySelector<HTMLElement>('#rule-editor-modal')!.style.display = 'none';
+  const modal = container.querySelector<HTMLElement>('#rule-editor-modal');
+  if (modal) modal.style.display = 'none';
   editorSessions.delete(container);
 }
 
