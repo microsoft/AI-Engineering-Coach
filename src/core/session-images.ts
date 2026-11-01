@@ -7,7 +7,7 @@ import * as path from 'path';
 import type { SessionSource } from './cache';
 import type { Session } from './types';
 import { extractCLIImageReferences, parseCLIEventsFile } from './parser-vscode-cli';
-import { extractClaudeImageReferences, parseClaudeSessionFile } from './parser-claude';
+import { extractClaudeImageReferences, isClaudeSubagentFile, parseClaudeSessionFile } from './parser-claude';
 import { extractCodexImageReferences, parseCodexSessionFile } from './parser-codex';
 import { loadOpenCodeSession, readOpenCodeImageReferences } from './parser-opencode';
 import { loadXcodeSession, readXcodeImageReferences } from './parser-xcode';
@@ -40,7 +40,7 @@ export function loadSourceSession(source: SessionSource, sessionId: string): Ses
       return parseCodexSessionFile(source.filePath);
     case 'claude-jsonl': {
       const sessions = [source.filePath, ...source.additionalFilePaths ?? []]
-        .map(file => parseClaudeSessionFile(file, source.workspaceId, source.workspaceName))
+        .map(file => parseClaudeSessionFile(file, source.workspaceId, source.workspaceName, { subagentFile: isClaudeSubagentFile(file) }))
         .filter((session): session is Session => session !== null);
       if (!sessions[0]) return null;
       const requests = sessions.flatMap(session => session.requests)
