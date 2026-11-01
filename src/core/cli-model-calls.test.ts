@@ -82,4 +82,13 @@ describe('cost shares across models with different prices', () => {
     for (const row of rows) addUsage(totals, row);
     expect(toCost(totals)).toEqual({ savedPct: 4.3, missCostPct: 99.5, ratedPct: 100 });
   });
+
+  it('keeps a negative saving when cache writes cost more than caching saved', () => {
+    // 100K tokens written to the cache at 1.25× the input price and never read back: 125K against 100K uncached.
+    const builder = new RequestCacheBuilder();
+    builder.addCall('main', 'claude-opus-5.5', { input: 100_000, cacheRead: 0, cacheWrite: 100_000, rates: { inputPrice: 1, cacheRead: 0.1, cacheWrite: 1.25 } });
+    const totals = emptyTotals();
+    for (const row of builder.take()?.rows ?? []) addUsage(totals, row);
+    expect(toCost(totals)).toEqual({ savedPct: -25, missCostPct: 100, ratedPct: 100 });
+  });
 });

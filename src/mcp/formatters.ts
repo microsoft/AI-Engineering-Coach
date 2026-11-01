@@ -494,6 +494,7 @@ export function formatPromptCache(data: PromptCacheData) {
       hitPct: h.all?.hitPct ?? null,
       writtenPct: h.all?.writePct ?? null,
       inputCostSavedPct: h.cost?.savedPct ?? null,
+      ...(h.cost && h.cost.savedPct < 0 ? { costNote: 'Caching cost more than it saved: cache writes, billed above the input price, outweighed what cache reads saved.' } : {}),
       inputCostOnMissesPct: h.cost?.missCostPct ?? null,
       breaksPer100Calls: h.breaksPer100,
       requestsWithData: h.requestsWithData,

@@ -63,11 +63,12 @@ export function toTotals(acc: TotalsAcc): CacheTotals | null {
 }
 
 /** Cost effect over the calls that logged prices; `null` when none did. Costs are summed in the logged price
- *  unit before taking ratios, so calls weigh by what they cost, not by their token count. */
+ *  unit before taking ratios, so calls weigh by what they cost, not by their token count. The saving is signed:
+ *  cache writes are billed above the input price, so caching can cost more than it saves. */
 export function toCost(acc: TotalsAcc): CacheCost | null {
   if (acc.baselineCost <= 0 || acc.cost <= 0) return null;
   return {
-    savedPct: Math.max(0, Math.round((1 - acc.cost / acc.baselineCost) * 1000) / 10),
+    savedPct: Math.round((1 - acc.cost / acc.baselineCost) * 1000) / 10,
     missCostPct: pct(acc.missCost, acc.cost) ?? 0,
     ratedPct: pct(acc.ratedInput, acc.input) ?? 0,
   };

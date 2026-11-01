@@ -111,9 +111,12 @@ export const ORIGIN_META: Record<CacheMissOrigin, { label: string; color: string
   'cold-start': { label: 'Session start', color: COLORS.cyan, help: 'The first call of each session, when nothing is cached yet.' },
 };
 
+/** "97%", "4.0%", "−25%": one decimal below 10%, and a minus sign for negative values. */
 export function pctText(pct: number | null | undefined): string {
   if (pct == null) return '\u2014';
-  return pct >= 10 || pct === 0 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
+  const abs = Math.abs(pct);
+  const text = abs >= 10 || abs === 0 ? `${Math.round(abs)}%` : `${abs.toFixed(1)}%`;
+  return pct < 0 ? `\u2212${text}` : text;
 }
 
 /** "1 break", "12 breaks". */

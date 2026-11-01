@@ -45,12 +45,28 @@ describe('formatPromptCache', () => {
     expect(json).not.toContain('secret-workspace');
     expect(json).not.toContain('secret prompt');
   });
+});
 
+describe('formatPromptCache harness rows', () => {
   it('calls a harness reported only when requests in range carried cache data', () => {
     // An older Copilot App build logs no per-call usage: the harness would log the cache per call, but didn't.
     const request = createRequest({ messageText: 'prompt', responseText: '', timestamp: Date.parse('2026-10-20T11:00:00Z') });
     const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'w', harness: 'GitHub Copilot App', requests: [request] });
     const summary = formatPromptCache(new PromptCacheAnalyzer([session], new Map()).getPromptCache());
     expect(summary.harnesses).toEqual([expect.objectContaining({ harness: 'GitHub Copilot App', reported: false, granularity: 'per-call', hitPct: null, requestsWithData: 0, totalRequests: 1 })]);
+  });
+
+  it('reports a negative saving, and says so, when caching cost more than it saved', () => {
+    // 100K tokens written at 1.25× the input price and never read back.
+    const request = createRequest({
+      messageText: 'prompt',
+      responseText: '',
+      timestamp: Date.parse('2026-10-20T11:00:00Z'),
+      promptCache: { rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 1, input: 100_000, cacheRead: 0, cacheWrite: 100_000, cost: 125_000, missCost: 125_000, baselineCost: 100_000, ratedInput: 100_000 }] },
+    });
+    const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'w', harness: 'GitHub Copilot App', requests: [request] });
+    const [row] = formatPromptCache(new PromptCacheAnalyzer([session], new Map()).getPromptCache()).harnesses;
+    expect(row).toMatchObject({ inputCostSavedPct: -25, inputCostOnMissesPct: 100 });
+    expect(row.costNote).toContain('Caching cost more than it saved');
   });
 });
