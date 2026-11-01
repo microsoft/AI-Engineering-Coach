@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { PromptCacheAnalyzer } from '../core/analyzer-prompt-cache';
 import { createRequest, createSession } from '../core/parser-shared';
+import type { ModelUsage, Session } from '../core/types';
 import { formatPromptCache } from './formatters';
 
 describe('formatPromptCache', () => {
@@ -68,5 +69,27 @@ describe('formatPromptCache harness rows', () => {
     const [row] = formatPromptCache(new PromptCacheAnalyzer([session], new Map()).getPromptCache()).harnesses;
     expect(row).toMatchObject({ inputCostSavedPct: -25, inputCostOnMissesPct: 100 });
     expect(row.costNote).toContain('Caching cost more than it saved');
+  });
+});
+
+describe('formatPromptCache with Codex session totals', () => {
+  function codexSession(usage: ModelUsage): Session {
+    const request = createRequest({ messageText: 'prompt', responseText: '', timestamp: Date.parse('2026-10-20T11:00:00Z') });
+    return createSession({ sessionId: 'c', workspaceId: 'ws', workspaceName: 'w', harness: 'Codex', requests: [request], modelUsage: { 'gpt-5.3-codex': usage } });
+  }
+
+  it('reports Codex usage without cached-token counts as not reported, not as a 0% hit ratio', () => {
+    const usage: ModelUsage = { inputTokens: 50_000, outputTokens: 900, cacheReadTokens: 0, cacheWriteTokens: 0, cacheTokensReported: false };
+    const data = new PromptCacheAnalyzer([codexSession(usage)], new Map()).getPromptCache();
+    // The dashboard's harness row has no cache data, so it reads "No cache usage logged in this range".
+    expect(data.harnesses).toEqual([expect.objectContaining({ harness: 'Codex', reporting: 'per-session', all: null, cost: null, requestsWithData: 0 })]);
+    expect(data.coverage).toMatchObject({ requestsWithData: 0, totalRequests: 1 });
+    expect(formatPromptCache(data).harnesses).toEqual([expect.objectContaining({ harness: 'Codex', reported: false, hitPct: null })]);
+  });
+
+  it('still reports a logged zero as a 0% hit ratio', () => {
+    const usage: ModelUsage = { inputTokens: 50_000, outputTokens: 900, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const data = new PromptCacheAnalyzer([codexSession(usage)], new Map()).getPromptCache();
+    expect(formatPromptCache(data).harnesses).toEqual([expect.objectContaining({ harness: 'Codex', reported: true, hitPct: 0 })]);
   });
 });
