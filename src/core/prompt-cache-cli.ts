@@ -203,7 +203,12 @@ export class CliCacheTracker {
   /** A model call, in log order. `callIndex` is its index in the session's call timeline (main agent only). */
   onCall(call: CliModelCall, callIndex: number | null, requestIndex: number): void {
     const lastMain = this.lastMain;
-    if (call.stream === 'main') this.lastMain = call;
+    const expired = call.stream === 'main' && lastMain ? expiredBefore(lastMain, call) : null;
+    if (call.stream === 'main') {
+      this.lastMain = call;
+      // A prompt you sent returns to the previous main-agent call, whether or not either call reported its cache.
+      if (lastMain && call.initiator === 'user') this.request.addReturn(expired);
+    }
     if (!call.cacheReported) {
       // The cached prompt can't be compared across a call that didn't report its cache.
       if (call.stream === 'main') this.previous = null;
@@ -214,8 +219,6 @@ export class CliCacheTracker {
     if (call.stream !== 'main') return;
     const cost = callCost(sample);
     const previous = this.previous;
-    const expired = lastMain ? expiredBefore(lastMain, call) : null;
-    if (lastMain && call.initiator === 'user') this.request.addReturn(expired);
     const compaction = this.takeCompactions(call);
     if (!this.sawMain) {
       // Cache data starts here. Its misses are the session's start only on the first main-agent call: after

@@ -71,7 +71,8 @@ export interface ModelCallRow {
 
 /** Prompt-cache usage of one request (a Copilot CLI turn, a Claude Code or an OpenCode request). */
 export interface RequestPromptCache {
-  /** One row per stream and model, main agent first. */
+  /** One row per stream and model, main agent first. Empty when none of the request's calls reported its cache,
+   *  but it counted returns. */
   rows: ModelCallRow[];
   /** Main-agent prompt tokens not read from the cache on the session's first model call. */
   coldStart?: number;

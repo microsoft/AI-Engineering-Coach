@@ -30,6 +30,7 @@ import { toDateStr } from './helpers';
 import { addUsage, emptyTotals, mergeTotals, missesOf, pct, toCost, toTotals, type TotalsAcc } from './prompt-cache-totals';
 import { addRequestExtras, buildIdle, buildOrigins, causeKey, controlShares, emptyOrigins, summarizeCauses, totalMisses, type OriginAcc } from './prompt-cache-causes';
 import { attributesBreaks, buildSessionTimeline, expectedReporting, sessionTotals, summarizeSession } from './prompt-cache-sessions';
+import { hasCacheRows } from './prompt-cache-usage';
 import { promptCacheTips } from './prompt-cache-tips';
 
 const MAX_MODELS = 12;
@@ -162,11 +163,17 @@ function collectRequests(requests: SessionRequest[], sessionOf: (request: Sessio
     const harness = getOrCreate(c.harnesses, session.harness, newHarness);
     harness.requests++;
     harness.sessions.add(session);
-    if (!request.promptCache) continue;
+    const cache = request.promptCache;
+    if (!cache) continue;
+    if (!hasCacheRows(cache)) {
+      // Its calls didn't report their cache, so it has no cache data; the returns it counted still go to the card.
+      if (attributesBreaks(session.harness)) addRequestExtras(c.origin, cache);
+      continue;
+    }
     harness.requestsWithData++;
     harness.sessionsWithData.add(session);
     harness.perCall = true;
-    addRows(c, session, request, request.promptCache);
+    addRows(c, session, request, cache);
   }
   return c;
 }

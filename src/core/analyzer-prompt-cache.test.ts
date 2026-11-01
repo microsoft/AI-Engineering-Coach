@@ -212,6 +212,20 @@ describe('PromptCacheAnalyzer attribution', () => {
   });
 });
 
+describe('PromptCacheAnalyzer requests that counted returns without cache rows', () => {
+  it('add their returns to the lifetime card, but no cache data', () => {
+    // A turn whose calls didn't report their cache keeps the returns it counted, with no rows.
+    const countsOnly = session('app-2', 'GitHub Copilot App', [request(`${DAY}T12:00:00Z`, { rows: [], returns: 2, expiredReturns: 1, unmeasuredReturns: 1 })]);
+    const a = analyzer([appSession(), countsOnly]);
+    const data = a.getPromptCache({ fromDate: DAY, toDate: DAY });
+    expect(data.attribution?.idle).toMatchObject({ returns: 6, expiredReturns: 2, unmeasuredReturns: 3 });
+    expect(data.coverage).toEqual({ requestsWithData: 2, totalRequests: 3, sessionsWithData: 1, totalSessions: 2 });
+    expect(data.workspaces).toEqual([expect.objectContaining({ workspaceName: 'alpha', sessions: 1 })]);
+    expect(a.getPromptCacheSessions('ws-alpha', undefined, { fromDate: DAY }).sessions.map(s => s.sessionId)).toEqual(['app-1']);
+    expect(a.getSessionTimeline('app-2')).toBeNull();
+  });
+});
+
 describe('PromptCacheAnalyzer tips', () => {
   function withBreaks(count: number, causes: CacheBreakCause[], extra: Partial<CacheBreak> = {}): Session {
     const s = appSession();
