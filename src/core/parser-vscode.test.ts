@@ -676,6 +676,20 @@ describe('parseSessionFile — per-request modes', () => {
     expect(noPlanModeFinding(session)?.occurrences).toBe(41);
   });
 
+  it('counts a custom agent as agentic, not as Plan, when its display name contains "plan"', () => {
+    const agentTurns = requests(40, builtin('agent'));
+    const explainer = customAgent('Code Explanation', '/workspace/.github/agents/Reviewer.agent.md', '1395712843');
+    const named = parseSessionFixture('code-explanation.json', jsonSession([...agentTurns, request(explainer)]));
+    expect(named.requests.at(-1)?.agentMode).toBe('Reviewer');
+    expect(noPlanModeFinding(named)?.occurrences).toBe(41);
+
+    // VS Code 1.106 to 1.110 log a custom agent's name but not its file.
+    const nameOnlyAgent = { kind: 'agent', isBuiltin: false, modeId: 'custom', modeInstructions: { name: 'Code Explanation', content: 'You explain code.', toolReferences: [] } };
+    const nameOnly = parseSessionFixture('code-explanation-1.106.json', jsonSession([...agentTurns, request(nameOnlyAgent)]));
+    expect(nameOnly.requests.at(-1)?.agentMode).toBe('Code Explanation');
+    expect(noPlanModeFinding(nameOnly)?.occurrences).toBe(41);
+  });
+
   it("reads each request's mode in a JSON session too", () => {
     const askAndEdit = parseSessionFixture('ask-edit.json', jsonSession([...requests(20, builtin('ask')), ...requests(20, builtin('edit'))]));
     expect([...new Set(askAndEdit.requests.map(r => r.agentMode))]).toEqual(['ask', 'edit']);
@@ -695,13 +709,24 @@ describe('parseSessionFile — per-request modes', () => {
 
 describe('requestModeFromInfo', () => {
   const customFile = { $mid: 1, scheme: 'file', path: '/c:/Users/test/agents/MERs Agent.agent.md' };
+  const planFile = { $mid: 1, scheme: 'file', path: '/c:/Users/test/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/plan-agent/Plan.agent.md' };
+  const reviewerFile = { $mid: 1, scheme: 'file', path: '/workspace/.github/agents/Reviewer.agent.md' };
   it.each<[string, RawRequest['modeInfo'], string | undefined]>([
     ['a built-in mode', { kind: 'ask', isBuiltin: true, telemetryModeId: 'ask', telemetryModeName: 'ask' }, 'ask'],
-    ['the modeId field of VS Code 1.105 to 1.111', { kind: 'edit', isBuiltin: true, modeId: 'edit' }, 'edit'],
+    ['the modeId field of VS Code 1.105 to 1.124', { kind: 'edit', isBuiltin: true, modeId: 'edit' }, 'edit'],
     ['the Plan agent', { kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan' }, 'plan'],
     ['the Plan agent with a hashed telemetry name', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Plan' } }, 'plan'],
+    ['the Plan agent as VS Code 1.125+ logs it', { kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan', modeInstructions: { name: 'Plan', uri: planFile } }, 'plan'],
+    ['the Plan agent as VS Code 1.111 to 1.124 log it', { kind: 'agent', isBuiltin: false, modeId: 'custom', modeName: 'Plan', modeInstructions: { name: 'Plan', uri: planFile } }, 'plan'],
+    ['the Plan agent as VS Code 1.106 to 1.110 log it', { kind: 'agent', isBuiltin: false, modeId: 'custom', modeInstructions: { name: 'Plan' } }, 'plan'],
+    ['the Plan agent by the telemetry name of VS Code 1.111 to 1.124', { modeId: 'custom', modeName: 'Plan' }, 'plan'],
+    ['an agent named plan in another case, as Copilot matches it', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'PLAN' } }, 'plan'],
     ['a custom agent file, named like the session mode', { modeId: 'custom', modeInstructions: { name: 'Reviewer', uri: customFile } }, 'MERs Agent'],
     ['a custom agent in a folder named like plan', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Reviewer', uri: { $mid: 1, scheme: 'file', path: '/workspace/planetarium/.github/agents/Reviewer.agent.md' } } }, 'Reviewer'],
+    ['a custom agent whose display name contains plan', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Code Explanation', uri: reviewerFile } }, 'Reviewer'],
+    ['an extension agent whose telemetry name contains plan', { telemetryModeId: 'custom', telemetryModeName: 'Code Explanation', modeInstructions: { name: 'Code Explanation', uri: reviewerFile } }, 'Reviewer'],
+    ['a custom agent file whose name contains plan', { modeId: 'custom', modeName: 'Planner', modeInstructions: { name: 'Planner', uri: { $mid: 1, scheme: 'file', path: '/workspace/.github/agents/Planner.agent.md' } } }, 'Planner'],
+    ['a custom agent without a file whose name contains plan', { modeId: 'custom', modeInstructions: { name: 'Code Explanation' } }, 'Code Explanation'],
     ['a custom agent without a file', { telemetryModeId: 'custom', modeInstructions: { name: 'Reviewer' } }, 'Reviewer'],
     ['a custom agent without instructions', { telemetryModeId: 'custom', telemetryModeName: '1395712843' }, 'custom'],
     ['an applied code block', { telemetryModeId: 'applyCodeBlock' }, undefined],
@@ -718,6 +743,19 @@ describe('normalizeSessionMode', () => {
     ['file:///workspace/planetarium/.github/agents/Reviewer.agent.md', 'Reviewer'],
     ['file:///c%3A/Users/test/plans%20team/MERs%20Agent.chatmode.md', 'MERs Agent'],
   ])('judges %s by its file name, not its folders', (modeId, expected) => {
+    expect(normalizeSessionMode(modeId)).toBe(expected);
+  });
+
+  it.each([
+    // Copilot's Plan agent: generated since January 2026, shipped as a file before that, and its October 2025 names.
+    ['file:///c%3A/Users/test/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/plan-agent/Plan.agent.md', 'plan'],
+    ['file:///c%3A/Users/test/.vscode/extensions/github.copilot-chat-0.33.0/assets/agents/Plan.agent.md', 'plan'],
+    ['file:///c%3A/Users/test/.vscode-insiders/extensions/github.copilot-chat-0.33.0/assets/agents/Plan.vscode-agent.md', 'plan'],
+    ['file:///c%3A/Users/test/.vscode/extensions/github.copilot-chat-0.33.0/assets/chatmodes/Plan.chatmode.md', 'plan'],
+    ['file:///workspace/.github/agents/Explanation.agent.md', 'Explanation'],
+    ['file:///workspace/.github/agents/Sprint%20Planner.agent.md', 'Sprint Planner'],
+    ['file:///workspace/.github/agents/Reviewer.vscode-agent.md', 'Reviewer'],
+  ])('reads %s as Plan only when the agent is named Plan', (modeId, expected) => {
     expect(normalizeSessionMode(modeId)).toBe(expected);
   });
 });

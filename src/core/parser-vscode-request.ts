@@ -110,6 +110,19 @@ function extractAgentInfo(agent: RawRequest['agent']): { agentName: string; agen
   };
 }
 
+/** The extensions VS Code drops from an agent file to name the agent; it used .vscode-agent.md for a day in October 2025. */
+const AGENT_FILE_EXTENSION = /\.(agent|vscode-agent|chatmode)\.md$/i;
+
+/**
+ * Whether a custom agent is Copilot's Plan agent. Copilot names it "Plan", in Plan.chatmode.md in October 2025 and
+ * Plan.agent.md after that; since January 2026 it generates that file in <globalStorage>/plan-agent/. Copilot's
+ * own telemetry recognizes Plan by that name, ignoring case, and so does this. Other custom agents keep their
+ * identity even when "plan" is part of their name.
+ */
+function isPlanAgent(name: string): boolean {
+  return name.toLowerCase() === 'plan';
+}
+
 /**
  * Normalize the session-level inputState.mode.id into a canonical agentMode value.
  * VS Code stores:
@@ -127,20 +140,22 @@ export function normalizeSessionMode(modeId: string | undefined): string {
   try { decoded = decodeURIComponent(modeId); } catch { decoded = modeId; }
   const lastSlash = decoded.lastIndexOf('/');
   const filename = lastSlash >= 0 ? decoded.substring(lastSlash + 1) : decoded;
-  const stem = filename.replace(/\.(agent|chatmode)\.md$/i, '');
-  if (stem.toLowerCase().includes('plan')) return 'plan';
+  const stem = filename.replace(AGENT_FILE_EXTENSION, '');
+  if (isPlanAgent(stem)) return 'plan';
   // Other custom agents/chatmodes — use the filename stem
   return stem || modeId;
 }
 
-/** VS Code's IChatRequestModeInfo; 1.105 to 1.111 call telemetryModeId `modeId`. */
+/** VS Code's IChatRequestModeInfo; 1.105 to 1.124 call telemetryModeId `modeId`, and 1.111 to 1.124 call telemetryModeName `modeName`. */
 interface RawModeInfo {
   kind?: string;
   isBuiltin?: boolean;
   telemetryModeId?: string;
   modeId?: string;
-  /** Hashed for user and workspace agents. */
+  /** The agent's name, hashed for user and workspace agents. */
   telemetryModeName?: string;
+  modeName?: string;
+  /** The agent's name (1.106+) and file (1.111+). */
   modeInstructions?: { name?: string; uri?: unknown };
 }
 
@@ -167,12 +182,12 @@ export function requestModeFromInfo(modeInfo: RawModeInfo | undefined): string |
   const modeId = textOf(modeInfo.telemetryModeId) || textOf(modeInfo.modeId);
   if (BUILTIN_MODES.has(modeId)) return modeId;
   if (modeId !== 'custom') return undefined;
-  // Plan and other agents that aren't built in. telemetryModeName is hashed for user agents, so check the instructions too;
-  // normalizeSessionMode judges the agent file by its name, not its folders.
+  // Plan and other agents that aren't built in. The telemetry name is hashed for user and workspace agents, so check the
+  // instructions' name too; normalizeSessionMode applies the same check to the agent's file name.
   const instructions = isObj(modeInfo.modeInstructions) ? modeInfo.modeInstructions : {};
   const uri = uriText(instructions.uri);
   const name = textOf(instructions.name);
-  if (/plan/i.test(`${name} ${textOf(modeInfo.telemetryModeName)}`)) return 'plan';
+  if (isPlanAgent(name) || isPlanAgent(textOf(modeInfo.telemetryModeName) || textOf(modeInfo.modeName))) return 'plan';
   if (uri) return normalizeSessionMode(uri);
   return name || 'custom';
 }
