@@ -12,7 +12,7 @@ import { createSession, detectDevcontainerFromRequests, ParseContext, prefetchCa
 import { accumulateEditLoc, EditTimelineLike, InitialContentResolver } from './edit-loc-diff';
 import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort } from './helpers';
-import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
+import { parseRawRequest, normalizeSessionMode, requestModeFromInfo, type RawRequest } from './parser-vscode-request';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { parseCLIWorkspaceName, parseWorkspaceName, parseWorkspaceFolderPath, parseCLIWorkspaceFolderPath, readFile, reconstructFromJsonl, stripImageData } from './parser-vscode-files';
 
@@ -527,11 +527,12 @@ export function parseSessionFile(sessionFile: string, wsId: string, wsName: stri
     if (!req.reasoningEffort && sessionEffortDefault) {
       req.reasoningEffort = sessionEffortDefault;
     }
-    // Apply session-level mode as agentMode — it's the definitive source
-    // for distinguishing agent/ask/plan/edit/custom modes.
-    // When absent, clear the per-request agent.id (a participant identifier
-    // like "copilot") so downstream analytics don't misclassify it as a mode.
-    req.agentMode = sessionMode;
+    // Each request's modeInfo records the mode it was sent in, so a switch to
+    // Plan mid-session isn't lost. Requests without it take the session-level
+    // mode. When both are absent, agentMode is '' rather than the per-request
+    // agent.id (a participant identifier like "copilot"), so downstream
+    // analytics don't misclassify it as a mode.
+    req.agentMode = requestModeFromInfo(r.modeInfo) ?? sessionMode;
     return req;
   });
   const hasDevcontainer = detectDevcontainerFromRequests(parsedRequests);

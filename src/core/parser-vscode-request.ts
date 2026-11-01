@@ -26,6 +26,8 @@ export interface RawRequest {
   agent?: { extensionDisplayName?: string; id?: string } | string;
   modelId?: string;
   slashCommand?: { name?: string } | string;
+  /** The chat mode the request was sent in (VS Code 1.105+). */
+  modeInfo?: RawModeInfo;
   variableData?: { variables?: RawVariable[] };
   contentReferences?: RawContentRef[];
   editedFileEvents?: { uri?: { path?: string } }[];
@@ -130,6 +132,49 @@ export function normalizeSessionMode(modeId: string | undefined): string {
   const filename = lastSlash >= 0 ? decoded.substring(lastSlash + 1) : decoded;
   const stem = filename.replace(/\.(agent|chatmode)\.md$/i, '');
   return stem || modeId;
+}
+
+/** VS Code's IChatRequestModeInfo; 1.105 to 1.111 call telemetryModeId `modeId`. */
+interface RawModeInfo {
+  kind?: string;
+  isBuiltin?: boolean;
+  telemetryModeId?: string;
+  modeId?: string;
+  /** Hashed for user and workspace agents. */
+  telemetryModeName?: string;
+  modeInstructions?: { name?: string; uri?: unknown };
+}
+
+const BUILTIN_MODES = new Set(['agent', 'ask', 'edit']);
+
+function textOf(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/** A serialized VS Code URI: a string, or UriComponents. */
+function uriText(uri: unknown): string {
+  if (typeof uri === 'string') return uri;
+  if (!isObj(uri)) return '';
+  return textOf(uri.external) || textOf(uri.path) || textOf(uri.fsPath);
+}
+
+/**
+ * The mode a VS Code request was sent in, from its own modeInfo, in the same
+ * values as normalizeSessionMode. Returns undefined when the request doesn't
+ * record a chat mode, so the caller can fall back to the session's mode.
+ */
+export function requestModeFromInfo(modeInfo: RawModeInfo | undefined): string | undefined {
+  if (!isObj(modeInfo)) return undefined;
+  const modeId = textOf(modeInfo.telemetryModeId) || textOf(modeInfo.modeId);
+  if (BUILTIN_MODES.has(modeId)) return modeId;
+  if (modeId !== 'custom') return undefined;
+  // Plan and other agents that aren't built in. telemetryModeName is hashed for user agents, so check the instructions too.
+  const instructions = isObj(modeInfo.modeInstructions) ? modeInfo.modeInstructions : {};
+  const uri = uriText(instructions.uri);
+  const name = textOf(instructions.name);
+  if (/plan/i.test(`${uri} ${name} ${textOf(modeInfo.telemetryModeName)}`)) return 'plan';
+  if (uri) return normalizeSessionMode(uri);
+  return name || 'custom';
 }
 
 function extractSlashCommand(slashCmd: RawRequest['slashCommand']): string {

@@ -19,7 +19,9 @@ import {
   processWorkspaceEntryAsync,
 } from './parser-vscode';
 import { getParseWarningCounts, type ParseContext, resetParseWarnings } from './parser-shared';
-import { parseRawRequest } from './parser-vscode-request';
+import { parseRawRequest, requestModeFromInfo, type RawRequest } from './parser-vscode-request';
+import { runDetectors, runEmitters } from './detector-registry';
+import type { Session } from './types';
 
 function withTempFile(name: string, content: string, run: (filePath: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
@@ -599,6 +601,93 @@ describe('parseSessionFile — basic VS Code session', () => {
       expect(session).not.toBeNull();
       expect(session!.sessionId).toBe('jsonl-test');
     });
+  });
+});
+
+function parseSessionFixture(name: string, content: string): Session {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
+  try {
+    const filePath = path.join(dir, name);
+    fs.writeFileSync(filePath, content, 'utf-8');
+    const session = parseSessionFile(filePath, 'ws', 'wp', 'Local Agent');
+    if (!session) throw new Error('session did not parse');
+    return session;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function noPlanModeFinding(session: Session) {
+  return runDetectors(session.requests, [session], false).find(pattern => pattern.id === 'no-plan-mode');
+}
+
+describe('parseSessionFile — per-request modes', () => {
+  const at = new Date(2026, 8, 30, 10).getTime();
+  const PLAN_URI = 'file:///c%3A/Users/test/agents/Plan.agent.md';
+  const builtin = (mode: string) => ({ kind: mode, isBuiltin: true, telemetryModeId: mode, telemetryModeName: mode, permissionLevel: 'default' });
+  // How current VS Code records a request sent with Copilot's Plan agent.
+  const plan = {
+    kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan', permissionLevel: 'default',
+    modeInstructions: { name: 'Plan', content: 'You are a PLANNING AGENT.', toolReferences: [], uri: { $mid: 1, scheme: 'file', path: '/c:/Users/test/agents/Plan.agent.md' } },
+  };
+  let next = 0;
+  const request = (modeInfo?: Record<string, unknown>) => ({
+    requestId: `r${next}`, timestamp: at + 60_000 * next++, message: { text: 'Refactor the parser so it streams events' },
+    response: [{ value: 'Done.' }], agent: { extensionDisplayName: 'GitHub Copilot Chat', id: 'github.copilot.editsAgent' },
+    result: { metadata: {} }, ...(modeInfo ? { modeInfo } : {}),
+  });
+  const requests = (count: number, modeInfo?: Record<string, unknown>) => Array.from({ length: count }, () => request(modeInfo));
+  const start = (modeId: string) => JSON.stringify({ kind: 0, v: { version: 3, sessionId: 'modes', creationDate: at, initialLocation: 'panel', requests: [], inputState: { mode: { id: modeId, kind: 'agent' } } } });
+  const switchMode = (modeId: string) => JSON.stringify({ kind: 1, k: ['inputState', 'mode'], v: { id: modeId, kind: 'agent' } });
+  const append = (added: unknown[]) => JSON.stringify({ kind: 2, k: ['requests'], v: added });
+  const jsonSession = (added: unknown[]) => JSON.stringify({ sessionId: 'json-modes', inputState: { mode: { id: 'agent', kind: 'agent' } }, requests: added });
+
+  it('keeps a mid-session switch to Plan mode that a JSONL session logs', () => {
+    // The session's saved mode stays at its initial Agent mode; only the request records Plan.
+    const agentTurns = requests(40, builtin('agent'));
+    const switched = parseSessionFixture('switched.jsonl', [
+      start('agent'), append(agentTurns),
+      switchMode(PLAN_URI), append([request(plan)]),
+      switchMode('agent'), append([request(builtin('agent'))]),
+    ].join('\n'));
+    expect(switched.requests.map(r => r.agentMode)).toEqual([...Array<string>(40).fill('agent'), 'plan', 'agent']);
+    expect(noPlanModeFinding(switched)).toBeUndefined();
+
+    expect(noPlanModeFinding(parseSessionFixture('agent-only.jsonl', [start('agent'), append(agentTurns)].join('\n')))?.occurrences).toBe(40);
+  });
+
+  it("reads each request's mode in a JSON session too", () => {
+    const askAndEdit = parseSessionFixture('ask-edit.json', jsonSession([...requests(20, builtin('ask')), ...requests(20, builtin('edit'))]));
+    expect([...new Set(askAndEdit.requests.map(r => r.agentMode))]).toEqual(['ask', 'edit']);
+    expect(runEmitters(askAndEdit.requests, [askAndEdit], false).get('no-plan-mode')).toMatchObject({ count: 0, total: 40 });
+    expect(noPlanModeFinding(askAndEdit)).toBeUndefined();
+
+    const planned = parseSessionFixture('planned.json', jsonSession([...requests(40, builtin('agent')), request(plan)]));
+    expect(planned.requests.at(-1)?.agentMode).toBe('plan');
+    expect(noPlanModeFinding(planned)).toBeUndefined();
+  });
+
+  it("falls back to the session's mode for requests that don't record one", () => {
+    const session = parseSessionFixture('fallback.jsonl', [start(PLAN_URI), append([request(), request(builtin('agent')), request({ telemetryModeId: 'applyCodeBlock' })])].join('\n'));
+    expect(session.requests.map(r => r.agentMode)).toEqual(['plan', 'agent', 'plan']);
+  });
+});
+
+describe('requestModeFromInfo', () => {
+  const customFile = { $mid: 1, scheme: 'file', path: '/c:/Users/test/agents/MERs Agent.agent.md' };
+  it.each<[string, RawRequest['modeInfo'], string | undefined]>([
+    ['a built-in mode', { kind: 'ask', isBuiltin: true, telemetryModeId: 'ask', telemetryModeName: 'ask' }, 'ask'],
+    ['the modeId field of VS Code 1.105 to 1.111', { kind: 'edit', isBuiltin: true, modeId: 'edit' }, 'edit'],
+    ['the Plan agent', { kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan' }, 'plan'],
+    ['the Plan agent with a hashed telemetry name', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Plan' } }, 'plan'],
+    ['a custom agent file, named like the session mode', { modeId: 'custom', modeInstructions: { name: 'Reviewer', uri: customFile } }, 'MERs Agent'],
+    ['a custom agent without a file', { telemetryModeId: 'custom', modeInstructions: { name: 'Reviewer' } }, 'Reviewer'],
+    ['a custom agent without instructions', { telemetryModeId: 'custom', telemetryModeName: '1395712843' }, 'custom'],
+    ['an applied code block', { telemetryModeId: 'applyCodeBlock' }, undefined],
+    ['no mode id', { kind: 'agent' }, undefined],
+    ['no modeInfo', undefined, undefined],
+  ])('reads %s', (_label, modeInfo, expected) => {
+    expect(requestModeFromInfo(modeInfo)).toBe(expected);
   });
 });
 
