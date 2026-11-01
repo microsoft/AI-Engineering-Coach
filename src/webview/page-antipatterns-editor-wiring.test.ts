@@ -202,6 +202,21 @@ describe('Rule Editor source answering after another rule was opened', () => {
     await settle();
     expect(calls('saveRule')).toEqual([{ markdown: SOURCES[B], ruleId: B }]);
   });
+
+  it('keeps the rule opened last when the earlier rule\'s source answers after its own, without closing the editor', async () => {
+    const page = await renderPage();
+    openRuleEditor(page, A);
+    openRuleEditor(page, B);
+
+    await answer('getRuleSource', { source: SOURCES[B] }, { ruleId: B });
+    await answer('getRuleSource', { source: SOURCES[A] }, { ruleId: A });
+    expect(el(page, '#rule-editor-modal').dataset.ruleId).toBe(B);
+    expect(formId(page)).toBe(B);
+    expect(shownSource(page)).toBe(SOURCES[B]);
+    click(page, '#rule-editor-save');
+    await settle();
+    expect(calls('saveRule')).toEqual([{ markdown: SOURCES[B], ruleId: B }]);
+  });
 });
 
 describe('Rule Editor source answering after the editor closed', () => {
