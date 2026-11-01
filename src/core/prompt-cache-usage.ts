@@ -143,7 +143,13 @@ export class RequestCacheBuilder {
     if (cost != null) this.extra.rebuiltCost = (this.extra.rebuiltCost ?? 0) + cost;
   }
 
-  addReturn(expired: boolean): void {
+  /** A main-agent call you started after an earlier one. `expired` is `null` when the earlier call didn't log
+   *  when its cache expires: such a return is counted apart, never as one before expiry. */
+  addReturn(expired: boolean | null): void {
+    if (expired == null) {
+      this.extra.unmeasuredReturns = (this.extra.unmeasuredReturns ?? 0) + 1;
+      return;
+    }
     this.extra.returns = (this.extra.returns ?? 0) + 1;
     if (expired) this.extra.expiredReturns = (this.extra.expiredReturns ?? 0) + 1;
   }

@@ -87,7 +87,7 @@ function readCheckpointState(model: Record<string, unknown>, modelName: string):
     }
   }
   return {
-    model: modelName,
+    model: cacheModelName(modelName),
     segments,
     toolsKey: fnv1a(tools.sort().join('\u0001')),
     toolCount: num(model.tool_count),
@@ -182,11 +182,11 @@ export class CliCacheTracker {
       this.request.addColdStart(missTokens(sample), cost?.missCost);
     } else if (previous) {
       // The cache lifetime counts from the previous call's start, and this call reads the cache when it
-      // starts; the record itself is logged when the call finishes.
-      const expired = previous.cacheExpiresAt != null && call.startTs != null && call.startTs > previous.cacheExpiresAt;
+      // starts; the record itself is logged when the call finishes. Unknown when either time is missing.
+      const expired = previous.cacheExpiresAt != null && call.startTs != null ? call.startTs > previous.cacheExpiresAt : null;
       if (call.initiator === 'user') this.request.addReturn(expired);
       if (isCacheBreak(previous.inputTokens, call.cacheReadTokens)) {
-        this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired, cost });
+        this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost });
       }
     }
     this.previous = call;
@@ -254,7 +254,8 @@ export class CliCacheTracker {
   }
 
   /** A main-agent `promptCacheBreakState` entry and its active model's state. Hash changes between two
-   *  checkpoints of the same model explain breaks inside that window. */
+   *  checkpoints of the same model explain that model's breaks inside the window; they say nothing about the
+   *  prompt of another model used in between. */
   onCheckpoint(entry: Record<string, unknown>, model: Record<string, unknown> | undefined, modelName: string): void {
     const pending = Array.isArray(entry.pendingRewriteSources) ? entry.pendingRewriteSources : [];
     if (pending.includes('compaction')) this.signals.add('compaction');
@@ -267,6 +268,7 @@ export class CliCacheTracker {
         || differs(before.toolCount, state.toolCount)
         || differs(before.toolTokens, state.toolTokens);
       for (const brk of this.windowBreaks) {
+        if (brk.brk.model !== state.model) continue;
         if (segments.length > 0) {
           brk.inferred.add('system-prompt');
           brk.segments = segments.slice(0, MAX_SEGMENTS);

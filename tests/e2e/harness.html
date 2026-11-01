@@ -472,7 +472,7 @@ function mockPromptCache(mode, params) {
     ],
     idle: {
       ttlByModel: [{ model: 'gpt-6.1-sol', ttlSeconds: 1800, calls: 3900 }, { model: 'claude-opus-5.5', ttlSeconds: 300, calls: 3200 }, { model: 'claude-sonnet-5', ttlSeconds: 300, calls: 500 }],
-      returns: 450, expiredReturns: 78,
+      returns: 450, expiredReturns: 78, unmeasuredReturns: 3,
       buckets: [{ label: '\u22642\u00d7', user: 18, agent: 22 }, { label: '2\u20136\u00d7', user: 19, agent: 7 }, { label: '6\u201324\u00d7', user: 21, agent: 2 }, { label: '>24\u00d7', user: 16, agent: 0 }],
       medianIdleMinutes: 51,
     },

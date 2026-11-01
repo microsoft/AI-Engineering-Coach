@@ -58,6 +58,7 @@ function appSession(): Session {
     rebuiltCost: 250_000,
     returns: 4,
     expiredReturns: 1,
+    unmeasuredReturns: 2,
   };
   return session('app-1', 'GitHub Copilot App', [request(`${DAY}T10:30:00Z`, first), request(`${DAY}T11:30:00Z`, second)], {
     promptCache: {
@@ -178,8 +179,19 @@ describe('PromptCacheAnalyzer attribution', () => {
       ['growth', 160_000], ['rebuilt', 200_000], ['subagents', 50_000], ['compaction', 20_000], ['cold-start', 40_000],
     ]);
     expect(a?.origins.reduce((sum, o) => sum + o.pct, 0)).toBeCloseTo(100, 0);
-    expect(a?.idle).toMatchObject({ returns: 4, expiredReturns: 1, medianIdleMinutes: 60, ttlByModel: [{ model: 'claude-opus-5.5', ttlSeconds: 300, calls: 60 }] });
+    expect(a?.idle).toMatchObject({ returns: 4, expiredReturns: 1, unmeasuredReturns: 2, medianIdleMinutes: 60, ttlByModel: [{ model: 'claude-opus-5.5', ttlSeconds: 300, calls: 60 }] });
     expect(a?.idle.buckets.find(b => b.label === '6\u201324\u00d7')).toMatchObject({ user: 1, agent: 0 });
+  });
+
+  it('keeps an expiry whose call doesn’t log who made it apart from yours and the agent’s', () => {
+    const s = appSession();
+    s.promptCache = { breaks: [brk(1, ['ttl-expired'], { idleSeconds: 600 }), brk(1, ['ttl-expired'], { initiator: null, idleSeconds: 3_600 })] };
+    const a = analyzer([s]).getPromptCache({ fromDate: DAY }).attribution;
+    expect(a?.causes.map(c => [c.key, c.control, c.breaks])).toEqual([['ttl-user', 'you', 1], ['ttl-unknown', 'unknown', 1]]);
+    expect(a?.controlPct).toEqual({ you: 50, partly: 0, harness: 0, unknown: 50 });
+    // The split counts only the logged caller; the median still covers both expiry breaks.
+    expect(a?.idle.buckets.map(b => [b.label, b.user, b.agent])).toEqual([['\u22642\u00d7', 1, 0], ['2\u20136\u00d7', 0, 0], ['6\u201324\u00d7', 0, 0], ['>24\u00d7', 0, 0]]);
+    expect(a?.idle.medianIdleMinutes).toBe(35);
   });
 
   it('classifies harness-driven system-prompt changes and agent waits apart from your own causes', () => {

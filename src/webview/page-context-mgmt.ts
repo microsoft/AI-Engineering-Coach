@@ -73,8 +73,11 @@ function renderCompositionOnly(container: HTMLElement, data: ContextManagementDa
   if (section) attachCompositionDrilldown(section, filter);
 }
 
-export async function renderContextManagement(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
+/** `isCurrent` is false once a newer Context Health render (another tab or range) owns the page; the response is
+ *  then dropped. */
+export async function renderContextManagement(container: HTMLElement, currentFilter: DateFilter, isCurrent: () => boolean = () => true): Promise<void> {
   const data = await rpc<ContextManagementData>('getContextManagement', { filter: currentFilter } as Record<string, unknown>);
+  if (!isCurrent()) return;
 
   if (data.totalSessions === 0) {
     // Composition counts requests sent in the range, so a session that continues past the range still

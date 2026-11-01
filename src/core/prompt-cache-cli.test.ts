@@ -299,6 +299,15 @@ describe('Copilot CLI cache expiry is measured from call starts', () => {
     expect(breaksOf(session)[0]).toMatchObject({ causes: ['ttl-expired'], idleSeconds: 400, ttlSeconds: 300, timestamp: BASE + 430_000 });
     expect(session.requests[1].promptCache).toMatchObject({ returns: 1, expiredReturns: 1 });
   });
+
+  it('counts a return after a call that logged no cache expiry apart, never as one before expiry', () => {
+    const noExpiry = call(0, { input: 150_000, read: 0 });
+    delete (noExpiry.data as { usage: Record<string, unknown> }).usage.cacheExpiresAt;
+    const session = parse([START, user('u1', 0), noExpiry, user('u2', 3_600), call(3_600, { input: 155_000, read: 150_000, initiator: 'user' })]);
+    expect(session.requests[1].promptCache).toMatchObject({ unmeasuredReturns: 1 });
+    expect(session.requests[1].promptCache).not.toHaveProperty('returns');
+    expect(session.requests[1].promptCache).not.toHaveProperty('expiredReturns');
+  });
 });
 
 describe('Copilot CLI cache breaks from compaction', () => {
@@ -351,7 +360,9 @@ describe('Copilot CLI cache breaks from setting changes', () => {
     ]);
     expect(breaksOf(session).map(brk => brk.causes)).toEqual([['reasoning-effort'], ['tools-changed'], ['mode-change'], ['resume']]);
   });
+});
 
+describe('Copilot CLI cache breaks from checkpoint windows', () => {
   it('infers system-prompt and tool-schema changes from the checkpoint window, naming only the segments', () => {
     const session = parse([
       START,
@@ -366,6 +377,27 @@ describe('Copilot CLI cache breaks from setting changes', () => {
     const [instructions, schema] = breaksOf(session);
     expect(instructions).toMatchObject({ causes: ['system-prompt'], inferred: ['system-prompt'], confidence: 'checkpoint', segments: ['custom_instructions'] });
     expect(schema).toMatchObject({ causes: ['tools-changed'], inferred: ['tools-changed'], confidence: 'checkpoint' });
+  });
+
+  it('applies a checkpoint window\u2019s changes only to breaks on the checkpoint\u2019s model', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      checkpoint(),
+      call(1, { input: 100_000, read: 0 }),
+      call(10, { input: 102_000, read: 0, model: 'gpt-6.1-sol' }),
+      call(20, { input: 104_000, read: 20_000, model: 'gpt-6.1-sol' }),
+      call(30, { input: 106_000, read: 0 }),
+      call(40, { input: 108_000, read: 25_000 }),
+      // Both checkpoints show claude-opus-5.5, whose instructions changed in between.
+      checkpoint({ changed: ['custom_instructions'] }),
+    ]);
+    expect(breaksOf(session).map(brk => [brk.model, brk.causes, brk.confidence])).toEqual([
+      ['gpt-6.1-sol', ['model-switch'], 'logged'],
+      ['gpt-6.1-sol', [], 'unattributed'],
+      ['claude-opus-5.5', ['model-switch', 'system-prompt'], 'logged'],
+      ['claude-opus-5.5', ['system-prompt'], 'checkpoint'],
+    ]);
   });
 });
 

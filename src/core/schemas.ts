@@ -111,6 +111,7 @@ export const RequestPromptCacheSchema = z.object({
   rebuiltCost: tokenSchema.optional(),
   returns: z.number().int().min(0).optional(),
   expiredReturns: z.number().int().min(0).optional(),
+  unmeasuredReturns: z.number().int().min(0).optional(),
 }).strict();
 
 export const CacheBreakSchema = z.object({

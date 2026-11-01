@@ -26,6 +26,7 @@ const YOUR_SEGMENTS = new Set(['custom_instructions', 'memory']);
 const CONTROL: Record<CacheCauseKey, CacheControl> = {
   'ttl-user': 'you',
   'ttl-agent': 'partly',
+  'ttl-unknown': 'unknown',
   resume: 'you',
   'model-switch': 'you',
   'model-auto': 'harness',
@@ -47,12 +48,15 @@ const IDLE_BUCKETS: { label: string; max: number }[] = [
   { label: '>24\u00d7', max: Number.POSITIVE_INFINITY },
 ];
 
-/** The cause row a break belongs to. */
+/** The cause row a break belongs to. An expiry counts as yours or the agent's only when the call logs who made
+ *  it. */
 export function causeKey(brk: CacheBreak): CacheCauseKey {
   const primary = brk.causes[0];
   switch (primary) {
     case undefined: return 'unattributed';
-    case 'ttl-expired': return brk.initiator === 'agent' ? 'ttl-agent' : 'ttl-user';
+    case 'ttl-expired':
+      if (brk.initiator === 'agent') return 'ttl-agent';
+      return brk.initiator === 'user' ? 'ttl-user' : 'ttl-unknown';
     case 'model-switch': return brk.autoModel ? 'model-auto' : 'model-switch';
     case 'system-prompt': return brk.segments?.some(segment => YOUR_SEGMENTS.has(segment)) ? 'instructions-changed' : 'system-prompt';
     default: return primary;
@@ -131,10 +135,11 @@ export interface OriginAcc {
   rebuiltCost: number;
   returns: number;
   expiredReturns: number;
+  unmeasuredReturns: number;
 }
 
 export function emptyOrigins(): OriginAcc {
-  return { main: emptyTotals(), subagents: emptyTotals(), compaction: emptyTotals(), coldStart: 0, coldStartCost: 0, rebuilt: 0, rebuiltCost: 0, returns: 0, expiredReturns: 0 };
+  return { main: emptyTotals(), subagents: emptyTotals(), compaction: emptyTotals(), coldStart: 0, coldStartCost: 0, rebuilt: 0, rebuiltCost: 0, returns: 0, expiredReturns: 0, unmeasuredReturns: 0 };
 }
 
 export function addRequestExtras(acc: OriginAcc, cache: RequestPromptCache): void {
@@ -144,6 +149,7 @@ export function addRequestExtras(acc: OriginAcc, cache: RequestPromptCache): voi
   acc.rebuiltCost += cache.rebuiltCost ?? 0;
   acc.returns += cache.returns ?? 0;
   acc.expiredReturns += cache.expiredReturns ?? 0;
+  acc.unmeasuredReturns += cache.unmeasuredReturns ?? 0;
 }
 
 export function totalMisses(acc: OriginAcc): number {
@@ -186,7 +192,8 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-/** Time since the cache was last refreshed at cache-expiry breaks, and the cache lifetime logged per model. */
+/** Time since the cache was last refreshed at cache-expiry breaks, and the cache lifetime logged per model. The
+ *  you / agent split counts only breaks whose call logs who made it; the median counts every expiry break. */
 export function buildIdle(breaks: CacheBreak[], acc: OriginAcc, ttlCalls: Map<string, Map<number, number>>): CacheIdleSummary {
   const buckets: CacheIdleBucket[] = IDLE_BUCKETS.map(bucket => ({ label: bucket.label, user: 0, agent: 0 }));
   const idleMinutes: number[] = [];
@@ -194,7 +201,7 @@ export function buildIdle(breaks: CacheBreak[], acc: OriginAcc, ttlCalls: Map<st
     if (brk.causes[0] !== 'ttl-expired') continue;
     if (brk.idleSeconds != null) idleMinutes.push(brk.idleSeconds / 60);
     const bucket = buckets.find(b => b.label === idleLabel(brk));
-    if (bucket) bucket[brk.initiator === 'agent' ? 'agent' : 'user']++;
+    if (bucket && brk.initiator) bucket[brk.initiator]++;
   }
   const ttlByModel = [...ttlCalls]
     .map(([model, counts]) => {
@@ -210,6 +217,7 @@ export function buildIdle(breaks: CacheBreak[], acc: OriginAcc, ttlCalls: Map<st
     ttlByModel,
     returns: acc.returns,
     expiredReturns: acc.expiredReturns,
+    unmeasuredReturns: acc.unmeasuredReturns,
     buckets,
     medianIdleMinutes: med == null ? null : Math.round(med),
   };

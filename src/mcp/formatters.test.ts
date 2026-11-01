@@ -19,6 +19,7 @@ describe('formatPromptCache', () => {
         rebuilt: 200_000,
         returns: 5,
         expiredReturns: 2,
+        unmeasuredReturns: 1,
       },
     });
     const session = createSession({
@@ -34,12 +35,20 @@ describe('formatPromptCache', () => {
       rebuiltYouCanChangePct: 100,
       causes: [{ cause: 'ttl-user', who: 'you', breaks: 1, rebuiltPct: 100 }],
       cacheLifetimes: [{ model: 'claude-opus-5.5', seconds: 300 }],
-      returnsAfterExpiry: { expired: 2, of: 5 },
+      returnsAfterExpiry: { expired: 2, of: 5, notMeasured: 1 },
       medianMinutesSinceCacheRefreshAtExpiry: 60,
     });
     const json = JSON.stringify(summary);
     expect(json).not.toContain('secret-session-id');
     expect(json).not.toContain('secret-workspace');
     expect(json).not.toContain('secret prompt');
+  });
+
+  it('calls a harness reported only when requests in range carried cache data', () => {
+    // An older Copilot App build logs no per-call usage: the harness would log the cache per call, but didn't.
+    const request = createRequest({ messageText: 'prompt', responseText: '', timestamp: Date.parse('2026-10-20T11:00:00Z') });
+    const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'w', harness: 'GitHub Copilot App', requests: [request] });
+    const summary = formatPromptCache(new PromptCacheAnalyzer([session], new Map()).getPromptCache());
+    expect(summary.harnesses).toEqual([expect.objectContaining({ harness: 'GitHub Copilot App', reported: false, granularity: 'per-call', hitPct: null, requestsWithData: 0, totalRequests: 1 })]);
   });
 });

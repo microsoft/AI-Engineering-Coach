@@ -27,6 +27,11 @@ export const CAUSE_META: Record<CacheCauseKey, { label: string; short: string; c
     help: 'The agent continued after a long-running tool or background agent outlasted the cache lifetime. Long waits sometimes can\u2019t be avoided; this shows what they cost.',
     action: 'Nothing you did. Expect a rebuild after waits longer than the cache lifetime.',
   },
+  'ttl-unknown': {
+    label: 'Cache expired, caller not logged', short: 'Expired (?)', color: COLORS.muted,
+    help: 'The previous call’s cache lifetime had passed when this call started, but the call doesn’t log whether you or the agent made it, so it isn’t counted as either.',
+    action: 'Nothing to act on: the log doesn’t say who made the call.',
+  },
   resume: {
     label: 'Resumed an earlier session', short: 'Resumed', color: COLORS.purple,
     help: 'The session was resumed, and its context had to be sent again. Resuming usually also refreshes parts of the system prompt.',
