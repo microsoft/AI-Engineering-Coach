@@ -89,6 +89,12 @@ affect users. Machines can draft notes; a person curates them.
 
    A build of the tag shows no **dev** badge in the dashboard.
 
+Publishing a stable release makes the update check offer it to everyone running a release build,
+once VS Code's `extensions.autoUpdateDelay` has passed (12 hours by default); `/releases/latest`
+never returns pre-releases. The **Update** button installs only releases that GitHub marks as
+immutable with the VSIX uploaded by the workflow. For other releases it opens the release page, so
+check a release before publishing it rather than replacing assets afterwards.
+
 ## After the first release
 
 `README.md` and `docs/content/getting-started/installation.md` still say there is no Releases

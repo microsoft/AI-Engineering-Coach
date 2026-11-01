@@ -39,6 +39,7 @@ AI-Engineering-Coach/
 │   │   ├── rules/<id>.md        # 45+ built-in detection rules (markdown + DSL)
 │   │   └── metrics/<id>.metric.md# Built-in metrics referenced by rules
 │   ├── webview/                # Dashboard UI: app.ts plus page-*.ts per route
+│   ├── update/                 # Update check: GitHub release feed, schedule, verified VSIX install
 │   ├── chat/                   # VS Code Chat participant integration
 │   ├── mcp/                    # Tools exposed to the chat participant / MCP
 │   └── summary-export-vscode.ts# Markdown/JSON summary export
@@ -186,6 +187,11 @@ body and an optional `# Tests` block. See [`docs/AUTHORING_RULES.md`](docs/AUTHO
 - **No telemetry, no network calls** in core analysis paths. The optional AI features (rule
   compiler, skill finder, context review) use the VS Code Copilot language model API only when
   the user explicitly invokes them.
+- **The update check is the only automatic network request.** [`src/update/`](src/update/)
+  asks the GitHub Releases API about once a day, from release builds only, anonymously and with
+  a constant User-Agent, and honors `aiEngineerCoach.updates.autoCheck` and
+  `extensions.autoCheckUpdates`. It installs nothing without a click. Tests never call GitHub:
+  inject `fetch`, or use the loopback release server of the desktop update suite.
 - **Read-only with respect to user data.** The extension never modifies session log files.
 - **Inclusive language.** Prefer allowlist/denylist, primary/replica, etc.
 - **Author over generate.** Rules and skills are markdown — write them by hand or via the Rule

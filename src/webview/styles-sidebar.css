@@ -60,6 +60,7 @@ button.secondary {
 }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
 .sidebar-build { margin-top: 6px; overflow-wrap: anywhere; }
+.sidebar-update { margin-top: 4px; color: var(--vscode-foreground); }
 button.link {
   display: inline;
   width: auto;

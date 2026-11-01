@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   executeScript: vi.fn<() => Promise<string>>(),
   saveSnapshot: vi.fn<typeof import('./snapshots')['saveSnapshot']>(),
   wait: vi.fn<(condition: () => Promise<boolean>, timeout: number, message?: string) => Promise<boolean>>(),
+  getNotifications: vi.fn<() => Promise<unknown[]>>(),
+  centerNotifications: vi.fn<(type: unknown) => Promise<unknown[]>>(),
+  waitForWorkbench: vi.fn<(timeout: number) => Promise<void>>(),
 }));
 
 vi.mock('vscode-extension-tester', async importOriginal => {
@@ -29,8 +32,12 @@ vi.mock('vscode-extension-tester', async importOriginal => {
       takeScreenshot: mocks.takeScreenshot,
       executeScript: mocks.executeScript,
       wait: mocks.wait,
-    } } },
-    Workbench: class { executeCommand = mocks.executeCommand; },
+    }, waitForWorkbench: mocks.waitForWorkbench } },
+    Workbench: class {
+      executeCommand = mocks.executeCommand;
+      getNotifications = mocks.getNotifications;
+      openNotificationsCenter = () => Promise.resolve({ getNotifications: mocks.centerNotifications });
+    },
     WebView: class { switchToFrame = mocks.switchToFrame; },
     until: { ...actual.until, elementLocated: () => mocks.editorReady },
   };
@@ -48,6 +55,9 @@ beforeEach(() => {
   mocks.takeScreenshot.mockResolvedValue('captured-image');
   mocks.executeScript.mockResolvedValue('[]');
   mocks.saveSnapshot.mockResolvedValue();
+  mocks.waitForWorkbench.mockResolvedValue();
+  mocks.getNotifications.mockResolvedValue([]);
+  mocks.centerNotifications.mockResolvedValue([]);
   mocks.wait.mockImplementation(async (condition, _timeout, message) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (await condition()) return true;
@@ -107,6 +117,47 @@ describe('desktop webview synchronization', () => {
     await new Dashboard().open();
 
     expect(mocks.switchToFrame.mock.calls).toEqual([[60_000], [59_900]]);
+  });
+});
+
+describe('desktop notifications and window reloads', () => {
+  const notification = (message: string | Error) => ({
+    getMessage: message instanceof Error ? vi.fn().mockRejectedValue(message) : vi.fn().mockResolvedValue(message),
+    takeAction: vi.fn().mockResolvedValue(undefined),
+  });
+
+  it('clicks the button of the matching toast, skipping stale ones', async () => {
+    const match = notification('AI Engineer Coach v0.1.1 is available. You have v0.1.0.');
+    mocks.getNotifications.mockResolvedValue([
+      notification(new error.StaleElementReferenceError('The toast was replaced')), notification('Something else'), match,
+    ]);
+    await new Dashboard().notificationAction(/^AI Engineer Coach v0\.1\.1 is available\./, 'Update');
+    expect(match.takeAction).toHaveBeenCalledExactlyOnceWith('Update');
+    expect(mocks.centerNotifications).not.toHaveBeenCalled();
+  });
+
+  it('looks in the notification center once the toast has been hidden', async () => {
+    const match = notification('AI Engineer Coach v0.1.1 is installed. Reload the window to start using it.');
+    mocks.getNotifications.mockResolvedValue([]);
+    mocks.wait.mockRejectedValueOnce(new error.TimeoutError('Waiting for the toast'));
+    mocks.centerNotifications.mockResolvedValue([match]);
+    expect(await new Dashboard().waitForNotification(/is installed/)).toBe(match);
+  });
+
+  it('reports a notification that never appeared', async () => {
+    mocks.getNotifications.mockResolvedValue([]);
+    mocks.wait.mockRejectedValueOnce(new error.TimeoutError('Waiting for the toast'));
+    mocks.centerNotifications.mockResolvedValue([notification('Unrelated')]);
+    await expect(new Dashboard().waitForNotification(/is available/)).rejects.toThrow('Expected a notification matching /is available/');
+  });
+
+  it('waits for a new document and the workbench after a window reload', async () => {
+    mocks.documentId.mockResolvedValueOnce('before').mockResolvedValueOnce('before').mockResolvedValue('after');
+    const trigger = vi.fn().mockResolvedValue(undefined);
+    await new Dashboard().expectWindowReload(trigger);
+    expect(trigger).toHaveBeenCalledTimes(1);
+    expect(mocks.documentId).toHaveBeenCalledTimes(3);
+    expect(mocks.waitForWorkbench).toHaveBeenCalledExactlyOnceWith(60_000);
   });
 });
 

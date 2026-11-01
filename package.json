@@ -39,6 +39,8 @@
     "onCommand:aiEngineerCoach.exportSummary",
     "onCommand:aiEngineerCoach.reviewLocalRules",
     "onCommand:aiEngineerCoach.showReleaseNotes",
+    "onCommand:aiEngineerCoach.checkForUpdates",
+    "onCommand:aiEngineerCoach.installUpdate",
     "onView:aiEngineerCoach.welcome"
   ],
   "main": "./dist/extension.js",
@@ -74,8 +76,26 @@
         "command": "aiEngineerCoach.showReleaseNotes",
         "title": "AI Engineer Coach: What's New",
         "icon": "$(megaphone)"
+      },
+      {
+        "command": "aiEngineerCoach.checkForUpdates",
+        "title": "AI Engineer Coach: Check for Updates",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "aiEngineerCoach.installUpdate",
+        "title": "AI Engineer Coach: Install Update",
+        "icon": "$(cloud-download)"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "aiEngineerCoach.installUpdate",
+          "when": "aiEngineerCoach.updateAvailable"
+        }
+      ]
+    },
     "configuration": {
       "title": "AI Engineer Coach",
       "properties": {
@@ -83,6 +103,15 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notification that links to the release notes the first time AI Engineer Coach runs after an update to a newer version."
+        },
+        "aiEngineerCoach.updates.autoCheck": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "tags": [
+            "usesOnlineServices"
+          ],
+          "markdownDescription": "Check GitHub Releases about once a day for a newer version of AI Engineer Coach. Only release builds check on their own. Each check is one anonymous request to `api.github.com` with no identifiers or usage data, and nothing is downloaded or installed until you choose **Update**. Automatic checks also stop when `#extensions.autoCheckUpdates#` is off. **AI Engineer Coach: Check for Updates** works either way."
         }
       }
     },

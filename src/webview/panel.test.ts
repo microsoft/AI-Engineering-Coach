@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   probe: vi.fn<(timeoutMs: number) => Promise<boolean>>(),
   heavy: vi.fn(() => ({ kind: 'heavy' })),
   light: vi.fn(() => ({ kind: 'light' })),
+  updateStatus: undefined as Record<string, unknown> | undefined,
+  updateListener: undefined as ((status: unknown) => void) | undefined,
+  promptInstall: vi.fn<() => Promise<void>>(),
+  reloadAfterUpdate: vi.fn<() => Promise<void>>(),
 }));
 
 vi.mock('vscode', () => ({
@@ -65,6 +69,19 @@ vi.mock('./panel-sidebar', () => ({ DashboardSidebarProvider: class {} }));
 vi.mock('./panel-rpc', () => ({
   getRpcHandler: (method: string) => method === 'getAntiPatterns' || method === 'getConfigHealth' ? mocks.heavy : mocks.light,
 }));
+vi.mock('../update/update-service', () => ({
+  getUpdateService: () => ({
+    getStatus: () => mocks.updateStatus,
+    onDidChangeStatus: (listener: (status: unknown) => void, _thisArg: unknown, disposables?: { dispose(): void }[]) => {
+      mocks.updateListener = listener;
+      const subscription = { dispose: () => { mocks.updateListener = undefined; } };
+      disposables?.push(subscription);
+      return subscription;
+    },
+    promptInstall: mocks.promptInstall,
+    reloadAfterUpdate: mocks.reloadAfterUpdate,
+  }),
+}));
 
 const result: ParseResult = {
   sessions: [], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map(),
@@ -81,6 +98,9 @@ beforeEach(() => {
   mocks.parse.mockResolvedValue(result);
   mocks.warmUp.mockResolvedValue(undefined);
   mocks.probe.mockResolvedValue(true);
+  mocks.updateStatus = { state: 'none' };
+  mocks.promptInstall.mockResolvedValue(undefined);
+  mocks.reloadAfterUpdate.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -277,5 +297,31 @@ describe('host capabilities', () => {
     await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(2));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(capabilityPushes()).toHaveLength(0);
+  });
+});
+
+describe('update status', () => {
+  const available = { state: 'available', current: '0.2.0', latest: '0.4.0', publishedAt: '2026-10-01T12:00:00.000Z', canInstall: true };
+
+  it('answers before data is ready and lets the host confirm every action', () => {
+    mocks.warmUp.mockReturnValue(new Promise<void>(() => {}));
+    mocks.updateStatus = available;
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    mocks.receive({ type: 'request', id: 'status', method: 'getUpdateStatus' });
+    expect(mocks.post).toHaveBeenCalledWith({ type: 'response', id: 'status', data: available });
+    mocks.receive({ type: 'request', id: 'prompt', method: 'promptUpdate', params: { url: 'https://example.com/evil.vsix' } });
+    expect(mocks.promptInstall).toHaveBeenCalledExactlyOnceWith();
+    expect(mocks.post).toHaveBeenCalledWith({ type: 'response', id: 'prompt', data: { ok: true } });
+    mocks.receive({ type: 'request', id: 'reload', method: 'reloadAfterUpdate' });
+    expect(mocks.reloadAfterUpdate).toHaveBeenCalledExactlyOnceWith();
+    expect(mocks.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' }));
+  });
+
+  it('pushes status changes until the panel is disposed', () => {
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    mocks.updateListener?.({ state: 'installed', latest: '0.4.0' });
+    expect(mocks.post).toHaveBeenCalledWith({ type: 'updateStatus', status: { state: 'installed', latest: '0.4.0' } });
+    mocks.disposed();
+    expect(mocks.updateListener).toBeUndefined();
   });
 });

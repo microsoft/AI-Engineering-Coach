@@ -4,7 +4,7 @@ title: "Home"
 
 ## Privacy First
 
-AI Engineer Coach is entirely **read-only** and ships with **zero telemetry**. It parses log files that already exist on your machine and never sends data anywhere. Your usage data stays local.
+AI Engineer Coach is entirely **read-only** and ships with **zero telemetry**. It parses log files that already exist on your machine and never sends your data anywhere. Your usage data stays local. The only automatic network request is an anonymous, roughly daily [update check](getting-started/installation.md#updates) in release builds, which you can turn off.
 
 ## Multi-Harness Support
 

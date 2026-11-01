@@ -3,10 +3,25 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ActivityBar, By, EditorView, error, until, VSBrowser, WebView, WebviewView, Workbench } from 'vscode-extension-tester';
+import { ActivityBar, By, EditorView, error, NotificationType, until, VSBrowser, WebView, WebviewView, Workbench, type Notification, type ViewControl } from 'vscode-extension-tester';
 import { saveSnapshot } from './snapshots';
 
 const READY_TIMEOUT = 60_000;
+
+function isStale(err: unknown): boolean {
+  return err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError;
+}
+
+async function findNotification(notifications: Notification[], pattern: RegExp): Promise<Notification | undefined> {
+  for (const notification of notifications) {
+    try {
+      if (pattern.test(await notification.getMessage())) return notification;
+    } catch (err: unknown) {
+      if (!isStale(err)) throw err;
+    }
+  }
+  return undefined;
+}
 
 export class Dashboard {
   private currentWebview: WebView | undefined;
@@ -65,6 +80,52 @@ export class Dashboard {
     await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
   }
 
+  /**
+   * Waits for a notification whose message matches. Toasts hide after a while, so the
+   * notification center is searched once the toasts didn't show it.
+   */
+  async waitForNotification(pattern: RegExp): Promise<Notification> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    let found: Notification | undefined;
+    try {
+      await driver.wait(async () => (found = await findNotification(await new Workbench().getNotifications(), pattern)) !== undefined,
+        READY_TIMEOUT / 2);
+    } catch (err: unknown) {
+      if (!(err instanceof error.TimeoutError)) throw err;
+    }
+    if (!found) {
+      const center = await new Workbench().openNotificationsCenter();
+      found = await findNotification(await center.getNotifications(NotificationType.Any), pattern);
+    }
+    if (!found) throw new Error(`Expected a notification matching ${String(pattern)}`);
+    return found;
+  }
+
+  /** Clicks a button of the notification whose message matches. */
+  async notificationAction(pattern: RegExp, action: string): Promise<void> {
+    await (await this.waitForNotification(pattern)).takeAction(action);
+  }
+
+  /** Runs `trigger`, then waits until the window has reloaded and the workbench is ready again. */
+  async expectWindowReload(trigger: () => Promise<void>): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const before = await driver.findElement(By.css('html')).getId();
+    await trigger();
+    await driver.wait(async () => {
+      try {
+        await driver.switchTo().defaultContent();
+        return await driver.findElement(By.css('html')).getId() !== before;
+      } catch (err: unknown) {
+        if (isStale(err) || err instanceof error.NoSuchWindowError || err instanceof error.WebDriverError) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, 'Waiting for the window to reload');
+    await VSBrowser.instance.waitForWorkbench(READY_TIMEOUT);
+    this.currentWebview = undefined;
+  }
+
   /** Waits for an editor tab whose title matches and returns that title. */
   async waitForEditor(pattern: RegExp): Promise<string> {
     const driver = VSBrowser.instance.driver;
@@ -92,8 +153,19 @@ export class Dashboard {
    * returns to the workbench.
    */
   async inActivityBarView<T>(action: (view: WebviewView) => Promise<T>): Promise<T> {
-    await VSBrowser.instance.driver.switchTo().defaultContent();
-    const control = await new ActivityBar().getViewControl('AI Engineer Coach');
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    // Right after startup the activity bar may not list contributed containers yet.
+    let control: ViewControl | undefined;
+    await driver.wait(async () => {
+      try {
+        control = await new ActivityBar().getViewControl('AI Engineer Coach');
+        return control !== undefined;
+      } catch (err: unknown) {
+        if (isStale(err)) return false;
+        throw err;
+      }
+    }, READY_TIMEOUT, 'The AI Engineer Coach activity-bar container is missing');
     if (!control) throw new Error('The AI Engineer Coach activity-bar container is missing');
     const view = new WebviewView(await control.openView());
     // #whatsNew exists only in this view, so another ready webview is retried instead of read.

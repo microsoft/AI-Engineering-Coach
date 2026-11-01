@@ -21,6 +21,7 @@ import { getRpcHandler } from './panel-rpc';
 import { PanelRequestService } from './panel-request-service';
 import { DashboardSidebarProvider } from './panel-sidebar';
 import { isRequestMessage, isSafeExternalHttpsUrl, postResponse, errorResult } from './panel-shared';
+import { forwardUpdateStatus, tryHandleUpdateRequest } from './panel-update';
 
 export { DashboardSidebarProvider } from './panel-sidebar';
 
@@ -71,6 +72,7 @@ export class DashboardPanel {
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg: unknown) => this.handleMessage(msg), null, this.disposables);
     vscode.lm.onDidChangeChatModels(() => this.refreshCapabilities(), null, this.disposables);
+    forwardUpdateStatus(this.panel.webview, this.disposables);
 
     void this.loadData(forceReload);
   }
@@ -356,6 +358,9 @@ export class DashboardPanel {
       });
       return;
     }
+
+    // Update state for the build stamp footer, also answered before data readiness.
+    if (tryHandleUpdateRequest(this.panel.webview, msg)) return;
 
     if (this.requestService.tryHandle(msg)) return;
 

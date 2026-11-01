@@ -28,6 +28,7 @@ import { registerChatParticipant } from './chat/participant';
 import { exportSummaryFiles } from './summary-export-vscode';
 import { formatBuildLogFields } from './core/build-info';
 import { registerWhatsNew } from './whats-new-vscode';
+import { registerUpdateCheck } from './update/update-service';
 
 type PanelModule = typeof import('./webview/panel');
 let panelModulePromise: Promise<PanelModule> | null = null;
@@ -236,6 +237,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   registerWhatsNew(context);
+  const updates = registerUpdateCheck(context);
   registerTools(context, () => panelCache.analyzerInstance);
   registerChatParticipant(context);
 
@@ -243,6 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
     const sidebarProvider = new DashboardSidebarProvider(context.extensionUri);
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider('aiEngineerCoach.welcome', sidebarProvider),
+      updates.onDidChangeStatus(() => sidebarProvider.refresh()),
     );
   });
 }
