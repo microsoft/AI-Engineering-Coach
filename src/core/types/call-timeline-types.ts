@@ -31,7 +31,8 @@ export interface CallTimelineBucket {
   /* Context and token types (Copilot CLI and Copilot App). Absent when no call in the bucket logged them. */
   /** Largest prompt of a call in the bucket, including cached tokens: the context size. */
   peakPrompt?: number;
-  /** Largest context limit the bucket's calls reported (`maxPromptTokens`). */
+  /** Largest context limit the bucket's calls are measured against, by the turn's rule: a call's `maxPromptTokens`,
+   *  else one an earlier call of its model reported in the turn, else a compaction's `tokenLimit` for its model. */
   contextLimit?: number;
   /** Output tokens of the bucket's calls, including reasoning. */
   output?: number;

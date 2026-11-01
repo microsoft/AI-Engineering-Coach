@@ -50,6 +50,12 @@ export interface CallRow {
   ttftMs?: number[];
   /** Duration of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
   durationMs?: number[];
+  /** Calls that logged their time to first token, when thinning kept fewer `ttftMs` samples: each sample stands for
+   *  `ttftCalls / ttftMs.length` calls, so a row keeps its weight in percentiles across rows. Absent when every
+   *  logged value was kept. */
+  ttftCalls?: number;
+  /** The same for `durationMs`. */
+  durationCalls?: number;
 }
 
 /** A `CallRow` of calls that reported their cache usage, with their cache sums. */

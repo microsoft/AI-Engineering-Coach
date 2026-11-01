@@ -289,6 +289,8 @@ function eventTime(ev: CLIEvent): number | null {
 function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
   const call = readCliModelCall(ev.data || {}, eventTime(ev), state.currentModelId);
   if (!call) return;
+  // The limit the turn's context rule gives the call, so the timeline's limit agrees with the turn's.
+  const contextLimit = state.context.addCall(call);
   const callIndex = call.stream === 'main'
     ? state.timeline.add({
       timestamp: call.timestamp,
@@ -298,7 +300,7 @@ function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
       cacheWrite: call.cacheWriteTokens,
       uncached: uncachedTokens({ input: call.inputTokens, cacheRead: call.cacheReadTokens, cacheWrite: call.cacheWriteTokens }),
       promptTokens: call.inputTokens,
-      contextLimit: call.maxPromptTokens,
+      contextLimit,
       outputTokens: call.outputTokens,
       reasoningTokens: call.reasoningTokens,
       truncated: call.finishReason === 'length',
@@ -306,7 +308,6 @@ function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
     : null;
   if (callIndex != null) state.mainCalls = callIndex + 1;
   state.cache.onCall(call, callIndex, state.requests.length);
-  state.context.addCall(call);
   addCompositionUsage(state.turn, call);
 }
 

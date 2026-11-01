@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { cliOutputSample, readCallOutputs } from './call-outputs';
 import { RequestCacheBuilder, type CacheCallSample } from './prompt-cache-usage';
 import { ModelCallRowSchema } from './schemas';
-import { mainTokens, rowReasoning, rowTruncation } from './token-types-rows';
+import { mainTokens, rowLatency, rowReasoning, rowTruncation } from './token-types-rows';
 import type { CacheStream, ModelCallRow } from './types';
 
 const MODEL = 'claude-opus-5.5';
@@ -111,5 +111,23 @@ describe('reasoning over the calls that logged it, by effort', () => {
     for (const key of ['reasoningByEffort', 'stopCalls']) expect(rows[0]).not.toHaveProperty(key);
     expect(rowReasoning(rows)?.byEffort).toEqual([{ effort: 'high', stream: 'main', calls: 2, outputTokens: 2_000, reasoningTokens: 800, sharePct: 40 }]);
     expect(rowTruncation(rows)).toEqual({ calls: 2, truncatedCalls: 0, filteredCalls: 0 });
+  });
+});
+
+describe('latency percentiles across rows', () => {
+  /** A call that logged only how long it took. */
+  const timed = (durationMs: number): [CacheStream, CacheCallSample] =>
+    ['main', { input: 1_000, cacheRead: 0, cacheWrite: 0, outputs: cliOutputSample({ ...readCallOutputs({ outputTokens: 100 }), durationMs }) }];
+
+  it('weights a row\u2019s thinned samples by the calls they stand for', () => {
+    // Copilot's example: one turn with 256 calls of 10 s, and 200 single-call turns of 1 s. The median call takes 10 s.
+    const [long] = rowsOf(Array.from({ length: 256 }, () => timed(10_000)));
+    expect(long.durationMs).toHaveLength(128);
+    expect(long.durationCalls).toBe(256);
+    const short = Array.from({ length: 200 }, () => rowsOf([timed(1_000)])[0]);
+    expect(short[0]).not.toHaveProperty('durationCalls');
+    expect(rowLatency([long, ...short])).toEqual([
+      { model: MODEL, calls: 456, ttftP50Ms: null, ttftP90Ms: null, durationP50Ms: 10_000, durationP90Ms: 10_000 },
+    ]);
   });
 });

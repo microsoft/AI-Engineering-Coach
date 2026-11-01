@@ -37,16 +37,20 @@ export class TurnContextAccumulator {
   /** Limits logged elsewhere in the turn (a compaction's `tokenLimit`), per model. */
   private readonly fallbackLimits = new Map<string | undefined, number>();
 
-  /** Sub-agent calls have their own context and are ignored. */
-  addCall(call: ContextCall): void {
+  /** Adds a main-agent call; sub-agent calls have their own context and are ignored. Returns the limit the call is
+   *  measured against, by the rule of the turn's limit: its own, else the latest one a call of its model reported in
+   *  the turn, else a compaction's limit for its model. `null` when there's none, or for a sub-agent call. */
+  addCall(call: ContextCall): number | null {
+    if (call.stream !== 'main') return null;
+    const limit = positive(call.maxPromptTokens);
     const input = positive(call.inputTokens);
-    if (call.stream !== 'main' || input == null) return;
+    if (input == null) return limit;
     this.calls++;
     this.last = input;
     this.peak = Math.max(this.peak, input);
     this.model = call.model;
-    const limit = positive(call.maxPromptTokens);
     if (limit != null) this.limits.set(call.model, limit);
+    return this.limitOf(call.model);
   }
 
   /** A limit logged elsewhere in the turn (a compaction's `tokenLimit`), for the model of the latest main-agent
@@ -63,9 +67,13 @@ export class TurnContextAccumulator {
     return {
       lastPromptTokens: this.last,
       peakPromptTokens: this.peak,
-      contextLimit: this.limits.get(this.model) ?? this.fallbackLimits.get(this.model) ?? null,
+      contextLimit: this.limitOf(this.model),
       calls: this.calls,
     };
+  }
+
+  private limitOf(model: string | undefined): number | null {
+    return this.limits.get(model) ?? this.fallbackLimits.get(model) ?? null;
   }
 
   /** The turn's result; the accumulator then starts the next turn. */
