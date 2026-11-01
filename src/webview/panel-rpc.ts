@@ -533,7 +533,7 @@ match: matches(harness, "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)") AN
 aggregate: count
 planLoggedReqs: countWhere(all, "harness", "matches", "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)")
 agentRatio: count / planLoggedReqs
-planUsage: someWhere(all, "slashCommand", "plan") OR someWhere(all, "agentMode", "matches", "(?i)plan")
+planUsage: someWhere(all, "slashCommand", "plan") OR someWhere(all, "agentMode", "matches", "(?i)^plan$")
 agenticReqs: count
 emitTotal: planLoggedReqs
 check: planUsage == 0 AND planLoggedReqs >= thresholds.minReqs AND agentRatio >= thresholds.agentRate
