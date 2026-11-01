@@ -6,7 +6,7 @@
 /* Sections of the Prompt Cache tab: key figures, prompt tokens per harness, why the cache broke, where
  * cache misses come from, cache lifetime and expiry, and breakdowns by model and week. */
 
-import type { CacheAttribution, CacheCauseSummary, CacheCost, CacheIdleSummary, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData, PromptCacheTrend } from '../core/types';
+import type { CacheAttribution, CacheCauseSummary, CacheCost, CacheIdleSummary, CacheReturnsWithoutData, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData, PromptCacheTrend } from '../core/types';
 import { CACHE_MAX_BREAKS_PER_SESSION } from '../core/constants';
 import { createChart, destroyChartById, formatNum, harnessColor } from './shared';
 import { html, type ComponentChildren } from './render';
@@ -190,7 +190,7 @@ function originsCard(a: CacheAttribution): ComponentChildren {
 }
 
 /** How often you came back after the cache expired, over the returns whose previous call logged its expiry. */
-function returnsText(idle: CacheIdleSummary): ComponentChildren {
+function returnsText(idle: Pick<CacheIdleSummary, 'returns' | 'expiredReturns' | 'unmeasuredReturns'>): ComponentChildren {
   const unmeasured = idle.unmeasuredReturns;
   if (idle.returns === 0) {
     return unmeasured > 0
@@ -199,6 +199,18 @@ function returnsText(idle: CacheIdleSummary): ComponentChildren {
   }
   const rest = unmeasured > 0 ? ` ${countText(unmeasured, 'more return came', 'more returns came')} after a call that didn’t log when its cache expires, so ${unmeasured === 1 ? 'it isn’t' : 'they aren’t'} counted.` : '';
   return html`You came back after the cache expired in <strong>${formatNum(idle.expiredReturns)}</strong> of ${formatNum(idle.returns)} returns (${pctText((idle.expiredReturns / idle.returns) * 100)}).${rest}`;
+}
+
+/** The returns Copilot CLI and Copilot App counted when none of their calls in range logged cache tokens. It claims no
+ *  breaks or misses for them, since those can't be measured without cache tokens. `null` without returns. */
+export function renderReturnsWithoutCacheData(r: CacheReturnsWithoutData | null | undefined): ComponentChildren {
+  if (!r || r.returns + r.unmeasuredReturns === 0) return null;
+  const none = r.harnesses.map(shortHarness).join(' or ');
+  return html`<div class="chart-wrap ctx-cache-card" id="ctxCacheReturnsOnly">
+    <div class="chart-title">Cache lifetime and expiry <span class="ctx-cache-muted">\u00b7 ${r.label}</span></div>
+    <p class="ctx-cache-idle-stat">${returnsText(r)}</p>
+    <div class="ctx-cache-muted">No ${none} call in this range logged cache tokens, so ${r.label} cache breaks and misses can\u2019t be measured; only your returns are shown. Each is measured against the cache of the call it returned to, which can be outside the range.</div>
+  </div>`;
 }
 
 function idleCard(a: CacheAttribution): ComponentChildren {

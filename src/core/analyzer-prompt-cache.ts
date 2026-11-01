@@ -11,6 +11,7 @@ import type {
   CacheAttribution,
   CacheBreak,
   CacheCauseKey,
+  CacheReturnsWithoutData,
   CacheSessionSummary,
   CacheStream,
   DateFilter,
@@ -30,6 +31,7 @@ import { toDateStr } from './helpers';
 import { addUsage, emptyTotals, mergeTotals, missesOf, pct, toCost, toTotals, type TotalsAcc } from './prompt-cache-totals';
 import { addRequestExtras, buildIdle, buildOrigins, causeKey, controlShares, emptyOrigins, summarizeCauses, totalMisses, type OriginAcc } from './prompt-cache-causes';
 import { attributesBreaks, buildSessionTimeline, expectedReporting, sessionTotals, summarizeSession } from './prompt-cache-sessions';
+import { hasCacheRows } from './prompt-cache-usage';
 import { promptCacheTips } from './prompt-cache-tips';
 
 const MAX_MODELS = 12;
@@ -57,8 +59,12 @@ interface Collected {
   harnesses: Map<string, HarnessAcc>;
   included: Set<SessionRequest>;
   sessions: Set<Session>;
+  /** Sums over the attribution harnesses' requests in range, including the returns of requests without cache rows. */
   origin: OriginAcc;
+  /** Attribution harnesses with cache rows in range: only they make a measured attribution. */
   attributionHarnesses: Set<string>;
+  /** Attribution harnesses with requests in range that counted returns without cache rows. */
+  returnHarnesses: Set<string>;
   ttlCalls: Map<string, Map<number, number>>;
   models: Map<string, ModelAcc>;
   workspaces: Map<string, WorkspaceAcc>;
@@ -151,7 +157,7 @@ function addRows(c: Collected, session: Session, request: SessionRequest, cache:
 
 function collectRequests(requests: SessionRequest[], sessionOf: (request: SessionRequest) => Session | undefined): Collected {
   const c: Collected = {
-    harnesses: new Map(), included: new Set(), sessions: new Set(), origin: emptyOrigins(), attributionHarnesses: new Set(),
+    harnesses: new Map(), included: new Set(), sessions: new Set(), origin: emptyOrigins(), attributionHarnesses: new Set(), returnHarnesses: new Set(),
     ttlCalls: new Map(), models: new Map(), workspaces: new Map(), weeks: new Map(), breaks: [], countedBreaks: 0,
   };
   for (const request of requests) {
@@ -162,11 +168,21 @@ function collectRequests(requests: SessionRequest[], sessionOf: (request: Sessio
     const harness = getOrCreate(c.harnesses, session.harness, newHarness);
     harness.requests++;
     harness.sessions.add(session);
-    if (!request.promptCache) continue;
+    const cache = request.promptCache;
+    if (!cache) continue;
+    if (!hasCacheRows(cache)) {
+      // Its calls didn't report their cache, so it has no cache data. The returns it counted still count, measured
+      // against the calls they returned to, but on their own they don't make a measured attribution.
+      if (attributesBreaks(session.harness)) {
+        addRequestExtras(c.origin, cache);
+        c.returnHarnesses.add(session.harness);
+      }
+      continue;
+    }
     harness.requestsWithData++;
     harness.sessionsWithData.add(session);
     harness.perCall = true;
-    addRows(c, session, request, request.promptCache);
+    addRows(c, session, request, cache);
   }
   return c;
 }
@@ -240,6 +256,10 @@ function buildHarnessRows(c: Collected): HarnessPromptCache[] {
     .sort((a, b) => (b.all?.input ?? 0) - (a.all?.input ?? 0) || b.totalRequests - a.totalRequests || a.harness.localeCompare(b.harness));
 }
 
+function harnessLabel(harnesses: string[]): string {
+  return harnesses.map(h => HARNESS_SHORT_NAMES.get(h) ?? h).sort().join(' and ');
+}
+
 function buildAttribution(c: Collected): CacheAttribution | null {
   if (c.attributionHarnesses.size === 0) return null;
   const harnesses = [...c.attributionHarnesses].sort();
@@ -251,7 +271,7 @@ function buildAttribution(c: Collected): CacheAttribution | null {
   const confidence = { logged: 0, checkpoint: 0, unattributed: 0 };
   for (const brk of c.breaks) confidence[brk.confidence]++;
   return {
-    label: harnesses.map(h => HARNESS_SHORT_NAMES.get(h) ?? h).sort().join(' and '),
+    label: harnessLabel(harnesses),
     harnesses,
     mainCalls,
     breaks: c.countedBreaks,
@@ -265,6 +285,16 @@ function buildAttribution(c: Collected): CacheAttribution | null {
     origins: buildOrigins(c.origin, totalCost),
     idle: buildIdle(c.breaks, c.origin, c.ttlCalls),
   };
+}
+
+/** The returns the attribution harnesses counted when none of their requests in range logged cache tokens. Kept apart
+ *  from a measured attribution: without cache tokens, breaks and misses can't be measured, so none are claimed. */
+function buildReturnsWithoutCacheData(c: Collected): CacheReturnsWithoutData | null {
+  if (c.attributionHarnesses.size > 0 || c.returnHarnesses.size === 0) return null;
+  const { returns, expiredReturns, unmeasuredReturns } = c.origin;
+  if (returns + unmeasuredReturns === 0) return null;
+  const harnesses = [...c.returnHarnesses].sort();
+  return { label: harnessLabel(harnesses), harnesses, returns, expiredReturns, unmeasuredReturns };
 }
 
 function dominantTtl(ttl: Map<number, number>): number | null {
@@ -367,6 +397,7 @@ export function analyzePromptCache(
   return {
     harnesses,
     attribution,
+    returnsWithoutCacheData: buildReturnsWithoutCacheData(c),
     models: buildModels(c),
     workspaces: buildWorkspaces(c),
     trend: buildTrend(c),

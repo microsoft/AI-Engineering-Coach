@@ -58,7 +58,7 @@ function cacheData(savedPct: number, trend: PromptCacheTrend = { labels: [], ser
     breaks: 0, breaksPer100: 0, totalRequests: 1, requestsWithData: 1, sessions: 1, sessionsWithData: 1,
   };
   return {
-    harnesses: [harness], attribution: null, models: [], workspaces: [], trend, topSessions: [], tips: [],
+    harnesses: [harness], attribution: null, returnsWithoutCacheData: null, models: [], workspaces: [], trend, topSessions: [], tips: [],
     coverage: { requestsWithData: 1, totalRequests: 1, sessionsWithData: 1, totalSessions: 1 },
   };
 }
