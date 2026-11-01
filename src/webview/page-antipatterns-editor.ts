@@ -9,7 +9,7 @@ import { DateFilter } from '../core/types';
 import { rpc } from './shared';
 import { html, render, type ComponentChildren } from './render';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
-import { hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, sourceOnlyFields, TEXT_SECTION_FIELDS, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
+import { activeThresholdLines, hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, sourceOnlyFields, TEXT_SECTION_FIELDS, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULE_EDITOR_SYSTEM_PROMPT = `You are an expert at writing detection rules for the AI Engineer Coach VS Code extension.
 Rules are markdown files with YAML frontmatter and a Detection Logic block using a custom DSL.
@@ -20,14 +20,13 @@ Output ONLY the raw markdown rule. No code fences around the whole output. No ex
 
 const NO_DETECTION_LOGIC = 'This rule has no detection logic, so it would match everything. Add a detect block with a match: or check: line under Detection Logic first.';
 
+/** Reads the sliders' thresholds from the `thresholds:` block that the rule parser and the form use. */
 export function parseThresholdsFromMarkdown(markdown: string): Record<string, number> {
   const result: Record<string, number> = {};
   const md = normalizeLineEndings(markdown);
-  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return result;
-  const threshMatch = fmMatch[1].match(/thresholds:\n((?:\s{2,}\S.*\n?)*)/);
-  if (!threshMatch) return result;
-  for (const line of threshMatch[1].split('\n')) {
+  const active = activeThresholdLines(md);
+  if (!active) return result;
+  for (const line of md.split('\n').slice(active.start, active.end)) {
     const m = line.match(/^\s+(\w+):\s*([-\d.]+)\s*$/);
     if (m) {
       const n = Number.parseFloat(m[2]);
@@ -37,9 +36,12 @@ export function parseThresholdsFromMarkdown(markdown: string): Record<string, nu
   return result;
 }
 
+/** Sets the sliders' values in the block parseThresholdsFromMarkdown reads, and keeps the rest of the markdown. */
 export function applyThresholdOverrides(md: string, overrides: Record<string, number>): string {
-  return normalizeLineEndings(md).replace(/(thresholds:\n)((?:\s{2,}\S.*\n?)*)/, (_full, head: string, body: string) => {
-    const newBody = body.replaceAll(/^(\s+)(\w+):[ \t]*([-\d.]+)[ \t]*$/gm, (line, indent: string, key: string, _val: string) => {
+  const lines = normalizeLineEndings(md).split('\n');
+  const { start, end } = activeThresholdLines(md) ?? { start: 0, end: 0 };
+  for (let at = start; at < end; at++) {
+    lines[at] = lines[at].replace(/^(\s+)(\w+):[ \t]*([-\d.]+)[ \t]*$/, (line, indent: string, key: string) => {
       if (overrides[key] !== undefined) {
         const v = overrides[key];
         const formatted = Number.isInteger(v) ? String(v) : String(Math.round(v * 1000) / 1000);
@@ -47,8 +49,8 @@ export function applyThresholdOverrides(md: string, overrides: Record<string, nu
       }
       return line;
     });
-    return head + newBody;
-  });
+  }
+  return lines.join('\n');
 }
 
 function sliderRange(value: number): { min: number; max: number; step: number } {

@@ -11,7 +11,9 @@ vi.mock('./shared', () => ({
 }));
 vi.mock('./dsl-cheatsheet', () => ({ DSL_CHEATSHEET: '' }));
 
+import { parseRule } from '../core/rule-parser';
 import { parseThresholdsFromMarkdown, applyThresholdOverrides } from './page-antipatterns-editor';
+import { readRuleFields } from './rule-form-markdown';
 
 describe('page-antipatterns-editor threshold helpers', () => {
   const sampleMd = [
@@ -98,5 +100,30 @@ describe('page-antipatterns-editor threshold helpers', () => {
       expect(out).toContain('  shortLen: 100\n');
       expect(parseThresholdsFromMarkdown(out)).toEqual({ shortLen: 100, ratioLimit: 0.25 });
     });
+  });
+
+  describe('with more than one thresholds block', () => {
+    // The rule parser and the Rule Editor form use the last block; the earlier one is inactive.
+    const twoBlocks = sampleMd.replace('thresholds:\n', 'thresholds:\n  shortLen: 5\nthresholds:\n');
+
+    it('parseThresholdsFromMarkdown reads the block the rule parser and the form use', () => {
+      expect(parseThresholdsFromMarkdown(twoBlocks)).toEqual({ shortLen: 50, ratioLimit: 0.25 });
+      expect(parseRule(twoBlocks)?.thresholds).toEqual({ shortLen: 50, ratioLimit: 0.25 });
+      expect(readRuleFields(twoBlocks).thresholds).toBe('shortLen: 50\nratioLimit: 0.25');
+    });
+
+    it('applyThresholdOverrides sets that block and keeps the earlier one as it is', () => {
+      const out = applyThresholdOverrides(twoBlocks.replaceAll('\n', '\r\n'), { shortLen: 100 });
+      expect(out).toBe(twoBlocks.replace('  shortLen: 50', '  shortLen: 100'));
+      expect(parseRule(out)?.thresholds).toEqual({ shortLen: 100, ratioLimit: 0.25 });
+    });
+  });
+
+  it('reads and sets the entries after a comment in the thresholds block, as the rule parser does', () => {
+    const md = sampleMd.replace('  ratioLimit', '# The share of requests\n  ratioLimit');
+    expect(parseThresholdsFromMarkdown(md)).toEqual(parseRule(md)?.thresholds);
+    const out = applyThresholdOverrides(md, { ratioLimit: 0.5 });
+    expect(out).toBe(md.replace('ratioLimit: 0.25', 'ratioLimit: 0.5'));
+    expect(parseRule(out)?.thresholds).toEqual({ shortLen: 50, ratioLimit: 0.5 });
   });
 });

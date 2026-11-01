@@ -368,6 +368,25 @@ test.describe('Anti-Patterns Rule Editor', () => {
     expect(markdown).toBe(BOTH_SCOPE_RULE);
   });
 
+  test('tunes the thresholds block the rule uses with a slider, and keeps an earlier one', async ({ page }) => {
+    // The rule parser and the form use the last thresholds block (minReqs: 30); the earlier one is inactive.
+    const source = BOTH_SCOPE_RULE.replace('thresholds:\n', 'thresholds:\n  minReqs: 5\nthresholds:\n');
+    const tuned = source.replace('  minReqs: 30', '  minReqs: 12');
+    await editRuleSource(page, source);
+    await expect(page.locator('#rf-thresholds')).toHaveValue('minReqs: 30');
+    expect(await testRuleMarkdown(page)).toBe(source);
+
+    const slider = page.locator('.rule-threshold-slider[data-key="minReqs"]');
+    const shown = page.locator('[data-threshold-value="minReqs"]');
+    await expect(slider).toHaveValue('30');
+    await expect(shown).toHaveText('30');
+    await slider.fill('12');
+    await expect.poll(() => page.evaluate(() => (window as RuleEditorWindow).ruleEditorCalls!
+      .filter(call => call.method === 'testRuleLive').map(call => String(call.params.markdown)))).toEqual([source, tuned]);
+    await expect(slider).toHaveValue('12');
+    await expect(shown).toHaveText('12');
+  });
+
   test('fills the form from a rule with CRLF line endings and tests that rule', async ({ page }) => {
     await editRuleSource(page, BOTH_SCOPE_RULE.replaceAll('\n', '\r\n'));
     await expect(page.locator('#rf-id')).toHaveValue('context-both');

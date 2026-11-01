@@ -279,6 +279,38 @@ describe('Rule Editor Test Rule', () => {
     expect(markdown).toMatch(/^requiresIdeContext: true$/m);
     expect(await testRuleLive(markdown)).toMatchObject({ ok: true, triggered: false, occurrences: 30 });
   });
+
+  it('tunes the thresholds block the rule uses with the sliders, and keeps an earlier one', async () => {
+    // The rule parser and the form use the last thresholds block (limit 50); the earlier one (limit 5) is inactive.
+    const md = [
+      '---', 'id: duplicate-thresholds', 'name: Duplicate thresholds', 'group: prompt-quality', 'severity: low', 'scope: requests',
+      'thresholds:', '  limit: 5', 'thresholds:', '  limit: 50', '---', '',
+      '# Detection Logic', '```detect', 'scan: requests', 'match: true', 'check: count >= thresholds.limit', '```', '',
+    ].join('\n');
+    const page = await renderPage();
+    await openRule(page, 'duplicate-thresholds', toCrlf(md));
+    expect(input(page, 'rf-thresholds').value).toBe('limit: 50');
+
+    const results = page.querySelector<HTMLElement>('#rule-test-results')!;
+    const slider = () => results.querySelector<HTMLInputElement>('.rule-threshold-slider[data-key="limit"]')!;
+    const shown = () => results.querySelector('[data-threshold-value="limit"]')!.textContent;
+    page.querySelector<HTMLButtonElement>('#rule-editor-test')!.click();
+    await vi.waitFor(() => expect(results.textContent).toContain('CLEAN'));
+    expect(parseRule(sentMarkdown('testRuleLive'))?.thresholds).toEqual({ limit: 50 });
+    expect([slider().value, shown()]).toEqual(['50', '50']);
+
+    // 35 of the 40 requests would trigger the rule.
+    slider().value = '35';
+    slider().dispatchEvent(new Event('input'));
+    slider().dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(results.textContent).toContain('TRIGGERED'));
+    const markdown = sentMarkdown('testRuleLive');
+    expect(markdown).toBe(md.replace('  limit: 50', '  limit: 35'));
+    expect(parseRule(markdown)?.thresholds).toEqual({ limit: 35 });
+    expect([slider().value, shown()]).toEqual(['35', '35']);
+    expect(await testRuleLive(markdown)).toMatchObject({ ok: true, triggered: true, occurrences: 40, total: 40 });
+    expect(results.textContent).toContain('(40 / 40)');
+  });
 });
 
 describe('Rule Editor Save Rule', () => {

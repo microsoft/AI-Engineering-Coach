@@ -274,6 +274,21 @@ export function readRuleFields(markdown: string): Partial<RuleFormFields> {
 }
 
 /**
+ * The lines of the `thresholds:` block that the rule parser uses, for Test Rule's threshold sliders: the block of
+ * the last `thresholds:` key, which readRuleFields reads and mergeRuleMarkdown rewrites too, so an earlier block is
+ * left out. `start` and `end` index the lines after the key in the markdown with LF line endings (see
+ * normalizeLineEndings). Null when the markdown has no front matter or no `thresholds:` key.
+ */
+export function activeThresholdLines(markdown: string): { start: number; end: number } | null {
+  const { frontmatter } = splitFrontmatter(normalizeLineEndings(markdown));
+  const at = frontmatter ? lastBlockIndex(frontmatter, 'thresholds') : -1;
+  if (!frontmatter || at < 0) return null;
+  // Line 0 is the opening `---`, and a block's first line is its key.
+  const key = 1 + frontmatter.slice(0, at).reduce((lines, block) => lines + block.lines.length, 0);
+  return { start: key + 1, end: key + frontmatter[at].lines.length };
+}
+
+/**
  * Writes text sections into a rule body. The form edits the text before a detect block in a section, and keeps
  * the block and what follows it; it doesn't write a section whose heading is inside the detect block.
  */
