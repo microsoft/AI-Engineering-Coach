@@ -71,7 +71,8 @@ export interface ModelCallRow {
 
 /** Prompt-cache usage of one request (a Copilot CLI turn, a Claude Code or an OpenCode request). */
 export interface RequestPromptCache {
-  /** One row per stream and model, main agent first. */
+  /** One row per stream and model, main agent first. Empty when none of the request's calls reported its cache,
+   *  but it counted returns. */
   rows: ModelCallRow[];
   /** Main-agent prompt tokens not read from the cache on the session's first model call. */
   coldStart?: number;
@@ -80,12 +81,12 @@ export interface RequestPromptCache {
   /** Main-agent prompt tokens rebuilt after cache breaks (Copilot CLI and Copilot App). */
   rebuilt?: number;
   rebuiltCost?: number;
-  /** Main-agent calls you started after an earlier call that logged when its cache expires, and how many
-   *  started after that cache had expired. */
+  /** Main-agent calls you started after an earlier main-agent call that logged when its cache expires, and how many
+   *  started after that cache had expired. Counted whether or not the returning call itself reported its cache. */
   returns?: number;
   expiredReturns?: number;
-  /** Main-agent calls you started after an earlier call that didn't log when its cache expires. Expiry can't
-   *  be measured for them, so they aren't in `returns`. */
+  /** Main-agent calls you started after an earlier main-agent call that didn't log when its cache expires, including
+   *  one that didn't report its cache at all. Expiry can't be measured for them, so they aren't in `returns`. */
   unmeasuredReturns?: number;
 }
 
@@ -255,11 +256,12 @@ export interface CacheIdleBucket {
 export interface CacheIdleSummary {
   /** Logged cache lifetime per model, most main-agent calls first. */
   ttlByModel: { model: string; ttlSeconds: number; calls: number }[];
-  /** Main-agent calls you started after an earlier call that logged when its cache expires, and how many
-   *  started after it had expired. */
+  /** Main-agent calls you started after an earlier main-agent call that logged when its cache expires, and how many
+   *  started after it had expired. Includes returns whose own call didn't report its cache. */
   returns: number;
   expiredReturns: number;
-  /** Such calls after an earlier call that didn't log when its cache expires: not in `returns`. */
+  /** Such calls after an earlier call that didn't log when its cache expires, or didn't report its cache: not in
+   *  `returns`. */
   unmeasuredReturns: number;
   /** Cache-expiry breaks by the time since the cache was last refreshed (see `CacheBreak.idleSeconds`), split
    *  by who made the call; breaks whose call doesn't log that are left out of the split. */
@@ -289,6 +291,19 @@ export interface CacheAttribution {
   misses: number;
   origins: CacheOriginSlice[];
   idle: CacheIdleSummary;
+}
+
+/** Returns that Copilot CLI and Copilot App prompts counted in range when none of their requests in range logged cache
+ *  tokens, so there's no `CacheAttribution`: their cache breaks and misses can't be measured, only these returns. Each
+ *  is measured against the cache of the call it returned to, which can be outside the range. */
+export interface CacheReturnsWithoutData {
+  /** Display name, e.g. "Copilot App" or "Copilot App and Copilot CLI". */
+  label: string;
+  harnesses: string[];
+  /** As in `CacheIdleSummary`. */
+  returns: number;
+  expiredReturns: number;
+  unmeasuredReturns: number;
 }
 
 export interface ModelPromptCache {
@@ -363,7 +378,11 @@ export interface CacheSessionSummary {
 export interface PromptCacheData {
   /** One row per harness with requests in range, including harnesses that don't report cache. */
   harnesses: HarnessPromptCache[];
+  /** Measured break attribution: `null` unless a Copilot CLI or Copilot App request in range logged cache tokens. */
   attribution: CacheAttribution | null;
+  /** The returns Copilot CLI and Copilot App counted when `attribution` is `null`; `null` with an attribution, or
+   *  without returns. */
+  returnsWithoutCacheData: CacheReturnsWithoutData | null;
   models: ModelPromptCache[];
   workspaces: WorkspacePromptCache[];
   trend: PromptCacheTrend;

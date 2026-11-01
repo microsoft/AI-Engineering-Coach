@@ -77,6 +77,12 @@ export function cacheHitPct(rows: Iterable<ModelCallRow>, stream: CacheStream = 
   return input > 0 ? Math.round((read / input) * 1000) / 10 : null;
 }
 
+/** The request logged cache usage. A request whose calls didn't report their cache has no rows, but it can still
+ *  carry the returns it counted. */
+export function hasCacheRows(cache: RequestPromptCache | undefined): boolean {
+  return (cache?.rows.length ?? 0) > 0;
+}
+
 function emptyRow(stream: CacheStream, model: string): ModelCallRow {
   return { stream, model, calls: 0, input: 0, cacheRead: 0, cacheWrite: 0 };
 }
@@ -171,6 +177,8 @@ export class RequestCacheBuilder {
     if (expired) this.extra.expiredReturns = (this.extra.expiredReturns ?? 0) + 1;
   }
 
+  /** The request's cache usage; the builder then starts the next request. `undefined` when the request has neither
+   *  rows nor counts: one whose calls didn't report their cache keeps the returns it counted, with no rows. */
   take(): RequestPromptCache | undefined {
     const rows = [...this.rows.values()]
       .sort((a, b) => STREAM_ORDER.indexOf(a.stream) - STREAM_ORDER.indexOf(b.stream) || b.input - a.input)
@@ -178,7 +186,7 @@ export class RequestCacheBuilder {
     const extra = this.extra;
     this.rows = new Map();
     this.extra = {};
-    if (rows.length === 0) return undefined;
+    if (rows.length === 0 && Object.keys(extra).length === 0) return undefined;
     const out: RequestPromptCache = { rows };
     for (const [key, value] of Object.entries(extra) as [keyof typeof extra, number][]) {
       if (value != null) out[key] = Math.round(value);

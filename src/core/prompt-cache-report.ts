@@ -7,7 +7,7 @@
  * It holds only aggregates: counts, percentages, token sums, model names, cause names and system-prompt
  * segment names. It never holds workspace names, session ids, file paths or prompt text. */
 
-import type { CacheAttribution, PromptCacheData, Session } from './types';
+import type { CacheAttribution, CacheReturnsWithoutData, PromptCacheData, Session } from './types';
 import { AnalyzerBase } from './analyzer-base';
 import { analyzePromptCache } from './analyzer-prompt-cache';
 import { exportedOriginName } from './prompt-cache-causes';
@@ -76,6 +76,13 @@ function attributionLines(a: CacheAttribution): string[] {
   return lines;
 }
 
+function returnsOnlyLines(r: CacheReturnsWithoutData): string[] {
+  return [
+    '',
+    `Returns without cache data (${r.label}): ${r.returns} with a logged expiry, after expiry ${r.expiredReturns}; ${r.unmeasuredReturns} more without a logged expiry`,
+  ];
+}
+
 function breakdownLines(data: PromptCacheData): string[] {
   return [
     '',
@@ -111,6 +118,7 @@ export function promptCacheReport(parse: () => Session[], fromDate?: string): st
     '',
     ...harnessLines(data),
     ...(data.attribution ? attributionLines(data.attribution) : []),
+    ...(data.returnsWithoutCacheData ? returnsOnlyLines(data.returnsWithoutCacheData) : []),
     ...breakdownLines(data),
   ];
 }
