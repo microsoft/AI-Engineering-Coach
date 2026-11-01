@@ -219,7 +219,7 @@ turn. Turns that the harness logged as sent by something other than you are
 not human turns: another agent, a skill, the harness itself, autopilot, another
 session (the harness's relay wrapper or a sender ID header such as
 `from_session_id`, outside quoted blocks such as an IDE selection, or a VS Code
-delegation), a parent agent (Claude Code sidechain transcripts, Codex sub-agent
+delegation), a parent agent (Claude Code sub-agent transcripts, Codex sub-agent
 sessions, OpenCode child sessions), harness-written meta lines, compaction
 summaries, and command output. A relay wrapper or sender ID header that you
 typed stays yours when the harness only moved your prompt's line breaks or

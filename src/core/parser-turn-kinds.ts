@@ -258,7 +258,8 @@ function expandsTypedCommand(lines: readonly ClaudeTurnLine[], index: number): b
 }
 
 /**
- * Claude marks sub-agent transcripts `isSidechain`, the turn that replays a compacted conversation
+ * Claude marks sub-agent transcripts `isSidechain` (and `parseClaudeSessionFile` marks every turn of a file under
+ * `subagents/`, with or without that field), the turn that replays a compacted conversation
  * `isCompactSummary`, and lines it wrote itself `isMeta` (the local-command caveat, skill bodies). A typed prompt
  * command is the exception: Claude logs the `<command-name>` line, then the expanded prompt as an `isMeta` line,
  * which is the user's turn. Background task results arrive as `<task-notification>` lines.

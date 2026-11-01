@@ -388,6 +388,9 @@ describe('parseClaudeSessions', () => {
       // Sorted by timestamp
       expect(sessions[0].requests[0].messageText).toContain('parent prompt');
       expect(sessions[0].requests[1].messageText).toContain('subagent task');
+      // The sub-agent's lines carry no isSidechain; its file under subagents/ still marks its turn as the parent agent's
+      expect(sessions[0].requests.map(r => r.nonHumanKind)).toEqual([undefined, 'subagent']);
+      expect(sessions[0].requests.map(r => r.curiosity?.kind)).toEqual([undefined, 'excluded']);
       expect(sessions[0].requestCount).toBe(2);
       // lastMessageDate extends to the subagent's last assistant timestamp
       expect(sessions[0].lastMessageDate).toBe(new Date('2025-06-15T10:00:31Z').getTime());
@@ -426,6 +429,8 @@ describe('parseClaudeSessions', () => {
       expect(sessions[0].launcherKind).toBe('programmatic');
       expect(sessions[0].requests).toHaveLength(1);
       expect(sessions[0].requests[0].messageText).toContain('orphan task');
+      expect(sessions[0].requests[0].nonHumanKind).toBe('subagent');
+      expect(sessions[0].requests[0].curiosity?.kind).toBe('excluded');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

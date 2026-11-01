@@ -245,6 +245,12 @@ function countClaudeImages(line: ClaudeLine): number {
   return imageReferencesFromContent(line.message?.content).length;
 }
 
+/** Claude Code writes each sub-agent's transcript to `<sessionId>/subagents/agent-*.jsonl`, beside the session's
+ *  own `<sessionId>.jsonl`. */
+export function isClaudeSubagentFile(filePath: string): boolean {
+  return path.basename(path.dirname(filePath)) === 'subagents';
+}
+
 function claudeTranscriptKey(filePath: string): string {
   const resolved = path.resolve(filePath);
   return createHash('sha256').update(process.platform === 'win32' ? resolved.toLowerCase() : resolved).digest('hex').slice(0, 32);
@@ -810,6 +816,9 @@ export function parseClaudeSessionFile(
 
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
   const transcriptKey = claudeTranscriptKey(filePath);
+  // Every turn in a sub-agent's transcript came from the parent agent, whether or not Claude marked it `isSidechain`,
+  // which `claudeNonHumanKind` reads for other files.
+  const subagentFile = isClaudeSubagentFile(filePath);
   const requests: SessionRequest[] = [];
   let cwd = '';
   let firstTs: number | null = null;
@@ -835,7 +844,7 @@ export function parseClaudeSessionFile(
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);
-    const nonHumanKind = claudeNonHumanKind(lines, i);
+    const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
     requests.push(request);
     i = assistantData.nextIndex;

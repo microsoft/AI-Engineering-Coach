@@ -269,6 +269,22 @@ describe('Claude Code', () => {
   });
 });
 
+describe('Claude Code on the Activity Patterns calendar', () => {
+  it("counts sub-agent transcripts without isSidechain as the parent agent's turns", () => {
+    claudeClock = new Date(2026, 8, 30, 12).getTime();
+    const sessions = parseClaudeProject({
+      'sess-1.jsonl': claudeTurn(claudeUser('Why does the build fail?')),
+      'sess-1/subagents/agent-a1.jsonl': claudeTurn(claudeUser('Find where the totals are computed.', { agentId: 'a1' })),
+      'orphan-1/subagents/agent-b2.jsonl': claudeTurn(claudeUser('Check the cache.', { agentId: 'b2', sessionId: 'orphan-1' })),
+    });
+    expect(kinds(sessions.find(session => session.sessionId === 'sess-1')?.requests ?? [])).toEqual([undefined, 'subagent']);
+    expect(kinds(sessions.find(session => session.sessionId === 'orphan-1')?.requests ?? [])).toEqual(['subagent']);
+    const calendar = new DashboardAnalyzer(sessions, new Map()).getCalendarActivity();
+    expect(calendar.days.map(day => [day.date, day.requests])).toEqual([['2026-09-30', 1]]);
+    expect(calendar.turnBasis).toEqual({ humanTurns: 1, automatedTurns: 2, automatedByKind: { subagent: 2 } });
+  });
+});
+
 describe('Codex', () => {
   it.each<[string, unknown, NonHumanKind | undefined]>([
     ['cli', 'cli', undefined],
