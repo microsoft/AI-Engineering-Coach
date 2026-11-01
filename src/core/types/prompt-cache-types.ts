@@ -138,7 +138,8 @@ export interface CacheTotals {
 /** Cost effect of caching, from per-call prices the harness logged. Percentages only, never amounts. */
 export interface CacheCost {
   /** How much caching cut input cost, in percent: 1 − cost ÷ what the same prompts would have cost uncached,
-   *  both summed in the logged price unit, so pricier models weigh more. */
+   *  both summed in the logged price unit, so pricier models weigh more. Negative when caching cost more than it
+   *  saved: cache writes are billed above the input price, so ranges that write much and read little cost more. */
   savedPct: number;
   /** Percent of input cost spent on tokens not read from the cache. */
   missCostPct: number;

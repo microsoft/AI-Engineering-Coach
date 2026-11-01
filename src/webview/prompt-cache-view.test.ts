@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { CacheAttribution, CacheIdleSummary } from '../core/types';
-import { renderAttribution } from './prompt-cache-view';
+import type { CacheAttribution, CacheIdleSummary, HarnessPromptCache, PromptCacheData, PromptCacheTrend } from '../core/types';
+import { renderAttribution, renderKpis, renderTrendPanel } from './prompt-cache-view';
 import { render } from './render';
 
 vi.mock('./shared', () => ({
@@ -47,6 +47,65 @@ function textOf(a: CacheAttribution): string {
   render(renderAttribution(a), host);
   return host.textContent ?? '';
 }
+
+/** Prompt Cache data for one Copilot App harness, with the given cost effect and weekly trend. */
+function cacheData(savedPct: number, trend: PromptCacheTrend = { labels: [], series: [] }): PromptCacheData {
+  const harness: HarnessPromptCache = {
+    harness: 'GitHub Copilot App', reporting: 'per-call', attribution: true,
+    all: { calls: 1, input: 100_000, cacheRead: 0, cacheWrite: 100_000, uncached: 0, hitPct: 0, writePct: 100, uncachedPct: 0 },
+    main: null, subagents: null, compaction: null,
+    cost: { savedPct, missCostPct: 100, ratedPct: 100 },
+    breaks: 0, breaksPer100: 0, totalRequests: 1, requestsWithData: 1, sessions: 1, sessionsWithData: 1,
+  };
+  return {
+    harnesses: [harness], attribution: null, models: [], workspaces: [], trend, topSessions: [], tips: [],
+    coverage: { requestsWithData: 1, totalRequests: 1, sessionsWithData: 1, totalSessions: 1 },
+  };
+}
+
+function mount(children: ReturnType<typeof renderKpis>): HTMLElement {
+  const host = document.createElement('div');
+  render(children, host);
+  return host;
+}
+
+describe('renderKpis', () => {
+  it('shows a negative saving with the reason when caching cost more than it saved', () => {
+    const chip = [...mount(renderKpis(cacheData(-25))).querySelectorAll('.ctx-comp-kpi')].find(el => el.textContent?.includes('Input cost saved'));
+    expect(chip?.querySelector('.ctx-comp-kpi-value')?.textContent).toBe('\u221225%');
+    expect(chip?.textContent).toContain('caching cost more than it saved');
+    expect(chip?.getAttribute('data-tip')).toContain('Caching cost more than it saved for Copilot App prompts');
+  });
+
+  it('keeps the plain wording for a positive saving', () => {
+    const chip = [...mount(renderKpis(cacheData(90.4))).querySelectorAll('.ctx-comp-kpi')].find(el => el.textContent?.includes('Input cost saved'));
+    expect(chip?.querySelector('.ctx-comp-kpi-value')?.textContent).toBe('90%');
+    expect(chip?.textContent).not.toContain('cost more');
+  });
+});
+
+describe('renderTrendPanel', () => {
+  it('offers the weekly trend as a keyboard-accessible table with the tooltip figures', () => {
+    const trend: PromptCacheTrend = {
+      labels: ['2026-10-19', '2026-10-26'],
+      series: [
+        { harness: 'GitHub Copilot App', hitPct: [96.8, 97], breaksPer100: [2.2, null], calls: [4100, 3800] },
+        { harness: 'Claude', hitPct: [null, 91], breaksPer100: [null, null], calls: [0, 2100] },
+      ],
+    };
+    const host = mount(renderTrendPanel(cacheData(90, trend)));
+    const details = host.querySelector('details#ctxCacheTrendData');
+    expect(details?.querySelector('summary')?.textContent).toBe('Show the chart as a table');
+    expect(details?.querySelector('[role="region"]')?.getAttribute('tabindex')).toBe('0');
+    const rows = [...(details?.querySelectorAll('tbody tr') ?? [])].map(row => [...row.children].map(cell => cell.textContent?.trim()));
+    expect(rows).toEqual([
+      ['2026-10-19', 'Copilot App', '97%', '2.2', '4100'],
+      ['2026-10-19', 'Claude', '\u2014', '\u2014', '0'],
+      ['2026-10-26', 'Copilot App', '97%', '\u2014', '3800'],
+      ['2026-10-26', 'Claude', '91%', '\u2014', '2100'],
+    ]);
+  });
+});
 
 describe('renderAttribution', () => {
   it('says no call crossed the break threshold rather than that every call reused the cache', () => {

@@ -2,6 +2,15 @@ import { test, expect, Page } from '@playwright/test';
 
 const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
 
+/** Opens the dashboard and waits until its first page has rendered. */
+async function openDashboard(page: Page) {
+  await page.goto(HARNESS_URL);
+  await page.waitForFunction(() => {
+    const content = document.getElementById('content');
+    return content && content.innerHTML.length > 200 && !content.querySelector('.loading-spinner') && !content.querySelector('.error-boundary');
+  }, { timeout: 10000 });
+}
+
 async function openPromptCache(page: Page, mode?: string, readyText = 'Prompt Cache') {
   await page.goto(HARNESS_URL);
   if (mode) await page.evaluate(m => { (window as unknown as { mockPromptCacheMode: string }).mockPromptCacheMode = m; }, mode);
@@ -191,11 +200,7 @@ test.describe('Prompt Cache tab states', () => {
 test.describe('Context Health sub-tabs with late responses', () => {
   /** Opens the dashboard with one RPC method answering after a second. */
   async function openWithSlow(page: Page, method: string) {
-    await page.goto(HARNESS_URL);
-    await page.waitForFunction(() => {
-      const content = document.getElementById('content');
-      return content && content.innerHTML.length > 200 && !content.querySelector('.loading-spinner') && !content.querySelector('.error-boundary');
-    }, { timeout: 10000 });
+    await openDashboard(page);
     await page.evaluate(slow => {
       (window as unknown as { mockResponseDelay: (method: string) => number }).mockResponseDelay = m => (m === slow ? 1_000 : 5);
     }, method);
@@ -246,5 +251,30 @@ test.describe('Context Health sub-tabs with late responses', () => {
     await page.evaluate(() => { (window as unknown as { mockErrorMethods: string[] }).mockErrorMethods = ['getConfigHealth']; });
     await page.locator('[data-page="config-health"]').first().click();
     await expect(page.locator('#content .error-boundary')).toContainText('mock getConfigHealth failure');
+  });
+});
+
+test.describe('Context Health date cutoff', () => {
+  test('applies to Context Quality but not to Prompt Cache', async ({ page }) => {
+    await openDashboard(page);
+    await page.locator('[data-page="config-health"]').first().click();
+    await expect(page.locator('#content')).toContainText('Overall Score');
+    const allTime = page.locator('#ctxRangeBar .cons-range-btn[data-range="0"]');
+    await expect(allTime).toBeDisabled();
+
+    await page.locator('[data-tab="prompt-cache"]').click();
+    await expect(page.locator('#ctxPromptCache')).toBeVisible();
+    await expect(allTime).toBeEnabled();
+    await allTime.click();
+    await expect(allTime).toHaveClass(/\bactive\b/);
+    // All time asks for every request, including those from before the Context Health cutoff.
+    await expect.poll(() => page.evaluate(() => {
+      const loads = (window as unknown as { promptCacheRequests: { method: string; params: { filter: { fromDate?: string } } }[] }).promptCacheRequests.filter(r => r.method === 'getPromptCache');
+      return loads.length > 1 ? loads[loads.length - 1].params.filter.fromDate ?? 'none' : 'pending';
+    })).toBe('none');
+
+    await page.locator('[data-tab="config-quality"]').click();
+    await expect(page.locator('#content')).toContainText('Overall Score');
+    await expect(allTime).toBeDisabled();
   });
 });

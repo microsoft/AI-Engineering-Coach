@@ -157,6 +157,7 @@ function finalize(pending: PendingBreak): CacheBreak {
 export class CliCacheTracker {
   private readonly request = new RequestCacheBuilder();
   private previous: CliModelCall | null = null;
+  /** A main-agent call has reported its cache, so the session has cache data. */
   private sawMain = false;
   private readonly signals = new Set<Signal>();
   private trigger: CacheBreak['compactionTrigger'];
@@ -178,8 +179,10 @@ export class CliCacheTracker {
     const cost = callCost(sample);
     const previous = this.previous;
     if (!this.sawMain) {
+      // Cache data starts here. Its misses are the session's start only on the first main-agent call: after
+      // calls that didn't report their cache, nothing says what this call could have reused.
       this.sawMain = true;
-      this.request.addColdStart(missTokens(sample), cost?.missCost);
+      if (callIndex === 0) this.request.addColdStart(missTokens(sample), cost?.missCost);
     } else if (previous) {
       // The cache lifetime counts from the previous call's start, and this call reads the cache when it
       // starts; the record itself is logged when the call finishes. Unknown when either time is missing.

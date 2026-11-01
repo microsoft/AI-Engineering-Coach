@@ -56,11 +56,14 @@ const ALL_RANGES: { days: number; label: string }[] = [
 
 export async function renderConfigHealth(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const generation = ++renderGeneration;
-  // Helpers for the TOKEN_DATA_AVAILABLE_FROM cutoff. Both sub-tabs (Context
-  // Quality, Context Management) analyze token-driven signals, so any range
-  // whose nominal start lies before the cutoff is greyed out with an
-  // explanatory tooltip. As time advances and post-cutoff data fills the
-  // longer ranges, the disabled buttons re-enable automatically.
+  // Helpers for the TOKEN_DATA_AVAILABLE_FROM cutoff. Context Quality and
+  // Context Management analyze token-driven signals, so any range whose
+  // nominal start lies before the cutoff is greyed out with an explanatory
+  // tooltip. As time advances and post-cutoff data fills the longer ranges,
+  // the disabled buttons re-enable automatically. Prompt Cache is exempt: it
+  // shows cache tokens wherever a harness logged them, including Claude Code,
+  // OpenCode and Codex logs from before the cutoff.
+  const cutoffApplies = activeSubTab !== 'prompt-cache';
   function rangeStartDate(days: number): string {
     if (days === 0) return '0001-01-01';
     const d = new Date();
@@ -68,7 +71,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
     return d.toISOString().slice(0, 10);
   }
   function isRangeDisabledByCutoff(days: number): boolean {
-    return rangeStartDate(days) < TOKEN_DATA_AVAILABLE_FROM;
+    return cutoffApplies && rangeStartDate(days) < TOKEN_DATA_AVAILABLE_FROM;
   }
 
   function buildRangeFilter(): DateFilter {
@@ -77,9 +80,9 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
     if (days > 0) {
       f.fromDate = rangeStartDate(days);
     }
-    // Both sub-tabs are token-data sensitive — clamp the lower bound to the
-    // cutoff so even "All time" excludes pre-cutoff sessions.
-    if (!f.fromDate || f.fromDate < TOKEN_DATA_AVAILABLE_FROM) {
+    // Context Quality and Context Management are token-data sensitive — clamp
+    // the lower bound to the cutoff so even "All time" excludes pre-cutoff sessions.
+    if (cutoffApplies && (!f.fromDate || f.fromDate < TOKEN_DATA_AVAILABLE_FROM)) {
       f.fromDate = TOKEN_DATA_AVAILABLE_FROM;
     }
     return f;

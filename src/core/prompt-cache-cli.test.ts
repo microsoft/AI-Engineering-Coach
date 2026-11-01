@@ -230,6 +230,21 @@ describe('Copilot CLI prompt-cache usage from partial or older logs', () => {
   });
 });
 
+describe('Copilot CLI session-start misses', () => {
+  it('counts them only on the first main-agent call, not where cache data starts mid-conversation', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 100_000, read: 0, extra: { cacheDetailsReported: false } }),
+      user('u2', 60),
+      call(61, { input: 110_000, read: 0, initiator: 'user' }),
+    ]);
+    expect(session.requests[1].promptCache?.rows[0]).toMatchObject({ stream: 'main', calls: 1, input: 110_000 });
+    expect(session.requests[1].promptCache).not.toHaveProperty('coldStart');
+    expect(session.promptCache).toEqual({ breaks: [] });
+  });
+});
+
 describe('Copilot CLI cache breaks from expiry', () => {
   it('attributes a return after the cache expired to TTL expiry, by who made the call', () => {
     const session = parse([

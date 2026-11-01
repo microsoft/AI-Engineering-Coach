@@ -6,7 +6,7 @@
 /* Sections of the Prompt Cache tab: key figures, prompt tokens per harness, why the cache broke, where
  * cache misses come from, cache lifetime and expiry, and breakdowns by model and week. */
 
-import type { CacheAttribution, CacheCauseSummary, CacheIdleSummary, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData } from '../core/types';
+import type { CacheAttribution, CacheCauseSummary, CacheCost, CacheIdleSummary, CacheTotals, HarnessPromptCache, ModelPromptCache, PromptCacheData, PromptCacheTrend } from '../core/types';
 import { CACHE_MAX_BREAKS_PER_SESSION } from '../core/constants';
 import { createChart, destroyChartById, formatNum, harnessColor } from './shared';
 import { html, type ComponentChildren } from './render';
@@ -34,6 +34,17 @@ function kpiChip(label: string, value: string, tip: string, sub?: string): Compo
   </div>`;
 }
 
+/** Input cost saved. Negative, and said so, when cache writes cost more than caching saved. */
+function savedChip(cost: CacheCost, name: string): ComponentChildren {
+  const prices = `from the per-call prices ${name} logged (rates on ${pctText(cost.ratedPct)} of tokens)`;
+  if (cost.savedPct >= 0) {
+    return kpiChip('Input cost saved', pctText(cost.savedPct), `How much caching cut the input cost of ${name} prompts, ${prices}. Percentages only; no amounts are shown.`, name);
+  }
+  return kpiChip('Input cost saved', pctText(cost.savedPct),
+    `Caching cost more than it saved for ${name} prompts in this range: cache writes are billed above the input price, and too little was read back from the cache to make up for them. Computed ${prices}.`,
+    `${name} \u00b7 caching cost more than it saved`);
+}
+
 export function renderKpis(data: PromptCacheData): ComponentChildren {
   const chips: ComponentChildren[] = [];
   for (const h of data.harnesses) {
@@ -41,7 +52,7 @@ export function renderKpis(data: PromptCacheData): ComponentChildren {
     const name = shortHarness(h.harness);
     chips.push(kpiChip('Cache hit ratio', pctText(h.all.hitPct), `Share of ${name} prompt tokens read from the cache, weighted by tokens. ${REPORTING_HELP[h.reporting]}`, name));
     if (h.cost) {
-      chips.push(kpiChip('Input cost saved', pctText(h.cost.savedPct), `How much caching cut the input cost of ${name} prompts, from the per-call prices ${name} logged (rates on ${pctText(h.cost.ratedPct)} of tokens). Percentages only; no amounts are shown.`, name));
+      chips.push(savedChip(h.cost, name));
       chips.push(kpiChip('Cost on cache misses', pctText(h.cost.missCostPct), `Share of ${name} input cost spent on tokens that weren\u2019t read from the cache: ${pctText(h.all.writePct)} of tokens were written and ${pctText(h.all.uncachedPct)} uncached.`, name));
     }
     if (h.breaksPer100 != null) chips.push(kpiChip('Breaks per 100 calls', String(h.breaksPer100), `How often a ${name} main-agent call couldn\u2019t reuse most of the previous call\u2019s cached prompt.`, `${countText(h.breaks ?? 0, 'break')} \u00b7 ${name}`));
@@ -234,10 +245,32 @@ export function renderModelTable(models: ModelPromptCache[]): ComponentChildren 
     </table></div>`;
 }
 
+/** The weekly trend as a table for keyboard and screen-reader users: each week and harness with the plotted hit
+ *  ratio and the tooltip's breaks per 100 calls and main-agent calls. Styled like the session timeline's table. */
+function trendTable(trend: PromptCacheTrend): ComponentChildren {
+  const series = trend.series.filter(s => s.hitPct.some(v => v != null));
+  if (series.length === 0) return null;
+  const caption = 'Cache hit ratio by week and harness, with breaks per 100 main-agent calls';
+  return html`<details class="call-timeline-data" id="ctxCacheTrendData">
+    <summary>Show the chart as a table</summary>
+    <div class="call-timeline-data-scroll" role="region" tabindex="0" aria-label=${caption}>
+      <table class="call-timeline-table">
+        <caption>${caption}</caption>
+        <thead><tr><th scope="col">Week of</th><th scope="col">Harness</th><th scope="col" class="num">Hit ratio</th><th scope="col" class="num">Breaks / 100</th><th scope="col" class="num">Main calls</th></tr></thead>
+        <tbody>${trend.labels.flatMap((label, i) => series.map(s => html`<tr>
+          <th scope="row">${label}</th><td>${shortHarness(s.harness)}</td><td class="num">${pctText(s.hitPct[i])}</td>
+          <td class="num">${s.breaksPer100[i] ?? '\u2014'}</td><td class="num">${formatNum(s.calls[i] ?? 0)}</td>
+        </tr>`))}</tbody>
+      </table>
+    </div>
+  </details>`;
+}
+
 export function renderTrendPanel(data: PromptCacheData): ComponentChildren {
   return html`<div class="chart-wrap"><div class="chart-title">Cache hit ratio by week ${infoTip('Weekly share of prompt tokens read from the cache, per harness. The tooltip also shows breaks per 100 main-agent calls.', 'About the weekly trend')}</div>
     ${data.trend.labels.length > 1
-      ? html`<div style="position:relative;height:200px;"><canvas id=${CACHE_TREND_CHART_ID} role="img" aria-label="Weekly cache hit ratio per harness"></canvas></div>`
+      ? html`<div style="position:relative;height:200px;"><canvas id=${CACHE_TREND_CHART_ID} role="img" aria-label="Weekly cache hit ratio per harness. Show the chart as a table, below it, for the values."></canvas></div>
+        ${trendTable(data.trend)}`
       : html`<div class="ctx-comp-note">Not enough weekly data for a trend yet.</div>`}
   </div>`;
 }

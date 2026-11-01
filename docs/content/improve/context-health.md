@@ -152,7 +152,7 @@ Each harness is shown separately, never pooled, because harnesses log the cache 
 ### Key figures
 
 - **Cache hit ratio** -- For each harness, the share of prompt tokens read from the cache, across all model calls, including subagents and compaction summaries. Larger prompts count more.
-- **Input cost saved** and **Cost on cache misses** -- How much caching cut the input cost, and the share of the input cost spent on tokens that weren't read from the cache. They're computed from the per-call prices that Copilot App and Copilot CLI log, and shown only as percentages, never as amounts.
+- **Input cost saved** and **Cost on cache misses** -- How much caching cut the input cost, and the share of the input cost spent on tokens that weren't read from the cache. They're computed from the per-call prices that Copilot App and Copilot CLI log, and shown only as percentages, never as amounts. Input cost saved is negative when caching cost more than it saved: cache writes are billed above the input price, so a range that writes a lot to the cache and reads little back costs more than it would without caching.
 - **Breaks per 100 calls** -- How often a main-agent call couldn't reuse the previous call's cached prompt (Copilot App and Copilot CLI).
 - **Coverage** -- How many requests in the range logged cache tokens.
 
@@ -189,7 +189,7 @@ Two cards break the misses down further:
 - **Where cache misses come from** -- Prompt tokens not read from the cache, by origin: new context such as your prompts and tool results, together with minor misses (cached context re-sent in amounts too small to count as a break); context rebuilt after a break; subagents (which build their own context); compaction summaries; and the first call of each session. In parentheses, the share of the input cost.
 - **Cache lifetime and expiry** -- The cache lifetime your logs show for each model, how often you came back after the cache had expired, and, for each expiry break, the time since the cache was last refreshed in multiples of the lifetime, split into you away and the agent waiting. A call refreshes the cache when it starts, so this time runs from the previous call's start to the next call's start, and the cache had expired exactly when it's longer than the lifetime. The logged lifetimes, for example 5 or 30 minutes, can differ from general documentation. A return counts only when the previous call logged when its cache expires; the card says how many didn't. Expiry breaks whose call doesn't log who made it aren't split.
 
-Below them, **Cache hit ratio by week** shows a line per harness, and **By model** lists each model's hit ratio, write share, breaks per 100 calls, and cache lifetime. **Sessions that rebuilt the most** and **By workspace** lead to individual sessions.
+Below them, **Cache hit ratio by week** shows a line per harness; **Show the chart as a table**, below the chart, lists each week's hit ratio, breaks per 100 calls, and main-agent calls per harness. **By model** lists each model's hit ratio, write share, breaks per 100 calls, and cache lifetime. **Sessions that rebuilt the most** and **By workspace** lead to individual sessions.
 
 ### Session timeline
 
@@ -228,6 +228,7 @@ Insights at the top of the tab apply these tips to your own numbers and quote th
 - Breaks are detected for the main agent only. Subagents build their own context and appear under **Where cache misses come from**.
 - Copilot App and Copilot CLI log each call when it finishes, but its cache lifetime counts from when it started. Expiry is therefore checked from each call's start, using the call duration in the log.
 - Totals count the requests sent in the selected range, like Context Composition, and a break counts when its request is in the range. The session lists include every session with a request in the range, and their numbers cover the whole session.
+- Unlike Context Quality and Context Management, Prompt Cache offers every range, including **All time**. It shows cache tokens from every log that has them, such as Claude Code, OpenCode, and Codex logs from before April 2026.
 - Cost percentages use the prices logged with each call. Costs are added up in the logged price unit before the percentage is taken, so calls to pricier models weigh more. They describe the relative effect of caching, not what you're billed.
 - Claude Code, OpenCode, and Codex don't log what invalidated the cache, so they show efficiency only.
 - These figures are for your own coaching, not for evaluating anyone's performance.
