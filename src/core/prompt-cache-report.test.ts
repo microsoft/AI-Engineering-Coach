@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseClaudeSessions } from './parser-claude';
 import { createRequest, createSession } from './parser-shared';
 import { promptCacheReport } from './prompt-cache-report';
+import type { RequestPromptCache } from './types';
 
 const roots: string[] = [];
 
@@ -61,5 +62,23 @@ describe('promptCacheReport', () => {
     const report = promptCacheReport(() => [codex]).join('\n');
     expect(report).toContain('Codex [per-session]: 1/1 requests\n  session totals; input 0.2M\n  hit 90.0%');
     expect(report).not.toMatch(/calls 0/);
+  });
+
+  it.each([
+    ['Copilot CLI', 'Copilot App'],
+    ['Copilot App', 'Copilot CLI'],
+  ])('keeps the returns of %s, which logged cache tokens, apart from those of %s, which didn\u2019t', (measured, apart) => {
+    const at = Date.parse('2026-10-20T11:00:00Z');
+    const copilot = (id: string, harness: string, promptCache: RequestPromptCache) => createSession({
+      sessionId: id, workspaceId: 'ws', workspaceName: 'w', harness: `GitHub ${harness}`,
+      requests: [createRequest({ messageText: 'prompt', responseText: '', timestamp: at, promptCache })],
+    });
+    const report = promptCacheReport(() => [
+      copilot('measured', measured, { rows: [{ stream: 'main', model: 'claude-opus-5.5', calls: 2, input: 300_000, cacheRead: 150_000, cacheWrite: 150_000 }], returns: 1 }),
+      copilot('apart', apart, { rows: [], returns: 1, expiredReturns: 1 }),
+    ]).join('\n');
+    expect(report).toContain(`\nAttribution (${measured}): 0 breaks over 2 main calls`);
+    expect(report).toContain('\n  returns 1 with a logged expiry, after expiry 0; 0 more without a logged expiry\n');
+    expect(report).toContain(`\nReturns without cache data (${apart}): 1 with a logged expiry, after expiry 1; 0 more without a logged expiry\n`);
   });
 });

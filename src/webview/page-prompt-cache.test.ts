@@ -7,20 +7,20 @@
  * @vitest-environment jsdom
  */
 
-/* The Prompt Cache page when no Copilot CLI or Copilot App call in range logged cache tokens, but a prompt you sent
- * there returned to an earlier call: the page shows that return, measured against the call it returned to, which can
- * be outside the range, and claims no cache breaks or misses for those harnesses, whatever other harnesses logged.
- * Synthetic logs go through the real parsers and analyzer. */
+/* The Prompt Cache page when a Copilot CLI or Copilot App call in range logged no cache tokens, but a prompt you sent
+ * there returned to an earlier call: the page shows that return on its own card, measured against the call it returned
+ * to, which can be outside the range. It claims no cache breaks or misses for that harness and adds its returns to no
+ * other harness's figures, whatever other harnesses logged. Synthetic logs go through the real parsers and analyzer. */
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptCacheData, Session } from '../core/types';
-import { parseCLIEventsFile } from '../core/parser-vscode-cli';
 import { parseClaudeSessions } from '../core/parser-claude';
 import { PromptCacheAnalyzer } from '../core/analyzer-prompt-cache';
 import { toDateStr } from '../core/helpers';
+import { TODAY, YESTERDAY, copilotSession, returnedAfterExpiryWithoutCacheData, returnedToday } from '../test/copilot-cache-sessions';
 import { renderPromptCache } from './page-prompt-cache';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -36,8 +36,6 @@ vi.mock('./shared', () => ({
   COLORS: new Proxy({}, { get: () => '#888888' }),
 }));
 
-const YESTERDAY = Date.parse('2026-10-28T09:00:00Z');
-const TODAY = YESTERDAY + 86_400_000;
 const iso = (ms: number): string => new Date(ms).toISOString();
 
 const tempDirs: string[] = [];
@@ -49,34 +47,6 @@ afterEach(() => {
 function writeJsonl(file: string, lines: object[]): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, lines.map(line => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
-}
-
-/** A Copilot App main-agent call that starts and is logged at `at`. A reported call's cache expires 5 minutes after
- *  its start; an unreported one logs `cacheDetailsReported: false` and no expiry. */
-function appCall(at: number, initiator: 'user' | 'agent', reported: boolean): object {
-  const cache = reported
-    ? { cacheReadTokens: 0, cacheWriteTokens: 150_000, cacheExpiresAt: iso(at + 300_000), cacheTtlSeconds: 300, cacheDetailsReported: true }
-    : { cacheReadTokens: 0, cacheWriteTokens: 0, cacheDetailsReported: false };
-  return {
-    type: 'session.usage_record',
-    timestamp: iso(at),
-    data: { usage: { model: 'claude-opus-5.5', initiator, interactionType: 'conversation-agent', inputTokens: 150_000, outputTokens: 500, ...cache } },
-  };
-}
-
-/** Yesterday's call reports its cache; today's prompt returns to it with a call that doesn't. */
-function appSession(dir: string, { returnReported = false } = {}): Session {
-  const file = path.join(dir, 'app', 'events.jsonl');
-  writeJsonl(file, [
-    { type: 'session.start', timestamp: iso(YESTERDAY), data: { sessionId: 'app-session', startTime: iso(YESTERDAY), selectedModel: 'claude-opus-5.5', remoteSteerable: true } },
-    { type: 'user.message', id: 'u1', timestamp: iso(YESTERDAY), data: { content: 'secret prompt one' } },
-    appCall(YESTERDAY, 'agent', true),
-    { type: 'user.message', id: 'u2', timestamp: iso(TODAY), data: { content: 'secret prompt two' } },
-    appCall(TODAY, 'user', returnReported),
-  ]);
-  const session = parseCLIEventsFile(file, 'ws-app', 'app');
-  if (!session) throw new Error('no Copilot App session');
-  return session;
 }
 
 /** A Claude Code request today that reports cache usage. */
@@ -96,12 +66,20 @@ function claudeSessions(dir: string): Session[] {
 }
 
 /** The Prompt Cache data for today only, from the real parsers and analyzer. */
-function todayData({ claude = true, returnReported = false } = {}): PromptCacheData {
+function todaysData(build: (dir: string) => Session[]): PromptCacheData {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-page-cache-'));
   tempDirs.push(dir);
-  const sessions = [appSession(dir, { returnReported }), ...(claude ? claudeSessions(dir) : [])];
   const today = toDateStr(TODAY);
-  return new PromptCacheAnalyzer(sessions, new Map()).getPromptCache({ fromDate: today, toDate: today });
+  return new PromptCacheAnalyzer(build(dir), new Map()).getPromptCache({ fromDate: today, toDate: today });
+}
+
+/** Yesterday's Copilot App call reports its cache, and today's prompt returns to it with a call that reports it
+ *  (`returnReported`) or doesn't. Claude Code reports its cache today unless `claude` is false. */
+function todayData({ claude = true, returnReported = false } = {}): PromptCacheData {
+  return todaysData(dir => [
+    copilotSession(dir, 'app-session', true, [{ at: YESTERDAY, reported: true }, { at: TODAY, reported: returnReported }]),
+    ...(claude ? claudeSessions(dir) : []),
+  ]);
 }
 
 async function page(data: PromptCacheData): Promise<HTMLElement> {
@@ -143,6 +121,26 @@ describe('Prompt Cache page when another harness logged cache tokens but Copilot
     expect(host.querySelector('#ctxCacheAttribution')).not.toBeNull();
     expect(host.querySelector('#ctxCacheReturnsOnly')).toBeNull();
     expect(host.querySelector('#ctxCacheReturns')?.textContent).toContain(RETURNED);
+  });
+});
+
+describe('Prompt Cache page with Copilot CLI and Copilot App returns in one range', () => {
+  beforeEach(() => rpc.mockReset());
+
+  it.each<[string, string, boolean]>([
+    ['Copilot CLI', 'Copilot App', false],
+    ['Copilot App', 'Copilot CLI', true],
+  ])('keeps the %s attribution\u2019s returns its own, and shows the %s returns on their own card', async (measured, apart, measuredIsApp) => {
+    const host = await page(todaysData(dir => [
+      returnedToday(dir, 'measured', measuredIsApp),
+      returnedAfterExpiryWithoutCacheData(dir, 'apart', !measuredIsApp),
+    ]));
+    expect(host.querySelector('#ctxCacheAttribution h4')?.textContent).toContain(`Why the cache broke \u00b7 ${measured} \u00b7`);
+    expect(host.querySelector('#ctxCacheReturns')?.textContent).toContain('You came back after the cache expired in 0 of 1 returns (0%).');
+    const card = host.querySelector('#ctxCacheReturnsOnly')?.textContent ?? '';
+    expect(card).toContain(`Cache lifetime and expiry \u00b7 ${apart}`);
+    expect(card).toContain(RETURNED);
+    expect(card).toContain(`No ${apart} call in this range logged cache tokens, so ${apart} cache breaks and misses can\u2019t be measured`);
   });
 });
 

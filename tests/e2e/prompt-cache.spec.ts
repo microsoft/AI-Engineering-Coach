@@ -207,6 +207,19 @@ test.describe('Prompt Cache tab states', () => {
     await expect(returns).toContainText('You came back after the cache expired in 1 of 1 returns (100%).');
     await expect(returns).toContainText('No Copilot App call in this range logged cache tokens, so Copilot App cache breaks and misses can\u2019t be measured');
   });
+
+  test('keeps one Copilot harness\u2019s returns out of the other\u2019s measured attribution, on a card of their own', async ({ page }) => {
+    await openPromptCache(page, 'returns-mixed', 'Why the cache broke');
+    const root = page.locator('#ctxPromptCache');
+    await expect(root.locator('.ctx-comp-row', { hasText: 'Copilot CLI' })).toContainText('No cache usage logged in this range');
+    await expect(root.locator('#ctxCacheAttribution h4')).toContainText('Why the cache broke \u00b7 Copilot App \u00b7');
+    // The measured harness's own returns, unchanged by the other harness's.
+    await expect(root.locator('#ctxCacheReturns')).toContainText('You came back after the cache expired in 78 of 450 returns (17%).');
+    const returns = root.locator('#ctxCacheReturnsOnly');
+    await expect(returns).toContainText('Cache lifetime and expiry \u00b7 Copilot CLI');
+    await expect(returns).toContainText('You came back after the cache expired in 1 of 1 returns (100%).');
+    await expect(returns).toContainText('No Copilot CLI call in this range logged cache tokens, so Copilot CLI cache breaks and misses can\u2019t be measured');
+  });
 });
 
 test.describe('Context Health sub-tabs with late responses', () => {
