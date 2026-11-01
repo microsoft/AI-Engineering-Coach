@@ -124,7 +124,10 @@ if (isWatch) {
         console.log(`CSS rebuilt (${source} changed)`);
       } catch (err) {
         console.error('CSS rebuild failed:', err);
+        return;
       }
+      // esbuild doesn't see the CSS, so restamp the bundles and dist/build-info.json here.
+      stamp.refresh();
     });
   }
   console.log('Watching for changes...');

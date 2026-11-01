@@ -139,7 +139,8 @@ export function buildInfoOptions(stamp, hooks = {}) {
 /**
  * Keeps watch-mode stamps fresh and identical across bundles. The first rebuild that the watcher
  * starts after a change computes a new stamp; rebuilds it starts while that one runs belong to the
- * same change and reuse it. Once no build is running, every bundle that embeds an older stamp is
+ * same change and reuse it. `refresh()` does the same for a change that esbuild doesn't see, such
+ * as the dashboard CSS. Once no build is running, every bundle that embeds an older stamp is
  * rebuilt, and then `write` records the stamp that all of them share (for dist/build-info.json).
  * A bundle whose last build failed waits for its own files to change, so a broken file can't cause
  * a rebuild loop.
@@ -154,6 +155,8 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
   let info = initial;
   let generation = 0;
   let written = -1;
+  let refreshRequested = false; // refresh() wants a stamp newer than any computed so far
+  let disposed = false;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
   /** @type {Map<string, { rebuild(): Promise<unknown> }>} */
@@ -172,6 +175,11 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
     if (building.size > 0) return; // each build schedules another check when it ends
     const names = [...contexts.keys()];
     if (!names.every(name => served.has(name) || failed.has(name))) return;
+    if (refreshRequested) {
+      refreshRequested = false;
+      info = compute();
+      generation += 1;
+    }
     const stale = names.filter(name => !failed.has(name) && served.get(name) !== generation);
     for (const name of stale) {
       requested.add(name);
@@ -184,6 +192,7 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
   }
 
   function schedule() {
+    if (disposed) return;
     clearTimeout(timer);
     timer = setTimeout(settle, settleMs);
   }
@@ -205,6 +214,7 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
           if (started.has(name) && watcherBuilds.size === 0) {
             info = compute();
             generation += 1;
+            refreshRequested = false; // This newer stamp also covers a pending refresh().
           }
           started.add(name);
           watcherBuilds.add(name);
@@ -230,7 +240,17 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
     attach(name, context) {
       contexts.set(name, context);
     },
+    /**
+     * Restamps every bundle and dist/build-info.json after a change that esbuild doesn't see, such
+     * as the dashboard CSS that esbuild.mjs concatenates itself. Calls that arrive together share
+     * one stamp, computed once no build is running.
+     */
+    refresh() {
+      refreshRequested = true;
+      schedule();
+    },
     dispose() {
+      disposed = true;
       clearTimeout(timer);
     },
   };

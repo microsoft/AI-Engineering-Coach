@@ -279,6 +279,73 @@ describe('createWatchStamp', () => {
     expect(writes).toEqual([]);
     expect(bundles.extension.rebuild).not.toHaveBeenCalled();
   });
+
+  // refresh() is for a CSS-only edit: esbuild.mjs rewrites dist/webview/styles.css itself, and no
+  // esbuild build runs.
+  describe('refresh', () => {
+    it('restamps every bundle and dist/build-info.json once for a change esbuild does not see', async () => {
+      const { stamp, compute, writes, all } = await started();
+      stamp.refresh();
+      stamp.refresh(); // fs.watch often reports one save twice.
+      expect(compute).not.toHaveBeenCalled();
+      await settle();
+      expect(compute).toHaveBeenCalledOnce();
+      for (const bundle of all) {
+        expect(bundle.embedded).toEqual(stampNumber(1));
+        expect(bundle.rebuild).toHaveBeenCalledOnce();
+      }
+      expect(writes).toEqual([{ info: stampNumber(0), generation: 0 }, { info: stampNumber(1), generation: 1 }]);
+    });
+
+    it('waits for a running build, then restamps for a change made after that build stamped', async () => {
+      const { stamp, compute, writes, bundles, all } = await started();
+      bundles.webview.start(); // A watcher build computes stamp 1.
+      stamp.refresh(); // The CSS changes while it runs.
+      await settle();
+      expect(compute).toHaveBeenCalledOnce();
+      expect(writes).toHaveLength(1);
+      bundles.webview.load();
+      bundles.webview.end();
+      await settle();
+      expect(compute).toHaveBeenCalledTimes(2);
+      for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(2));
+      expect(writes.at(-1)).toEqual({ info: stampNumber(2), generation: 2 });
+    });
+
+    it('lets a watcher build that starts after the change cover it with the same stamp', async () => {
+      const { stamp, compute, writes, bundles, all } = await started();
+      stamp.refresh();
+      bundles.extension.build(); // A TypeScript change rebuilds before the pending refresh runs.
+      await settle();
+      expect(compute).toHaveBeenCalledOnce();
+      for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(1));
+      expect(writes.at(-1)).toEqual({ info: stampNumber(1), generation: 1 });
+    });
+
+    it('waits for every first build before restamping', async () => {
+      const { stamp, compute, writes, bundles, all } = setup();
+      bundles.extension.build();
+      stamp.refresh();
+      await settle();
+      expect(compute).not.toHaveBeenCalled();
+      bundles.webview.build();
+      bundles.worker.build();
+      await settle();
+      expect(compute).toHaveBeenCalledOnce();
+      for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(1));
+      expect(writes).toEqual([{ info: stampNumber(1), generation: 1 }]);
+    });
+
+    it('does nothing after dispose', async () => {
+      const { stamp, compute, writes, all } = await started();
+      stamp.dispose();
+      stamp.refresh();
+      await settle();
+      expect(compute).not.toHaveBeenCalled();
+      expect(writes).toHaveLength(1);
+      for (const bundle of all) expect(bundle.rebuild).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('createWatchStamp with esbuild', () => {
@@ -290,7 +357,7 @@ describe('createWatchStamp with esbuild', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('refreshes every bundle after a rebuild, as watch mode runs it', async () => {
+  it('refreshes every bundle after a rebuild or refresh(), as watch mode runs them', async () => {
     let n = 0;
     let wrote = () => {};
     const generations = [];
@@ -318,7 +385,11 @@ describe('createWatchStamp with esbuild', () => {
       await contexts[1].rebuild(); // What the watcher runs after a change to the webview's files
       await written;
       expect(embedded()).toEqual([stampNumber(1), stampNumber(1)]);
-      expect(generations).toEqual([0, 1]);
+      written = nextWrite();
+      stamp.refresh(); // What esbuild.mjs calls after rebuilding the dashboard CSS
+      await written;
+      expect(embedded()).toEqual([stampNumber(2), stampNumber(2)]);
+      expect(generations).toEqual([0, 1, 2]);
     } finally {
       stamp.dispose();
     }
