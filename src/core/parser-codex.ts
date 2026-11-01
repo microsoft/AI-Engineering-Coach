@@ -538,7 +538,7 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   const last = recordValue(info?.last_token_usage);
   const lastInput = tokenCount(last?.input_tokens);
   if (newCall && lastInput != null) {
-    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window) });
+    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window), model: state.turnModel || undefined });
   }
 }
 

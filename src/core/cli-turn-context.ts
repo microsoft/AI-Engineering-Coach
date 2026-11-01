@@ -49,10 +49,11 @@ export class TurnContextAccumulator {
   }
 
   /** A limit logged elsewhere in the turn (a compaction's `tokenLimit`), for the model of the latest main-agent
-   *  call. Used when no call of that model reported one. */
-  addLimit(limit: number | null | undefined): void {
+   *  call, or `selectedModel` (the session's model) before the session's first one. Used when no call of that model
+   *  reported one. */
+  addLimit(limit: number | null | undefined, selectedModel?: string): void {
     const value = positive(limit);
-    if (value != null) this.fallbackLimits.set(this.model, value);
+    if (value != null) this.fallbackLimits.set(this.model ?? selectedModel, value);
   }
 
   /** `undefined` when the turn logged no main-agent call. The limit is one of the last call's model, or `null`. */

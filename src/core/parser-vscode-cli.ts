@@ -19,7 +19,7 @@ import { compositionFromCliUsage, readSystemSegments, type CliTurnUsage } from '
 import { readCliModelCall, type CliModelCall } from './cli-model-calls';
 import { CallTimelineBuilder } from './call-timeline';
 import { CliCacheTracker } from './prompt-cache-cli';
-import { uncachedTokens } from './prompt-cache-usage';
+import { cacheModelName, uncachedTokens } from './prompt-cache-usage';
 import { addTurnCompaction, readCliCompaction } from './cli-compaction';
 import { SubagentRunTracker } from './cli-subagents';
 import { TurnContextAccumulator } from './cli-turn-context';
@@ -537,7 +537,7 @@ function handleCompactionComplete(data: Record<string, unknown>, state: CLIParse
   state.cache.onCompactionComplete(data, at);
   setSystemTokens(state, data.systemTokens);
   const event = readCliCompaction(data);
-  state.context.addLimit(event.tokenLimit);
+  state.context.addLimit(event.tokenLimit, cacheModelName(state.currentModelId));
   const turn = state.turn;
   if (!turn) return;
   if (state.mainCalls > 0) event.atCall = state.mainCalls;

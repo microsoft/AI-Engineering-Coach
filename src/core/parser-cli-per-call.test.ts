@@ -204,6 +204,16 @@ describe('Copilot CLI turn context when the model changes within a turn', () => 
     ]), 'ws', 'demo');
     expect(session?.requests.map(r => r.contextUsage?.contextLimit)).toEqual([null, 400_000]);
   });
+
+  it('applies a compaction logged before the session\u2019s first call to the selected model', () => {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-first-compaction', startTime: iso(0), selectedModel: 'claude-opus-5.5' } },
+      { type: 'user.message', id: 'u1', timestamp: iso(1), data: { content: 'secret prompt' } },
+      compaction(5, 120_000, 30_000, 300_000),
+      call(10, { input: 50_000, limit: null }),
+    ]), 'ws', 'demo');
+    expect(session?.requests[0].contextUsage?.contextLimit).toBe(300_000);
+  });
 });
 
 describe('Copilot CLI token types of calls that didn\u2019t report their cache', () => {
