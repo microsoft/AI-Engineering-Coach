@@ -8,8 +8,9 @@ import type { DetectionRule, DetectorEmission, RuleTemplateVars } from './types'
 import { getAllRules } from './rule-engine';
 import { registerAllBuiltinRules, loadPersonalRules, registerAllBuiltinMetrics } from './rule-loader';
 import { fillTemplate } from './rule-parser';
-import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from './rule-pipeline';
+import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance, type Pipeline } from './rule-pipeline';
 import { isoWeek } from './helpers';
+import { runtimeDebug } from './runtime-debug';
 
 registerAllBuiltinRules();
 registerAllBuiltinMetrics();
@@ -228,6 +229,28 @@ function parseIsoWeek(wk: string): Date {
 /*  Pipeline-based registry build                                     */
 /* ------------------------------------------------------------------ */
 
+/** Rule id and message of each detection failure already logged, so a broken rule is logged once. */
+const loggedFailures = new Set<string>();
+
+/**
+ * The rule's emission, or null when its detection logic throws, such as a `match:` expression that doesn't parse. A
+ * broken personal or project rule then counts as not triggered instead of stopping every other rule, and the reason
+ * goes to the Output log (runtimeDebug) once per rule and message.
+ */
+function emitOrSkip(pipeline: Pipeline, rule: DetectionRule, ctx: DetectorContext): DetectorEmission | null {
+  try {
+    return executePipeline(pipeline, rule, ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${rule.id}\n${message}`;
+    if (!loggedFailures.has(key)) {
+      loggedFailures.add(key);
+      runtimeDebug('detectors', 'rule-skipped', `${rule.id}: ${message}`);
+    }
+    return null;
+  }
+}
+
 function buildRegistry(): DetectorDefinition[] {
   const rules = getAllRules();
   const registry: DetectorDefinition[] = [];
@@ -242,8 +265,8 @@ function buildRegistry(): DetectorDefinition[] {
       requiresIdeContext: rule.requiresIdeContext,
       rule,
       run: (ctx) => {
-        const emission = executePipeline(pipeline, rule, ctx);
-        if (!checkPipelineTrigger(pipeline, emission, rule)) return null;
+        const emission = emitOrSkip(pipeline, rule, ctx);
+        if (!emission || !checkPipelineTrigger(pipeline, emission, rule)) return null;
         return emissionToAntiPattern(emission, rule);
       },
     });
@@ -263,6 +286,7 @@ export const DETECTOR_REGISTRY: DetectorDefinition[] = new Proxy([] as DetectorD
 
 export function invalidateDetectorRegistry(): void {
   _registry = null;
+  loggedFailures.clear();
 }
 
 export function getActiveDetectors(skipIdeDetectors: boolean): DetectorDefinition[] {
@@ -286,7 +310,8 @@ export function runEmitters(reqs: SessionRequest[], sessions: Session[], skipIde
     if (skipIdeDetectors && rawRule.requiresIdeContext) continue;
     const rule = resolveInheritance(rawRule);
     const pipeline = parsePipeline(rule);
-    results.set(rule.id, executePipeline(pipeline, rule, { reqs, sessions, skipIdeDetectors }));
+    const emission = emitOrSkip(pipeline, rule, { reqs, sessions, skipIdeDetectors });
+    if (emission) results.set(rule.id, emission);
   }
   return results;
 }
