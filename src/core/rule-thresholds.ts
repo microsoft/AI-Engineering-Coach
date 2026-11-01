@@ -8,12 +8,12 @@
  *
  * Only the number on each edited threshold's line changes. The line's indentation, the spaces around the number, the
  * `\r` of a CRLF line and every other line stay as written, so a rule keeps its `# Tests`, its detection logic and its
- * line endings. Lines are found the way parseFrontmatter (rule-parser.ts) reads the front matter: only its
- * `thresholds:` block is searched, never `patterns:`, the body or the detection logic.
+ * line endings. The lines are the ones the rule parser reads: readFrontmatter (rule-parser.ts) gives the front matter's
+ * keys and where each value starts, and only the last `thresholds:` block is changed, never `patterns:`, the body or
+ * the detection logic.
  */
 
-/** The front matter, matched as parseFrontmatter matches it. Group 1 is the YAML block; the `d` flag gives its offsets. */
-const FRONT_MATTER = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/d;
+import { readFrontmatter, type FrontmatterField, type FrontmatterLine } from './rule-parser';
 
 /** A number as written, such as `5`, `-0.25`, `0.40`, `1e3` or `Infinity` (which the parser reads as a number too). */
 const NUMBER = /^[-+]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|Infinity)$/;
@@ -37,54 +37,27 @@ export type ThresholdPatch =
  * unless every key can be set.
  */
 export function patchThresholds(source: string, values: Record<string, number>): ThresholdPatch {
-  const block = FRONT_MATTER.exec(source)?.indices?.[1];
-  const lines = block ? source.slice(block[0], block[1]).split('\n') : [];
-  const keyLines = thresholdLines(lines);
+  const lines = thresholdLines(source);
+  const edits: Array<{ line: FrontmatterLine; value: number }> = [];
   for (const [key, value] of Object.entries(values)) {
     if (!Number.isFinite(value)) return { ok: false, key, reason: 'invalid-value' };
-    if (!keyLines) return { ok: false, key, reason: 'no-thresholds' };
-    const index = keyLines.get(key);
-    if (index === undefined) return { ok: false, key, reason: 'unknown-key' };
-    const line = withNumber(lines[index], value);
-    if (line === undefined) return { ok: false, key, reason: 'not-a-number' };
-    lines[index] = line;
+    if (!lines) return { ok: false, key, reason: 'no-thresholds' };
+    const line = lines.get(key);
+    if (!line) return { ok: false, key, reason: 'unknown-key' };
+    if (!NUMBER.test(line.value)) return { ok: false, key, reason: 'not-a-number' };
+    if (Number(line.value) !== value) edits.push({ line, value });
   }
-  if (!block) return { ok: true, source };
-  return { ok: true, source: source.slice(0, block[0]) + lines.join('\n') + source.slice(block[1]) };
+  // Last value first, so each edit leaves the offsets of the ones before it as they were.
+  let patched = source;
+  for (const { line, value } of edits.sort((a, b) => b.line.valueStart - a.line.valueStart)) {
+    patched = patched.slice(0, line.valueStart) + String(value) + patched.slice(line.valueStart + line.value.length);
+  }
+  return { ok: true, source: patched };
 }
 
-/**
- * The line of each threshold in the YAML block, or undefined without a `thresholds:` block. As parseFrontmatter reads
- * the block: blank and `#` lines are skipped, a block line starts with two or more whitespace characters and has a
- * colon, the last `thresholds:` wins (an inline value such as `thresholds: {}` included), and so does the last line of
- * a repeated key.
- */
-function thresholdLines(lines: string[]): Map<string, number> | undefined {
-  let thresholds: Map<string, number> | undefined;
-  let block: Map<string, number> | undefined;
-  let inBlock = false;
-  for (const [index, line] of lines.entries()) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    if (inBlock && /^\s{2,}/.test(line) && line.includes(':')) {
-      block?.set(line.slice(0, line.indexOf(':')).trim(), index);
-      continue;
-    }
-    const entry = /^(\w[\w-]*):\s*(.*)$/.exec(trimmed);
-    const value = entry?.[2].trim();
-    inBlock = value === '' || value === '|';
-    block = inBlock && entry?.[1] === 'thresholds' ? new Map<string, number>() : undefined;
-    if (entry?.[1] === 'thresholds') thresholds = block;
-  }
-  return thresholds;
-}
-
-/** `line` with its number set to `value`, or undefined when the line's value isn't written as a number. */
-function withNumber(line: string, value: number): string | undefined {
-  const start = line.indexOf(':') + 1;
-  const written = line.slice(start).trim();
-  if (!NUMBER.test(written)) return undefined;
-  if (Number(written) === value) return line;
-  const at = line.indexOf(written, start);
-  return line.slice(0, at) + String(value) + line.slice(at + written.length);
+/** The lines of the last `thresholds:` block by key (the last line of a repeated key), or undefined without one. */
+function thresholdLines(source: string): Map<string, FrontmatterLine> | undefined {
+  let thresholds: FrontmatterField | undefined;
+  for (const field of readFrontmatter(source)?.fields ?? []) if (field.key === 'thresholds') thresholds = field;
+  return thresholds?.block && new Map(thresholds.block.map(line => [line.key, line]));
 }

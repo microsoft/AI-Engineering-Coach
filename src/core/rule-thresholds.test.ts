@@ -143,6 +143,26 @@ describe.each(ENDINGS)('patchThresholds reads values and blocks as the parser do
   });
 });
 
+describe.each(ENDINGS)('patchThresholds and parseRule read the same lines, with %s line endings', (_label, eol) => {
+  it.each([
+    ['a block line', ['thresholds:', '  minChars: 30']],
+    ['a block line after a comment and a blank line', ['thresholds:', '  # minChars: 1', '', '  minChars: 30']],
+    ['a block line indented with tabs', ['thresholds:', '\t\tminChars: 30']],
+    ['a block opened with |', ['thresholds: |', '  minChars: 30']],
+    ['the last of a repeated key and block', ['thresholds:', '  minChars: 30', 'thresholds:', '  minChars: 31', '  minChars: 32']],
+    ['a line indented by one space, which ends the block', ['thresholds:', ' minChars: 30']],
+    ['a line that is not key: value, which ends the block', ['thresholds:', 'note', '  minChars: 30']],
+    ['a later inline thresholds value', ['thresholds:', '  minChars: 30', 'thresholds: {}']],
+    ['the key in another block', ['patterns:', '  minChars: 30']],
+  ])('sets the value parseRule reads, or nothing when it reads none: %s', (_case, fm) => {
+    const source = ruleSource(fm, eol);
+    const thresholds = parseRule(source)!.thresholds;
+    const result = patchThresholds(source, { minChars: 45 });
+    expect(result.ok).toBe('minChars' in thresholds);
+    if (result.ok) expect(parseRule(result.source)!.thresholds).toEqual({ ...thresholds, minChars: 45 });
+  });
+});
+
 describe.each(ENDINGS)('patchThresholds rejects, with %s line endings', (_label, eol) => {
   it.each([
     ['thresholds: {}', ['thresholds: {}']],

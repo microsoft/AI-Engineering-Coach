@@ -74,20 +74,13 @@ function parseScalar(raw: string): string {
   return readQuotedScalar(text) ?? text.replaceAll(/^['"]|['"]$/g, '');
 }
 
-function parseNestedValue(line: string, nestedObj: Record<string, number | string | string[]>): void {
-  const colonIdx = line.indexOf(':');
-  const k = line.substring(0, colonIdx).trim();
-  const v = line.substring(colonIdx + 1).trim();
+function parseNestedValue(v: string): number | string | string[] {
   if (v.startsWith('[') && v.endsWith(']')) {
-    nestedObj[k] = splitInlineList(v.slice(1, -1)).map(item => parseScalar(item));
-    return;
+    return splitInlineList(v.slice(1, -1)).map(item => parseScalar(item));
   }
   const num = Number.parseFloat(v);
-  if (!Number.isNaN(num) && String(num) === v) {
-    nestedObj[k] = num;
-    return;
-  }
-  nestedObj[k] = parseScalar(v);
+  if (!Number.isNaN(num) && String(num) === v) return num;
+  return parseScalar(v);
 }
 
 function parseTopLevelValue(value: string): unknown {
@@ -101,52 +94,79 @@ function parseTopLevelValue(value: string): unknown {
   return parseScalar(value);
 }
 
-function parseFrontmatter(raw: string): { frontmatter: ParsedFrontmatter; body: string } | null {
-  const match = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  if (!match) return null;
+/** A `key: value` line of a rule's front matter. */
+export interface FrontmatterLine {
+  key: string;
+  /** The value as written, without the whitespace around it (so without the `\r` of a CRLF line). */
+  value: string;
+  /** Where `value` starts in the rule's markdown. */
+  valueStart: number;
+}
 
-  const yamlBlock = match[1];
-  const body = match[2];
+/** A top-level front matter key. A value of '' or '|' opens a block of indented lines. */
+export interface FrontmatterField extends FrontmatterLine {
+  block?: FrontmatterLine[];
+}
 
-  const fm: Record<string, unknown> = {};
-  let currentKey = '';
-  let inNestedBlock = false;
-  const nestedObj: Record<string, number | string | string[]> = {};
+/**
+ * The front matter's top-level keys in source order, with where each value starts, and the body after the front
+ * matter; null without front matter. This is the front matter grammar that parsing and editing a rule share: blank
+ * lines and `#` comments are skipped; after a key that opens a block, a line indented by two or more whitespace
+ * characters that has a colon belongs to the block and any other line ends it; a line that isn't `key: value` is
+ * skipped. The last of a repeated key wins, within a block too.
+ */
+export function readFrontmatter(markdown: string): { fields: FrontmatterField[]; body: string } | null {
+  const match = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/d.exec(markdown);
+  const yamlStart = match?.indices?.[1]?.[0];
+  if (!match || yamlStart === undefined) return null;
 
-  for (const line of yamlBlock.split('\n')) {
+  const fields: FrontmatterField[] = [];
+  let block: FrontmatterLine[] | undefined;
+  let lineStart = yamlStart;
+  for (const line of match[1].split('\n')) {
+    const start = lineStart;
+    lineStart += line.length + 1;
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
 
-    if (inNestedBlock) {
-      if (/^\s{2,}/.test(line) && line.includes(':')) {
-        parseNestedValue(line, nestedObj);
-        continue;
-      }
-      fm[currentKey] = { ...nestedObj };
-      inNestedBlock = false;
+    if (block && /^\s{2,}/.test(line) && line.includes(':')) {
+      const colon = line.indexOf(':');
+      block.push(lineAt(line.substring(0, colon).trim(), line, start, colon + 1));
+      continue;
     }
+    block = undefined;
 
     const kvMatch = trimmed.match(/^(\w[\w-]*):\s*(.*)$/);
     if (!kvMatch) continue;
+    const field: FrontmatterField = lineAt(kvMatch[1], line, start, line.indexOf(':') + 1);
+    if (field.value === '' || field.value === '|') field.block = block = [];
+    fields.push(field);
+  }
+  return { fields, body: match[2] };
+}
 
-    const [, key, rawValue] = kvMatch;
-    const value = rawValue.trim();
+/** `line`'s value: the rest of the line from `valueFrom`, trimmed, and where it starts in the markdown. */
+function lineAt(key: string, line: string, lineStart: number, valueFrom: number): FrontmatterLine {
+  const rest = line.slice(valueFrom);
+  return { key, value: rest.trim(), valueStart: lineStart + valueFrom + rest.length - rest.trimStart().length };
+}
 
-    if (value === '' || value === '|') {
-      currentKey = key;
-      inNestedBlock = true;
-      for (const k of Object.keys(nestedObj)) delete nestedObj[k];
-      continue;
+function parseFrontmatter(raw: string): { frontmatter: ParsedFrontmatter; body: string } | null {
+  const read = readFrontmatter(raw);
+  if (!read) return null;
+
+  const fm: Record<string, unknown> = {};
+  for (const field of read.fields) {
+    if (field.block) {
+      const nestedObj: Record<string, number | string | string[]> = {};
+      for (const line of field.block) nestedObj[line.key] = parseNestedValue(line.value);
+      fm[field.key] = { ...nestedObj };
+    } else {
+      fm[field.key] = parseTopLevelValue(field.value);
     }
-
-    fm[key] = parseTopLevelValue(value);
   }
 
-  if (inNestedBlock) {
-    fm[currentKey] = { ...nestedObj };
-  }
-
-  return { frontmatter: fm as unknown as ParsedFrontmatter, body };
+  return { frontmatter: fm as unknown as ParsedFrontmatter, body: read.body };
 }
 
 function parseSection(body: string, heading: string): string {
