@@ -122,11 +122,9 @@ describe('describeBuildInfo', () => {
   });
 });
 
-/** A distinct stamp per number, as a fresh computeBuildInfo() would give after each change. */
-function stampNumber(n) {
-  const id = String(n).padStart(2, '0');
-  return { version: '0.2.0', commit: `c0000${id}`, dirty: n > 0, branch: 'main', builtAt: `2026-11-03T09:30:${id}.000Z`, dev: true };
-}
+/** What git reports for a clean checkout of the v0.2.0 tag, and after an uncommitted edit. */
+const CLEAN = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', dev: false };
+const EDITED = { ...CLEAN, dirty: true, branch: 'main', dev: true };
 
 /** Evaluates a CommonJS bundle and returns its exports. */
 function evaluate(code) {
@@ -137,7 +135,7 @@ function evaluate(code) {
 
 describe('buildInfoOptions', () => {
   it('gives src/core/build-info.ts the stamp as __AIC_BUILD_INFO__', async () => {
-    const info = stampNumber(7);
+    const info = { ...EDITED, builtAt: '2026-11-03T09:30:07.000Z' };
     const result = await esbuild.build({
       entryPoints: [join(ROOT, 'src', 'core', 'build-info.ts')], bundle: true, platform: 'node', format: 'cjs',
       write: false, logLevel: 'silent', ...buildInfoOptions(() => info),
@@ -145,7 +143,7 @@ describe('buildInfoOptions', () => {
     const module = evaluate(result.outputFiles[0].text);
     expect(module.BUILD_INFO).toEqual(info);
     expect(module.formatBuildLogFields()).toBe(
-      'version=0.2.0 commit=c000007 dirty=true dev=true branch=main builtAt=2026-11-03T09:30:07.000Z');
+      'version=0.2.0 commit=abc1234 dirty=true dev=true branch=main builtAt=2026-11-03T09:30:07.000Z');
   });
 });
 
@@ -180,103 +178,139 @@ describe('createWatchStamp', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  function setup() {
-    let n = 0;
-    const compute = vi.fn(() => stampNumber(++n));
+  /**
+   * Three fake bundles and a source whose state the test changes, the way edits and reverts change
+   * what git reports. Each compute() reads that state and gets a new build time.
+   */
+  function setup(initial = CLEAN) {
+    const source = { ...initial };
+    let clock = 0;
+    const compute = vi.fn(() => ({ ...source, builtAt: `T${++clock}` }));
     const writes = [];
     const stamp = createWatchStamp({
-      initial: stampNumber(0), compute, settleMs: 50, write: (info, generation) => writes.push({ info, generation }),
+      initial: { ...source, builtAt: 'T0' }, compute, settleMs: 50,
+      write: (info, generation) => writes.push({ info, generation }),
     });
     const bundles = fakeBundles(stamp, ['extension', 'webview', 'worker']);
-    return { stamp, compute, writes, bundles, all: Object.values(bundles) };
+    const all = Object.values(bundles);
+    const generations = () => writes.map(write => write.generation);
+    /** The last stamp written to dist/build-info.json, after checking that every bundle embeds it. */
+    function published() {
+      const { info } = writes.at(-1);
+      for (const bundle of all) expect(bundle.embedded).toEqual(info);
+      return info;
+    }
+    return { stamp, source, compute, writes, generations, published, bundles, all };
   }
 
   const settle = () => vi.advanceTimersByTimeAsync(1000);
 
-  async function started() {
-    const context = setup();
+  async function started(initial) {
+    const context = setup(initial);
     for (const bundle of context.all) bundle.build();
     await settle();
     return context;
   }
 
-  it('starts from the initial stamp without computing another', async () => {
-    const { compute, writes, all } = await started();
-    expect(compute).not.toHaveBeenCalled();
-    expect(writes).toEqual([{ info: stampNumber(0), generation: 0 }]);
-    for (const bundle of all) {
-      expect(bundle.embedded).toEqual(stampNumber(0));
-      expect(bundle.rebuild).not.toHaveBeenCalled();
-    }
+  it('keeps the initial stamp while the source is unchanged', async () => {
+    const { generations, published, all } = await started();
+    expect(generations()).toEqual([0]);
+    expect(published()).toEqual({ ...CLEAN, builtAt: 'T0' });
+    for (const bundle of all) expect(bundle.rebuild).not.toHaveBeenCalled();
   });
 
   it('restamps after a change and rebuilds the other bundles with the same stamp', async () => {
-    const { compute, writes, bundles, all } = await started();
+    const { source, generations, published, bundles } = await started();
+    Object.assign(source, EDITED);
     bundles.webview.build(); // The watcher rebuilds only the bundle that uses the changed file.
-    expect(compute).toHaveBeenCalledOnce();
-    expect(writes).toHaveLength(1);
+    expect(generations()).toEqual([0]);
     await settle();
-    for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(1));
+    expect(generations()).toEqual([0, 1]);
+    expect(published()).toMatchObject(EDITED);
     expect(bundles.webview.rebuild).not.toHaveBeenCalled();
     expect(bundles.extension.rebuild).toHaveBeenCalledOnce();
     expect(bundles.worker.rebuild).toHaveBeenCalledOnce();
-    expect(writes.at(-1)).toEqual({ info: stampNumber(1), generation: 1 });
-    expect(compute).toHaveBeenCalledOnce();
   });
 
   it('stamps once for the builds that one change starts together, and waits for all of them', async () => {
-    const { compute, writes, bundles } = await started();
+    const { source, generations, published, bundles } = await started();
+    Object.assign(source, EDITED);
     bundles.extension.start();
     bundles.webview.start();
     bundles.webview.load();
     bundles.webview.end();
     await settle(); // The extension is still building: nothing is synced or written yet.
     expect(bundles.worker.rebuild).not.toHaveBeenCalled();
-    expect(writes).toHaveLength(1);
+    expect(generations()).toEqual([0]);
     bundles.extension.load();
     bundles.extension.end();
     await settle();
-    expect(compute).toHaveBeenCalledOnce();
-    expect([bundles.extension.embedded, bundles.webview.embedded, bundles.worker.embedded])
-      .toEqual([stampNumber(1), stampNumber(1), stampNumber(1)]);
+    expect(generations()).toEqual([0, 1]);
+    expect(published()).toMatchObject(EDITED);
     expect(bundles.extension.rebuild).not.toHaveBeenCalled();
     expect(bundles.worker.rebuild).toHaveBeenCalledOnce();
-    expect(writes.at(-1)).toEqual({ info: stampNumber(1), generation: 1 });
+  });
+
+  it('restamps every bundle when the source changed after overlapping builds took their stamp', async () => {
+    // On the release tag, reverting the last edit starts a rebuild that stamps the clean source.
+    // A webview-only edit saved before that rebuild finishes starts another that reuses the stamp.
+    const { source, generations, published, bundles } = await started(EDITED);
+    Object.assign(source, CLEAN);
+    bundles.extension.start();
+    Object.assign(source, EDITED);
+    bundles.webview.start();
+    for (const bundle of [bundles.extension, bundles.webview]) {
+      bundle.load();
+      bundle.end();
+    }
+    await settle();
+    expect(published()).toMatchObject({ dirty: true, dev: true, branch: 'main' });
+    expect(generations()).toEqual([0, 2]); // The clean stamp was never published.
   });
 
   it('leaves a bundle that failed to build until its files change again', async () => {
-    const { compute, writes, bundles } = await started();
+    const { source, writes, generations, published, bundles } = await started();
+    Object.assign(source, EDITED);
     bundles.webview.build([{ text: 'Expected ";" but found "}"' }]);
     await settle();
     expect(bundles.webview.rebuild).not.toHaveBeenCalled(); // No rebuild loop on a broken file.
-    expect([bundles.extension.embedded, bundles.worker.embedded]).toEqual([stampNumber(1), stampNumber(1)]);
-    expect(writes.at(-1)).toEqual({ info: stampNumber(1), generation: 1 });
+    expect(generations()).toEqual([0, 1]);
+    const first = writes.at(-1).info;
+    expect([bundles.extension.embedded, bundles.worker.embedded]).toEqual([first, first]);
     bundles.webview.build(); // The fix
     await settle();
-    expect(compute).toHaveBeenCalledTimes(2);
-    expect([bundles.extension.embedded, bundles.webview.embedded, bundles.worker.embedded])
-      .toEqual([stampNumber(2), stampNumber(2), stampNumber(2)]);
-    expect(writes.at(-1)).toEqual({ info: stampNumber(2), generation: 2 });
+    expect(generations()).toEqual([0, 1, 2]);
+    expect(published().builtAt).not.toBe(first.builtAt);
   });
 
   it('writes nothing before every bundle has finished its first build', async () => {
-    const { writes, bundles } = setup();
+    const { generations, bundles } = setup();
     bundles.extension.build();
     bundles.webview.build();
     await settle();
-    expect(writes).toEqual([]);
+    expect(generations()).toEqual([]);
     expect(bundles.worker.rebuild).not.toHaveBeenCalled();
     bundles.worker.build();
     await settle();
-    expect(writes).toEqual([{ info: stampNumber(0), generation: 0 }]);
+    expect(generations()).toEqual([0]);
+  });
+
+  it('keeps the current stamp when the source cannot be read, instead of stopping the watcher', async () => {
+    const { source, compute, generations, published, bundles } = await started();
+    Object.assign(source, EDITED);
+    bundles.webview.build();
+    compute.mockImplementationOnce(() => { throw new SyntaxError('Unexpected end of JSON input'); }); // package.json mid-save
+    await settle();
+    expect(generations()).toEqual([0, 1]);
+    expect(published()).toMatchObject(EDITED);
   });
 
   it('stops checking after dispose', async () => {
-    const { stamp, writes, bundles, all } = setup();
+    const { stamp, generations, bundles, all } = setup();
     for (const bundle of all) bundle.build();
     stamp.dispose();
     await settle();
-    expect(writes).toEqual([]);
+    expect(generations()).toEqual([]);
     expect(bundles.extension.rebuild).not.toHaveBeenCalled();
   });
 
@@ -284,65 +318,77 @@ describe('createWatchStamp', () => {
   // esbuild build runs.
   describe('refresh', () => {
     it('restamps every bundle and dist/build-info.json once for a change esbuild does not see', async () => {
-      const { stamp, compute, writes, all } = await started();
+      const { stamp, source, generations, published, all } = await started();
+      Object.assign(source, EDITED);
       stamp.refresh();
       stamp.refresh(); // fs.watch often reports one save twice.
-      expect(compute).not.toHaveBeenCalled();
       await settle();
-      expect(compute).toHaveBeenCalledOnce();
-      for (const bundle of all) {
-        expect(bundle.embedded).toEqual(stampNumber(1));
-        expect(bundle.rebuild).toHaveBeenCalledOnce();
-      }
-      expect(writes).toEqual([{ info: stampNumber(0), generation: 0 }, { info: stampNumber(1), generation: 1 }]);
+      expect(generations()).toEqual([0, 1]);
+      expect(published()).toMatchObject(EDITED);
+      for (const bundle of all) expect(bundle.rebuild).toHaveBeenCalledOnce();
     });
 
     it('waits for a running build, then restamps for a change made after that build stamped', async () => {
-      const { stamp, compute, writes, bundles, all } = await started();
-      bundles.webview.start(); // A watcher build computes stamp 1.
+      const { stamp, source, generations, published, bundles } = await started();
+      Object.assign(source, EDITED);
+      bundles.webview.start(); // A watcher build stamps the edited source.
       stamp.refresh(); // The CSS changes while it runs.
       await settle();
-      expect(compute).toHaveBeenCalledOnce();
-      expect(writes).toHaveLength(1);
+      expect(generations()).toEqual([0]);
       bundles.webview.load();
+      const running = bundles.webview.embedded;
       bundles.webview.end();
       await settle();
-      expect(compute).toHaveBeenCalledTimes(2);
-      for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(2));
-      expect(writes.at(-1)).toEqual({ info: stampNumber(2), generation: 2 });
+      expect(generations()).toEqual([0, 2]);
+      expect(published().builtAt).not.toBe(running.builtAt);
     });
 
     it('lets a watcher build that starts after the change cover it with the same stamp', async () => {
-      const { stamp, compute, writes, bundles, all } = await started();
+      const { stamp, source, generations, published, bundles } = await started();
+      Object.assign(source, EDITED);
       stamp.refresh();
       bundles.extension.build(); // A TypeScript change rebuilds before the pending refresh runs.
       await settle();
-      expect(compute).toHaveBeenCalledOnce();
-      for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(1));
-      expect(writes.at(-1)).toEqual({ info: stampNumber(1), generation: 1 });
+      expect(generations()).toEqual([0, 1]);
+      expect(published()).toMatchObject(EDITED);
     });
 
     it('waits for every first build before restamping', async () => {
-      const { stamp, compute, writes, bundles, all } = setup();
+      const { stamp, generations, published, bundles } = setup();
       bundles.extension.build();
-      stamp.refresh();
+      stamp.refresh(); // Same source as the initial stamp: only the build time changes.
       await settle();
-      expect(compute).not.toHaveBeenCalled();
+      expect(generations()).toEqual([]);
       bundles.webview.build();
       bundles.worker.build();
       await settle();
-      expect(compute).toHaveBeenCalledOnce();
-      for (const bundle of all) expect(bundle.embedded).toEqual(stampNumber(1));
-      expect(writes).toEqual([{ info: stampNumber(1), generation: 1 }]);
+      expect(generations()).toEqual([1]);
+      expect(published()).toMatchObject(CLEAN);
+      expect(published().builtAt).not.toBe('T0');
+    });
+
+    it('keeps the request while the source cannot be read, and restamps at the next check', async () => {
+      const { stamp, source, compute, generations, published, bundles } = await started();
+      Object.assign(source, EDITED);
+      compute.mockImplementationOnce(() => { throw new Error('EBUSY: package.json'); });
+      stamp.refresh();
+      await settle();
+      expect(generations()).toEqual([0]);
+      compute.mockImplementationOnce(() => { throw new Error('EBUSY: package.json'); });
+      bundles.webview.build(); // A rebuild that can't compute a stamp either keeps the current one.
+      await settle();
+      expect(generations()).toEqual([0, 1]);
+      expect(published()).toMatchObject(EDITED);
     });
 
     it('does nothing after dispose', async () => {
-      const { stamp, compute, writes, all } = await started();
+      const { stamp, compute, generations, all } = await started();
+      compute.mockClear();
       stamp.dispose();
       stamp.refresh();
       await settle();
       expect(compute).not.toHaveBeenCalled();
-      expect(writes).toHaveLength(1);
+      expect(generations()).toEqual([0]);
       for (const bundle of all) expect(bundle.rebuild).not.toHaveBeenCalled();
     });
   });
@@ -358,12 +404,13 @@ describe('createWatchStamp with esbuild', () => {
   });
 
   it('refreshes every bundle after a rebuild or refresh(), as watch mode runs them', async () => {
-    let n = 0;
+    const source = { ...CLEAN };
+    let clock = 0;
     let wrote = () => {};
-    const generations = [];
+    const writes = [];
     const stamp = createWatchStamp({
-      initial: stampNumber(0), compute: () => stampNumber(++n), settleMs: 10,
-      write: (_info, generation) => { generations.push(generation); wrote(); },
+      initial: { ...source, builtAt: 'T0' }, compute: () => ({ ...source, builtAt: `T${++clock}` }), settleMs: 10,
+      write: (info, generation) => { writes.push({ info, generation }); wrote(); },
     });
     const nextWrite = () => new Promise(resolve => { wrote = resolve; });
     for (const name of ['extension', 'webview']) {
@@ -375,21 +422,28 @@ describe('createWatchStamp with esbuild', () => {
       stamp.attach(name, context);
       contexts.push(context);
     }
-    const embedded = () => ['extension', 'webview'].map(name => evaluate(readFileSync(join(dir, `${name}.cjs`), 'utf8')).info);
+    /** The stamp both bundles embed, after checking that it is the one last written. */
+    const embedded = () => {
+      const stamps = ['extension', 'webview'].map(name => evaluate(readFileSync(join(dir, `${name}.cjs`), 'utf8')).info);
+      expect(stamps).toEqual([writes.at(-1).info, writes.at(-1).info]);
+      return stamps[0];
+    };
     try {
       let written = nextWrite();
       await Promise.all(contexts.map(context => context.rebuild()));
       await written;
-      expect(embedded()).toEqual([stampNumber(0), stampNumber(0)]);
+      expect(embedded()).toEqual({ ...CLEAN, builtAt: 'T0' });
+      Object.assign(source, EDITED);
       written = nextWrite();
       await contexts[1].rebuild(); // What the watcher runs after a change to the webview's files
       await written;
-      expect(embedded()).toEqual([stampNumber(1), stampNumber(1)]);
+      expect(embedded()).toMatchObject(EDITED);
+      Object.assign(source, CLEAN); // The edit is reverted, say in the CSS that esbuild doesn't see.
       written = nextWrite();
       stamp.refresh(); // What esbuild.mjs calls after rebuilding the dashboard CSS
       await written;
-      expect(embedded()).toEqual([stampNumber(2), stampNumber(2)]);
-      expect(generations).toEqual([0, 1, 2]);
+      expect(embedded()).toMatchObject(CLEAN);
+      expect(writes.map(write => write.generation)).toEqual([0, 1, 2]);
     } finally {
       stamp.dispose();
     }

@@ -137,13 +137,24 @@ export function buildInfoOptions(stamp, hooks = {}) {
 }
 
 /**
+ * Whether two stamps describe the same source. `builtAt` is left out: it differs on every compute.
+ * @param {BuildInfo} a
+ * @param {BuildInfo} b
+ */
+function sameSource(a, b) {
+  return a.version === b.version && a.commit === b.commit && a.dirty === b.dirty && a.branch === b.branch && a.dev === b.dev;
+}
+
+/**
  * Keeps watch-mode stamps fresh and identical across bundles. The first rebuild that the watcher
  * starts after a change computes a new stamp; rebuilds it starts while that one runs belong to the
  * same change and reuse it. `refresh()` does the same for a change that esbuild doesn't see, such
  * as the dashboard CSS. Once no build is running, every bundle that embeds an older stamp is
- * rebuilt, and then `write` records the stamp that all of them share (for dist/build-info.json).
- * A bundle whose last build failed waits for its own files to change, so a broken file can't cause
- * a rebuild loop.
+ * rebuilt. Overlapping builds can share a stamp computed before a later edit (or revert), so the
+ * source is checked again before `write` records the stamp that all of them share (for
+ * dist/build-info.json), and every bundle is restamped if it changed. A bundle whose last build
+ * failed waits for its own files to change, so a broken file can't cause a rebuild loop. A stamp
+ * that can't be computed (say, package.json caught mid-save) leaves the current one in place.
  * @param {{
  *   initial: BuildInfo,
  *   compute: () => BuildInfo,
@@ -171,21 +182,47 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
   const requested = new Set(); // bundles this coordinator asked to rebuild
   const failed = new Set(); // bundles whose last build failed
 
+  /** A fresh stamp, or undefined when it can't be computed right now. */
+  function tryCompute() {
+    try {
+      return compute();
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** @param {BuildInfo} latest a stamp that every bundle gets on its next build */
+  function restamp(latest) {
+    info = latest;
+    generation += 1;
+  }
+
   function settle() {
     if (building.size > 0) return; // each build schedules another check when it ends
     const names = [...contexts.keys()];
     if (!names.every(name => served.has(name) || failed.has(name))) return;
     if (refreshRequested) {
-      refreshRequested = false;
-      info = compute();
-      generation += 1;
+      const latest = tryCompute();
+      if (latest) {
+        refreshRequested = false;
+        restamp(latest);
+      }
     }
-    const stale = names.filter(name => !failed.has(name) && served.get(name) !== generation);
+    const healthy = names.filter(name => !failed.has(name));
+    let stale = healthy.filter(name => served.get(name) !== generation);
+    const ready = () => stale.length === 0 && written !== generation && names.some(name => served.get(name) === generation);
+    if (ready()) {
+      const latest = tryCompute();
+      if (latest && !sameSource(latest, info)) {
+        restamp(latest);
+        stale = healthy;
+      }
+    }
     for (const name of stale) {
       requested.add(name);
       contexts.get(name)?.rebuild().catch(() => { requested.delete(name); });
     }
-    if (stale.length === 0 && written !== generation && names.some(name => served.get(name) === generation)) {
+    if (ready()) {
       written = generation;
       write(info, generation);
     }
@@ -212,9 +249,11 @@ export function createWatchStamp({ initial, compute, write, settleMs = 100 }) {
           serving.delete(name);
           if (requested.delete(name)) return;
           if (started.has(name) && watcherBuilds.size === 0) {
-            info = compute();
-            generation += 1;
-            refreshRequested = false; // This newer stamp also covers a pending refresh().
+            const latest = tryCompute();
+            if (latest) {
+              restamp(latest);
+              refreshRequested = false; // This newer stamp also covers a pending refresh().
+            }
           }
           started.add(name);
           watcherBuilds.add(name);
