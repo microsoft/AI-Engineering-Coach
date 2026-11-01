@@ -156,6 +156,8 @@ function closeRuleEditor(container: HTMLElement): void {
 function loadRuleSource(container: HTMLElement, session: EditorSession, ruleId: string): void {
   rpc<{ source: string }>('getRuleSource', { ruleId }).then(res => {
     if (!isOpenEditor(container, session)) return;
+    // The extension answers an empty source for a rule it doesn't have (any more).
+    if (!res.source.trim()) throw new Error(`No rule "${ruleId}" was found.`);
     markdownToForm(container, res.source);
     session.formRuleId = ruleId;
     enableSaveAndTest(container, true);

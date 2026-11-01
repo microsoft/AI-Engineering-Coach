@@ -294,6 +294,20 @@ describe('Rule Editor Save and Test without the rule\'s source', () => {
     expect(results.textContent).toContain('Rule not found');
     await expectSaveAndTestRefused(page);
   });
+
+  it('says why it won\'t save or test a rule the extension has no source for', async () => {
+    const page = await renderPage();
+    showDetail(page, A);
+    click(page, '#rule-edit-source-btn');
+    await answer('getRuleSource', { source: '' });
+
+    const results = el(page, '#rule-test-results');
+    expect(results.className).toBe('rule-test-results rule-test-error');
+    expect(results.style.display).toBe('');
+    expect(results.textContent).toContain(`No rule "${A}" was found.`);
+    expect(formId(page)).toBe('');
+    await expectSaveAndTestRefused(page);
+  });
 });
 
 describe('Rule Editor Save answering late', () => {
