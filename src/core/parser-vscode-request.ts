@@ -122,15 +122,14 @@ export function normalizeSessionMode(modeId: string | undefined): string {
   if (!modeId) return '';
   // Built-in modes
   if (modeId === 'agent' || modeId === 'ask' || modeId === 'edit') return modeId;
-  // URI-based modes: extract the meaningful name from the path
-  const lower = modeId.toLowerCase();
-  if (lower.includes('plan')) return 'plan';
-  // Other custom agents/chatmodes — use the filename stem
+  // URI-based modes: judge them by the file name, not by the folders it's in
   let decoded: string;
   try { decoded = decodeURIComponent(modeId); } catch { decoded = modeId; }
   const lastSlash = decoded.lastIndexOf('/');
   const filename = lastSlash >= 0 ? decoded.substring(lastSlash + 1) : decoded;
   const stem = filename.replace(/\.(agent|chatmode)\.md$/i, '');
+  if (stem.toLowerCase().includes('plan')) return 'plan';
+  // Other custom agents/chatmodes — use the filename stem
   return stem || modeId;
 }
 
@@ -168,11 +167,12 @@ export function requestModeFromInfo(modeInfo: RawModeInfo | undefined): string |
   const modeId = textOf(modeInfo.telemetryModeId) || textOf(modeInfo.modeId);
   if (BUILTIN_MODES.has(modeId)) return modeId;
   if (modeId !== 'custom') return undefined;
-  // Plan and other agents that aren't built in. telemetryModeName is hashed for user agents, so check the instructions too.
+  // Plan and other agents that aren't built in. telemetryModeName is hashed for user agents, so check the instructions too;
+  // normalizeSessionMode judges the agent file by its name, not its folders.
   const instructions = isObj(modeInfo.modeInstructions) ? modeInfo.modeInstructions : {};
   const uri = uriText(instructions.uri);
   const name = textOf(instructions.name);
-  if (/plan/i.test(`${uri} ${name} ${textOf(modeInfo.telemetryModeName)}`)) return 'plan';
+  if (/plan/i.test(`${name} ${textOf(modeInfo.telemetryModeName)}`)) return 'plan';
   if (uri) return normalizeSessionMode(uri);
   return name || 'custom';
 }

@@ -19,7 +19,7 @@ import {
   processWorkspaceEntryAsync,
 } from './parser-vscode';
 import { getParseWarningCounts, type ParseContext, resetParseWarnings } from './parser-shared';
-import { parseRawRequest, requestModeFromInfo, type RawRequest } from './parser-vscode-request';
+import { parseRawRequest, requestModeFromInfo, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
 import { runDetectors, runEmitters } from './detector-registry';
 import type { Session } from './types';
 
@@ -621,26 +621,36 @@ function noPlanModeFinding(session: Session) {
   return runDetectors(session.requests, [session], false).find(pattern => pattern.id === 'no-plan-mode');
 }
 
-describe('parseSessionFile — per-request modes', () => {
+/** Builders for VS Code session logs whose requests record their own modeInfo. */
+function modeLogFixtures() {
   const at = new Date(2026, 8, 30, 10).getTime();
-  const PLAN_URI = 'file:///c%3A/Users/test/agents/Plan.agent.md';
   const builtin = (mode: string) => ({ kind: mode, isBuiltin: true, telemetryModeId: mode, telemetryModeName: mode, permissionLevel: 'default' });
-  // How current VS Code records a request sent with Copilot's Plan agent.
-  const plan = {
-    kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan', permissionLevel: 'default',
-    modeInstructions: { name: 'Plan', content: 'You are a PLANNING AGENT.', toolReferences: [], uri: { $mid: 1, scheme: 'file', path: '/c:/Users/test/agents/Plan.agent.md' } },
-  };
+  // How current VS Code records a request sent with a custom agent, such as Copilot's Plan agent.
+  // telemetryModeName is hashed for user and workspace agents.
+  const customAgent = (name: string, agentPath: string, telemetryName = name) => ({
+    kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: telemetryName, permissionLevel: 'default',
+    modeInstructions: { name, content: 'You are an agent.', toolReferences: [], uri: { $mid: 1, scheme: 'file', path: agentPath } },
+  });
   let next = 0;
   const request = (modeInfo?: Record<string, unknown>) => ({
     requestId: `r${next}`, timestamp: at + 60_000 * next++, message: { text: 'Refactor the parser so it streams events' },
     response: [{ value: 'Done.' }], agent: { extensionDisplayName: 'GitHub Copilot Chat', id: 'github.copilot.editsAgent' },
     result: { metadata: {} }, ...(modeInfo ? { modeInfo } : {}),
   });
-  const requests = (count: number, modeInfo?: Record<string, unknown>) => Array.from({ length: count }, () => request(modeInfo));
-  const start = (modeId: string) => JSON.stringify({ kind: 0, v: { version: 3, sessionId: 'modes', creationDate: at, initialLocation: 'panel', requests: [], inputState: { mode: { id: modeId, kind: 'agent' } } } });
-  const switchMode = (modeId: string) => JSON.stringify({ kind: 1, k: ['inputState', 'mode'], v: { id: modeId, kind: 'agent' } });
-  const append = (added: unknown[]) => JSON.stringify({ kind: 2, k: ['requests'], v: added });
-  const jsonSession = (added: unknown[]) => JSON.stringify({ sessionId: 'json-modes', inputState: { mode: { id: 'agent', kind: 'agent' } }, requests: added });
+  return {
+    builtin, customAgent, request,
+    PLAN_URI: 'file:///c%3A/Users/test/agents/Plan.agent.md',
+    plan: customAgent('Plan', '/c:/Users/test/agents/Plan.agent.md'),
+    requests: (count: number, modeInfo?: Record<string, unknown>) => Array.from({ length: count }, () => request(modeInfo)),
+    start: (modeId: string) => JSON.stringify({ kind: 0, v: { version: 3, sessionId: 'modes', creationDate: at, initialLocation: 'panel', requests: [], inputState: { mode: { id: modeId, kind: 'agent' } } } }),
+    switchMode: (modeId: string) => JSON.stringify({ kind: 1, k: ['inputState', 'mode'], v: { id: modeId, kind: 'agent' } }),
+    append: (added: unknown[]) => JSON.stringify({ kind: 2, k: ['requests'], v: added }),
+    jsonSession: (added: unknown[]) => JSON.stringify({ sessionId: 'json-modes', inputState: { mode: { id: 'agent', kind: 'agent' } }, requests: added }),
+  };
+}
+
+describe('parseSessionFile — per-request modes', () => {
+  const { builtin, customAgent, request, requests, plan, PLAN_URI, start, switchMode, append, jsonSession } = modeLogFixtures();
 
   it('keeps a mid-session switch to Plan mode that a JSONL session logs', () => {
     // The session's saved mode stays at its initial Agent mode; only the request records Plan.
@@ -654,6 +664,16 @@ describe('parseSessionFile — per-request modes', () => {
     expect(noPlanModeFinding(switched)).toBeUndefined();
 
     expect(noPlanModeFinding(parseSessionFixture('agent-only.jsonl', [start('agent'), append(agentTurns)].join('\n')))?.occurrences).toBe(40);
+  });
+
+  it('counts a custom agent as agentic, not as Plan, when a folder above it is named like plan', () => {
+    const reviewerPath = '/workspace/planetarium/.github/agents/Reviewer.agent.md';
+    const session = parseSessionFixture('reviewer.jsonl', [
+      start('agent'), append(requests(40, builtin('agent'))),
+      switchMode(`file://${reviewerPath}`), append([request(customAgent('Reviewer', reviewerPath, '1395712843'))]),
+    ].join('\n'));
+    expect(session.requests.at(-1)?.agentMode).toBe('Reviewer');
+    expect(noPlanModeFinding(session)?.occurrences).toBe(41);
   });
 
   it("reads each request's mode in a JSON session too", () => {
@@ -681,6 +701,7 @@ describe('requestModeFromInfo', () => {
     ['the Plan agent', { kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan' }, 'plan'],
     ['the Plan agent with a hashed telemetry name', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Plan' } }, 'plan'],
     ['a custom agent file, named like the session mode', { modeId: 'custom', modeInstructions: { name: 'Reviewer', uri: customFile } }, 'MERs Agent'],
+    ['a custom agent in a folder named like plan', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Reviewer', uri: { $mid: 1, scheme: 'file', path: '/workspace/planetarium/.github/agents/Reviewer.agent.md' } } }, 'Reviewer'],
     ['a custom agent without a file', { telemetryModeId: 'custom', modeInstructions: { name: 'Reviewer' } }, 'Reviewer'],
     ['a custom agent without instructions', { telemetryModeId: 'custom', telemetryModeName: '1395712843' }, 'custom'],
     ['an applied code block', { telemetryModeId: 'applyCodeBlock' }, undefined],
@@ -691,6 +712,15 @@ describe('requestModeFromInfo', () => {
   });
 });
 
+describe('normalizeSessionMode', () => {
+  it.each([
+    ['vscode-userdata:/c%3A/Users/test/plan-agent/Plan.agent.md', 'plan'],
+    ['file:///workspace/planetarium/.github/agents/Reviewer.agent.md', 'Reviewer'],
+    ['file:///c%3A/Users/test/plans%20team/MERs%20Agent.chatmode.md', 'MERs Agent'],
+  ])('judges %s by its file name, not its folders', (modeId, expected) => {
+    expect(normalizeSessionMode(modeId)).toBe(expected);
+  });
+});
 describe('scanVsCodeDirs', () => {
   it.each(['GitHub Copilot CLI', 'Local Agent'])('does not count absent events files as parse failures for %s', async harness => {
     const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-empty-'));
