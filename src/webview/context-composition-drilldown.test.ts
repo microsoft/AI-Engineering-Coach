@@ -119,6 +119,28 @@ describe('composition workspace drill-down', () => {
     await flush();
     expect(panel.textContent).toContain('Could not load sessions.');
   });
+
+  it('reveals sessions beyond the most recent ten on request', async () => {
+    mocks.rpc.mockResolvedValueOnce(response(...Array.from({ length: 23 }, (_, i) => session(`s${i + 1}`))));
+    const { toggle, panel } = setup();
+    toggle.click();
+    await flush();
+    const more = () => panel.querySelector<HTMLButtonElement>('.ctx-comp-ws-more');
+    expect(listed(panel)).toHaveLength(10);
+    expect(panel.textContent).toContain('Showing the 10 most recent of 23 sessions.');
+    listed(panel)[0].click();
+    expect(more()?.textContent).toBe('Show 10 more');
+    more()?.click();
+    // The open session stays open, and focus moves to the first session that appeared.
+    expect(listed(panel)).toHaveLength(20);
+    expect(listed(panel)[0].getAttribute('aria-expanded')).toBe('true');
+    expect((document.activeElement as HTMLElement | null)?.dataset.sessionId).toBe('s11');
+    expect(more()?.textContent).toBe('Show 3 more');
+    more()?.click();
+    expect(listed(panel).map(button => button.dataset.sessionId).at(-1)).toBe('s23');
+    expect(more()).toBeNull();
+    expect(panel.textContent).not.toContain('most recent of');
+  });
 });
 
 describe('composition workspace drill-down with stale responses', () => {

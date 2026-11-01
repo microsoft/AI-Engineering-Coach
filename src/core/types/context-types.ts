@@ -82,6 +82,8 @@ export interface CompositionTrendSeries {
   systemInstructions: (number | null)[];
   /** Requests (Copilot CLI: turns) behind each weekly share, like `CompositionBreakdown.samples`. */
   samples: number[];
+  /** How each weekly share is weighted, like `CompositionBreakdown.weighting`; `null` for weeks without data. */
+  weighting: (CompositionBreakdown['weighting'] | null)[];
 }
 
 export interface CompositionTrend {

@@ -12,20 +12,33 @@ import { html, render, unmount } from './render';
 import { compositionMiniBar, countText, renderSessionCompositionChart, renderSessionCompositionPanel } from './context-composition-view';
 
 const WORKSPACE_SESSION_CHART_ID = 'ctxCompWsSessionChart';
-const MAX_DRILLDOWN_SESSIONS = 10;
+/** Sessions listed at first, and added by each "Show more". */
+const DRILLDOWN_PAGE = 10;
 
 function hasSessionComposition(s: SessionContextDetail): boolean {
   const detail = s.composition;
   return detail != null && (detail.breakdown != null || detail.systemSegments.length > 0 || detail.compactions.length > 0);
 }
 
-function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDetail[], total: number, selected: string | null): void {
+/** How many sessions the list shows, which one is open, and which one gets focus after rendering. */
+interface SessionListState {
+  shown: number;
+  selected: string | null;
+  focusId?: string;
+}
+
+/** Lists the `shown` most recent sessions. "Show more" adds the next page and moves focus to its first session. */
+function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDetail[], state: SessionListState): void {
+  const { shown, selected, focusId } = state;
   destroyChartById(WORKSPACE_SESSION_CHART_ID);
-  const select = (id: string) => renderWorkspaceSessions(panel, sessions, total, id === selected ? null : id);
+  const visible = sessions.slice(0, shown);
+  const remaining = sessions.length - visible.length;
+  const select = (id: string) => renderWorkspaceSessions(panel, sessions, { shown, selected: id === selected ? null : id });
+  const showMore = () => renderWorkspaceSessions(panel, sessions, { shown: shown + DRILLDOWN_PAGE, selected, focusId: sessions[shown]?.sessionId });
   render(sessions.length === 0
     ? html`<div class="ctx-comp-note">No session in this workspace has composition data in this range.</div>`
     : html`<ul class="ctx-comp-ws-session-list" aria-label="Sessions with composition data">
-      ${sessions.map(s => html`<li>
+      ${visible.map(s => html`<li>
         <button type="button" class="ctx-comp-ws-session" data-session-id=${s.sessionId} aria-expanded=${String(s.sessionId === selected)} onClick=${() => select(s.sessionId)}>
           <span>${s.date}</span>
           <span class="ctx-comp-ws-session-harness">${s.harness}</span>
@@ -34,10 +47,14 @@ function renderWorkspaceSessions(panel: HTMLElement, sessions: SessionContextDet
         </button>
         ${s.sessionId === selected ? renderSessionCompositionPanel(s, WORKSPACE_SESSION_CHART_ID) : null}
       </li>`)}
-      ${total > sessions.length ? html`<li class="ctx-comp-note">Showing the ${sessions.length} most recent of ${total} sessions.</li>` : null}
+      ${remaining > 0 ? html`<li class="ctx-comp-ws-more-row">
+        <span class="ctx-comp-note">Showing the ${visible.length} most recent of ${sessions.length} sessions.</span>
+        <button type="button" class="ctx-comp-ws-more" onClick=${showMore}>Show ${Math.min(DRILLDOWN_PAGE, remaining)} more</button>
+      </li>` : null}
     </ul>`, panel);
-  const current = sessions.find(s => s.sessionId === selected);
+  const current = visible.find(s => s.sessionId === selected);
   if (current) renderSessionCompositionChart(current, WORKSPACE_SESSION_CHART_ID);
+  if (focusId) [...panel.querySelectorAll<HTMLButtonElement>('.ctx-comp-ws-session')].find(button => button.dataset.sessionId === focusId)?.focus();
 }
 
 function closeWorkspacePanels(toggles: HTMLButtonElement[]): void {
@@ -76,7 +93,7 @@ export function attachCompositionDrilldown(root: HTMLElement, filter: DateFilter
         .then(data => {
           if (!isCurrent()) return;
           const sessions = data.sessions.filter(s => hasSessionComposition(s) && (source == null || s.composition?.source === source));
-          renderWorkspaceSessions(panel, sessions.slice(0, MAX_DRILLDOWN_SESSIONS), sessions.length, null);
+          renderWorkspaceSessions(panel, sessions, { shown: DRILLDOWN_PAGE, selected: null });
         })
         .catch(() => {
           if (isCurrent()) render(html`<div class="ctx-comp-note">Could not load sessions.</div>`, panel);

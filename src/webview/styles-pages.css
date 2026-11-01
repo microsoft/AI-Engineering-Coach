@@ -1928,6 +1928,9 @@
 .ctx-comp-ws-session { width: 100%; display: grid; grid-template-columns: 82px minmax(0, 1fr) 82px 80px; align-items: center; gap: 8px; padding: 4px 8px; font-size: 11px; text-align: left; }
 .ctx-comp-ws-session:hover, .ctx-comp-ws-session[aria-expanded="true"] { background: rgba(88, 166, 255, 0.06); }
 .ctx-comp-ws-session-harness { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.ctx-comp-ws-more-row { display: flex; align-items: center; gap: 8px; }
+.ctx-comp-ws-more { font: inherit; font-size: 11px; color: var(--text-muted); cursor: pointer; border: 1px solid var(--border); background: transparent; border-radius: 4px; padding: 2px 8px; }
+.ctx-comp-ws-more:hover { color: var(--text); border-color: var(--text-muted); }
 .ctx-comp-segments { margin: 4px 0 12px; }
 .ctx-comp-segment-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-width: 640px; }
 .ctx-comp-segment-list li { display: grid; grid-template-columns: minmax(150px, 220px) 1fr 60px 50px; align-items: center; gap: 8px; font-size: 11px; }

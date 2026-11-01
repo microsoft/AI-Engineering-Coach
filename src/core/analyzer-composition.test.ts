@@ -341,6 +341,7 @@ describe('context composition with mixed prompt sizes', () => {
     // and the count; week 2 recorded no prompt size, so both of its requests count equally.
     expect(series.toolDefinitions).toEqual([60, 30]);
     expect(series.samples).toEqual([1, 2]);
+    expect(series.weighting).toEqual(['tokens', 'requests']);
   });
 });
 

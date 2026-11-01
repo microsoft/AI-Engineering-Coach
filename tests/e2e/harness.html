@@ -330,9 +330,9 @@ function mockContextComposition(empty) {
     trend: {
       labels: ['2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04'],
       series: [
-        { harness: 'GitHub Copilot CLI', toolDefinitions: [11.2, 10.1, 9.0, 8.4], systemInstructions: [5.8, 5.5, 5.2, 5.0], samples: [140, 160, 160, 180] },
-        { harness: 'Local Agent', toolDefinitions: [41.0, 38.5, 35.2, 31.0], systemInstructions: [12.0, 11.5, 11.0, 10.4], samples: [110, 120, 125, 128] },
-        { harness: 'Local Agent (Insiders)', toolDefinitions: [null, 44.0, 41.0, 39.5], systemInstructions: [null, 10.2, 9.9, 9.5], samples: [0, 50, 60, 70] },
+        { harness: 'GitHub Copilot CLI', toolDefinitions: [11.2, 10.1, 9.0, 8.4], systemInstructions: [5.8, 5.5, 5.2, 5.0], samples: [140, 160, 160, 180], weighting: ['tokens', 'tokens', 'tokens', 'tokens'] },
+        { harness: 'Local Agent', toolDefinitions: [41.0, 38.5, 35.2, 31.0], systemInstructions: [12.0, 11.5, 11.0, 10.4], samples: [110, 120, 125, 128], weighting: ['tokens', 'tokens', 'tokens', 'tokens'] },
+        { harness: 'Local Agent (Insiders)', toolDefinitions: [null, 44.0, 41.0, 39.5], systemInstructions: [null, 10.2, 9.9, 9.5], samples: [0, 50, 60, 70], weighting: [null, 'tokens', 'tokens', 'tokens'] },
       ],
     },
     systemSegments: [

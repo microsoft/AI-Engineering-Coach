@@ -178,6 +178,7 @@ function buildTrend(samples: Sample[]): CompositionTrend {
         toolDefinitions: breakdowns.map(b => shareOf(b, 'toolDefinitions')),
         systemInstructions: breakdowns.map(b => shareOf(b, 'systemInstructions')),
         samples: breakdowns.map(b => b?.samples ?? 0),
+        weighting: breakdowns.map(b => b?.weighting ?? null),
       };
     });
   return { labels, series };

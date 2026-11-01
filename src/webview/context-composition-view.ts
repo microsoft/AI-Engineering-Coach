@@ -292,7 +292,7 @@ export function renderCompositionSection(data: ContextCompositionData): Componen
     </div>
     ${empty ? null : html`<div class="two-col ctx-comp-detail">
       <div class="chart-wrap">
-        <div class="chart-title">Tool-definition share by week ${infoTip('Weekly share of prompt tokens spent on tool definitions, per harness. Watch it drop after you disable MCP servers or switch to smaller tool sets.', 'About the tool-definition trend')}</div>
+        <div class="chart-title">Tool-definition share by week ${infoTip('Weekly share of prompt tokens spent on tool definitions, per harness. A week whose requests recorded no prompt size counts each request equally, and its tooltip says \u201cequal weight\u201d. Watch it drop after you disable MCP servers or switch to smaller tool sets.', 'About the tool-definition trend')}</div>
         ${data.trend.labels.length > 1
           ? html`<div style="position:relative;height:200px;"><canvas id=${COMPOSITION_TREND_CHART_ID} role="img" aria-label="Weekly tool-definition share per harness"></canvas></div>`
           : html`<div class="ctx-comp-note">Not enough weekly data for a trend yet.</div>`}
@@ -338,7 +338,8 @@ export function renderCompositionTrendChart(data: ContextCompositionData): void 
             const s = series[item.datasetIndex];
             if (!s || item.parsed.y == null) return '';
             const system = s.systemInstructions[item.dataIndex];
-            return `${s.harness}: tools ${pctText(item.parsed.y)}${system == null ? '' : ` \u00b7 system ${pctText(system)}`} \u00b7 ${countText(s.samples[item.dataIndex], nouns.get(s.harness) ?? 'request')}`;
+            const equal = s.weighting[item.dataIndex] === 'requests' ? ' \u00b7 equal weight' : '';
+            return `${s.harness}: tools ${pctText(item.parsed.y)}${system == null ? '' : ` \u00b7 system ${pctText(system)}`} \u00b7 ${countText(s.samples[item.dataIndex], nouns.get(s.harness) ?? 'request')}${equal}`;
           },
         },
       },

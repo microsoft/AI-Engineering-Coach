@@ -114,14 +114,14 @@ describe('context composition weighting labels', () => {
 type TrendTooltipLabel = (item: { datasetIndex: number; dataIndex: number; parsed: { y: number | null } }) => string;
 
 describe('context composition weekly trend tooltip', () => {
-  it('counts the requests, or Copilot CLI turns, behind each weekly share', () => {
+  it('counts the requests, or Copilot CLI turns, behind each weekly share and flags equal-weight weeks', () => {
     const data = mixed();
     data.harnesses.push({ ...harness('GitHub Copilot CLI', breakdown('tokens', 3, 10), 3), source: 'copilot-cli' });
     data.trend = {
       labels: ['2026-09-07', '2026-09-14'],
       series: [
-        { harness: 'Local Agent', toolDefinitions: [60, 40], systemInstructions: [10, null], samples: [1, 3] },
-        { harness: 'GitHub Copilot CLI', toolDefinitions: [null, 9], systemInstructions: [null, 5], samples: [0, 2] },
+        { harness: 'Local Agent', toolDefinitions: [60, 40], systemInstructions: [10, null], samples: [1, 3], weighting: ['tokens', 'requests'] },
+        { harness: 'GitHub Copilot CLI', toolDefinitions: [null, 9], systemInstructions: [null, 5], samples: [0, 2], weighting: [null, 'tokens'] },
       ],
     };
     show(data);
@@ -129,7 +129,7 @@ describe('context composition weekly trend tooltip', () => {
     const options = vi.mocked(createChart).mock.calls.at(-1)?.[3] as unknown as { plugins: { tooltip: { callbacks: { label: TrendTooltipLabel } } } };
     const label = options.plugins.tooltip.callbacks.label;
     expect(label({ datasetIndex: 0, dataIndex: 0, parsed: { y: 60 } })).toBe('Local Agent: tools 60% \u00b7 system 10% \u00b7 1 request');
-    expect(label({ datasetIndex: 0, dataIndex: 1, parsed: { y: 40 } })).toBe('Local Agent: tools 40% \u00b7 3 requests');
+    expect(label({ datasetIndex: 0, dataIndex: 1, parsed: { y: 40 } })).toBe('Local Agent: tools 40% \u00b7 3 requests \u00b7 equal weight');
     expect(label({ datasetIndex: 1, dataIndex: 1, parsed: { y: 9 } })).toBe('GitHub Copilot CLI: tools 9.0% \u00b7 system 5.0% \u00b7 2 turns');
   });
 });
