@@ -191,6 +191,8 @@ export function openRuleEditor(container: HTMLElement, existingRuleId: string | 
     (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = markdown;
   } else if (existingRuleId) {
     rpc<{ source: string }>('getRuleSource', { ruleId: existingRuleId }).then(res => {
+      // Drop a late response if the editor has since been opened for another rule.
+      if (modal.dataset.ruleId !== existingRuleId) return;
       markdownToForm(container, res.source);
       (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = res.source;
     }).catch(() => {});

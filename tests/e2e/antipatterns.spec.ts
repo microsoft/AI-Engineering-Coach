@@ -261,3 +261,51 @@ test.describe('Anti-Patterns Why? explanations', () => {
     await expect(name).toHaveValue('Draft rule that must survive');
   });
 });
+
+test.describe('Anti-Patterns rule detail Edit Source', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-09-30T12:00:00Z'));
+    await navigateToAntiPatterns(page);
+  });
+
+  test('opens one editor for the rule shown after viewing several rules', async ({ page }) => {
+    await page.evaluate(() => {
+      const root = window as MockWindow & { ruleSourceRequests?: string[] };
+      const original = root.getMockData;
+      const requests: string[] = [];
+      root.ruleSourceRequests = requests;
+      const rule = (id: string) => ({
+        id, name: `Rule ${id}`, group: 'prompt-quality', severity: 'medium', scope: 'requests',
+        requiresIdeContext: false, description: `About ${id}`, descriptionTemplate: '', suggestionTemplate: '',
+        exampleTemplate: '', thresholds: {}, tags: [], source: 'built-in', sourceFilePath: `${id}.md`,
+        version: 1, rawSource: '',
+      });
+      root.getMockData = (method, params) => {
+        if (method === 'getRuleEditor') {
+          return { rules: ['rule-a', 'rule-b', 'rule-c'].map(rule), previews: [], layers: [], pending: [] };
+        }
+        if (method === 'getRuleSource') {
+          const ruleId = params.ruleId as string;
+          requests.push(ruleId);
+          return { source: `---\nid: ${ruleId}\nname: Rule ${ruleId}\n---\n# Description\nAbout ${ruleId}\n` };
+        }
+        return original(method, params);
+      };
+    });
+    await page.locator('#sidebar [data-page="anti-patterns"]').click();
+    await page.locator('.ap-tab[data-tab="rules"]').click();
+
+    for (const id of ['rule-a', 'rule-b']) {
+      await page.locator(`.rule-card[data-rule-id="${id}"]`).click();
+      await expect(page.locator('#rule-detail-panel')).toBeVisible();
+      await page.locator('#rule-back-btn').click();
+    }
+    await page.locator('.rule-card[data-rule-id="rule-c"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+
+    await expect(page.locator('#rule-editor-modal')).toBeVisible();
+    await expect(page.locator('#rf-id')).toHaveValue('rule-c');
+    expect(await page.evaluate(() => (window as MockWindow & { ruleSourceRequests?: string[] }).ruleSourceRequests))
+      .toEqual(['rule-c']);
+  });
+});
