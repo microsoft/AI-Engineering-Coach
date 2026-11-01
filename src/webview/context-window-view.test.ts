@@ -55,7 +55,7 @@ describe('context-window labels', () => {
       requestId: `r${n}`, messageText: 'm', responseText: 'r', timestamp: Date.UTC(2026, 9, 28, 10, n), promptTokens: last, completionTokens: 100,
       contextUsage: { lastPromptTokens: last, peakPromptTokens: peak, contextLimit: null, calls: 3 },
     });
-    const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'ws', harness: 'Claude', requests: [turn(1, 30_000, 200_000), turn(2, 30_000, 30_000)] });
+    const session = createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'ws', harness: 'Codex', requests: [turn(1, 30_000, 200_000), turn(2, 30_000, 30_000)] });
     const data = new Analyzer([session]).getWorkspaceContextSessions('ws');
     const [row] = data.sessions;
     // The workspace's window comes from last prompts only; the session's includes the 200K peak (224K).

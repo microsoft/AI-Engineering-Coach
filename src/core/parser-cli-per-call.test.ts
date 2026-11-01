@@ -40,6 +40,7 @@ interface CallOptions {
   input: number;
   subagent?: boolean;
   limit?: number | null;
+  model?: string;
   output?: number;
   reasoning?: number;
   finish?: string;
@@ -54,7 +55,7 @@ function call(at: number, o: CallOptions): Record<string, unknown> {
     timestamp: iso(at),
     data: {
       usage: {
-        model: o.subagent ? 'claude-haiku-4.5' : 'claude-opus-5.5',
+        model: o.model ?? (o.subagent ? 'claude-haiku-4.5' : 'claude-opus-5.5'),
         reasoningEffort: o.subagent ? 'low' : 'high',
         initiator: o.subagent ? 'sub-agent' : 'agent',
         interactionType: o.subagent ? 'conversation-subagent' : 'conversation-agent',
@@ -164,5 +165,34 @@ describe('Copilot CLI per-call token types', () => {
     expect(session?.requests[0].compaction).toMatchObject({ contextLengthBefore: 200_000, tokenLimit: 250_000 });
     expect(session?.requests[0].compaction).not.toHaveProperty('atCall');
     expect(session?.callTimeline).toBeUndefined();
+  });
+});
+
+describe('Copilot CLI turn context when the model changes within a turn', () => {
+  it('measures the turn against a limit of its last call\u2019s model only', () => {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-model-switch', startTime: iso(0), selectedModel: 'claude-opus-5.5' } },
+      { type: 'user.message', id: 'u1', timestamp: iso(1), data: { content: 'secret prompt' } },
+      call(10, { input: 100_000 }),
+      // Another model, with no limit logged: the first model's 968K must not be reported for it.
+      call(20, { input: 150_000, limit: null, model: 'gpt-6.1-sol' }),
+    ]), 'ws', 'demo');
+    expect(session?.requests[0].contextUsage).toEqual({ lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: null, calls: 2 });
+  });
+
+  it('applies a compaction limit only to the model whose context it compacted', () => {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', timestamp: iso(0), data: { sessionId: 'cli-model-switch-compaction', startTime: iso(0), selectedModel: 'claude-opus-5.5' } },
+      { type: 'user.message', id: 'u1', timestamp: iso(1), data: { content: 'secret prompt one' } },
+      call(10, { input: 200_000, limit: null }),
+      compaction(20, 200_000, 40_000, 272_000),
+      // Another model after the compaction, with no limit logged: the 272K of claude-opus-5.5 doesn't apply to it.
+      call(30, { input: 50_000, limit: null, model: 'gpt-6.1-sol' }),
+      { type: 'user.message', id: 'u2', timestamp: iso(40), data: { content: 'secret prompt two' } },
+      // Logged before the turn's first call: it compacted the context of the previous call's model.
+      compaction(41, 60_000, 20_000, 400_000),
+      call(50, { input: 25_000, limit: null, model: 'gpt-6.1-sol' }),
+    ]), 'ws', 'demo');
+    expect(session?.requests.map(r => r.contextUsage?.contextLimit)).toEqual([null, 400_000]);
   });
 });
