@@ -79,7 +79,7 @@ Type `@aicoach` in any VS Code chat panel for conversational access to all coach
 
 ## Privacy
 
-AI Engineer Coach reads your local session logs and never modifies or uploads them, and it collects no telemetry. Its only automatic network request is the update check: at most one anonymous request a day to `api.github.com`, with no identifiers or usage data. Turn it off with the `aiEngineerCoach.updates.autoCheck` setting or VS Code's `extensions.autoCheckUpdates`.
+AI Engineer Coach reads your local session logs and never modifies or uploads them, and it collects no telemetry. Its only automatic network request is the update check: about one anonymous request a day to `api.github.com` (failed checks are retried sooner), with no identifiers or usage data. Turn it off with the `aiEngineerCoach.updates.autoCheck` setting or VS Code's `extensions.autoCheckUpdates`.
 
 
 

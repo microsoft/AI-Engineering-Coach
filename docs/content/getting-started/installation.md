@@ -51,10 +51,10 @@ Release builds, the ones installed from a [GitHub Release](https://github.com/mi
 
 What the update check sends:
 
-- At most one request a day to `api.github.com` (`GET /repos/microsoft/AI-Engineering-Coach/releases/latest`), with a fixed `User-Agent` and no version, machine, account, or usage data. GitHub sees your IP address, as with any download.
+- About one request a day to `api.github.com` (`GET /repos/microsoft/AI-Engineering-Coach/releases/latest`), with a fixed `User-Agent` and no version, machine, account, or usage data. GitHub sees your IP address, as with any download.
 - Only after you click **Update**: a download from `github.com`, redirected to `release-assets.githubusercontent.com`. Like a manual download, it counts toward the release's public download count.
 
-The check runs only after the extension activates, uses VS Code's proxy settings, and stays silent while you're offline or GitHub is unreachable; it tries again later. A new release is announced only once VS Code's `extensions.autoUpdateDelay` has passed since it was published (12 hours by default).
+Automatic checks start 2 to 10 minutes after the extension activates at the earliest, then run 22 to 26 hours apart; all windows of a VS Code profile share one schedule. While you're offline or GitHub is unreachable, a failed check stays silent and waits 1 hour before the next try, then 2, 4, 8, and 16 hours, then a day. **Check for Updates** asks right away. When GitHub's limit for anonymous requests is reached, every check, including **Check for Updates**, waits for GitHub's reset time. Checks use VS Code's proxy settings. A new release is announced only once VS Code's `extensions.autoUpdateDelay` has passed since it was published (12 hours by default).
 
 To turn automatic checks off, set `aiEngineerCoach.updates.autoCheck` to `false`, or turn off VS Code's `extensions.autoCheckUpdates`. Behind a firewall, allow `api.github.com`, `github.com`, and `release-assets.githubusercontent.com`, or turn the check off.
 
