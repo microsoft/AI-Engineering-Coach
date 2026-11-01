@@ -314,7 +314,7 @@ export function renderCompositionSection(data: ContextCompositionData): Componen
       <div class="chart-wrap">
         <div class="chart-title">Tool-definition share by week ${infoTip('Weekly share of prompt tokens spent on tool definitions, per harness. A week whose requests recorded no prompt size counts each request equally, and its tooltip says \u201cequal weight\u201d. Watch it drop after you disable MCP servers or switch to smaller tool sets.', 'About the tool-definition trend')}</div>
         ${data.trend.labels.length > 1
-          ? html`<div style="position:relative;height:200px;"><canvas id=${COMPOSITION_TREND_CHART_ID} role="img" aria-label="Weekly tool-definition share per harness"></canvas></div>
+          ? html`<div style="position:relative;height:200px;"><canvas id=${COMPOSITION_TREND_CHART_ID} role="img" aria-label="Weekly tool-definition share per harness. Show the chart as a table, below it, for the values."></canvas></div>
             ${trendTable(data.trend.labels, trendSeries(data), sampleNouns(data), TABLE_FORMAT)}`
           : html`<div class="ctx-comp-note">Not enough weekly data for a trend yet.</div>`}
       </div>
@@ -398,7 +398,7 @@ export function renderSessionCompositionPanel(s: SessionContextDetail, chartId =
     ${detail.breakdown ? html`
       ${compositionBar(detail.breakdown.slices, 'Session prompt composition', { unit })}
       ${sessionLegend(detail.breakdown.slices, unit)}` : null}
-    ${hasPerRequest ? html`<div class="ctx-comp-session-chart"><canvas id=${chartId} role="img" aria-label="Prompt composition per request, 100% stacked"></canvas></div>
+    ${hasPerRequest ? html`<div class="ctx-comp-session-chart"><canvas id=${chartId} role="img" aria-label="Prompt composition per request, 100% stacked. Show the chart as a table, below it, for the values."></canvas></div>
       ${perRequestTable(s, detail, perRequestCategories(detail), TABLE_FORMAT)}` : null}
     ${detail.systemSegments.length > 0 ? html`<div class="ctx-comp-session-sub">
       <div class="ctx-comp-session-title">System prompt (latest checkpoint)${detail.toolCount == null ? '' : ` \u00b7 ${detail.toolCount} tools sent${detail.toolTokens == null ? '' : `, \u2248${formatNum(detail.toolTokens)} tokens`}`}</div>

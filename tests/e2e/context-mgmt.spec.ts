@@ -280,9 +280,14 @@ test.describe('Context Composition', () => {
   });
 
   test('reads the weekly tool-definition shares from the keyboard, without hover', async ({ page }) => {
-    await page.locator('.ctx-comp-detail details.ctx-comp-table summary').focus();
+    // Tab from the chart's info icon, past the canvas, onto the disclosure under it, and open it.
+    await page.locator('.ctx-comp-detail .chart-wrap').first().locator('.info-icon').focus();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.ctx-comp-detail details.ctx-comp-table summary')).toBeFocused();
     await page.keyboard.press('Enter');
-    // Found by role and name, so the table is in the accessibility tree once opened.
+    // The next stop is the table's scroll region. Found by role and name, so it's in the accessibility tree.
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('region', { name: 'Weekly tool-definition share per harness' })).toBeFocused();
     const table = page.getByRole('table', { name: 'Weekly tool-definition share per harness' });
     await expect(table.locator('thead th')).toHaveText(['Week of', 'Harness', 'Tool definitions', 'System instructions', 'Based on', 'Weighting']);
     const rows = table.locator('tbody tr');
@@ -297,7 +302,10 @@ test.describe('Context Composition', () => {
     await openWorkspaceSessions(page);
     await page.locator('.ctx-session-row').nth(0).locator('.ctx-session-expand').focus();
     await page.keyboard.press('Enter');
-    await page.locator('.ctx-session-chart-row details.ctx-comp-table summary').focus();
+    // Tab from the session's composition bar, past the per-request chart, onto the disclosure under it.
+    await page.locator('.ctx-session-chart-row .ctx-comp-session > .ctx-comp-bar').focus();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.ctx-session-chart-row details.ctx-comp-table summary')).toBeFocused();
     await page.keyboard.press('Enter');
     const table = page.getByRole('table', { name: 'Prompt composition per request' });
     await expect(table.locator('thead th')).toHaveText(['Request', 'Prompt', 'System instructions', 'Tool definitions', 'Messages', 'Tool results', 'Files']);
