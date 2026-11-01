@@ -17,9 +17,10 @@ import { BUILD_INFO, type BuildInfo } from '../core/build-info';
 import { runtimeDebug } from '../core/runtime-debug';
 import type { UpdateStatus } from '../core/types/rpc-types';
 import { purgeStaleDownloads } from './download-folder';
-import { installRelease } from './install-release';
+import type { InstallRecord } from './install-lock';
+import { installReleaseOnce } from './install-release';
 import {
-  canInstallCandidate, describeNetworkError, fetchLatestRelease, isUpdateCandidate, releasesPageUrl, resolveFeedEndpoints,
+  canInstallCandidate, fetchLatestRelease, isUpdateCandidate, releasesPageUrl, resolveFeedEndpoints,
   type FeedEndpoints, type FeedResult, type UpdateCandidate,
 } from './release-feed';
 import { describeManualCheck } from './update-messages';
@@ -27,7 +28,6 @@ import { automaticChecksEnabled, cooldownFromSetting, evaluateUpdate, isNewerVer
 import {
   activeRateLimit, afterFailure, afterRateLimit, afterSuccess, claimCheck, isCheckDue, nextCheckTime, timerDelay, type ScheduleState,
 } from './update-schedule';
-import { UpdateDownloadError } from './vsix-download';
 import { runUnderLease } from './window-lease';
 
 export const CHECK_FOR_UPDATES_COMMAND = 'aiEngineerCoach.checkForUpdates';
@@ -63,10 +63,6 @@ export interface UpdateServiceOptions {
   /** Directory for downloaded packages; defaults to `<globalStorage>/updates`. */
   downloadDir?: () => Promise<string>;
   sleep?: (ms: number) => Promise<void>;
-}
-
-function isAbort(err: unknown): boolean {
-  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
 }
 
 /** For calls whose outcome doesn't matter: VS Code cancels them when the window reloads or closes. */
@@ -228,6 +224,19 @@ export class UpdateService implements vscode.Disposable {
     await this.context.globalState.update(UPDATE_STATE_KEY, { ...this.readState(), ...patch });
   }
 
+  /** An install into this installation since this window started, so this window still has to reload. */
+  private pendingInstall(state = this.readState()): InstallRecord | undefined {
+    const { installedVersion: version, installedLocation: location, installedAt: at } = state;
+    return version && location === this.location && typeof at === 'number' && at >= this.startedAt ? { version, location, at } : undefined;
+  }
+
+  /** Never lowers the recorded version: another window's newer install may have reached this one first. */
+  private async recordInstall(record: InstallRecord): Promise<void> {
+    const pending = this.pendingInstall();
+    if (pending && isNewerVersion(pending.version, record.version)) return;
+    await this.writeState({ installedVersion: record.version, installedLocation: record.location, installedAt: record.at });
+  }
+
   private automatic(): boolean {
     return automaticChecksEnabled({
       production: this.context.extensionMode === vscode.ExtensionMode.Production,
@@ -239,13 +248,10 @@ export class UpdateService implements vscode.Disposable {
 
   private evaluate(): Evaluation {
     const state = this.readState();
-    // Other windows of the installation that were running before the install still need to reload.
-    const installedHere = state.installedLocation === this.location
-      && typeof state.installedAt === 'number' && state.installedAt >= this.startedAt;
     return evaluateUpdate({
       candidate: state.release,
       current: this.build.version,
-      markers: { ...state, installedVersion: installedHere ? state.installedVersion : undefined },
+      markers: { ...state, installedVersion: this.pendingInstall(state)?.version },
       automatic: this.automatic(),
       revealedVersion: this.revealedVersion,
       allowInstall: this.localWindow,
@@ -396,33 +402,27 @@ export class UpdateService implements vscode.Disposable {
     }
     this.installing = true;
     this.setStatus({ state: 'updating', latest: release.version });
-    let failure: { error: unknown } | undefined;
-    try {
-      await installRelease(release, {
-        fetch: this.fetchImpl, endpoints: this.endpoints, downloadDirectory: () => this.downloadDirectory(),
-      });
-    } catch (err: unknown) {
-      failure = { error: err };
-    } finally {
-      this.installing = false;
-    }
-    if (!failure) {
-      await this.writeState({ installedVersion: release.version, installedLocation: this.location, installedAt: this.now() });
-      runtimeDebug('update', 'installed', `version=${release.version}`);
-      this.refresh();
-      await this.offerReload(release.version);
-      return;
-    }
+    const outcome = await installReleaseOnce(release, {
+      fetch: this.fetchImpl, endpoints: this.endpoints, downloadDirectory: () => this.downloadDirectory(),
+      sharedFolder: () => this.sharedFolder(), location: this.location, since: this.startedAt, now: this.now, sleep: this.sleep,
+      sharedRecord: () => this.pendingInstall(), onInstalled: record => this.recordInstall(record),
+    }).finally(() => { this.installing = false; });
     this.refresh();
-    if (isAbort(failure.error)) {
-      runtimeDebug('update', 'install-cancelled', `version=${release.version}`);
+    if (outcome.kind === 'installed') {
+      // Another window may have installed a newer release already; that's the one to reload into.
+      const version = this.pendingInstall()?.version ?? outcome.record.version;
+      runtimeDebug('update', 'installed', `version=${version}`);
+      await this.offerReload(version);
       return;
     }
-    const reason = failure.error instanceof UpdateDownloadError ? failure.error.message : describeNetworkError(failure.error);
-    runtimeDebug('update', 'install-failed', `version=${release.version} reason=${reason}`);
-    const choice = await vscode.window.showErrorMessage(
-      `Couldn't install AI Engineer Coach v${release.version}: ${reason}.`, OPEN_RELEASE_PAGE);
-    if (choice === OPEN_RELEASE_PAGE) await vscode.env.openExternal(vscode.Uri.parse(release.releaseUrl));
+    runtimeDebug('update', `install-${outcome.kind}`, `version=${release.version}${outcome.kind === 'failed' ? ` reason=${outcome.reason}` : ''}`);
+    if (outcome.kind === 'busy') {
+      ignoreRejection(vscode.window.showInformationMessage('AI Engineer Coach is being updated in another window. Try again once it has finished.'));
+    } else if (outcome.kind === 'failed') {
+      const choice = await vscode.window.showErrorMessage(
+        `Couldn't install AI Engineer Coach v${release.version}: ${outcome.reason}.`, OPEN_RELEASE_PAGE);
+      if (choice === OPEN_RELEASE_PAGE) await vscode.env.openExternal(vscode.Uri.parse(release.releaseUrl));
+    }
   }
 
   private async offerReload(version: string): Promise<void> {
@@ -431,17 +431,21 @@ export class UpdateService implements vscode.Disposable {
     if (choice === RELOAD_WINDOW) await this.reloadAfterUpdate();
   }
 
-  private async downloadDirectory(): Promise<string> {
+  /** The updates folder all local windows of the profile share; undefined when globalStorage isn't on disk. */
+  private async sharedFolder(): Promise<string | undefined> {
     if (this.downloadDir) return this.downloadDir();
     // VS Code installs a VSIX only from file: (or vscode-remote:) URIs.
-    if (this.context.globalStorageUri.scheme === 'file') return path.join(this.context.globalStorageUri.fsPath, 'updates');
-    return fs.mkdtemp(path.join(os.tmpdir(), 'ai-engineer-coach-update-'));
+    return this.context.globalStorageUri.scheme === 'file' ? path.join(this.context.globalStorageUri.fsPath, 'updates') : undefined;
+  }
+
+  private async downloadDirectory(): Promise<string> {
+    return await this.sharedFolder() ?? fs.mkdtemp(path.join(os.tmpdir(), 'ai-engineer-coach-update-'));
   }
 
   /** Removes packages left behind by a crash or an interrupted install. */
   private async purgeStaleDownloads(): Promise<void> {
-    if (!this.downloadDir && this.context.globalStorageUri.scheme !== 'file') return;
-    await purgeStaleDownloads(await this.downloadDirectory(), this.now());
+    const folder = await this.sharedFolder();
+    if (folder) await purgeStaleDownloads(folder, this.now());
   }
 }
 

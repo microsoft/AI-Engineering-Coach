@@ -90,6 +90,7 @@ const NOW = Date.parse('2026-10-31T12:00:00Z');
 const API = 'https://api.github.com/repos/microsoft/AI-Engineering-Coach/releases/latest';
 const RELEASE_PAGE = 'https://github.com/microsoft/AI-Engineering-Coach/releases/tag/v0.4.0';
 const VSIX_URL = 'https://github.com/microsoft/AI-Engineering-Coach/releases/download/v0.4.0/ai-engineer-coach-0.4.0.vsix';
+const V6_URL = 'https://github.com/microsoft/AI-Engineering-Coach/releases/download/v0.6.0/ai-engineer-coach-0.6.0.vsix';
 const STORAGE_URL = 'https://release-assets.githubusercontent.com/github-production-release-asset/1/vsix?sig=x';
 const RELEASE_BUILD = { version: '0.2.0', dev: false };
 
@@ -173,6 +174,18 @@ function propagatingStores(windows: number, delayMs: number): Map<string, unknow
 
 function installCalls() {
   return mocks.executeCommand.mock.calls.filter(([command]) => command === 'workbench.extensions.installExtension');
+}
+
+/** GitHub with whichever release `latest()` names, both packages behind the storage redirect. */
+function serveLatest(latest: () => string) {
+  const bytes = fakeVsix(512);
+  const redirect = () => new Response(null, { status: 302, headers: { location: STORAGE_URL } });
+  return serve({
+    [API]: () => jsonResponse(releaseJson(latest(), { bytes })),
+    [VSIX_URL]: redirect,
+    [V6_URL]: redirect,
+    [STORAGE_URL]: () => new Response(bytes),
+  });
 }
 
 /** The user switches back to the windows, which VS Code reports as a focus change. */
@@ -376,7 +389,8 @@ describe('Check for Updates', () => {
     const vsix = (install[1] as { fsPath: string }).fsPath;
     expect(path.dirname(vsix)).toBe(downloads);
     expect(path.basename(vsix)).toMatch(/^ai-engineer-coach-0\.4\.0-[0-9a-f]{12}\.vsix$/);
-    expect(await fs.readdir(downloads)).toEqual([]);
+    // The package is gone; the record of the install stays for other windows.
+    expect(await fs.readdir(downloads)).toEqual(['installed.json']);
     expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
       'AI Engineer Coach v0.4.0 is installed. Reload the window to start using it.', 'Reload Window');
     expect(mocks.executeCommand).toHaveBeenCalledWith('workbench.action.reloadWindow');
@@ -572,8 +586,6 @@ describe('Install Update', () => {
 });
 
 describe('an update notification answered late', () => {
-  const V6_URL = 'https://github.com/microsoft/AI-Engineering-Coach/releases/download/v0.6.0/ai-engineer-coach-0.6.0.vsix';
-
   /** Leaves the v0.4.0 notification open while a second check finds v0.6.0 and answers its notification. */
   async function leaveOpen(answerForV6: string | undefined) {
     const bytes = fakeVsix(512);
@@ -673,6 +685,26 @@ describe('installed marker', () => {
     expect(service.getStatus()).toEqual({ state: 'none' });
   });
 
+  it('is never lowered, even when a newer install by another window arrives during this one', async () => {
+    const store = sharedStore();
+    const fetch = serveLatest(() => '0.4.0');
+    mocks.executeCommand.mockImplementation(command => {
+      if (command === 'workbench.extensions.installExtension') {
+        const state = store.get(UPDATE_STATE_KEY) as Record<string, unknown>;
+        store.set(UPDATE_STATE_KEY, { ...state, installedVersion: '0.6.0', installedLocation: LOCAL, installedAt: Date.now() });
+      }
+      return Promise.resolve(undefined);
+    });
+    mocks.showInformationMessage.mockResolvedValueOnce('Update');
+    const service = createService(fetch, { store });
+    service.start();
+    await service.checkNow();
+    expect(store.get(UPDATE_STATE_KEY)).toMatchObject({ installedVersion: '0.6.0' });
+    expect(service.getStatus()).toEqual({ state: 'installed', latest: '0.6.0' });
+    expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
+      'AI Engineer Coach v0.6.0 is installed. Reload the window to start using it.', 'Reload Window');
+  });
+
   it('ignores a cached release it cannot read and fetches it again in full', async () => {
     const store = sharedStore();
     store.set(UPDATE_STATE_KEY, { release: { version: '0.4.0' }, etag: 'W/"old"' });
@@ -688,12 +720,7 @@ describe('installed marker', () => {
 describe('changes made in another window', () => {
   it('show once this window is focused again, even without automatic checks', async () => {
     const store = sharedStore();
-    const bytes = fakeVsix(512);
-    const fetch = serve({
-      [API]: () => jsonResponse(releaseJson('0.4.0', { bytes })),
-      [VSIX_URL]: () => new Response(null, { status: 302, headers: { location: STORAGE_URL } }),
-      [STORAGE_URL]: () => new Response(bytes),
-    });
+    const fetch = serveLatest(() => '0.4.0');
     // Dev builds never check on their own, so no timer would ever refresh this window.
     const devBuild = { version: '0.2.0', dev: true };
     const here = createService(fetch, { store, build: devBuild });
@@ -708,6 +735,65 @@ describe('changes made in another window', () => {
     expect(here.getStatus()).toMatchObject({ state: 'available' });
     focusWindows();
     expect(here.getStatus()).toEqual({ state: 'installed', latest: '0.4.0' });
+  });
+});
+
+// The windows below haven't received each other's globalState writes; they share only the disk.
+describe('installs from several windows', () => {
+  it('never undo a newer install with an older release', async () => {
+    let latest = '0.4.0';
+    const fetch = serveLatest(() => latest);
+    const here = createService(fetch, { store: sharedStore() });
+    here.start();
+    let answer: (choice: string) => void = () => {};
+    mocks.showInformationMessage.mockImplementationOnce(() => new Promise<string | undefined>(resolve => { answer = resolve; }));
+    const offered = here.checkNow();
+    await vi.waitFor(() => expect(mocks.showInformationMessage).toHaveBeenCalledTimes(1));
+    latest = '0.6.0';
+    const there = createService(fetch, { store: sharedStore() });
+    there.start();
+    mocks.showInformationMessage.mockResolvedValueOnce('Update');
+    await there.checkNow();
+    answer('Update');
+    await offered;
+    expect(installCalls()).toHaveLength(1);
+    expect(path.basename((installCalls()[0][1] as { fsPath: string }).fsPath)).toMatch(/^ai-engineer-coach-0\.6\.0-/);
+    expect(here.getStatus()).toEqual({ state: 'installed', latest: '0.6.0' });
+    expect(mocks.showInformationMessage).toHaveBeenLastCalledWith(
+      'AI Engineer Coach v0.6.0 is installed. Reload the window to start using it.', 'Reload Window');
+  });
+});
+
+describe('installs from several windows at once', () => {
+  it('keep the newer release when the older one would finish last', async () => {
+    let latest = '0.4.0';
+    const fetch = serveLatest(() => latest);
+    let finishOlder = () => {};
+    const olderInstalling = new Promise<void>(resolve => { finishOlder = resolve; });
+    const finished: string[] = [];
+    mocks.executeCommand.mockImplementation(async (command, uri) => {
+      if (command !== 'workbench.extensions.installExtension') return undefined;
+      const version = /ai-engineer-coach-(\d+\.\d+\.\d+)-/.exec((uri as { fsPath: string }).fsPath)?.[1];
+      if (version === '0.4.0') await olderInstalling;
+      finished.push(version ?? 'unknown');
+      return undefined;
+    });
+    mocks.showInformationMessage.mockResolvedValueOnce('Update').mockResolvedValueOnce('Update');
+    const older = createService(fetch, { store: sharedStore() });
+    const newer = createService(fetch, { store: sharedStore() });
+    older.start();
+    newer.start();
+    const olderDone = older.checkNow();
+    await vi.waitFor(() => expect(installCalls()).toHaveLength(1));
+    latest = '0.6.0';
+    const newerDone = newer.checkNow();
+    // Time for the newer window to reach VS Code's installer, if nothing holds it back.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    finishOlder();
+    await Promise.all([olderDone, newerDone]);
+    expect(finished).toEqual(['0.4.0', '0.6.0']);
+    expect(JSON.parse(await fs.readFile(path.join(downloads, 'installed.json'), 'utf8'))).toMatchObject({ version: '0.6.0' });
+    expect(newer.getStatus()).toEqual({ state: 'installed', latest: '0.6.0' });
   });
 });
 
