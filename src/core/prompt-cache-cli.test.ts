@@ -11,6 +11,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
+import { PromptCacheAnalyzer } from './analyzer-prompt-cache';
+import { toDateStr } from './helpers';
 import { SessionSchema } from './schemas';
 import { stripSingleSession } from './parser-shared';
 import type { Session } from './types';
@@ -367,6 +369,46 @@ describe('Copilot CLI returns after a call that didn\u2019t report its cache', (
     expect(session.requests[1].promptCache).not.toHaveProperty('returns');
     expect(session.requests[1].promptCache).not.toHaveProperty('coldStart');
     expect(breaksOf(session)).toEqual([]);
+  });
+});
+
+describe('Copilot CLI returns on a call that didn\u2019t report its cache', () => {
+  const returning = (at: number, reported: boolean) => parse([
+    { ...START, data: { ...START.data, sessionId: reported ? 'cli-measured' : 'cli-unreported' } },
+    user('u1', 0),
+    reported ? call(0, { input: 150_000, read: 0 }) : unreported(0, { input: 150_000, read: 0 }),
+    user('u2', at),
+    unreported(at, { input: 155_000, read: 0, initiator: 'user' }),
+  ]);
+
+  it.each([[3_600, { returns: 1, expiredReturns: 1 }], [200, { returns: 1 }]])('count, measured against the previous call\u2019s expiry, with no rows or breaks (%i s later)', (at, counts) => {
+    const session = returning(at, true);
+    expect(session.requests[1].promptCache).toEqual({ rows: [], ...counts });
+    expect(breaksOf(session)).toEqual([]);
+  });
+
+  it('reach the lifetime card without counting as cache data, even in a session with no cache rows', () => {
+    const measured = returning(3_600, true);
+    const unmeasured = returning(3_600, false);
+    expect(unmeasured.requests.map(r => r.promptCache)).toEqual([undefined, { rows: [], unmeasuredReturns: 1 }]);
+    expect(unmeasured).not.toHaveProperty('promptCache');
+    const analyzer = new PromptCacheAnalyzer([measured, unmeasured], new Map());
+    const data = analyzer.getPromptCache({});
+    expect(data.attribution?.idle).toMatchObject({ returns: 1, expiredReturns: 1, unmeasuredReturns: 1 });
+    expect(data.returnsWithoutCacheData).toBeNull();
+    expect(data.coverage).toEqual({ requestsWithData: 1, totalRequests: 4, sessionsWithData: 1, totalSessions: 2 });
+    expect(analyzer.getSessionTimeline('cli-unreported')?.cache ?? null).toBeNull();
+  });
+
+  it('are kept apart from cache attribution when the range holds the return but not the call it returned to', () => {
+    const session = returning(86_400, true);
+    const day = toDateStr(BASE + 86_400_000);
+    const data = new PromptCacheAnalyzer([session], new Map()).getPromptCache({ fromDate: day, toDate: day });
+    expect(data.coverage).toEqual({ requestsWithData: 0, totalRequests: 1, sessionsWithData: 0, totalSessions: 1 });
+    // Without a call in range that logged cache tokens, breaks and misses aren't known: no attribution claims them.
+    expect(data.attribution).toBeNull();
+    expect(data.returnsWithoutCacheData).toEqual({ label: 'Copilot App', harnesses: ['GitHub Copilot App'], returns: 1, expiredReturns: 1, unmeasuredReturns: 0 });
+    expect(data.tips).toEqual([]);
   });
 });
 

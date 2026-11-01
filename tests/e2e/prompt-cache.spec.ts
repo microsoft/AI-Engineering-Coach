@@ -195,6 +195,18 @@ test.describe('Prompt Cache tab states', () => {
     await expect(page.locator('#ctxCacheUnlisted')).toContainText('5 cache breaks in this range aren\u2019t listed, because each session lists only its first 100 breaks.');
     await expect(page.locator('#ctxCacheAttribution')).not.toContainText('every main-agent call reused');
   });
+
+  test('shows Copilot returns without claiming zero breaks or misses when only other harnesses logged cache tokens', async ({ page }) => {
+    await openPromptCache(page, 'returns-only', 'Cache lifetime and expiry');
+    const root = page.locator('#ctxPromptCache');
+    await expect(root.locator('.ctx-comp-row', { hasText: 'Copilot App' })).toContainText('No cache usage logged in this range');
+    await expect(root.locator('#ctxCacheAttribution')).toHaveCount(0);
+    await expect(root.locator('#ctxCacheNoBreaks')).toHaveCount(0);
+    await expect(root).not.toContainText('tokens missed the cache');
+    const returns = root.locator('#ctxCacheReturnsOnly');
+    await expect(returns).toContainText('You came back after the cache expired in 1 of 1 returns (100%).');
+    await expect(returns).toContainText('No Copilot App call in this range logged cache tokens, so Copilot App cache breaks and misses can\u2019t be measured');
+  });
 });
 
 test.describe('Context Health sub-tabs with late responses', () => {

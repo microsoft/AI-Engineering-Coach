@@ -419,7 +419,7 @@ function mockSessionCompositionCli(n) {
   };
 }
 
-/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error' | 'unlisted') ---- */
+/* ---- Prompt Cache tab (synthetic data; window.mockPromptCacheMode: undefined | 'empty' | 'no-attribution' | 'error' | 'unlisted' | 'returns-only') ---- */
 
 function cacheTotals(calls, input, readPct, writePct) {
   const cacheRead = Math.round(input * readPct / 100);
@@ -440,16 +440,20 @@ function mockPromptCache(mode, params) {
   const longRange = fromDate != null && Date.now() - Date.parse(fromDate) > 45 * 86400000;
   const vscode = { harness: 'Local Agent', reporting: 'none', attribution: false, all: null, main: null, subagents: null, compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 640, requestsWithData: 0, sessions: 58, sessionsWithData: 0 };
   if (mode === 'empty') {
-    return { harnesses: [vscode], attribution: null, models: [], workspaces: [], trend: { labels: [], series: [] }, topSessions: [], tips: [], coverage: { requestsWithData: 0, totalRequests: 640, sessionsWithData: 0, totalSessions: 58 } };
+    return { harnesses: [vscode], attribution: null, returnsWithoutCacheData: null, models: [], workspaces: [], trend: { labels: [], series: [] }, topSessions: [], tips: [], coverage: { requestsWithData: 0, totalRequests: 640, sessionsWithData: 0, totalSessions: 58 } };
   }
   const app = {
     harness: 'GitHub Copilot App', reporting: 'per-call', attribution: true,
     all: cacheTotals(9200, 2400000000, 96.6, 3.3), main: cacheTotals(7600, 2100000000, 96.8, 3.1), subagents: cacheTotals(1500, 270000000, 95.8, 4.2), compaction: cacheTotals(100, 30000000, 78.0, 2.0),
     cost: { savedPct: 90.4, missCostPct: 45.0, ratedPct: 100 }, breaks: 170, breaksPer100: 2.2, totalRequests: 820, requestsWithData: 610, sessions: 70, sessionsWithData: 55,
   };
+  if (mode === 'returns-only') {
+    // No Copilot App call in range logged cache tokens, but a prompt returned to yesterday's call; Claude and Codex logged theirs.
+    Object.assign(app, { attribution: false, all: null, main: null, subagents: null, compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 1, requestsWithData: 0, sessions: 1, sessionsWithData: 0 });
+  }
   const claude = { harness: 'Claude', reporting: 'per-call', attribution: false, all: cacheTotals(2100, 380000000, 91.0, 8.5), main: cacheTotals(1900, 350000000, 91.4, 8.2), subagents: cacheTotals(200, 30000000, 86.0, 13.0), compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 300, requestsWithData: 300, sessions: 24, sessionsWithData: 24 };
   const codex = { harness: 'Codex', reporting: 'per-session', attribution: false, all: cacheTotals(0, 90000000, 82.0, 0), main: cacheTotals(0, 90000000, 82.0, 0), subagents: null, compaction: null, cost: null, breaks: null, breaksPer100: null, totalRequests: 40, requestsWithData: 40, sessions: 6, sessionsWithData: 6 };
-  const attribution = mode === 'no-attribution' ? null : {
+  const attribution = mode === 'no-attribution' || mode === 'returns-only' ? null : {
     label: 'Copilot App', harnesses: ['GitHub Copilot App'], mainCalls: 7600, breaks: 170, breaksPer100: 2.2, omittedBreaks: 0, rebuiltTokens: 52000000,
     causes: [
       { key: 'ttl-user', control: 'you', breaks: 74, rebuiltTokens: 24500000, pctOfRebuilt: 47.1, costPct: 11.7, logged: 74, checkpoint: 0, segments: [], alsoSeen: [{ cause: 'resume', breaks: 9 }] },
@@ -481,9 +485,10 @@ function mockPromptCache(mode, params) {
     // Breaks counted in range, but every listed break falls outside it: their causes are unknown.
     Object.assign(attribution, { breaks: 5, breaksPer100: 0.1, omittedBreaks: 5, causes: [], confidence: { logged: 0, checkpoint: 0, unattributed: 0 }, controlPct: { you: 0, partly: 0, harness: 0, unknown: 100 } });
   }
-  return {
+  const data = {
     harnesses: [app, claude, codex, vscode],
     attribution,
+    returnsWithoutCacheData: mode === 'returns-only' ? { label: 'Copilot App', harnesses: ['GitHub Copilot App'], returns: 1, expiredReturns: 1, unmeasuredReturns: 0 } : null,
     models: [
       { harness: 'GitHub Copilot App', model: 'gpt-6.1-sol', calls: 4100, hitPct: 96.8, writePct: 3.1, breaksPer100: 2.2, ttlSeconds: 1800 },
       { harness: 'GitHub Copilot App', model: 'claude-opus-5.5', calls: 3800, hitPct: 97.2, writePct: 2.8, breaksPer100: 2.0, ttlSeconds: 300 },
@@ -501,12 +506,18 @@ function mockPromptCache(mode, params) {
       ],
     },
     topSessions: MOCK_CACHE_SESSIONS,
-    tips: mode === 'no-attribution' ? [] : [
+    tips: mode === 'no-attribution' || mode === 'returns-only' ? [] : [
       'Prompt tokens that missed the cache cost about 45% of your Copilot App input cost, because cache reads are billed at a small fraction of the input price while cache writes and uncached tokens are not.',
       '74 times you came back after the prompt cache had expired, and 24.5M tokens of context were rebuilt (47% of rebuilt tokens, about 12% of your input cost). Copilot App logged a cache lifetime of 5 minutes for claude-opus-5.5 and 30 minutes for gpt-6.1-sol. After a break, start a new session or run /compact before you continue.',
     ],
     coverage: { requestsWithData: 950, totalRequests: longRange ? 5400 : 1800, sessionsWithData: 85, totalSessions: 158 },
   };
+  if (mode === 'returns-only') {
+    // Copilot App logged no cache tokens in range, so it has no models, workspaces or trend of its own.
+    const others = item => item.harness !== 'GitHub Copilot App';
+    Object.assign(data, { models: data.models.filter(others), workspaces: data.workspaces.filter(others), trend: { ...data.trend, series: data.trend.series.filter(others) } });
+  }
+  return data;
 }
 
 function mockSessionTimeline(sessionId) {

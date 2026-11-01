@@ -20,6 +20,7 @@ import type {
 import { CallTimelineBuilder } from './call-timeline';
 import { causeControl, causeKey } from './prompt-cache-causes';
 import { addUsage, emptyTotals, missesOf, mergeTotals, pct, toTotals, type TotalsAcc } from './prompt-cache-totals';
+import { hasCacheRows } from './prompt-cache-usage';
 import { toDateStr } from './helpers';
 
 const ATTRIBUTION_HARNESSES = new Set(['GitHub Copilot CLI', 'GitHub Copilot App']);
@@ -70,7 +71,7 @@ function sessionStreams(session: Session): SessionStreams {
   let hasData = false;
   for (const request of session.requests) {
     const cache = request.promptCache;
-    if (!cache) continue;
+    if (!cache || !hasCacheRows(cache)) continue;
     hasData = true;
     for (const row of cache.rows) addUsage(streams[row.stream], row);
     rebuilt += cache.rebuilt ?? 0;
@@ -106,7 +107,7 @@ function topCause(breaks: CacheBreakDetail[]): CacheCauseKey | null {
 
 /** Per-request timeline of the main-agent rows, for harnesses without a call timeline. */
 function requestTimeline(session: Session): CallTimeline | null {
-  if (!session.requests.some(request => request.promptCache)) return null;
+  if (!session.requests.some(request => hasCacheRows(request.promptCache))) return null;
   const builder = new CallTimelineBuilder();
   for (const [requestIndex, request] of session.requests.entries()) {
     const main = emptyTotals();
