@@ -646,9 +646,10 @@ describe('rule-engine', () => {
       const byId = new Map(stats.map(stat => [stat.ruleId, stat]));
 
       expect(byId.get('broken-rule')).toMatchObject({
-        triggered: false, error: 'Parse error at position 0', previewDescription: 'Not evaluated: Parse error at position 0',
+        triggered: false, evaluationError: 'Parse error at position 0', previewDescription: 'Not evaluated: Parse error at position 0',
       });
-      expect(byId.get('other-rule')).not.toHaveProperty('error');
+      expect(byId.get('broken-rule')).not.toHaveProperty('error');
+      expect(byId.get('other-rule')).not.toHaveProperty('evaluationError');
       expect(byId.get('other-rule')?.previewDescription).toBe('Not triggered with current data.');
     });
   });

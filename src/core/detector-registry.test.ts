@@ -144,4 +144,16 @@ describe('the Anti-Patterns analysis with a personal rule whose detection logic 
     expect(complete.length).toBeGreaterThan(0);
     for (const score of complete) expect(score.improvements).toContain(ALL_PASSING);
   });
+
+  it('scores a group over the rules that ran, so a rule that fails does not raise the score', () => {
+    registerPersonalRuleSource('every-request', requestRule('every-request', 'messageLength > 0', 'high'), '/home/rules/every-request.md');
+    const promptQuality = () => new Analyzer(sessions, new Map()).getAntiPatterns({ harness: 'Local Agent' }).groupScores
+      .find(score => score.group === 'prompt-quality')!;
+    const before = promptQuality();
+    registerPersonalRuleSource('broken-rule', BROKEN, '/home/rules/broken-rule.md');
+    const after = promptQuality();
+    expect(after.failedRules).toHaveLength(1);
+    expect(before.score).toBeLessThan(100);
+    expect(after.score).toBe(before.score);
+  });
 });

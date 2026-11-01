@@ -161,7 +161,7 @@ test.describe('Anti-Patterns', () => {
         return {
           rules: [rule('broken-rule', 'Broken Rule'), rule('clean-rule', 'Clean Rule')],
           previews: [
-            { ...preview('broken-rule', 'Broken Rule'), previewDescription: `Not evaluated: ${failure.error}`, error: failure.error },
+            { ...preview('broken-rule', 'Broken Rule'), previewDescription: `Not evaluated: ${failure.error}`, evaluationError: failure.error },
             preview('clean-rule', 'Clean Rule'),
           ],
           layers: [], pending: [],
@@ -189,6 +189,56 @@ test.describe('Anti-Patterns', () => {
     await expect(stats).toContainText('NOT EVALUATED');
     await expect(stats).not.toContainText('CLEAN');
     await expect(page.locator('#rule-detail-content .rule-preview-desc')).toHaveText(`Not evaluated: ${failure.error}`);
+  });
+
+  test('refreshes the description with the stats after a threshold edit, so a rule shows or drops its error', async ({ page }) => {
+    const error = 'Parse error at position 0: Unexpected token';
+    await page.evaluate(error => {
+      const root = window as MockWindow;
+      const original = root.getMockData;
+      const preview = (failed: boolean) => ({
+        ruleId: 'tuned-rule', ruleName: 'Tuned Rule', triggered: false, occurrences: 0, total: 1, pct: 0, severity: 'low',
+        group: 'prompt-quality', previewDescription: failed ? `Not evaluated: ${error}` : 'Not triggered with current data.',
+        previewExamples: [], ...(failed ? { evaluationError: error } : {}),
+      });
+      let edits = 0;
+      root.getMockData = (method, params) => {
+        if (method === 'getRuleEditor') {
+          return {
+            rules: [{
+              id: 'tuned-rule', name: 'Tuned Rule', group: 'prompt-quality', severity: 'low', scope: 'requests', requiresIdeContext: false,
+              description: 'Tuned Rule.', descriptionTemplate: '', suggestionTemplate: '', exampleTemplate: '', thresholds: { minChars: 30 },
+              tags: [], source: 'personal', sourceFilePath: '', version: 1, rawSource: '',
+            }],
+            previews: [preview(true)], layers: [], pending: [],
+          };
+        }
+        if (method === 'updateRuleThreshold') {
+          edits++;
+          return { ok: true };
+        }
+        // The first edit makes the rule evaluate; the second breaks it again.
+        if (method === 'getRulePreview') return preview(edits !== 1);
+        return original(method, params);
+      };
+    }, error);
+    await page.locator('#sidebar [data-page="anti-patterns"]').click();
+    await page.locator('.ap-tab[data-tab="rules"]').click();
+    await page.locator('.rule-card[data-rule-id="tuned-rule"]').click();
+    const stats = page.locator('#rule-detail-content .rule-preview-stats');
+    const description = page.locator('#rule-detail-content .rule-preview-desc');
+    const input = page.locator('#rule-detail-content .rule-threshold-input[data-key="minChars"]');
+    await expect(description).toHaveText(`Not evaluated: ${error}`);
+
+    await input.fill('31');
+    await input.dispatchEvent('change');
+    await expect(stats).toContainText('CLEAN');
+    await expect(description).toHaveText('Not triggered with current data.');
+
+    await input.fill('29');
+    await input.dispatchEvent('change');
+    await expect(stats).toContainText('NOT EVALUATED');
+    await expect(description).toHaveText(`Not evaluated: ${error}`);
   });
 });
 

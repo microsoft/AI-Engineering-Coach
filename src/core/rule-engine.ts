@@ -332,7 +332,7 @@ export function getRulePreviewStats(
           ? `Not evaluated: ${failure.error}`
           : result?.description ?? 'Not triggered with current data.',
         previewExamples: result?.examples ?? [],
-        ...(failure && { error: failure.error }),
+        ...(failure && { evaluationError: failure.error }),
       };
     });
 }

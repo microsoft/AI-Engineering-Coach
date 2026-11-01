@@ -74,7 +74,7 @@ interface RulePreview {
   previewDescription: string;
   previewExamples: string[];
   /** Why the rule couldn't be evaluated; then it's neither triggered nor clean. */
-  error?: string;
+  evaluationError?: string;
 }
 
 interface RuleLayerInfo {
@@ -932,7 +932,7 @@ function renderRuleCard(
   const occurrences = preview?.occurrences ?? 0;
   const total = preview?.total ?? 0;
   const pct = preview?.pct ?? 0;
-  const error = preview?.error;
+  const error = preview?.evaluationError;
   const statusClass = error !== undefined ? 'rule-card-failed' : triggered ? 'rule-card-triggered' : 'rule-card-clean';
   const histSvg = histogram && error === undefined ? miniHistogramSvg(histogram.counts, histogram.labels, triggered ? COLORS.yellow : groupColor) : null;
 
@@ -1075,9 +1075,21 @@ function wireRulesSection(
 /* ── Rule detail view ── */
 
 function renderRulePreviewStats(preview: RulePreview | undefined): ComponentChildren {
-  if (preview?.error !== undefined) return html`${statPill('Total', preview.total)}${statPill('Status', 'NOT EVALUATED', 'var(--accent-red)')}`;
+  if (preview?.evaluationError !== undefined) return html`${statPill('Total', preview.total)}${statPill('Status', 'NOT EVALUATED', 'var(--accent-red)')}`;
   const flaggedColor = preview?.triggered ? 'var(--yellow)' : 'var(--green)';
   return html`${statPill('Flagged', preview?.occurrences ?? 0, flaggedColor)}${statPill('Total', preview?.total ?? 0)}${statPill('Rate', `${preview?.pct ?? 0}%`, flaggedColor)}${statPill('Status', preview?.triggered ? 'TRIGGERED' : 'CLEAN', flaggedColor)}`;
+}
+
+/** The preview's description, which says why when the rule couldn't be evaluated, and its examples. */
+function renderRulePreviewDetails(preview: RulePreview | undefined): ComponentChildren {
+  return html`
+    ${preview?.previewDescription ? html`<div class="rule-preview-desc">${preview.previewDescription}</div>` : null}
+    ${preview && preview.previewExamples.length > 0 ? html`
+      <details class="rule-preview-examples">
+        <summary>${preview.previewExamples.length} example(s)</summary>
+        <ul>${preview.previewExamples.map(ex => html`<li>${ex}</li>`)}</ul>
+      </details>
+    ` : null}`;
 }
 
 function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefined, ruleId: string): ComponentChildren {
@@ -1103,13 +1115,7 @@ function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefi
       <div class="rule-detail-section">
         <h3>Current Data Preview</h3>
         <div class="rule-preview-stats">${renderRulePreviewStats(preview)}</div>
-        ${preview?.previewDescription ? html`<div class="rule-preview-desc">${preview.previewDescription}</div>` : null}
-        ${preview && preview.previewExamples.length > 0 ? html`
-          <details class="rule-preview-examples">
-            <summary>${preview.previewExamples.length} example(s)</summary>
-            <ul>${preview.previewExamples.map(ex => html`<li>${ex}</li>`)}</ul>
-          </details>
-        ` : null}
+        <div class="rule-preview-details">${renderRulePreviewDetails(preview)}</div>
       </div>
 
       ${thresholdEntries.length > 0 ? html`
@@ -1159,6 +1165,9 @@ function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFi
         if (stats) {
           render(renderRulePreviewStats(preview), stats);
         }
+        // With the stats, so a rule that now fails shows why, and a fixed one drops its old error.
+        const details = content.querySelector<HTMLElement>('.rule-preview-details');
+        if (details) render(renderRulePreviewDetails(preview), details);
       } catch {
         /* ignore */
       }

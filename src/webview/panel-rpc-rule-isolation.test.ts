@@ -18,7 +18,7 @@ import { getRpcHandler } from './panel-rpc';
 // Keeps the skipped rule out of the developer's runtime.log.
 vi.mock('../core/runtime-debug', async importOriginal => ({ ...await importOriginal<typeof import('../core/runtime-debug')>(), runtimeDebug: vi.fn() }));
 
-interface Preview { ruleId: string; triggered: boolean; occurrences: number; total: number; previewDescription: string; error?: string }
+interface Preview { ruleId: string; triggered: boolean; occurrences: number; total: number; previewDescription: string; evaluationError?: string }
 
 /** A personal rule that flags each request matching `match`. */
 function requestRule(id: string, match: string, severity = 'low'): string {
@@ -34,8 +34,10 @@ const PARSE_ERROR = /^Parse error at position \d+/;
 /** The broken rule's preview: not evaluated, with its parse error, instead of a clean result. */
 function expectNotEvaluated(preview: Preview | undefined): void {
   expect(preview?.triggered).toBe(false);
-  expect(preview?.error).toMatch(PARSE_ERROR);
-  expect(preview?.previewDescription).toBe(`Not evaluated: ${preview?.error}`);
+  expect(preview?.evaluationError).toMatch(PARSE_ERROR);
+  expect(preview?.previewDescription).toBe(`Not evaluated: ${preview?.evaluationError}`);
+  // An RPC result with an `error` is a failed call: the webview would reject the preview instead of showing it.
+  expect(preview).not.toHaveProperty('error');
 }
 
 const requests = Array.from({ length: 6 }, (_, i) => createRequest({
@@ -64,13 +66,13 @@ describe('rule RPCs with a personal rule whose detection logic does not parse', 
     expect(rules.map(rule => rule.id)).toEqual(expect.arrayContaining(['every-request', 'broken-rule', 'lazy-prompting']));
     expect(previews.find(p => p.ruleId === 'every-request')).toMatchObject({ triggered: true, occurrences: 6, total: 6 });
     expectNotEvaluated(previews.find(p => p.ruleId === 'broken-rule'));
-    expect(previews.filter(p => p.error !== undefined).map(p => p.ruleId)).toEqual(['broken-rule']);
+    expect(previews.filter(p => p.evaluationError !== undefined).map(p => p.ruleId)).toEqual(['broken-rule']);
   });
 
   it('getRulePreview answers for the other rules and shows the broken one as not evaluated', () => {
     addRules();
     expect(call<Preview>('getRulePreview', { ruleId: 'every-request' })).toMatchObject({ triggered: true, occurrences: 6 });
-    expect(call<Preview>('getRulePreview', { ruleId: 'every-request' }).error).toBeUndefined();
+    expect(call<Preview>('getRulePreview', { ruleId: 'every-request' }).evaluationError).toBeUndefined();
     expectNotEvaluated(call<Preview>('getRulePreview', { ruleId: 'broken-rule' }));
   });
 

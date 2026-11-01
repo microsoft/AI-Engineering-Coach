@@ -215,8 +215,11 @@ export interface RulePreviewStats {
   group: PracticeGroup;
   previewDescription: string;
   previewExamples: string[];
-  /** Set when the rule couldn't be evaluated (see RuleFailure): why. The rule is then neither triggered nor clean. */
-  error?: string;
+  /**
+   * Set when the rule couldn't be evaluated (see RuleFailure): why. The rule is then neither triggered nor clean. Not
+   * `error`: an RPC result with an `error` is a failed call.
+   */
+  evaluationError?: string;
 }
 
 /**

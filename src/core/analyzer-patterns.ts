@@ -5,7 +5,7 @@
 
 /* Recommendations + anti-pattern detection analytics */
 
-import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation } from './types';
+import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation, RuleFailure } from './types';
 import { toDateStr, normalizeModel, modelMultiplier, extToLang } from './helpers';
 import { LONG_SESSION_REQS } from './constants';
 import { AnalyzerBase } from './analyzer-base';
@@ -17,6 +17,13 @@ import { SEVERITY_PENALTIES } from './detectors/scoring';
 
 function scoreToStatus(score: number): 'good' | 'needs-improvement' | 'critical' {
   return score >= 70 ? 'good' : score >= 40 ? 'needs-improvement' : 'critical';
+}
+
+/** Each group's active detectors, without the rules that couldn't be evaluated: the scores cover the rules that ran. */
+function evaluatedDetectorCounts(skipIdeDetectors: boolean, failedRules: RuleFailure[]): Record<PracticeGroup, number> {
+  const counts = getDetectorGroupCounts(skipIdeDetectors);
+  for (const failure of failedRules) counts[failure.group] -= 1;
+  return counts;
 }
 
 export class PatternsAnalyzer extends AnalyzerBase {
@@ -255,7 +262,7 @@ export class PatternsAnalyzer extends AnalyzerBase {
     const groupOrder: Record<string, number> = { 'prompt-quality': 0, 'session-hygiene': 1, 'code-review': 2, 'tool-mastery': 3 };
     patterns.sort((a, b) => (groupOrder[a.group] ?? 9) - (groupOrder[b.group] ?? 9) || b.occurrences - a.occurrences);
 
-    const groupDetectorCount = getDetectorGroupCounts(skipIdeDetectors);
+    const groupDetectorCount = evaluatedDetectorCounts(skipIdeDetectors, failedRules);
     const weeklyTrend = computeWeeklyTrend(reqs, weekly);
     const weeklyScores = computeWeeklyScores(reqs, weekly, groupDetectorCount);
     const totalOccurrences = patterns.reduce((s, p) => s + p.occurrences, 0);
