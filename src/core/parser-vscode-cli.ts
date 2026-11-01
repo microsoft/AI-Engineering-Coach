@@ -344,7 +344,7 @@ const MAX_COMPACTION_SNAPSHOTS = 50;
 
 function handleCompactionStart(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
-  state.cache.onCompactionStart();
+  state.cache.onCompactionStart(eventTime(ev));
   setSystemTokens(state, data.systemTokens);
   const currentTokens = finiteNumber(data.currentTokens);
   const systemTokens = finiteNumber(data.systemTokens);
@@ -530,8 +530,8 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
   addAssistantToolRequests(turn, data.toolRequests);
 }
 
-function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState): void {
-  state.cache.onCompactionComplete(data);
+function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
+  state.cache.onCompactionComplete(data, at);
   setSystemTokens(state, data.systemTokens);
   const event = readCliCompaction(data);
   state.context.addLimit(event.tokenLimit);
@@ -660,7 +660,7 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       if (state.turn) state.turn.isCanceled = true;
       return;
     case 'session.compaction_complete':
-      handleCompactionComplete(ev.data || {}, state);
+      handleCompactionComplete(ev.data || {}, state, eventTime(ev));
       return;
     case 'subagent.started':
       state.subagents.start(ev.data || {}, state.turn ? state.requests.length : null);

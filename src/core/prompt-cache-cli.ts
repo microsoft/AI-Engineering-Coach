@@ -31,6 +31,13 @@ export const CACHE_CAUSE_PRIORITY: readonly CacheBreakCause[] = [
 
 type Signal = 'compaction' | 'mode-change' | 'resume';
 
+/** A compaction event still to attribute: when it was logged (`null` without a time) and, for a completion, what
+ *  triggered it. */
+interface CompactionMark {
+  at: number | null;
+  trigger?: CacheBreak['compactionTrigger'];
+}
+
 const MAX_SEGMENTS = 6;
 const SEGMENT_NAME_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
@@ -137,6 +144,13 @@ function expiredBefore(previous: CliModelCall, call: CliModelCall): boolean | nu
   return call.startTs > previous.cacheExpiresAt;
 }
 
+/** The compaction event was logged before `call` started: a call's prompt is built when it starts, and its record
+ *  is logged when it finishes, so a call already running when a compaction completed didn't see the rewrite. An
+ *  unknown time counts as before. */
+function loggedBefore(mark: CompactionMark, call: CliModelCall): boolean {
+  return mark.at == null || call.startTs == null || mark.at <= call.startTs;
+}
+
 /** Causes logged on the call itself or in events since the previous main-agent call. */
 function loggedCauses(previous: CliModelCall, call: CliModelCall, expired: boolean, signals: ReadonlySet<Signal>): Set<CacheBreakCause> {
   const logged = new Set<CacheBreakCause>();
@@ -172,9 +186,11 @@ export class CliCacheTracker {
   /** A main-agent call has reported its cache, so the session has cache data. */
   private sawMain = false;
   private readonly signals = new Set<Signal>();
-  private trigger: CacheBreak['compactionTrigger'];
-  /** A compaction started since the previous main-agent call, and no compaction has completed since. */
-  private compactionStarted = false;
+  /** Successful compactions that no main-agent call has started after yet: each rewrote the context for the next
+   *  call that started after it. */
+  private completedCompactions: CompactionMark[] = [];
+  /** The first compaction start no main-agent call has started after yet, while no compaction has completed since. */
+  private startedCompaction: CompactionMark | null = null;
   /** Breaks attributed to a compaction that had only started. A completion logged later shows they came before any
    *  compaction rewrote the context, and takes that cause back. A log without one keeps it: the start is then the
    *  only record of the compaction. */
@@ -200,28 +216,40 @@ export class CliCacheTracker {
     const previous = this.previous;
     const expired = lastMain ? expiredBefore(lastMain, call) : null;
     if (lastMain && call.initiator === 'user') this.request.addReturn(expired);
-    const startedOnly = this.compactionStarted && !this.signals.has('compaction');
-    if (startedOnly) this.signals.add('compaction');
+    const compaction = this.takeCompactions(call);
     if (!this.sawMain) {
       // Cache data starts here. Its misses are the session's start only on the first main-agent call: after
       // calls that didn't report their cache, nothing says what this call could have reused.
       this.sawMain = true;
       if (callIndex === 0) this.request.addColdStart(missTokens(sample), cost?.missCost);
     } else if (previous && isCacheBreak(previous.inputTokens, call.cacheReadTokens)) {
-      const pending = this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost });
-      if (pending && startedOnly) this.startedCompactionBreaks.push(pending);
+      const pending = this.recordBreak(previous, call, { callIndex: callIndex ?? -1, requestIndex, expired: expired === true, cost, trigger: compaction.trigger });
+      if (pending && compaction.startedOnly) this.startedCompactionBreaks.push(pending);
     }
     this.previous = call;
     this.signals.clear();
-    this.trigger = undefined;
-    this.compactionStarted = false;
+  }
+
+  /** Adds the compaction signal for a main-agent call that started after a successful compaction completed, and
+   *  takes those compactions; or, tentatively, after a compaction started. Returns the completions' trigger and
+   *  whether the signal is only tentative. */
+  private takeCompactions(call: CliModelCall): { trigger: CacheBreak['compactionTrigger']; startedOnly: boolean } {
+    const completed = this.completedCompactions.filter(mark => loggedBefore(mark, call));
+    this.completedCompactions = this.completedCompactions.filter(mark => !completed.includes(mark));
+    if (completed.length > 0) this.signals.add('compaction');
+    const started = this.startedCompaction != null && loggedBefore(this.startedCompaction, call);
+    if (started) this.startedCompaction = null;
+    const startedOnly = started && !this.signals.has('compaction');
+    if (startedOnly) this.signals.add('compaction');
+    const trigger = completed.reduce<CacheBreak['compactionTrigger']>((last, mark) => mark.trigger ?? last, undefined);
+    return { trigger, startedOnly };
   }
 
   /** The break, or `null` when the session's list of breaks is full. */
   private recordBreak(
     previous: CliModelCall,
     call: CliModelCall,
-    at: { callIndex: number; requestIndex: number; expired: boolean; cost: { missCost: number } | null },
+    at: { callIndex: number; requestIndex: number; expired: boolean; cost: { missCost: number } | null; trigger: CacheBreak['compactionTrigger'] },
   ): PendingBreak | null {
     const rebuilt = Math.max(0, Math.min(previous.inputTokens, call.inputTokens) - call.cacheReadTokens);
     const misses = missTokens(sampleOf(call));
@@ -247,32 +275,29 @@ export class CliCacheTracker {
     };
     if (rebuiltCost != null) brk.rebuiltCost = Math.round(rebuiltCost);
     if (logged.has('model-switch') && call.autoModel) brk.autoModel = true;
-    if (logged.has('compaction') && this.trigger) brk.compactionTrigger = this.trigger;
+    if (logged.has('compaction') && at.trigger) brk.compactionTrigger = at.trigger;
     const pending: PendingBreak = { brk, logged, inferred: new Set(), segments: [] };
     this.breaks.push(pending);
     this.windowBreaks.push(pending);
     return pending;
   }
 
-  /** `session.compaction_start`. A compaction rewrites the context only when it completes; current builds keep
-   *  making main-agent calls while it runs. */
-  onCompactionStart(): void {
-    this.compactionStarted = true;
+  /** `session.compaction_start`, logged at `at`. A compaction rewrites the context only when it completes; current
+   *  builds keep making main-agent calls while it runs. */
+  onCompactionStart(at: number | null): void {
+    this.startedCompaction ??= { at };
   }
 
-  /** `session.compaction_complete`. Only a successful compaction rewrote the context, so only it explains the next
-   *  main-agent call's break. Compaction summaries are their own model calls, recorded as the `compaction` stream
-   *  once the session logs per-call usage (older builds log compaction tokens without it, and would show compaction
-   *  calls alone); a failed compaction's call counts too. */
-  onCompactionComplete(data: Record<string, unknown>): void {
-    // Calls since a compaction started ran on the context as it was.
+  /** `session.compaction_complete`, logged at `at`. Only a successful compaction rewrote the context, so only it
+   *  explains the break of the next main-agent call that started after it. Compaction summaries are their own model
+   *  calls, recorded as the `compaction` stream once the session logs per-call usage (older builds log compaction
+   *  tokens without it, and would show compaction calls alone); a failed compaction's call counts too. */
+  onCompactionComplete(data: Record<string, unknown>, at: number | null): void {
+    // Calls logged since a compaction started finished before this completion, so they ran on the context as it was.
     for (const pending of this.startedCompactionBreaks) pending.logged.delete('compaction');
     this.startedCompactionBreaks = [];
-    this.compactionStarted = false;
-    if (!compactionFailed(data)) {
-      this.signals.add('compaction');
-      this.trigger = compactionTrigger(data.trigger) ?? this.trigger;
-    }
+    this.startedCompaction = null;
+    if (!compactionFailed(data)) this.completedCompactions.push({ at, trigger: compactionTrigger(data.trigger) });
     const used = isRecord(data.compactionTokensUsed) ? data.compactionTokensUsed : undefined;
     const input = num(used?.inputTokens);
     if (!this.sawMain || !used || input == null || input <= 0) return;
