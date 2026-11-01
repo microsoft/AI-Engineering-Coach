@@ -136,4 +136,18 @@ describe('Context Management range bar with Copilot CLI composition', () => {
     expect(host.querySelector('.ctx-comp-ws[data-workspace="cli-project"] .ctx-comp-ws-toggle')).not.toBeNull();
     expect(host.textContent).not.toContain('No Session Data');
   });
+
+  it('says the range bar needs per-request tokens or composition when the sessions recorded neither', async () => {
+    // An older Copilot CLI build records no per-call usage, so its turns have neither.
+    const session = cliSession(5, false);
+    expect(session.requests.map(request => [request.promptTokens, request.promptComposition])).toEqual([[null, undefined]]);
+    serve([session]);
+
+    const host = await openContextManagement();
+
+    expect(rangeButtons(host)).toEqual([]);
+    expect(host.querySelector('#ctxRangeBar')?.textContent?.trim()).toBe(
+      'GitHub Copilot CLI recorded neither per-request tokens nor prompt composition, which Context Management needs to chart utilization and composition. Try a different harness, or view consumption in the Output tab.',
+    );
+  });
 });

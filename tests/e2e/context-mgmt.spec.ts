@@ -401,4 +401,11 @@ test.describe('Context Management range bar', () => {
     await expect(workspace.locator('.ctx-comp-ws-session')).toHaveCount(1);
     await expect(workspace.locator('.ctx-comp-ws-session')).toContainText('GitHub Copilot CLI');
   });
+
+  test('explains an empty range bar when no request recorded per-request tokens or composition', async ({ page }) => {
+    await setRangeScenario(page, 'boundary-empty', { rangesWithTokens: [], matchingSessions: 3, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
+    await navigateToContextHealth(page, 'No Session Data');
+    await expect(page.locator('#ctxRangeBar .cons-range-btn')).toHaveCount(0);
+    await expect(page.locator('#ctxRangeBar')).toHaveText('GitHub Copilot CLI recorded neither per-request tokens nor prompt composition, which Context Management needs to chart utilization and composition. Try a different harness, or view consumption in the Output tab.');
+  });
 });
