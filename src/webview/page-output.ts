@@ -117,6 +117,10 @@ type OutputTab = 'production' | 'token-usage';
 let activeRangeDays = 0;
 let activeTab: OutputTab = 'production';
 
+// Reject superseded responses; the captured target's connection also guards
+// navigation away, which does not start another Output render (see #101).
+let renderGeneration = 0;
+
 export async function renderOutput(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   if (!FF_TOKEN_REPORTING_ENABLED && activeTab === 'token-usage') {
     activeTab = 'production';
@@ -242,17 +246,22 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
     </div>
     <div id="output-tab-content"></div>
   `, container);
+  const target = container.querySelector<HTMLElement>('#output-tab-content')!;
   refreshRangeBar();
+
+  function isCurrentRender(gen: number): boolean {
+    return gen === renderGeneration && target.isConnected;
+  }
 
   // Populate range bar from its own Preact root so there is exactly one
   // owner of #outputRange's children (avoids duplicate buttons).
   refreshRangeBar();
 
-  async function renderProductionTab(): Promise<void> {
-    const target = document.getElementById('output-tab-content')!;
+  async function renderProductionTab(gen: number): Promise<void> {
     render(html`<div class="loading-spinner"></div>`, target);
 
     const prod = await rpc<ProdData>('getCodeProduction', buildRangeFilter());
+    if (!isCurrentRender(gen)) return;
     const s = prod.summary;
     const level = aggregationLevel(activeRangeDays);
     const chartTitle = level === 'weekly' ? 'Weekly AI Code Output' : level === 'monthly' ? 'Monthly AI Code Output' : 'Daily AI Code Output';
@@ -733,11 +742,11 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
     `, target);
   }
 
-  async function renderTokenUsageTab(): Promise<void> {
-    const target = document.getElementById('output-tab-content')!;
+  async function renderTokenUsageTab(gen: number): Promise<void> {
     render(html`<div class="loading-spinner"></div>`, target);
 
     const data = await rpc<AiCreditRpcData>('getAiCredits', buildRangeFilter());
+    if (!isCurrentRender(gen)) return;
 
     const { missingLabel, partialLabel, pendingLabel, noDataLabel } = buildCreditCoverageSummary(data);
     if (renderAiCreditsEmptyState(target, data)) return;
@@ -786,37 +795,30 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
   }
 
 
-  async function renderActiveTab(): Promise<void> {
+  async function renderActiveTab(): Promise<number | undefined> {
+    if (!target.isConnected) return;
+    const gen = ++renderGeneration;
     if (!FF_TOKEN_REPORTING_ENABLED && activeTab === 'token-usage') {
       activeTab = 'production';
     }
-    if (activeTab === 'production') await renderProductionTab();
-    else if (!FF_TOKEN_REPORTING_ENABLED) renderTokenUsageGated();
-    else await renderTokenUsageTab();
-  }
-
-  /** Shown when token-usage is gated behind the feature flag. */
-  function renderTokenUsageGated(): void {
-    const target = document.getElementById('output-tab-content')!;
-    render(html`
-      <div class="feature-gated-notice">
-        <h2>Token Usage is temporarily disabled</h2>
-        <p>
-          This feature has been disabled temporarily until we are able to verify
-          that the reporting is aligned with what is reported by GitHub.
-          It will be re-enabled once the billing system is active and numbers
-          can be validated.
-        </p>
-      </div>
-    `, target);
+    try {
+      if (activeTab === 'production') await renderProductionTab(gen);
+      else await renderTokenUsageTab(gen);
+    } catch (error) {
+      if (isCurrentRender(gen)) throw error;
+      console.warn('Output: ignored error from a stale render', error);
+      return;
+    }
+    return gen;
   }
 
   // Initial render — honour the persisted active tab
-  await renderActiveTab();
+  const initialGeneration = await renderActiveTab();
+  if (initialGeneration === undefined || !isCurrentRender(initialGeneration)) return;
 
   // Viewport-aware badge popup positioning — uses position:fixed and
   // clamps to viewport edges so popups never overflow off-screen.
-  document.body.addEventListener('mouseenter', (e) => {
+  target.addEventListener('mouseenter', (e) => {
     const trigger = (e.target as HTMLElement).closest?.('.badge-popup-trigger');
     if (!trigger) return;
     const popup = trigger.querySelector('.badge-popup') as HTMLElement | null;
