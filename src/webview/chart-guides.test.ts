@@ -11,6 +11,7 @@ import type { Chart } from 'chart.js';
 import {
   BAND_ROW_PX,
   MAX_BAND_SHARE,
+  MAX_DESCRIBED_GUIDES,
   MAX_MARKER_LABELS,
   chartGuidesPlugin,
   describeGuides,
@@ -172,8 +173,16 @@ describe('chartGuidesPlugin', () => {
 });
 
 describe('describeGuides', () => {
-  it('names the lines, markers and bands for screen readers', () => {
-    expect(describeGuides(GUIDES)).toBe('Lines: Degraded (50%), 80%. Markers: Compaction 120K\u219240K. Bands: \u2714 Write tests.');
+  it('names the lines, and the markers and bands with their 1-based requests, for screen readers', () => {
+    expect(describeGuides(GUIDES)).toBe('Lines: Degraded (50%), 80%. Markers: Compaction 120K\u219240K at request 4. Bands: \u2714 Write tests from request 2 to 5.');
+    expect(describeGuides({ bands: [{ xMin: 6, xMax: 6, row: 0, fill: 'f', stroke: 's', label: '\u2714 Plan' }] })).toBe('Bands: \u2714 Plan at request 7.');
     expect(describeGuides({})).toBe('');
+  });
+
+  it(`names at most ${MAX_DESCRIBED_GUIDES} markers or bands one by one, and counts the rest`, () => {
+    const markers = Array.from({ length: MAX_DESCRIBED_GUIDES + 5 }, (_, i) => ({ x: i, color: 'c', label: `M${i}` }));
+    const text = describeGuides({ markers });
+    expect(text.startsWith('Markers: M0 at request 1; M1 at request 2; ')).toBe(true);
+    expect(text.endsWith(`; M${MAX_DESCRIBED_GUIDES - 1} at request ${MAX_DESCRIBED_GUIDES}; and 5 more.`)).toBe(true);
   });
 });

@@ -256,14 +256,29 @@ export function chartGuidesPlugin(guides: ChartGuides): Plugin {
   };
 }
 
-/** Text equivalent of the guides for screen readers, e.g. "Lines: Degraded from 50%, Limited from 80%." */
-export function describeGuides(guides: ChartGuides): string {
+/** Most markers or bands `describeGuides` names one by one; it counts the rest. */
+export const MAX_DESCRIBED_GUIDES = 20;
+
+function describedList(items: string[]): string {
+  if (items.length <= MAX_DESCRIBED_GUIDES) return items.join('; ');
+  return `${items.slice(0, MAX_DESCRIBED_GUIDES).join('; ')}; and ${items.length - MAX_DESCRIBED_GUIDES} more`;
+}
+
+/** Text equivalent of the guides for screen readers, e.g. "Lines: Degraded (50%), Limited (80%). Markers: Compaction
+ *  at request 4. Bands: Write tests from request 2 to 5." Markers and bands give their 1-based position on the x
+ *  axis, whose categories are `unit`s. */
+export function describeGuides(guides: ChartGuides, unit = 'request'): string {
+  const position = (x: number): number => Math.round(x) + 1;
   const parts: string[] = [];
   const lines = (guides.lines ?? []).map(line => line.label).filter((label): label is string => !!label);
   if (lines.length > 0) parts.push(`Lines: ${lines.join(', ')}.`);
-  const markers = (guides.markers ?? []).map(marker => marker.label).filter((label): label is string => !!label);
-  if (markers.length > 0) parts.push(`Markers: ${markers.join(', ')}.`);
-  const bands = (guides.bands ?? []).map(band => band.label).filter((label): label is string => !!label);
-  if (bands.length > 0) parts.push(`Bands: ${bands.join(', ')}.`);
+  const markers = (guides.markers ?? []).filter(marker => !!marker.label).map(marker => `${marker.label} at ${unit} ${position(marker.x)}`);
+  if (markers.length > 0) parts.push(`Markers: ${describedList(markers)}.`);
+  const bands = (guides.bands ?? []).filter(band => !!band.label).map(band => {
+    const from = position(Math.min(band.xMin, band.xMax));
+    const to = position(Math.max(band.xMin, band.xMax));
+    return from === to ? `${band.label} at ${unit} ${from}` : `${band.label} from ${unit} ${from} to ${to}`;
+  });
+  if (bands.length > 0) parts.push(`Bands: ${describedList(bands)}.`);
   return parts.join(' ');
 }

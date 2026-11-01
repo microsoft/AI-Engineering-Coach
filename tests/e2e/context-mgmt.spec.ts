@@ -103,7 +103,7 @@ test.describe('Context Management chart guides', () => {
     await page.locator('.ctx-session-row').nth(2).click();
     const chart = page.locator('#ctxSessionTokenChart');
     await expect(chart).toBeVisible();
-    await expect(chart).toHaveAttribute('aria-label', 'Context utilization per request of this session. Lines: 45%, 80%. Markers: Compaction (full), Write tests. Bands: \u2714 Write tests.');
+    await expect(chart).toHaveAttribute('aria-label', 'Context utilization per request of this session. Lines: 45%, 80%. Markers: Compaction (full) at request 9; Write tests at request 21. Bands: \u2714 Write tests from request 1 to 21.');
     // Chart.js ran the guides plugin with the real scales: both thresholds, both events and the to-do band.
     await expect(chart).toHaveAttribute('data-guides', 'lines=2 markers=2 bands=1');
   });
