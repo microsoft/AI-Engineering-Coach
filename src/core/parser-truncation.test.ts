@@ -14,14 +14,21 @@ import { describe, expect, it } from 'vitest';
 import { parseClaudeSessions } from './parser-claude';
 import { parseOpenCodeSessions } from './parser-opencode';
 import { rowTruncation } from './token-types-rows';
+import type { ModelCallRow } from './types';
 
-function withClaudeFile(lines: object[], run: (projectsDir: string) => void): void {
+function withClaudeFiles(files: Record<string, object[]>, run: (projectsDir: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-truncation-test-'));
   const projectsDir = path.join(root, 'projects');
-  const projDir = path.join(projectsDir, '-Users-me-proj');
-  fs.mkdirSync(projDir, { recursive: true });
-  fs.writeFileSync(path.join(projDir, 'sess-1.jsonl'), lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+  for (const [name, lines] of Object.entries(files)) {
+    const file = path.join(projectsDir, '-Users-me-proj', name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+  }
   try { run(projectsDir); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+function withClaudeFile(lines: object[], run: (projectsDir: string) => void): void {
+  withClaudeFiles({ 'sess-1.jsonl': lines }, run);
 }
 
 function claudeUser(text: string, ts: string): object {
@@ -92,6 +99,29 @@ describe('Claude Code truncated calls', () => {
       const rows = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0].promptCache?.rows ?? [];
       expect(rows[0]).toMatchObject({ calls: 3, truncatedCalls: 1, stopCalls: 2 });
       expect(rowTruncation(rows)).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: null });
+    });
+  });
+});
+
+describe('Claude Code sub-agent transcripts\u2019 truncated calls', () => {
+  it('count on the sub-agent row, though the transcript\u2019s lines aren\u2019t marked', () => {
+    withClaudeFiles({
+      'sess-1.jsonl': [claudeUser('why is the parser slow', '2026-10-28T10:00:00Z'), claudeBlock('msg_p', '2026-10-28T10:00:01Z', 'end_turn')],
+      // Not every Claude Code build marks a sub-agent's lines `isSidechain`; none is here. The stop reasons come on
+      // later lines of each response, after the line that counted it.
+      'sess-1/subagents/agent-a1.jsonl': [
+        claudeUser('profile the parser and report back', '2026-10-28T10:00:02Z'),
+        claudeBlock('msg_s1', '2026-10-28T10:00:03Z', null),
+        claudeBlock('msg_s1', '2026-10-28T10:00:04Z', 'max_tokens'),
+        claudeBlock('msg_s2', '2026-10-28T10:00:05Z', null),
+        claudeBlock('msg_s2', '2026-10-28T10:00:06Z', 'end_turn'),
+      ],
+    }, (projectsDir) => {
+      const [parent, sub] = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      const figures = (rows: ModelCallRow[]) => rows.map(row => [row.stream, row.calls, row.truncatedCalls ?? null, row.stopCalls ?? null]);
+      expect(figures(parent.promptCache?.rows ?? [])).toEqual([['main', 1, 0, null]]);
+      expect(figures(sub.promptCache?.rows ?? [])).toEqual([['subagent', 2, 1, null]]);
+      expect(rowTruncation(sub.promptCache?.rows ?? [])).toEqual({ calls: 2, truncatedCalls: 1, filteredCalls: null });
     });
   });
 });

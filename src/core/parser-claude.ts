@@ -422,12 +422,18 @@ function knownTruncation(data: ClaudeAssistantData, line: ClaudeLine, responseId
   return truncated;
 }
 
+/** The stream of a line's response: a sub-agent's for a sidechain line, and for any line of a sub-agent's transcript,
+ *  marked or not. Used both where a response counts and where a later line of it logs why it stopped. */
+function claudeStream(line: ClaudeLine, cacheState: ClaudeCacheState): 'main' | 'subagent' {
+  return cacheState.subagentFile || line.isSidechain ? 'subagent' : 'main';
+}
+
 /** A later line of a response already counted can still log why it stopped. Claude Code logs the stop reason on
  *  some of a response's lines only, so a response counts toward truncation once any line logs one. */
-function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, responseId: string): void {
+function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, responseId: string, cacheState: ClaudeCacheState): void {
   const truncated = claudeTruncated(line);
   const seen = data.truncation.get(responseId);
-  const stream = line.isSidechain ? 'subagent' : 'main';
+  const stream = claudeStream(line, cacheState);
   if (truncated != null && seen === null) {
     data.truncation.set(responseId, truncated);
     data.cache.addStopReason(stream, cacheModelName(line.message?.model), truncated);
@@ -437,12 +443,12 @@ function addClaudeStopReason(data: ClaudeAssistantData, line: ClaudeLine, respon
   }
 }
 
-/** Count each API response's cache usage once, as the main agent or a sub-agent (a sidechain line, or any line of a
- *  sub-agent's transcript), and whether it stopped at the output-token limit. */
+/** Count each API response's cache usage once, as the main agent or a sub-agent (`claudeStream`), and whether it
+ *  stopped at the output-token limit. */
 function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheState: ClaudeCacheState): void {
   const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
   if (responseId && data.responseIds.has(responseId)) {
-    addClaudeStopReason(data, line, responseId);
+    addClaudeStopReason(data, line, responseId, cacheState);
     return;
   }
   const truncated = knownTruncation(data, line, responseId);
@@ -458,7 +464,7 @@ function addClaudeCacheUsage(data: ClaudeAssistantData, line: ClaudeLine, cacheS
     data.responseIds.add(responseId);
     data.truncation.set(responseId, truncated);
   }
-  const stream = cacheState.subagentFile || line.isSidechain ? 'subagent' : 'main';
+  const stream = claudeStream(line, cacheState);
   data.cache.addCall(stream, cacheModelName(line.message?.model), { ...sample, outputs: stopReasonSample(truncated) });
   if (stream === 'main' && !cacheState.sawMain) {
     cacheState.sawMain = true;
