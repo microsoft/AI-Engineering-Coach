@@ -16,7 +16,7 @@ import { CONTEXT_WINDOW_DEFAULT } from '../core/constants';
 vi.mock('./shared', () => ({ formatNum: (n: number) => `${Math.round(n / 1000)}K` }));
 
 import { render } from './render';
-import { utilizationSeries, windowFootnote, windowNote, windowTag } from './context-window-view';
+import { utilizationSeries, utilizationSparkline, windowFootnote, windowNote, windowTag } from './context-window-view';
 
 function detail(overrides: Partial<SessionContextDetail>): SessionContextDetail {
   return {
@@ -62,6 +62,24 @@ describe('context-window labels', () => {
     expect(data.estimatedContextWindow).toBe(CONTEXT_WINDOW_DEFAULT);
     expect(row).toMatchObject({ windowSource: 'estimated', contextWindow: 224_000, avgUtilization: 13.4, peakUtilization: 13.4 });
     expect(utilizationSeries(row, data.estimatedContextWindow)).toEqual([13.4, 13.4]);
+  });
+
+  it('draws the session sparkline against each turn\u2019s own limit, like its row, and colors it by that peak', () => {
+    // Prompts of 400K and 240K with reported limits of 968K and 272K peak at 88.2% (limited), not 41.3% of 968K.
+    const s = detail({ windowSource: 'reported', contextWindow: 968_000, tokenCurve: [400_000, 240_000], turnLimits: [968_000, 272_000] });
+    const colorOf = vi.fn((utilization: number) => (utilization >= 80 ? 'red' : 'green'));
+    const svg = rendered(utilizationSparkline(s, 128_000, colorOf)).querySelector('svg');
+    expect(colorOf).toHaveBeenCalledWith(88.2);
+    expect(svg?.querySelector('polyline')?.getAttribute('stroke')).toBe('red');
+    expect(svg?.querySelector('polyline')?.getAttribute('points')).toBe('0.0,11.7 80.0,2.4');
+    expect(svg?.getAttribute('title')).toBe('Context utilization across 2 of 2 requests');
+  });
+
+  it('bridges requests without token data in the sparkline, and shows a dash without any', () => {
+    const svg = rendered(utilizationSparkline(detail({ windowSource: 'estimated', turnLimits: undefined, tokenCurve: [100_000, null, 150_000] }), 128_000, () => 'green')).querySelector('svg');
+    expect(svg?.querySelector('polyline')?.getAttribute('points')).toBe('0.0,7.5 80.0,1.2');
+    expect(svg?.getAttribute('title')).toBe('Context utilization across 2 of 3 requests');
+    expect(rendered(utilizationSparkline(detail({ tokenCurve: [null, null] }), 128_000, () => 'green')).textContent).toBe('-');
   });
 
   it('says which turns reported their limit in the session header', () => {

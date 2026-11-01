@@ -19,7 +19,7 @@ import {
   renderSessionCompositionPanel,
 } from './context-composition-view';
 import { attachCompositionDrilldown } from './context-composition-drilldown';
-import { turnTooltipLines, utilizationSeries, windowFootnote, windowNote, windowSourceHelp, windowTag } from './context-window-view';
+import { turnTooltipLines, utilizationSeries, utilizationSparkline, windowFootnote, windowNote, windowSourceHelp, windowTag } from './context-window-view';
 import { closeContextTimeline, renderContextTimeline } from './context-session-timeline';
 import { renderSessionStrip } from './token-types-view';
 import { chartGuidesPlugin, describeGuides, type ChartGuides } from './chart-guides';
@@ -693,7 +693,7 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
   const clickable = s.hasPerRequestTokens || s.composition != null;
   const cursorStyle = clickable ? 'cursor:pointer;' : 'cursor:default;opacity:0.85;';
   const sparklineContent = s.hasPerRequestTokens
-    ? renderSparkline(s.tokenCurve, s.contextWindow || ctxWindow, thresholds)
+    ? utilizationSparkline(s, ctxWindow, utilization => contextColor(utilization, thresholds))
     : html`<span style="color:var(--text-muted);font-size:10px;" title="Session-level data only — no per-turn breakdown available (older Copilot CLI builds log usage only at session end)">—</span>`;
 
   const utilContent = s.hasPerRequestTokens
@@ -723,43 +723,4 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
         ? html`<button type="button" class="ctx-session-expand" aria-expanded="false" aria-label=${`Show details for the ${s.harness} session on ${s.date}`}>${compositionMiniBar(s.composition, false)}</button>`
         : compositionMiniBar(s.composition)}</td>
     </tr>`;
-}
-
-/** Render an inline SVG sparkline showing token usage across a session's requests.
- *  Null entries (requests with no native token data) are bridged so the curve
- *  reads as continuous — gaps in source data shouldn't visually look like
- *  a request was made with zero tokens. */
-    function renderSparkline(tokenCurve: (number | null)[], ctxWindow: number, thresholds: ContextVerdictThresholds): ComponentChildren {
-  const validValues = tokenCurve.filter((v): v is number => v != null && v > 0);
-  if (validValues.length === 0) return html`<span style="color:var(--text-muted);">-</span>`;
-
-  const width = 80;
-  const height = 20;
-  const maxVal = Math.max(ctxWindow, ...validValues);
-  const step = tokenCurve.length > 1 ? width / (tokenCurve.length - 1) : 0;
-
-  // Project every non-null point to (x, y); skip nulls. Drawing a single
-  // polyline through these points bridges across gaps (Chart.js spanGaps
-  // equivalent) so the sparkline reads as a continuous trend.
-  const points: { x: number; y: number }[] = [];
-  for (const [i, v] of tokenCurve.entries()) {
-    if (v == null || v <= 0) continue;
-    const x = tokenCurve.length === 1 ? width / 2 : i * step;
-    const y = height - (v / maxVal) * height;
-    points.push({ x, y });
-  }
-  if (points.length === 0) return html`<span style="color:var(--text-muted);">-</span>`;
-
-  const peakUtil = (Math.max(...validValues) / ctxWindow) * 100;
-  const color = contextColor(peakUtil, thresholds);
-
-  const pointsStr = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const firstX = points[0].x;
-  const lastX = points[points.length - 1].x;
-  const fillPath = `M${firstX.toFixed(1)},${height} ${points.map(p => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} L${lastX.toFixed(1)},${height} Z`;
-
-  return html`<svg width=${width} height=${height} style="vertical-align:middle;" title=${'Token usage across ' + validValues.length + ' of ' + tokenCurve.length + ' requests'}>
-    <path d=${fillPath} fill=${color} fill-opacity="0.15"/>
-    <polyline points=${pointsStr} fill="none" stroke=${color} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
-  </svg>`;
 }

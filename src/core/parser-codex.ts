@@ -531,7 +531,9 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   state.curTotalInput = input;
   state.curTotalOutput = output;
   state.curTotalCachedInput = tokenCount(totalUsage.cached_input_tokens) ?? 0;
-  state.curTotalReasoning = tokenCount(totalUsage.reasoning_output_tokens) ?? state.curTotalReasoning;
+  // Reasoning is part of the output, so both totals come from the same snapshot: one that doesn't report reasoning
+  // leaves it unknown rather than setting an earlier total against a later output total.
+  state.curTotalReasoning = tokenCount(totalUsage.reasoning_output_tokens);
   state.curTotalTokens = total;
   state.hasTokenData = true;
 

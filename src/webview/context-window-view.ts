@@ -40,6 +40,37 @@ export function utilizationSeries(s: SessionContextDetail, fallbackWindow: numbe
   });
 }
 
+/** Inline SVG sparkline of a session's utilization (%) per request, against the same windows as its row and chart
+ *  (`utilizationSeries`), in the color `colorOf` gives its peak. Requests without token data are bridged, so the
+ *  curve reads as continuous: a gap in the source data shouldn't look like a request made with zero tokens. */
+export function utilizationSparkline(s: SessionContextDetail, fallbackWindow: number, colorOf: (utilization: number) => string): ComponentChildren {
+  const series = utilizationSeries(s, fallbackWindow);
+  const values = series.filter((v): v is number => v != null);
+  if (values.length === 0) return html`<span style="color:var(--text-muted);">-</span>`;
+
+  const width = 80;
+  const height = 20;
+  const top = Math.max(100, ...values);
+  const step = series.length > 1 ? width / (series.length - 1) : 0;
+  // Project every point with a value to (x, y); one polyline through them bridges the gaps (like Chart.js spanGaps).
+  const points: { x: number; y: number }[] = [];
+  for (const [i, v] of series.entries()) {
+    if (v == null) continue;
+    points.push({ x: series.length === 1 ? width / 2 : i * step, y: height - (v / top) * height });
+  }
+  const color = colorOf(Math.max(...values));
+
+  const pointsStr = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const firstX = points[0].x;
+  const lastX = points[points.length - 1].x;
+  const fillPath = `M${firstX.toFixed(1)},${height} ${points.map(p => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} L${lastX.toFixed(1)},${height} Z`;
+
+  return html`<svg width=${width} height=${height} style="vertical-align:middle;" title=${'Context utilization across ' + values.length + ' of ' + series.length + ' requests'}>
+    <path d=${fillPath} fill=${color} fill-opacity="0.15"/>
+    <polyline points=${pointsStr} fill="none" stroke=${color} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
 /** Header note for an expanded session whose turns reported their limit. */
 export function windowNote(s: SessionContextDetail): string {
   if (s.contextWindow <= 0) return '';

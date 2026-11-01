@@ -113,6 +113,9 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
         'getContextRangeAvailability',
         { filter: { ...currentFilter, fromDate: undefined, toDate: undefined } } as Record<string, unknown>,
       );
+      // A newer render (another tab, range or filter) started while the range check was pending. It owns the page and
+      // the selected range now, so this answer mustn't change either.
+      if (generation !== renderGeneration) return;
       const allowed = new Set(avail.rangesWithTokens);
       visibleRanges = ALL_RANGES.filter(r => allowed.has(r.days));
       // If the current range is no longer available, snap to the nearest
@@ -143,7 +146,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
     } catch {
       // Fall back to all ranges on error so the UI stays usable.
     }
-    // A newer render (another tab or range) started while the range check was pending, and owns the page now.
+    // A newer render started while a range check that failed was pending, and owns the page now.
     if (generation !== renderGeneration) return;
   }
 
