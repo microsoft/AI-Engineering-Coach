@@ -43,6 +43,7 @@
  * ```
  */
 
+import { defaultRuleDescription } from './rule-summary';
 import { DetectionRule, RuleCondition, RuleSeverity, RuleScope, PracticeGroup, PRACTICE_GROUPS  } from './types';
 
 interface ParsedFrontmatter {
@@ -345,7 +346,7 @@ export function parseRule(markdown: string): DetectionRule | null {
     severity: fm.severity as RuleSeverity,
     requiresIdeContext: fm.requiresIdeContext ?? false,
     scope,
-    description: description || `Detects ${fm.name.toLowerCase()} patterns.`,
+    description: description || defaultRuleDescription(fm.name),
     descriptionTemplate: descriptionTemplate || '{{count}} occurrences detected.',
     suggestionTemplate: suggestionTemplate || 'Review your practices.',
     exampleTemplate: exampleTemplate || '',

@@ -45,7 +45,9 @@ thresholds:                      # Tunable knobs. Referenced as thresholds.<name
 ---
 
 # Description
-Short, user-facing summary of what this rule detects.
+Short, user-facing summary of what this rule detects, shown on its card in the Rules
+list and in full in its detail. Plain text: template variables aren't filled here, so
+a Description that has one shows "Detects <name> patterns." instead.
 
 # When Triggered
 One-line finding text. Supports template variables: {{count}}, {{total}}, {{pct}},

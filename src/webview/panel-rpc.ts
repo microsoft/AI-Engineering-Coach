@@ -26,6 +26,7 @@ import {
 import { runDetectors, runEmitters } from '../core/detector-registry';
 import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from '../core/rule-pipeline';
 import { parseRule, serializeRule } from '../core/rule-parser';
+import { ruleSummary } from '../core/rule-summary';
 import { getRuleLayerInfo, getPersonalRulesDir, getProjectRulesDir } from '../core/rule-loader';
 import { getPending } from '../core/rule-trust';
 import { spotlight } from '../core/spotlight';
@@ -821,9 +822,7 @@ const rpcHandlers: TypedRpcHandlers = {
       severity: r.severity,
       scope: r.scope,
       requiresIdeContext: r.requiresIdeContext,
-      description: r.descriptionTemplate
-        ? r.descriptionTemplate.replaceAll(/\{\{[^}]+\}\}/g, '...').substring(0, 200)
-        : r.name,
+      description: ruleSummary(r),
       descriptionTemplate: r.descriptionTemplate,
       suggestionTemplate: r.suggestionTemplate,
       exampleTemplate: r.exampleTemplate,
