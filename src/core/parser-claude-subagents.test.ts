@@ -3,9 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Claude Code sub-agent transcripts (`<sessionId>/subagents/agent-*.jsonl`) count as sub-agent cache usage whichever
- * of their lines carry `isSidechain`, since not every build marks them all. Fixtures mirror the real directory layout
- * and line shapes, content replaced. */
+/* Claude Code sub-agent transcripts (`<sessionId>/subagents/agent-*.jsonl`) count as sub-agent cache usage, and their
+ * turns are measured against their own calls, whichever of their lines carry `isSidechain`, since not every build
+ * marks them all. Fixtures mirror the real directory layout and line shapes, content replaced. */
 
 import * as fs from 'fs';
 import * as os from 'os';
@@ -136,6 +136,36 @@ describe('Claude Code sub-agent transcripts\u2019 prompt-cache rows', () => {
   });
 });
 
+describe('Claude Code sub-agent transcripts\u2019 token totals', () => {
+  it.each(MARKING_NAMES)('count each response once (%s marked)', marking => {
+    requestsOf(marking, (_parent, sub) => {
+      expect(sub).toMatchObject({
+        promptTokens: SUB_INPUT,
+        completionTokens: SUB_FIRST.output_tokens + SUB_NEXT.output_tokens,
+        cacheReadTokens: 5_000,
+        cacheWriteTokens: 6_000,
+      });
+    });
+  });
+});
+
+describe('Claude Code sub-agent transcripts\u2019 turn context', () => {
+  const own = { lastPromptTokens: promptOf(SUB_NEXT), peakPromptTokens: promptOf(SUB_NEXT), contextLimit: null, calls: 2 };
+
+  it.each(MARKING_NAMES)('is measured against their own calls (%s marked)', marking => {
+    requestsOf(marking, (parent, sub) => {
+      expect(parent.contextUsage).toEqual({ lastPromptTokens: promptOf(PARENT), peakPromptTokens: promptOf(PARENT), contextLimit: null, calls: 1 });
+      expect(sub.contextUsage).toEqual(own);
+    });
+  });
+
+  it.each(MARKING_NAMES)('is measured against their own calls without a parent transcript too (%s marked)', marking => {
+    withProject(transcripts(marking, true), projectsDir => {
+      expect(parse(projectsDir)[0].requests[0].contextUsage).toEqual(own);
+    });
+  });
+});
+
 describe('Claude Code sub-agent transcripts without a parent transcript', () => {
   it.each(MARKING_NAMES)('are sub-agent cache usage too (%s marked)', marking => {
     withProject(transcripts(marking, true), projectsDir => {
@@ -148,9 +178,9 @@ describe('Claude Code sub-agent transcripts without a parent transcript', () => 
 });
 
 describe('Claude Code sub-agent transcripts reloaded for the session detail', () => {
-  const figures = (request: SessionRequest) => ({ id: request.requestId, cache: request.promptCache });
+  const figures = (request: SessionRequest) => ({ id: request.requestId, cache: request.promptCache, context: request.contextUsage });
 
-  it.each(MARKING_NAMES)('keep the prompt-cache figures of the dashboard parse (%s marked)', marking => {
+  it.each(MARKING_NAMES)('keep the prompt-cache figures and the context of the dashboard parse (%s marked)', marking => {
     for (const orphan of [false, true]) {
       withProject(transcripts(marking, orphan), projectsDir => {
         const sources = new Map<string, SessionSource>();

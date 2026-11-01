@@ -73,8 +73,9 @@ interface ClaudeLine {
    *  interactive (cli, claude-desktop) vs programmatic (everything else). */
   entrypoint?: string;
   /** True on subagent lines (`<sessionId>/subagents/agent-*.jsonl` files).
-   *  Not every Claude Code build writes it there, so the prompt cache also
-   *  reads the file's own classification (`ClaudeCacheState.subagentFile`).
+   *  Not every Claude Code build writes it there, so the prompt cache and a
+   *  request's own chain also read the file's own classification
+   *  (`ClaudeCacheState.subagentFile`, see `claudeStream`).
    *  Carried through so callers can roll subagent requests up into the
    *  parent session rather than treating them as standalone sessions. */
   isSidechain?: boolean;
@@ -518,8 +519,9 @@ function finishClaudeCache(data: ClaudeAssistantData, cacheState: ClaudeCacheSta
 
 /** Record a line's usage under its API response: the first line of a `message.id` adds the response, later lines
  *  of it keep the largest value of each field (a response's lines normally repeat the same usage). A line
- *  without an id counts as its own response. Returns the response's index, or -1 when the line has no usage. */
-function addClaudeResponseUsage(data: ClaudeAssistantData, line: ClaudeLine, requestSidechain: boolean): number {
+ *  without an id counts as its own response. Returns the response's index, or -1 when the line has no usage.
+ *  `requestSidechain`: the request is a sub-agent's (`claudeStream` of its prompt). */
+function addClaudeResponseUsage(data: ClaudeAssistantData, line: ClaudeLine, requestSidechain: boolean, cacheState: ClaudeCacheState): number {
   const usage = line.message?.usage;
   if (!usage) return -1;
   const sample: ClaudeResponseUsage = {
@@ -527,7 +529,7 @@ function addClaudeResponseUsage(data: ClaudeAssistantData, line: ClaudeLine, req
     cacheRead: getNumberField(usage, 'cache_read_input_tokens'),
     cacheWrite: getNumberField(usage, 'cache_creation_input_tokens'),
     output: getNumberField(usage, 'output_tokens'),
-    ownChain: (line.isSidechain === true) === requestSidechain,
+    ownChain: (claudeStream(line, cacheState) === 'subagent') === requestSidechain,
   };
   const responseId = typeof line.message?.id === 'string' ? line.message.id : '';
   const index = responseId ? data.responseUsageIndex.get(responseId) : undefined;
@@ -589,7 +591,7 @@ function collectClaudeAssistantData(
   cacheState: ClaudeCacheState,
 ): ClaudeAssistantData {
   const startIndex = userIndex + 1;
-  const requestSidechain = lines[userIndex]?.isSidechain === true;
+  const requestSidechain = claudeStream(lines[userIndex], cacheState) === 'subagent';
   const data: ClaudeAssistantData = {
     nextIndex: startIndex,
     lastTs,
@@ -634,7 +636,7 @@ function collectClaudeAssistantData(
       if (!data.model && next.message?.model) data.model = next.message.model;
 
       if (reportsCacheUsage(next.message?.usage)) data.cacheUsageReported = true;
-      const response = addClaudeResponseUsage(data, next, requestSidechain);
+      const response = addClaudeResponseUsage(data, next, requestSidechain, cacheState);
       addClaudeCacheUsage(data, next, response, cacheState);
 
       for (const block of toContentArray(next.message?.content)) {
