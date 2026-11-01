@@ -391,6 +391,52 @@ function parseTestFixtures(body: string): Array<{ input: Record<string, unknown>
 }
 
 /**
+ * Patch threshold values in a rule's markdown source without regenerating it.
+ * Only the value on each matching line in the front-matter `thresholds:` block
+ * changes; a line whose value already equals the new one is left untouched.
+ * Keys missing from the block are appended to it (or a block is added).
+ * Everything else, including line endings, stays byte-identical.
+ */
+export function patchThresholdsInSource(source: string, thresholds: Record<string, number>): string {
+  const lines = source.split('\n');
+  if (lines[0]?.trim() !== '---') return source;
+  const fmEnd = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  if (fmEnd < 0) return source;
+  const eol = lines[0].endsWith('\r') ? '\r' : '';
+
+  const pending = new Map(Object.entries(thresholds));
+  const blockStart = lines.findIndex((l, i) => i > 0 && i < fmEnd && /^thresholds:\s*$/.test(l));
+  let insertAt = fmEnd;
+  let indent = '  ';
+
+  if (blockStart >= 0) {
+    insertAt = blockStart + 1;
+    for (let i = blockStart + 1; i < fmEnd; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      if (!/^\s{2,}/.test(line) || !line.includes(':')) break;
+      insertAt = i + 1;
+      const m = line.match(/^(\s+)([^:]*?)([ \t]*:[ \t]*)(.*?)(\s*)$/);
+      if (!m) continue;
+      const [, lineIndent, key, sep, value, trailing] = m;
+      indent = lineIndent;
+      const next = pending.get(key);
+      if (next === undefined) continue;
+      pending.delete(key);
+      if (String(Number.parseFloat(value)) === value && Number.parseFloat(value) === next) continue;
+      lines[i] = `${lineIndent}${key}${sep}${next}${trailing}`;
+    }
+  }
+
+  if (pending.size === 0) return lines.join('\n');
+  const added = [...pending].map(([k, v]) => `${indent}${k}: ${v}${eol}`);
+  if (blockStart < 0) added.unshift(`thresholds:${eol}`);
+  lines.splice(insertAt, 0, ...added);
+  return lines.join('\n');
+}
+
+/**
  * Serialize a DetectionRule back to markdown format.
  */
 export function serializeRule(rule: DetectionRule): string {

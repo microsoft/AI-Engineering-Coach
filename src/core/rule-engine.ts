@@ -14,7 +14,7 @@
  */
 
 import { DetectionRule, DetectorEmission, RulePreviewStats, RuleEvalResult, RuleTemplateVars, AntiPattern, PracticeGroup, Session, SessionRequest  } from './types';
-import { parseRule, fillTemplate, serializeRule } from './rule-parser';
+import { parseRule, fillTemplate, serializeRule, patchThresholdsInSource } from './rule-parser';
 import { warnCore } from './log';
 
 /* ---- Multi-layer rule storage ---- */
@@ -174,13 +174,16 @@ export function updateRuleThresholds(id: string, thresholds: Record<string, numb
   const existing = getRule(id);
   if (!existing) return null;
 
+  // Patch only the threshold lines so the rest of the source (tests, detect
+  // block, line endings) is kept, then re-parse to get the updated rule.
+  const rawSource = patchThresholdsInSource(existing.rawSource || serializeRule(existing), thresholds);
+  const parsed = parseRule(rawSource);
+  if (!parsed) return null;
   const updated: DetectionRule = {
-    ...existing,
-    thresholds: { ...existing.thresholds, ...thresholds },
+    ...parsed,
     source: existing.source === 'built-in' ? 'personal' : existing.source,
-    rawSource: '',  // Will be regenerated
+    sourceFilePath: existing.sourceFilePath,
   };
-  updated.rawSource = serializeRule(updated);
   setUserRule(updated);
   return updated;
 }
