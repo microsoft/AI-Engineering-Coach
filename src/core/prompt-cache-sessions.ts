@@ -41,11 +41,13 @@ export function expectedReporting(harness: string): CacheReporting {
   return reportsSessionTotals(harness) ? 'per-session' : 'none';
 }
 
-/** Codex session totals as a main-stream accumulator; `null` when the session has none. */
+/** Codex session totals as a main-stream accumulator; `null` when the session has none. Usage that didn't log
+ *  cached-token counts isn't a cache measurement, so it doesn't count as reported (a 0% hit ratio). */
 export function sessionTotals(session: Session): TotalsAcc | null {
   if (!reportsSessionTotals(session.harness) || !session.modelUsage) return null;
   const acc = emptyTotals();
   for (const usage of Object.values(session.modelUsage)) {
+    if (usage.cacheTokensReported === false) continue;
     addUsage(acc, {
       calls: 0,
       input: usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,

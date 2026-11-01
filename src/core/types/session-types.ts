@@ -39,6 +39,9 @@ export interface ModelUsage {
   cacheWriteTokens: number;
   /** Reasoning tokens (subset of output for some models, kept for diagnostics) */
   reasoningTokens?: number;
+  /** `false` when the harness logged no cached-token counts, so the cache fields are a default 0 rather than a
+   *  measurement (Codex logs without `cached_input_tokens`). Absent means they were logged. */
+  cacheTokensReported?: boolean;
 }
 
 export interface TodoItem {

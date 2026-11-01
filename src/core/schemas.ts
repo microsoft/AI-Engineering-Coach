@@ -46,6 +46,7 @@ export const ModelUsageSchema = z.object({
   cacheReadTokens: z.number(),
   cacheWriteTokens: z.number(),
   reasoningTokens: z.number().optional(),
+  cacheTokensReported: z.boolean().optional(),
 }).passthrough();
 
 const shareSchema = z.number().min(0).max(100).optional();

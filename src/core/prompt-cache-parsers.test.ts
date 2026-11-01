@@ -3,16 +3,19 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Per-request prompt-cache usage for Claude Code and OpenCode. Claude Code writes one line per content
- * block and repeats the response's usage on each, so usage counts once per response id. OpenCode writes
- * one assistant message per model call. Fixtures mirror those shapes with content redacted. */
+/* Per-request prompt-cache usage for Claude Code and OpenCode, and session totals for Codex. Claude Code writes
+ * one line per content block and repeats the response's usage on each, so usage counts once per response id.
+ * OpenCode writes one assistant message per model call. Codex logs cumulative token totals. Fixtures mirror
+ * those shapes with content redacted. */
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { parseClaudeSessions } from './parser-claude';
+import { parseCodexSessionFile } from './parser-codex';
 import { parseOpenCodeSessions } from './parser-opencode';
+import { sessionTotals } from './prompt-cache-sessions';
 
 function withClaudeFile(lines: object[], run: (projectsDir: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cache-test-'));
@@ -181,5 +184,37 @@ describe('OpenCode prompt-cache usage', () => {
       expect(request).toMatchObject({ promptTokens: 5_000, cacheReadTokens: null, cacheWriteTokens: null });
       expect(request).not.toHaveProperty('promptCache');
     });
+  });
+});
+
+/** Parses a one-turn Codex log whose cumulative `token_count` totals are `totals`. */
+function parseCodexTotals(totals: Record<string, number>) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cache-test-'));
+  const file = path.join(root, 'rollout-test.jsonl');
+  const lines = [
+    { type: 'session_meta', payload: { id: 'sess-codex', cwd: '/Users/me/proj' } },
+    { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },
+    { type: 'event_msg', timestamp: '2026-10-20T11:00:00Z', payload: { type: 'user_message', message: 'secret prompt' } },
+    { type: 'event_msg', timestamp: '2026-10-20T11:00:02Z', payload: { type: 'token_count', info: { total_token_usage: totals } } },
+  ];
+  fs.writeFileSync(file, lines.map(line => JSON.stringify(line)).join('\n'), 'utf-8');
+  try {
+    const session = parseCodexSessionFile(file);
+    if (!session) throw new Error('no session');
+    return session;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe('Codex prompt-cache session totals', () => {
+  it('marks totals without cached-token counts as not a cache measurement, unlike a logged zero', () => {
+    const notLogged = parseCodexTotals({ input_tokens: 50_000, output_tokens: 900 });
+    expect(notLogged.modelUsage?.['gpt-5.3-codex']).toMatchObject({ inputTokens: 50_000, cacheReadTokens: 0, cacheTokensReported: false });
+    expect(sessionTotals(notLogged)).toBeNull();
+
+    const zero = parseCodexTotals({ input_tokens: 50_000, output_tokens: 900, cached_input_tokens: 0 });
+    expect(zero.modelUsage?.['gpt-5.3-codex']).not.toHaveProperty('cacheTokensReported');
+    expect(sessionTotals(zero)).toMatchObject({ input: 50_000, cacheRead: 0 });
   });
 });
