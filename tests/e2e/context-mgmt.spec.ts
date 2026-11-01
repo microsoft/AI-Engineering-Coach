@@ -323,3 +323,51 @@ test.describe('Context Composition empty states', () => {
     await expect(page.locator('#ctxComposition')).toHaveCount(0);
   });
 });
+
+type MockDataWindow = Window & { getMockData: (method: string, params?: unknown) => unknown };
+
+/** The summary row of an expanded workspace in the utilization table ("Avg util:" with a colon, unlike the column header). */
+function expansionSummary(page: Page) {
+  return page.locator('tr.ctx-session-inline', { hasText: /Avg util:/ });
+}
+
+test.describe('Context Management workspace expansion summary', () => {
+  test.beforeEach(async ({ page }) => {
+    await navigateToContextHealth(page);
+  });
+
+  test('averages utilization and saturation over sessions with per-request tokens only', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    const summary = expansionSummary(page);
+    await expect(summary).toContainText('4 sessions');
+    // The Copilot CLI session has no per-request tokens; its placeholder zeros would pull the averages to 29.5% and 9.0%.
+    const util = summary.locator('span', { hasText: /^Avg util:/ });
+    await expect(util).toHaveText('Avg util: 39.3%');
+    await expect(util).toHaveAttribute('title', 'Averaged over the 3 of 4 sessions with per-request token data.');
+    await expect(summary.locator('span', { hasText: /^Saturation:/ })).toHaveText('Saturation: 12.0%');
+    // Its own row shows no utilization or saturation either.
+    await expect(page.locator('.ctx-session-row').nth(1).locator('td').nth(5)).toHaveText('\u2014');
+    await expect(page.locator('.ctx-session-row').nth(1).locator('td').nth(6)).toHaveText('\u2014');
+  });
+
+  test('shows no averages when no session in the workspace has per-request tokens', async ({ page }) => {
+    await page.evaluate(() => {
+      const w = window as MockDataWindow;
+      const original = w.getMockData;
+      w.getMockData = (method, params) => {
+        const data = original(method, params) as { sessions?: { hasPerRequestTokens: boolean }[] };
+        if (method === 'getWorkspaceContextSessions' && data.sessions) data.sessions = data.sessions.filter(s => !s.hasPerRequestTokens);
+        return data;
+      };
+    });
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(1);
+    const summary = expansionSummary(page);
+    await expect(summary).toContainText('1 session');
+    await expect(summary).not.toContainText('1 sessions');
+    const util = summary.locator('span', { hasText: /^Avg util:/ });
+    await expect(util).toHaveText('Avg util: \u2014');
+    await expect(util).toHaveAttribute('title', 'No session here has per-request token data, so utilization and saturation are unknown.');
+    await expect(summary.locator('span', { hasText: /^Saturation:/ })).toHaveText('Saturation: \u2014');
+  });
+});

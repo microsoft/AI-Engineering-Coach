@@ -128,7 +128,7 @@ A detailed table with per-session breakdowns for each workspace:
 | Cost Eff. | Ratio of output to context consumed |
 | Compactions | Number of auto-compaction events |
 
-Click a workspace row to expand inline session-level details with per-session verdicts, token curves, prompt composition, and event counts.
+Click a workspace row to expand inline session-level details with per-session verdicts, token curves, prompt composition, and event counts. The summary above the sessions averages utilization and saturation over the sessions that recorded per-request tokens. Sessions without them, such as Copilot CLI sessions, show a dash in those columns and are left out of the averages.
 
 ### Insights
 

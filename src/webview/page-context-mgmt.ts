@@ -350,17 +350,20 @@ export async function renderContextManagement(container: HTMLElement, currentFil
     summaryTr.className = 'ctx-session-inline';
 
     const totalSessions = sessions.length;
-    const avgUtil = totalSessions > 0 ? sessions.reduce((s, d) => s + d.avgUtilization, 0) / totalSessions : 0;
+    const averages = measuredSessionAverages(sessions);
     const totalCompactions = sessions.reduce((s, d) => s + d.compactionCount, 0);
     const limitedCount = sessions.filter(s => s.verdict === 'limited').length;
-    const avgSaturation = totalSessions > 0 ? sessions.reduce((s, d) => s + d.saturation, 0) / totalSessions : 0;
     const todoEvents = sessions.reduce((s, d) => s + d.events.filter(e => e.type === 'todo-add' || e.type === 'todo-complete').length, 0);
 
     render(html`<td colspan="9" style="padding:12px 16px;background:rgba(88,166,255,0.03);border-bottom:1px solid var(--border-color, #30363d);">
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <span style="font-size:12px;color:var(--text-muted);"><strong style="color:var(--text-primary, #c9d1d9);">${totalSessions}</strong> sessions</span>
-        <span style="font-size:12px;color:var(--text-muted);">Avg util: <strong style=${'color:' + contextColor(avgUtil, expandedSessionData.thresholds) + ';'}>${avgUtil.toFixed(1)}%</strong></span>
-        <span style="font-size:12px;color:var(--text-muted);">Saturation: <strong style=${'color:' + (avgSaturation > 30 ? COLORS.red : avgSaturation > 10 ? COLORS.yellow : COLORS.green) + ';'}>${avgSaturation.toFixed(1)}%</strong></span>
+        <span style="font-size:12px;color:var(--text-muted);"><strong style="color:var(--text-primary, #c9d1d9);">${totalSessions}</strong> session${totalSessions === 1 ? '' : 's'}</span>
+        <span style="font-size:12px;color:var(--text-muted);" title=${averages.note}>Avg util: ${averages.util == null
+          ? html`<strong>\u2014</strong>`
+          : html`<strong style=${'color:' + contextColor(averages.util, expandedSessionData.thresholds) + ';'}>${averages.util.toFixed(1)}%</strong>`}</span>
+        <span style="font-size:12px;color:var(--text-muted);" title=${averages.note}>Saturation: ${averages.saturation == null
+          ? html`<strong>\u2014</strong>`
+          : html`<strong style=${'color:' + (averages.saturation > 30 ? COLORS.red : averages.saturation > 10 ? COLORS.yellow : COLORS.green) + ';'}>${averages.saturation.toFixed(1)}%</strong>`}</span>
         <span style="font-size:12px;color:var(--text-muted);">Compactions: <strong style=${'color:' + (totalCompactions > 0 ? COLORS.yellow : 'var(--text-primary, #c9d1d9)') + ';'}>${totalCompactions}</strong></span>
         ${limitedCount > 0 ? html`<span style=${'font-size:12px;color:' + COLORS.red + ';'}><strong>${limitedCount}</strong> limited</span>` : null}
         ${todoEvents > 0 ? html`<span style=${'font-size:12px;color:' + (COLORS.purple ?? COLORS.blue) + ';'}>${todoEvents} todo events</span>` : null}
@@ -747,6 +750,20 @@ function renderWorkspaceTable(workspaces: WorkspaceContextScore[], page: number,
 /* ── Session-level inline rows ───────────────────────────────────── */
 
 const SESSION_PAGE_SIZE = 10;
+
+/** Utilization and saturation averaged over the sessions with per-request token data. The rest only carry
+ *  placeholder zeros, so they're left out, like they are from the workspace row; `null` when no session has any. */
+function measuredSessionAverages(sessions: SessionContextDetail[]): { util: number | null; saturation: number | null; note: string | undefined } {
+  const measured = sessions.filter(s => s.hasPerRequestTokens);
+  if (measured.length === 0) {
+    return { util: null, saturation: null, note: 'No session here has per-request token data, so utilization and saturation are unknown.' };
+  }
+  const mean = (value: (s: SessionContextDetail) => number) => measured.reduce((sum, s) => sum + value(s), 0) / measured.length;
+  const note = measured.length < sessions.length
+    ? `Averaged over the ${measured.length} of ${sessions.length} sessions with per-request token data.`
+    : undefined;
+  return { util: mean(s => s.avgUtilization), saturation: mean(s => s.saturation), note };
+}
 
 function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: number, thresholds: ContextVerdictThresholds): ComponentChildren {
   const vc = VERDICT_COLORS[s.verdict] || COLORS.muted;
