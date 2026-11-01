@@ -57,8 +57,8 @@ export interface RequestPromptCache {
    *  started after that cache had expired. */
   returns?: number;
   expiredReturns?: number;
-  /** Main-agent calls you started after an earlier call that didn't log when its cache expires. Expiry can't
-   *  be measured for them, so they aren't in `returns`. */
+  /** Main-agent calls you started after an earlier main-agent call that didn't log when its cache expires, including
+   *  one that didn't report its cache at all. Expiry can't be measured for them, so they aren't in `returns`. */
   unmeasuredReturns?: number;
 }
 
