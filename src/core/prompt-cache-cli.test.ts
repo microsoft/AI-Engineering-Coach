@@ -346,6 +346,156 @@ describe('Copilot CLI cache breaks from compaction', () => {
   });
 });
 
+describe('Copilot CLI cache breaks after a failed compaction', () => {
+  it.each([{ success: false }, { outcome: 'failed' }])('have no compaction cause (%j), and the compaction call still counts', failed => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', timestamp: iso(20), data: { trigger: 'threshold' } },
+      { type: 'session.compaction_complete', timestamp: iso(40), data: { ...failed, trigger: 'threshold', error: 'secret error', compactionTokensUsed: { inputTokens: 300_000, cacheReadTokens: 290_000, cacheWriteTokens: 0, model: 'claude-opus-5.5' } } },
+      user('u2', 3_600),
+      call(3_601, { input: 305_000, read: 0, initiator: 'user' }),
+    ]);
+    const [brk] = breaksOf(session);
+    expect(brk.causes).toEqual(['ttl-expired']);
+    expect(brk).not.toHaveProperty('compactionTrigger');
+    expect(session.requests[0].promptCache?.rows.find(row => row.stream === 'compaction')).toMatchObject({ calls: 1, input: 300_000, cacheRead: 290_000 });
+    expect(JSON.stringify(session)).not.toContain('secret error');
+  });
+
+  it('have no compaction cause on a call made while it ran, once the failure is logged', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', data: { trigger: 'threshold' } },
+      call(10, { input: 301_000, read: 0, tools: 12 }),
+      { type: 'session.compaction_complete', data: { success: false, trigger: 'threshold' } },
+      call(20, { input: 302_000, read: 0, tools: 12 }),
+    ]);
+    expect(breaksOf(session).map(brk => brk.causes)).toEqual([['tools-changed'], []]);
+  });
+});
+
+describe('Copilot CLI cache breaks while a compaction runs', () => {
+  it('have no compaction cause; the first call after it completes does', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', timestamp: iso(3_600), data: { trigger: 'threshold' } },
+      user('u2', 3_600),
+      // The cache expired; the compaction hasn't rewritten anything yet.
+      call(3_601, { input: 305_000, read: 0, initiator: 'user' }),
+      call(3_610, { input: 306_000, read: 305_000 }),
+      { type: 'session.compaction_complete', timestamp: iso(3_620), data: { success: true, trigger: 'threshold' } },
+      call(3_621, { input: 60_000, read: 30_000 }),
+    ]);
+    expect(breaksOf(session).map(brk => [brk.callIndex, brk.causes, brk.compactionTrigger])).toEqual([
+      [1, ['ttl-expired'], undefined],
+      [3, ['compaction'], 'auto'],
+    ]);
+  });
+
+  it('keep the compaction as their cause when the log never shows it completing', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', data: { trigger: 'threshold' } },
+      call(30, { input: 50_000, read: 30_000 }),
+    ]);
+    expect(breaksOf(session)[0].causes).toEqual(['compaction']);
+  });
+
+  it('give the compaction only to the first call after its start', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', data: { trigger: 'threshold' } },
+      call(10, { input: 301_000, read: 300_000 }),
+      call(20, { input: 302_000, read: 0, tools: 12 }),
+    ]);
+    expect(breaksOf(session).map(brk => brk.causes)).toEqual([['tools-changed']]);
+  });
+});
+
+const COMPACTED = { type: 'session.compaction_complete', data: { success: true, trigger: 'threshold' } };
+const STARTED = { type: 'session.compaction_start', data: { trigger: 'threshold' } };
+
+describe('Copilot CLI cache breaks after a compaction completed', () => {
+  it('keep the compaction as their cause when a later compaction completes', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      STARTED, COMPACTED,
+      call(41, { input: 60_000, read: 30_000 }),
+      call(50, { input: 61_000, read: 60_000 }),
+      STARTED, COMPACTED,
+      call(81, { input: 25_000, read: 10_000 }),
+    ]);
+    expect(breaksOf(session).map(brk => [brk.callIndex, brk.causes, brk.compactionTrigger])).toEqual([
+      [1, ['compaction'], 'auto'],
+      [3, ['compaction'], 'auto'],
+    ]);
+  });
+
+  it.each([
+    ['a completed compaction', [STARTED, COMPACTED, STARTED]],
+    ['a pending compaction rewrite in a checkpoint', [STARTED, checkpoint({ pending: ['compaction'] })]],
+  ])('keep the compaction as their cause when %s came before another compaction\u2019s start', (_signal, events) => {
+    const session = parse([START, user('u1', 0), call(1, { input: 300_000, read: 0 }), ...events, call(30, { input: 50_000, read: 30_000 }), COMPACTED]);
+    expect(breaksOf(session)[0].causes).toEqual(['compaction']);
+  });
+});
+
+describe('Copilot CLI cache breaks of calls logged after a compaction event', () => {
+  // A call's record is logged when it finishes, so a call can start before a compaction event logged before it.
+  it('give a completed compaction to the first call that started after it, not one that was running', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', timestamp: iso(20), data: { trigger: 'threshold' } },
+      { type: 'session.compaction_complete', timestamp: iso(40), data: { success: true, trigger: 'threshold' } },
+      call(30, { input: 301_000, read: 0, tools: 12, duration: 20 }),
+      call(60, { input: 60_000, read: 30_000, tools: 12 }),
+    ]);
+    expect(breaksOf(session).map(brk => [brk.callIndex, brk.causes, brk.compactionTrigger])).toEqual([
+      [1, ['tools-changed'], undefined],
+      [2, ['compaction'], 'auto'],
+    ]);
+  });
+
+  it('give each call the compactions that completed before it started', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_complete', timestamp: iso(100), data: { success: true, trigger: 'threshold' } },
+      { type: 'session.compaction_complete', timestamp: iso(200), data: { success: true, trigger: 'manual' } },
+      call(150, { input: 200_000, read: 0, duration: 100 }),
+      call(260, { input: 60_000, read: 20_000 }),
+    ]);
+    expect(breaksOf(session).map(brk => [brk.causes, brk.compactionTrigger])).toEqual([[['compaction'], 'auto'], [['compaction'], 'manual']]);
+  });
+
+  it('give a compaction that only started to the first call that started after it', () => {
+    const session = parse([
+      START,
+      user('u1', 0),
+      call(1, { input: 300_000, read: 0 }),
+      { type: 'session.compaction_start', timestamp: iso(20), data: { trigger: 'threshold' } },
+      call(10, { input: 301_000, read: 0, tools: 12, duration: 15 }),
+      call(30, { input: 50_000, read: 30_000, tools: 12 }),
+    ]);
+    expect(breaksOf(session).map(brk => brk.causes)).toEqual([['tools-changed'], ['compaction']]);
+  });
+});
+
 describe('Copilot CLI cache breaks from setting changes', () => {
   it('attributes model switches, marking those made by automatic model selection', () => {
     const session = parse([
