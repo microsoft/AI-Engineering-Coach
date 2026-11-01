@@ -7,7 +7,9 @@
  * the tooltip lines that name each request's events. */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { ContextVerdictThresholds, SessionContextDetail } from '../core/types';
+import type { ContextVerdictThresholds, SessionContextDetail, TodoItem } from '../core/types';
+import { Analyzer } from '../core/analyzer';
+import { createRequest, createSession } from '../core/parser-shared';
 
 vi.mock('./shared', () => ({ COLORS: { green: '#3fb950', yellow: '#d29922', red: '#f85149', blue: '#58a6ff' } }));
 
@@ -91,6 +93,52 @@ describe('sessionChartGuides to-do lifetimes', () => {
       markers: [],
       bands: [],
     });
+  });
+});
+
+describe('sessionChartGuides to-dos a snapshot first shows in progress or completed', () => {
+  it('starts an item first shown in progress there, and ends one first shown completed there', () => {
+    const events: Events = [
+      { requestIndex: 2, type: 'todo-add', label: 'Plan', status: 'completed' },
+      { requestIndex: 2, type: 'todo-add', label: 'Build', status: 'in-progress' },
+      { requestIndex: 2, type: 'todo-add', label: 'Ship' },
+      { requestIndex: 5, type: 'todo-add', label: 'Review', status: 'completed' },
+      { requestIndex: 6, type: 'todo-progress', label: 'Review' },
+    ];
+    const { bands, markers } = sessionChartGuides({ events, requestCount: 8 }, THRESHOLDS);
+    expect(bands?.map(b => [b.label, b.xMin, b.xMax, b.row, b.stroke])).toEqual([
+      ['\u2714 Plan', 2, 2, 0, '#3fb95080'],
+      ['\u25B6 Build', 2, 7, 1, '#d2992280'],
+      ['Ship', 2, 7, 2, '#58a6ff80'],
+      ['\u2714 Review', 5, 5, 3, '#3fb95080'],
+      // Put back in progress after it was shown completed: a new lifetime.
+      ['\u25B6 Review', 6, 7, 4, '#d2992280'],
+    ]);
+    // The markers still show each addition alone.
+    expect(markers?.map(m => [m.x, m.color])).toEqual([[2, '#58a6ff'], [2, '#58a6ff'], [2, '#58a6ff'], [5, '#58a6ff'], [6, '#d29922']]);
+  });
+
+  it('come out of the analyzer from VS Code\u2019s to-do list snapshots, still one addition per item', () => {
+    const todo = (id: number, title: string, status: TodoItem['status']): TodoItem => ({ id, title, status });
+    const request = (n: number, todoSnapshot: TodoItem[] | null) => createRequest({
+      requestId: `r${n}`, messageText: 'm', responseText: 'r', timestamp: Date.UTC(2026, 9, 28, 10, n), promptTokens: 10_000, completionTokens: 100, todoSnapshot,
+    });
+    const session = createSession({
+      sessionId: 's', workspaceId: 'ws', workspaceName: 'ws', harness: 'VS Code', requests: [
+        request(0, null),
+        request(1, [todo(1, 'Plan', 'completed'), todo(2, 'Build', 'in-progress'), todo(3, 'Ship', 'not-started')]),
+        request(2, [todo(1, 'Plan', 'completed'), todo(2, 'Build', 'completed'), todo(3, 'Ship', 'not-started'), todo(4, 'Review', 'completed')]),
+        request(3, null),
+      ],
+    });
+    const [row] = new Analyzer([session]).getWorkspaceContextSessions('ws').sessions;
+    // Markers, tooltips and the to-do counts read these: one addition per item, as before.
+    expect(row.events.map(e => [e.requestIndex, e.type, e.label])).toEqual([
+      [1, 'todo-add', 'Plan'], [1, 'todo-add', 'Build'], [1, 'todo-add', 'Ship'], [2, 'todo-complete', 'Build'], [2, 'todo-add', 'Review'],
+    ]);
+    expect(sessionChartGuides(row, THRESHOLDS).bands?.map(b => [b.label, b.xMin, b.xMax])).toEqual([
+      ['\u2714 Plan', 1, 1], ['\u2714 Build', 1, 2], ['Ship', 1, 3], ['\u2714 Review', 2, 2],
+    ]);
   });
 });
 

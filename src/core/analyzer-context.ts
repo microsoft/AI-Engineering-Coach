@@ -23,6 +23,7 @@ import {
   SessionContextDetail,
   SessionRangeMatch,
   SessionTimelineEvent,
+  TodoItem,
   WorkspaceContextSessionsData,
 } from './types';
 import { toDateStr } from './helpers';
@@ -66,6 +67,13 @@ function compactionLabel(compaction: CompactionEvent): string {
 function withTokenTypes(session: Session): Pick<SessionContextDetail, 'tokenTypes'> {
   const tokenTypes = sessionTokenTypes(session);
   return tokenTypes ? { tokenTypes } : {};
+}
+
+/** A to-do item's first appearance in a snapshot, with its status when it was already in progress or completed, so
+ *  its band doesn't start as not started or stay open to the last request. */
+function todoAddEvent(item: TodoItem, requestIndex: number): SessionTimelineEvent {
+  const status = item.status === 'in-progress' || item.status === 'completed' ? item.status : undefined;
+  return { requestIndex, type: 'todo-add', label: item.title, ...(status ? { status } : {}) };
 }
 
 export class ContextAnalyzer extends AnalyzerBase {
@@ -796,7 +804,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     const currentSnapshot = new Map(snapshot.map(item => [item.id, item.status]));
     if (prevSnapshot == null) {
       for (const item of snapshot) {
-        events.push({ requestIndex, type: 'todo-add', label: item.title });
+        events.push(todoAddEvent(item, requestIndex));
       }
       return currentSnapshot;
     }
@@ -804,7 +812,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     for (const item of snapshot) {
       const previousStatus = prevSnapshot.get(item.id);
       if (previousStatus == null) {
-        events.push({ requestIndex, type: 'todo-add', label: item.title });
+        events.push(todoAddEvent(item, requestIndex));
         continue;
       }
       if (previousStatus !== item.status) {

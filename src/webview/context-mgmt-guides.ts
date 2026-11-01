@@ -45,8 +45,9 @@ function eventMarker(event: SessionTimelineEvent): GuideMarker {
 
 interface TodoLife { title: string; addedAt: number; startedAt: number | null; completedAt: number | null }
 
-/** Each to-do item's lifetimes, from the request that added it to the one that completed it. An item added again
- *  or put back in progress after it was completed starts a new lifetime; a repeated completion is ignored. */
+/** Each to-do item's lifetimes, from the request that added it to the one that completed it. An item a snapshot
+ *  first shows in progress starts there, and one it first shows completed ends there. An item added again or put back
+ *  in progress after it was completed starts a new lifetime; a repeated completion is ignored. */
 function todoLives(events: SessionTimelineEvent[]): TodoLife[] {
   const items: TodoLife[] = [];
   const open = new Map<string, TodoLife>();
@@ -67,10 +68,11 @@ function todoLives(events: SessionTimelineEvent[]): TodoLife[] {
     } else if (item) {
       if (event.type === 'todo-progress' && item.startedAt == null) item.startedAt = event.requestIndex;
     } else if (event.type === 'todo-add' || seen.has(title)) {
-      const started = event.type === 'todo-progress' ? event.requestIndex : null;
-      const life: TodoLife = { title, addedAt: event.requestIndex, startedAt: started, completedAt: null };
+      const started = event.type === 'todo-progress' || event.status === 'in-progress' ? event.requestIndex : null;
+      const completed = event.status === 'completed' ? event.requestIndex : null;
+      const life: TodoLife = { title, addedAt: event.requestIndex, startedAt: started, completedAt: completed };
       items.push(life);
-      open.set(title, life);
+      if (completed == null) open.set(title, life);
       seen.add(title);
     }
   }

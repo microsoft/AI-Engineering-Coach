@@ -197,6 +197,9 @@ export interface SessionTimelineEvent {
   requestIndex: number;
   type: 'compaction' | 'todo-add' | 'todo-progress' | 'todo-complete';
   label: string;
+  /** On a `todo-add` from a to-do list snapshot: the item's status when it first appeared, if it was already in
+   *  progress or completed. Only the to-do bands read it; the other views count the addition alone. */
+  status?: 'in-progress' | 'completed';
 }
 
 /** Per-session context detail returned when drilling into a workspace */
