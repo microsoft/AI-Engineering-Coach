@@ -65,6 +65,7 @@ AI-Engineering-Coach/
 | Unit tests (vitest) | `npm test` |
 | All checks (CI gate) | `npm run check` |
 | End-to-end (Playwright) | `npm run test:e2e` |
+| End-to-end beside other checkouts | `E2E_PORT=4122 npm run test:e2e` (default 3999; `E2E_REUSE=1` reuses a running server if it serves this checkout) |
 | Package the VSIX | `npm run package` (see [skills/package-extension.md](skills/package-extension.md)) |
 | Bundle-size budget | `npm run check-size` |
 

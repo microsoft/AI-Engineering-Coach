@@ -3,8 +3,9 @@ import { curiosityBalance } from '../../src/core/curiosity-balance';
 import type { CuriosityData } from '../../src/core/types/curiosity-types';
 import { curiosityAntiPatterns } from '../../src/core/curiosity-patterns';
 import type { AntiPatternData } from '../../src/core/types';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 type MockWindow = Window & {
   getMockData: (method: string, params: Record<string, unknown>) => unknown;
   recordedRequests?: string[];
