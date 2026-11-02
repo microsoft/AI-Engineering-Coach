@@ -4,7 +4,7 @@ name: Frustration Signals
 group: prompt-quality
 severity: medium
 scope: requests
-version: 1
+version: 2
 tags: [prompt, frustration, caps, punctuation]
 thresholds:
   capsRate: 0.4
@@ -41,4 +41,7 @@ examples: "{{messageText | truncate:80}}"
 {messageText: "Please refactor the auth module", messageLength: 31} -> clean
 {messageText: "THIS IS SO BROKEN FIX IT NOW", messageLength: 28} -> triggered
 {messageText: "Add error handling to the API endpoint", messageLength: 38} -> clean
+{messageText: "please fix the config { a } now", messageLength: 31} -> clean
+{messageText: "why does this still fail!!!", messageLength: 27} -> triggered
+{messageText: "what is going on here???", messageLength: 24} -> triggered
 ```

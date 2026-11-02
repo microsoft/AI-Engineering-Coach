@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('./shared', () => ({
   rpc: mocks.rpc,
   createChart: vi.fn(),
+  createChartFrom: vi.fn(),
   destroyChartById: vi.fn(),
   destroyCharts: vi.fn(),
   trackChart: vi.fn(),
@@ -147,7 +148,59 @@ describe('Context Management range bar with Copilot CLI composition', () => {
 
     expect(rangeButtons(host)).toEqual([]);
     expect(host.querySelector('#ctxRangeBar')?.textContent?.trim()).toBe(
-      'GitHub Copilot CLI recorded neither per-request tokens nor prompt composition, which Context Management needs to chart utilization and composition. Try a different harness, or view consumption in the Output tab.',
+      'These GitHub Copilot CLI sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization or composition. Try a different harness or a more recent range, or view consumption in the Output tab.',
     );
+  });
+});
+
+describe('Context Management range checks that answer after a newer render', () => {
+  const activeRange = (host: HTMLElement) => rangeButtons(host).find(button => button.classList.contains('active'))?.textContent;
+  const contextManagementLoads = () => mocks.rpc.mock.calls.filter(([method]) => method === 'getContextManagement').length;
+
+  /** Renders the page twice. The older render's range check waits until `answer`, with `result`; the newer render's
+   *  answers at once. */
+  async function rerenderWithLateRangeCheck(host: HTMLElement): Promise<{ answer: (result: Promise<unknown>) => Promise<void> }> {
+    const { renderConfigHealth } = await import('./page-config');
+    const answerNow = mocks.rpc.getMockImplementation() as ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
+    let late = true;
+    let settle: (result: Promise<unknown>) => void = () => undefined;
+    mocks.rpc.mockImplementation((method: string, params?: Record<string, unknown>) => {
+      if (method !== 'getContextRangeAvailability' || !late) return answerNow?.(method, params);
+      late = false;
+      return new Promise(resolve => { settle = resolve; });
+    });
+    const older = renderConfigHealth(host, {});
+    await renderConfigHealth(host, {});
+    await vi.waitFor(() => expect(activeRange(host)).toBe('Last 1 month'));
+    return {
+      answer: async result => {
+        settle(result);
+        await older;
+      },
+    };
+  }
+
+  it('keeps the range the newer render shows, so another range can still be picked', async () => {
+    // Data in the last month and more in the last 3 months, so the range bar offers both.
+    serve([cliSession(5), cliSession(60)]);
+    const host = await openContextManagement();
+    expect(rangeButtons(host).map(button => button.textContent)).toEqual(['Last 1 month', 'Last 3 months']);
+    const { answer } = await rerenderWithLateRangeCheck(host);
+    // The older render's filter only has data that the 3-month range holds, which would select that range.
+    await answer(Promise.resolve({ rangesWithTokens: [90], matchingSessions: 1, sessionsWithRequestTokens: 1, harnessesWithoutRequestTokens: [] }));
+    expect(activeRange(host)).toBe('Last 1 month');
+    rangeButtons(host).find(button => button.textContent === 'Last 3 months')?.click();
+    await vi.waitFor(() => expect(activeRange(host)).toBe('Last 3 months'));
+  });
+
+  it('drops a range check that fails after a newer render', async () => {
+    serve([cliSession(5), cliSession(60)]);
+    const host = await openContextManagement();
+    const { answer } = await rerenderWithLateRangeCheck(host);
+    await vi.waitFor(() => expect(host.querySelector('#ctxSubTabContent .loading-spinner')).toBeNull());
+    const loads = contextManagementLoads();
+    await answer(Promise.reject(new Error('late range check failed')));
+    expect(contextManagementLoads()).toBe(loads);
+    expect(activeRange(host)).toBe('Last 1 month');
   });
 });

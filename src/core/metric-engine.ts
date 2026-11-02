@@ -35,6 +35,7 @@ import {
   evaluateTemplate,
 } from './dsl/index';
 import { fillTemplate } from './rule-parser';
+import { readQuotedScalar, splitInlineList } from './frontmatter-values';
 
 /* ================================================================== */
 /*  Metric Definition (parsed from .metric.md)                        */
@@ -519,6 +520,10 @@ function extractSection(body: string, heading: string): string | null {
   return section.trim() || null;
 }
 
+/**
+ * Front matter as a flat key → value map. Quoted values and inline lists follow the same rules as
+ * rule front matter (see frontmatter-values.ts); unquoted values are numbers when they look like one.
+ */
 function parseYamlLike(text: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const lines = text.split('\n');
@@ -532,7 +537,8 @@ function parseYamlLike(text: string): Record<string, unknown> {
 
     // Array item under a key
     if (trimmed.startsWith('- ') && currentKey && indent > 0) {
-      arrayBuffer.push(trimmed.substring(2).trim());
+      const item = trimmed.substring(2).trim();
+      arrayBuffer.push(readQuotedScalar(item) ?? item);
       continue;
     }
 
@@ -552,18 +558,13 @@ function parseYamlLike(text: string): Record<string, unknown> {
 
     if (!val) continue; // Sub-object or array follows
 
-    // Inline array: [a, b, c]
+    // Inline array: [a, b, c]. A comma inside a quoted item stays in the item.
     if (val.startsWith('[') && val.endsWith(']')) {
-      result[key] = val.slice(1, -1).split(',').map(s => {
-        const t = s.trim();
-        const n = Number.parseFloat(t);
-        return !Number.isNaN(n) && /^[\d.-]+$/.test(t) ? n : t;
-      });
+      result[key] = splitInlineList(val.slice(1, -1)).map(s => yamlLikeValue(s.trim()));
     } else if (val === 'true' || val === 'false') {
       result[key] = val === 'true';
     } else {
-      const num = Number.parseFloat(val);
-      result[key] = !Number.isNaN(num) && /^[\d.-]+$/.test(val) ? num : val;
+      result[key] = yamlLikeValue(val);
     }
   }
 
@@ -573,6 +574,14 @@ function parseYamlLike(text: string): Record<string, unknown> {
   }
 
   return result;
+}
+
+/** A quoted scalar's value, else a number when the text looks like one, else the text as written. */
+function yamlLikeValue(text: string): string | number {
+  const quoted = readQuotedScalar(text);
+  if (quoted !== undefined) return quoted;
+  const num = Number.parseFloat(text);
+  return !Number.isNaN(num) && /^[\d.-]+$/.test(text) ? num : text;
 }
 
 function parseTestCases(body: string): TestCase[] {

@@ -277,7 +277,7 @@
         "name": "aiEngineerCoach_contextHealth",
         "tags": ["ai-engineer-coach"],
         "displayName": "Coach: Context Health",
-        "modelDescription": "Get context management health: compaction, config scores, agentic readiness, instruction quality.",
+        "modelDescription": "Get context management health: compaction, prompt cache efficiency and why the cache broke, config scores, agentic readiness, instruction quality.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -302,6 +302,7 @@
     "analyze:data-inventory": "npx tsx scripts/data-inventory.ts",
     "analyze:token-inventory": "npx tsx scripts/token-inventory.ts --save",
     "analyze:context-composition": "npx tsx scripts/explore-context-composition.ts",
+    "analyze:prompt-cache": "npx tsx scripts/explore-prompt-cache.ts",
     "analyze:e2e-real-data": "npx tsx scripts/e2e-real-data.ts",
     "parity": "npx tsx scripts/parse-parity.ts",
     "analyze:catalog-fetch": "node scripts/test-catalog-fetch.mjs",

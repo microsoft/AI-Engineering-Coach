@@ -162,7 +162,7 @@ function sessionDetail(): SessionContextDetail {
     sessionId: 'cli-1', date: '2026-09-30', harness: 'GitHub Copilot CLI', requestCount: 2, requestsWithTokens: 0,
     avgPromptTokens: 0, maxPromptTokens: 0, avgUtilization: 0, peakUtilization: 0, contextWindow: 0, compactionCount: 0,
     tokenCurve: [null, null], saturation: 0, costEfficiency: null, verdict: 'optimal', events: [],
-    requestQueries: ['Refactor the parser', 'Add tests'], hasPerRequestTokens: false,
+    requestQueries: ['Refactor the parser', 'Add tests'], hasPerRequestTokens: false, windowSource: 'estimated',
     composition: {
       source: 'copilot-cli',
       breakdown: { slices: [{ category: 'toolDefinitions', pct: 10, tokens: 30_000 }, { category: 'conversation', pct: 90, tokens: 270_000 }], weighting: 'tokens', samples: 1, avgPromptTokens: 300_000 },

@@ -45,7 +45,9 @@ thresholds:                      # Tunable knobs. Referenced as thresholds.<name
 ---
 
 # Description
-Short, user-facing summary of what this rule detects.
+Short, user-facing summary of what this rule detects, shown on its card in the Rules
+list and in full in its detail. Plain text: template variables aren't filled here, so
+a Description that has one shows "Detects <name> patterns." instead.
 
 # When Triggered
 One-line finding text. Supports template variables: {{count}}, {{total}}, {{pct}},
@@ -135,6 +137,36 @@ ratio                            # Aggregation: count | ratio | sum | avg
 
 Once defined, a metric is automatically available in the Rule Playground metric list and can be
 referenced from any rule's detection logic.
+
+## Patterns
+
+A rule can keep its regular expressions in front matter under `patterns:` and use them as
+`patterns.<name>` in its detection logic. Every entry is an array of strings, even one written as a
+single string:
+
+```yaml
+patterns:
+  frustration: ["!{3,}", "\\?{3,}", "wtf|come on|why won't"]
+  headings: "(?m)^#+\\s"
+```
+
+Rule and metric front matter reads values this way:
+
+- A list splits on commas outside quotes. Quote any item that contains a comma: `"!{3,}"` is one
+  item, but an unquoted `!{3,}` becomes the two items `!{3` and `}`.
+- In double quotes, `\\` is one backslash and `\"` is a double quote. Any other backslash stays as
+  written, so `"\\d"` and `"\d"` are both `\d`. YAML escapes such as `\n` and `\t` aren't processed.
+- In single quotes, `''` is one single quote, and a backslash is always literal.
+- An unquoted value is used as written. If a quote is never closed, the value is read the old way: a
+  list splits on every comma, and a rule file drops one quote character from each end of a value.
+- A pattern can start with inline flags such as `(?i)` or `(?m)`.
+
+These functions take one pattern or an array of patterns, and match when any pattern matches:
+`matches(text, pattern)`, `matchesAny(text, patterns)`, `anyMatch(strings, pattern)` (1 or 0),
+`hasSkillByPattern(reqs, pattern)` (1 or 0), and the `"matches"` operator of `countWhere`, `anyWhere`,
+`someWhere` and `flatSomeWhere`. An empty array, an empty pattern and a value that isn't a string
+match nothing, so an entry written as `[]` or left blank never matches. A regex literal such as
+`/^fix/i` works only in `matches()`; elsewhere, write `"(?i)^fix"`.
 
 ## Local testing workflow
 

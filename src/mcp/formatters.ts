@@ -9,8 +9,9 @@
  * so the LLM can synthesize rather than parse.
  */
 
+import { exportedOriginName } from '../core/prompt-cache-causes';
 import type { Analyzer } from '../core/analyzer';
-import type { ContextCompositionData, DateFilter, TurnBasis } from '../core/types';
+import type { ContextCompositionData, DateFilter, PromptCacheData, TokenTypesData, TurnBasis } from '../core/types';
 
 /** What a time-based measure counts: the prompts the user typed, not the turns agents or the harness sent. */
 function typedPromptBasis(basis: TurnBasis): { counts: string; typedPrompts: number; automatedTurnsLeftOut: number } {
@@ -489,11 +490,118 @@ function formatComposition(composition: ContextCompositionData) {
   };
 }
 
+/** Prompt-cache efficiency per harness and, where logged, why the cache broke. Percentages, not amounts. */
+export function formatPromptCache(data: PromptCacheData) {
+  const a = data.attribution;
+  const r = data.returnsWithoutCacheData;
+  return {
+    harnesses: data.harnesses.map(h => ({
+      harness: h.harness,
+      // Whether requests in range carried cache data; `granularity` is how the harness logs it when it does.
+      reported: h.requestsWithData > 0,
+      granularity: h.reporting,
+      hitPct: h.all?.hitPct ?? null,
+      writtenPct: h.all?.writePct ?? null,
+      inputCostSavedPct: h.cost?.savedPct ?? null,
+      ...(h.cost && h.cost.savedPct < 0 ? { costNote: 'Caching cost more than it saved: cache writes, billed above the input price, outweighed what cache reads saved.' } : {}),
+      inputCostOnMissesPct: h.cost?.missCostPct ?? null,
+      breaksPer100Calls: h.breaksPer100,
+      requestsWithData: h.requestsWithData,
+      totalRequests: h.totalRequests,
+    })),
+    cacheBreaks: a ? {
+      harnesses: a.label,
+      breaks: a.breaks,
+      per100Calls: a.breaksPer100,
+      rebuiltTokens: a.rebuiltTokens,
+      rebuiltYouCanChangePct: a.controlPct.you,
+      rebuiltPartlyYoursPct: a.controlPct.partly,
+      causes: a.causes.slice(0, 6).map(c => ({ cause: c.key, who: c.control, breaks: c.breaks, rebuiltPct: c.pctOfRebuilt, inputCostPct: c.costPct })),
+      cacheMissOrigins: a.origins.map(o => ({ origin: exportedOriginName(o.origin), pct: o.pct, inputCostPct: o.costPct })),
+      cacheLifetimes: a.idle.ttlByModel.map(t => ({ model: t.model, seconds: t.ttlSeconds })),
+      returnsAfterExpiry: { expired: a.idle.expiredReturns, of: a.idle.returns, notMeasured: a.idle.unmeasuredReturns },
+      medianMinutesSinceCacheRefreshAtExpiry: a.idle.medianIdleMinutes,
+    } : null,
+    // Copilot harnesses with no call in range that logged cache tokens: their breaks and misses are unknown, so they
+    // aren't in cacheBreaks, which covers only the harnesses it names. Prompts you sent there still returned to earlier
+    // calls, which can be outside the range.
+    returnsWithoutCacheData: r ? {
+      harnesses: r.label,
+      returnsAfterExpiry: { expired: r.expiredReturns, of: r.returns, notMeasured: r.unmeasuredReturns },
+    } : null,
+    tips: data.tips,
+  };
+}
+
+/** Token types beyond input and output, one entry per source (never pooled). Counts, ratios and times only. */
+export function formatTokenTypes(data: TokenTypesData) {
+  return {
+    sources: data.sources.map(s => ({
+      source: s.label,
+      requests: s.requests,
+      reasoning: s.reasoning ? {
+        basis: s.reasoning.basis,
+        mainPctOfOutput: s.reasoning.main?.sharePct ?? null,
+        subagentPctOfOutput: s.reasoning.subagent?.sharePct ?? null,
+        byEffort: s.reasoning.byEffort.map(e => ({ effort: e.effort, stream: e.stream, pctOfOutput: e.sharePct, calls: e.calls })),
+      } : null,
+      compaction: s.compaction ? {
+        count: s.compaction.count,
+        automatic: s.compaction.automatic,
+        failed: s.compaction.failed,
+        avgTokensBefore: s.compaction.avgTokensBefore,
+        avgTokensAfter: s.compaction.avgTokensAfter,
+        removedPct: s.compaction.yieldPct,
+        compactionCallInputPctOfMainInput: s.compaction.shareOfMainInputPct,
+        modelMinutes: Math.round(s.compaction.modelTimeMs / 60_000),
+      } : null,
+      subagents: s.subagents ? {
+        runs: s.subagents.runs,
+        totalTokens: s.subagents.totalTokens,
+        pctOfAllTokens: s.subagents.shareOfAllTokensPct,
+        byType: s.subagents.byType.slice(0, 6).map(t => ({ type: t.agentType, runs: t.runs, tokens: t.totalTokens })),
+      } : null,
+      truncation: s.truncation,
+      latency: s.latency?.slice(0, 5).map(l => ({
+        model: l.model, calls: l.calls, firstTokenP50Ms: l.ttftP50Ms, firstTokenP90Ms: l.ttftP90Ms, callP50Ms: l.durationP50Ms, callP90Ms: l.durationP90Ms,
+      })) ?? null,
+    })),
+    harnessesWithoutTokenTypes: data.harnesses.filter(h => h.source == null).map(h => h.harness),
+    tips: data.tips,
+  };
+}
+
+function formatConfigHealth(cfg: ReturnType<Analyzer['getConfigHealth']>) {
+  return {
+    overallScore: cfg.overallScore,
+    suggestions: cfg.suggestions,
+    agenticReadiness: {
+      score: cfg.agenticReadiness.score,
+      missingSignals: cfg.agenticReadiness.signals
+        .filter(s => !s.present)
+        .map(s => ({ label: s.label, detail: s.detail })),
+    },
+    workspaceSummary: topN(
+      [...cfg.workspaces].sort((a, b) => a.instructionQualityScore - b.instructionQualityScore),
+      5,
+    ).map(w => ({
+      workspace: w.workspaceName,
+      hasInstructions: w.hasInstructions,
+      hasPrompts: w.hasPrompts,
+      hasAgents: w.hasAgents,
+      qualityScore: w.instructionQualityScore,
+      staleContext: w.staleContext,
+      suggestions: w.suggestions.slice(0, 3),
+    })),
+  };
+}
+
 export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
   const ctx = analyzer.getContextManagement(f);
-  const cfg = analyzer.getConfigHealth(f);
 
   return {
+    promptCache: formatPromptCache(analyzer.getPromptCache(f)),
+    tokenTypes: formatTokenTypes(analyzer.getTokenTypes(f)),
     contextManagement: {
       overallScore: ctx.overallScore,
       estimatedContextWindow: ctx.estimatedContextWindow,
@@ -512,31 +620,11 @@ export function formatContextHealth(analyzer: Analyzer, f?: DateFilter) {
         verdict: w.verdict,
         avgUtilization: Math.round(w.avgUtilization),
         peakUtilization: Math.round(w.peakUtilization),
+        contextWindow: w.windowSource,
         compactions: w.compactionCount,
       })),
       composition: ctx.composition ? formatComposition(ctx.composition) : undefined,
     },
-    configHealth: {
-      overallScore: cfg.overallScore,
-      suggestions: cfg.suggestions,
-      agenticReadiness: {
-        score: cfg.agenticReadiness.score,
-        missingSignals: cfg.agenticReadiness.signals
-          .filter(s => !s.present)
-          .map(s => ({ label: s.label, detail: s.detail })),
-      },
-      workspaceSummary: topN(
-        [...cfg.workspaces].sort((a, b) => a.instructionQualityScore - b.instructionQualityScore),
-        5,
-      ).map(w => ({
-        workspace: w.workspaceName,
-        hasInstructions: w.hasInstructions,
-        hasPrompts: w.hasPrompts,
-        hasAgents: w.hasAgents,
-        qualityScore: w.instructionQualityScore,
-        staleContext: w.staleContext,
-        suggestions: w.suggestions.slice(0, 3),
-      })),
-    },
+    configHealth: formatConfigHealth(analyzer.getConfigHealth(f)),
   };
 }

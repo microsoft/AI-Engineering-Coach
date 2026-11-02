@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { harnessUrl } from './harness-url';
 
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
   test(`loading starts before progress and survives early navigation at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.clock.install();
     await page.clock.pauseAt(new Date(Date.now() + 60_000));
-    await page.goto('http://localhost:3999/tests/e2e/harness?mode=loading');
+    await page.goto(harnessUrl('tests/e2e/harness?mode=loading'));
     await expect(page.locator('#load-progress-bar')).toBeAttached();
     await page.evaluate(() => {
       window.dispatchEvent(new MessageEvent('message', { data: {
@@ -29,7 +30,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.setViewportSize(viewport);
     await page.clock.install();
     await page.clock.pauseAt(new Date(Date.now() + 60_000));
-    await page.goto('http://localhost:3999/tests/e2e/harness?mode=manual-loading');
+    await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
     await page.evaluate(() => {
       window.dispatchEvent(new MessageEvent('message', { data: {
         type: 'progress', phase: 4, pct: 91, detail: 'Computing analytics',
@@ -63,7 +64,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.setViewportSize(viewport);
     await page.clock.install();
     await page.clock.pauseAt(new Date(Date.now() + 60_000));
-    await page.goto('http://localhost:3999/tests/e2e/harness?mode=loading');
+    await page.goto(harnessUrl('tests/e2e/harness?mode=loading'));
     await page.clock.runFor(120);
     await expect(page.locator('.loading-screen')).toBeVisible();
 
