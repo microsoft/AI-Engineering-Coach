@@ -187,7 +187,7 @@ image requests.
 | **Rule Playground** | Interactive REPL for the rule DSL with field browser, function catalog, and metric list                                                    |
 | **Data Explorer**   | Browse session fields, view distributions, run ad-hoc filters                                                                              |
 | **Skill Finder**    | Discover repeated prompt patterns and matching community skills from the open-source catalog                                               |
-| **Context Health**  | Overall context score, agentic readiness checklist, workspace context map, AI-powered instruction-file review                              |
+| **Context Health**  | Overall context score, agentic readiness checklist, workspace context map, AI-powered instruction-file review, why the prompt cache breaks |
 
 ### Level Up
 

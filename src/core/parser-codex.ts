@@ -95,6 +95,8 @@ interface CodexParseState {
   currentEditLocs: FileEditLocMap;
   editLocIndex?: EditLocIndex;
   pendingToolEdits: Map<string, PendingCodexEdit>;
+  /** The latest `total_token_usage` logged `cached_input_tokens`; without it the cached count is a default 0. */
+  curTotalCachedReported: boolean;
 }
 
 interface PendingCodexEdit {
@@ -187,6 +189,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     currentEditLocs: new Map(),
     editLocIndex,
     pendingToolEdits: new Map(),
+    curTotalCachedReported: false,
   };
 }
 
@@ -196,6 +199,7 @@ function computeModelUsage(state: CodexParseState, model: string): Record<string
   const uncachedInput = Math.max(0, state.curTotalInput - state.curTotalCachedInput);
   return {
     [billingModel]: {
+      ...(state.curTotalCachedReported ? {} : { cacheTokensReported: false }),
       inputTokens: uncachedInput,
       outputTokens: state.curTotalOutput,
       cacheReadTokens: state.curTotalCachedInput,
@@ -213,6 +217,13 @@ function computeEndReason(
     !request.responseText && request.toolsUsed.length === 0 && request.editedFiles.length === 0,
   );
   return everyRequestEmpty ? 'aborted' : 'unknown';
+}
+
+/** A `token_count` event: its totals, and whether they logged cached input tokens at all. */
+function handleTokenCount(payload: Record<string, unknown>, state: CodexParseState): void {
+  const totalUsage = recordValue(recordValue(payload.info)?.total_token_usage);
+  if (totalUsage) state.curTotalCachedReported = typeof totalUsage.cached_input_tokens === 'number';
+  handleTokenCountEvent(payload, state);
 }
 
 function updateTimestamps(state: CodexParseState, ts: number | null): void {
@@ -518,7 +529,7 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     return;
   }
   if (eventType === 'token_count') {
-    handleTokenCountEvent(payload, state);
+    handleTokenCount(payload, state);
     return;
   }
   if (eventType === 'function_call_output' || eventType === 'custom_tool_call_output') {
@@ -648,7 +659,7 @@ function handleCodexImageLine(line: CodexLine, state: CodexParseState, meta: Cod
       handleUserMessageEvent(payload, state, ts, meta.model);
       return;
     }
-    if (type === 'token_count') handleTokenCountEvent(payload, state);
+    if (type === 'token_count') handleTokenCount(payload, state);
     if (type === 'turn_aborted') state.turnCanceled = true;
     if (type === 'agent_reasoning' || (type === 'assistant_message' && typeof payload.content === 'string')) scan.hasAssistantText = true;
     if (type === 'function_call') scan.hasTools = true;
