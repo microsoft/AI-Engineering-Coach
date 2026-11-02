@@ -10,7 +10,7 @@ The Rule Editor turns anti-pattern detection into an open, editable system. Ever
 
 ## Layout
 
-The page lists every rule grouped by practice category. Each row shows the rule name, group, severity, scope (requests or sessions), and a layer badge indicating whether the rule is built-in, a user override, or a fresh user-authored rule stored under `.ai-engineer-coach/rules/` in your home directory or workspace root.
+The page lists every rule grouped by practice category. Each row shows the rule name, group, severity, scope (requests, sessions, or both), and a layer badge indicating whether the rule is built-in, a user override, or a fresh user-authored rule stored under `.ai-engineer-coach/rules/` in your home directory or workspace root.
 
 Use the filter bar to search by tag or group, and click any rule to open its detail view.
 
@@ -23,7 +23,7 @@ Click **Edit** on any rule to open the modal editor. The editor has two tabs:
 | **Form** | Fill in structured fields -- id, name, group, severity, scope, tags, thresholds, description, examples, and detection logic |
 | **Source** | View or edit the full markdown file directly. Useful for advanced edits or for pasting in rules from elsewhere |
 
-Switching tabs syncs both directions, so you can round-trip between the form and the raw source.
+Switching tabs syncs both directions, so you can round-trip between the form and the raw source. The form writes back only the fields you change; everything else in the rule stays as it is, including frontmatter keys and sections the form doesn't show, such as `# Tests`. Rules with Windows (CRLF) line endings load into the form like any other. A section whose heading sits inside the detect block is read-only in the form, because rewriting it would change the detection logic; edit it in the Source tab.
 
 ## Live Testing
 
@@ -34,6 +34,8 @@ Click **Test Rule** to run the current draft against your real session data usin
 - The generated description, suggestion, and up to a handful of real examples
 
 Threshold sliders appear above the result so you can sweep a value without retyping the markdown. Changes are applied to the draft in memory; nothing is persisted until you hit **Save**.
+
+A draft without detection logic -- a detect block with a `match:` or `check:` line -- shows an error instead of running, and isn't saved, because it would match everything. Test Rule and detection run only the detect block, so a `# Filter` section doesn't count.
 
 ## AI Builder
 

@@ -608,9 +608,14 @@ examples: {{workspaceName}}: {{requestCount}} messages
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
 
 function cleanRuleMarkdown(raw: string): string {
-  let md = raw.trim();
-  // Strip outer code fences
-  md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+  let md = raw.replaceAll(/\r\n?/g, '\n').trim();
+  // Strip an outer code fence: one still open where the rule starts, at its front matter (or, without front
+  // matter, its first heading). Only then is the reply's last fence its closing one; otherwise the last fence
+  // closes the rule's detect block.
+  const fmStart = md.indexOf('---');
+  const ruleStart = fmStart >= 0 ? fmStart : Math.max(md.search(/^#/m), 0);
+  const fencesBefore = md.slice(0, ruleStart).split('\n').filter(line => line.startsWith('```')).length;
+  if (fencesBefore % 2 === 1) md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
   // Strip leading prose before the frontmatter
   const fmIdx = md.indexOf('---');
   if (fmIdx > 0) md = md.substring(fmIdx);
@@ -627,7 +632,7 @@ function validateRuleMarkdown(md: string): string[] {
     issues.push('Missing or invalid "group:" (must be one of: prompt-quality, session-hygiene, code-review, tool-mastery, context-management)');
   }
   if (!md.match(/^severity:\s*(low|medium|high)/m)) issues.push('Missing or invalid "severity:" (must be low, medium, or high)');
-  if (!md.match(/^scope:\s*(requests|sessions)/m)) issues.push('Missing or invalid "scope:" (must be requests or sessions)');
+  if (!md.match(/^scope:[ \t]*(['"]?)(requests|sessions|both)\1[ \t]*$/m)) issues.push('Missing or invalid "scope:" (must be requests, sessions, or both)');
   if (!md.includes('# Description')) issues.push('Missing "# Description" section');
   if (!md.includes('# When Triggered')) issues.push('Missing "# When Triggered" section');
   if (!md.includes('# How to Improve')) issues.push('Missing "# How to Improve" section');

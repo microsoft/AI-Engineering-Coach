@@ -9,6 +9,7 @@ import { DateFilter } from '../core/types';
 import { rpc } from './shared';
 import { html, render, type ComponentChildren } from './render';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
+import { activeThresholdLines, hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, sourceOnlyFields, TEXT_SECTION_FIELDS, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULE_EDITOR_SYSTEM_PROMPT = `You are an expert at writing detection rules for the AI Engineer Coach VS Code extension.
 Rules are markdown files with YAML frontmatter and a Detection Logic block using a custom DSL.
@@ -17,13 +18,15 @@ ${DSL_CHEATSHEET}
 
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
 
-export function parseThresholdsFromMarkdown(md: string): Record<string, number> {
+const NO_DETECTION_LOGIC = 'This rule has no detection logic, so it would match everything. Add a detect block with a match: or check: line under Detection Logic first.';
+
+/** Reads the sliders' thresholds from the `thresholds:` block that the rule parser and the form use. */
+export function parseThresholdsFromMarkdown(markdown: string): Record<string, number> {
   const result: Record<string, number> = {};
-  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return result;
-  const threshMatch = fmMatch[1].match(/thresholds:\n((?:\s{2,}\S.*\n?)*)/);
-  if (!threshMatch) return result;
-  for (const line of threshMatch[1].split('\n')) {
+  const md = normalizeLineEndings(markdown);
+  const active = activeThresholdLines(md);
+  if (!active) return result;
+  for (const line of md.split('\n').slice(active.start, active.end)) {
     const m = line.match(/^\s+(\w+):\s*([-\d.]+)\s*$/);
     if (m) {
       const n = Number.parseFloat(m[2]);
@@ -33,9 +36,12 @@ export function parseThresholdsFromMarkdown(md: string): Record<string, number> 
   return result;
 }
 
+/** Sets the sliders' values in the block parseThresholdsFromMarkdown reads, and keeps the rest of the markdown. */
 export function applyThresholdOverrides(md: string, overrides: Record<string, number>): string {
-  return md.replace(/(thresholds:\n)((?:\s{2,}\S.*\n?)*)/, (_full, head: string, body: string) => {
-    const newBody = body.replaceAll(/^(\s+)(\w+):[ \t]*([-\d.]+)[ \t]*$/gm, (line, indent: string, key: string, _val: string) => {
+  const lines = normalizeLineEndings(md).split('\n');
+  const { start, end } = activeThresholdLines(md) ?? { start: 0, end: 0 };
+  for (let at = start; at < end; at++) {
+    lines[at] = lines[at].replace(/^(\s+)(\w+):[ \t]*([-\d.]+)[ \t]*$/, (line, indent: string, key: string) => {
       if (overrides[key] !== undefined) {
         const v = overrides[key];
         const formatted = Number.isInteger(v) ? String(v) : String(Math.round(v * 1000) / 1000);
@@ -43,8 +49,8 @@ export function applyThresholdOverrides(md: string, overrides: Record<string, nu
       }
       return line;
     });
-    return head + newBody;
-  });
+  }
+  return lines.join('\n');
 }
 
 function sliderRange(value: number): { min: number; max: number; step: number } {
@@ -73,95 +79,77 @@ function buildThresholdSliders(thresholds: Record<string, number>, overrides: Re
   return html`<div class="rule-test-sliders"><div class="rule-test-sliders-title">Tune thresholds (live)</div>${rows}</div>`;
 }
 
-function formToMarkdown(c: HTMLElement): string {
-  const val = (id: string) => (c.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement)?.value?.trim() || '';
-  const thresholds = val('rf-thresholds').split('\n').filter(l => l.includes(':')).map(l => '  ' + l.trim()).join('\n');
-  const tags = val('rf-tags').split(',').map(t => t.trim()).filter(Boolean);
-  const patternsRaw = val('rf-patterns');
-  const fileTypesRaw = val('rf-filetypes');
-  const extraFm = val('rf-extra-fm');
-  return `---
-id: ${val('rf-id') || 'my-custom-rule'}
-name: ${val('rf-name') || 'My Custom Rule'}
-group: ${val('rf-group')}
-severity: ${val('rf-severity')}
-scope: ${val('rf-scope')}
-version: ${val('rf-version') || '1'}
-tags: [${tags.join(', ')}]
-${thresholds ? `thresholds:\n${thresholds}` : 'thresholds: {}'}
-${patternsRaw ? `patterns:\n${patternsRaw}` : ''}${fileTypesRaw ? `\nfileTypes:\n${fileTypesRaw}` : ''}${extraFm ? `\n${extraFm}` : ''}
----
+type FieldInput = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
-# Description
-${val('rf-description') || 'Describe what this rule detects.'}
+const FIELD_INPUTS: Record<RuleFormField, string> = {
+  id: 'rf-id',
+  name: 'rf-name',
+  group: 'rf-group',
+  severity: 'rf-severity',
+  scope: 'rf-scope',
+  version: 'rf-version',
+  tags: 'rf-tags',
+  thresholds: 'rf-thresholds',
+  description: 'rf-description',
+  whenTriggered: 'rf-when-triggered',
+  howToImprove: 'rf-how-to-improve',
+  examples: 'rf-examples',
+  detect: 'rf-detect',
+};
+const FORM_FIELDS = Object.keys(FIELD_INPUTS) as RuleFormField[];
 
-# When Triggered
-${val('rf-when-triggered') || '{{count}} occurrences detected ({{pct}} of requests).'}
+/** What the form was loaded from: the rule markdown, and the form's values then. */
+const loadedRules = new WeakMap<HTMLElement, { markdown: string; fields: RuleFormFields }>();
+/** Forms opened for a new rule: until a rule or draft is loaded, an empty Detection Logic gets the template's. */
+const newRuleForms = new WeakSet<HTMLElement>();
 
-# How to Improve
-${val('rf-how-to-improve') || 'Explain how to fix this anti-pattern.'}
-
-# Examples
-${val('rf-examples') || '"{{message}}..."'}
-
-# Detection Logic
-\`\`\`detect
-${val('rf-detect') || 'scan: requests\nmatch: messageLength > 0\naggregate: count\ncheck: count >= 1'}
-\`\`\`
-`;
+function readForm(c: HTMLElement): RuleFormFields {
+  const fields = {} as RuleFormFields;
+  for (const field of FORM_FIELDS) fields[field] = c.querySelector<FieldInput>(`#${FIELD_INPUTS[field]}`)?.value.trim() ?? '';
+  return fields;
 }
 
-function markdownToForm(c: HTMLElement, md: string): void {
-  const set = (id: string, v: string) => {
-    const el = c.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-    if (el) el.value = v;
-  };
-  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
-  if (fmMatch) {
-    const fm = fmMatch[1];
-    const field = (key: string) => {
-      const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-      return m ? m[1].trim() : '';
-    };
-    set('rf-id', field('id'));
-    set('rf-name', field('name'));
-    set('rf-group', field('group'));
-    set('rf-severity', field('severity'));
-    set('rf-scope', field('scope'));
-    set('rf-version', field('version') || '1');
-    const tagsMatch = field('tags');
-    const tags = tagsMatch.replaceAll(/^\[|\]$/g, '').split(',').map(t => t.trim()).filter(Boolean);
-    set('rf-tags', tags.join(', '));
-    const threshMatch = fm.match(/thresholds:\n((?:\s{2,}\S.*\n?)*)/);
-    if (threshMatch) {
-      set('rf-thresholds', threshMatch[1].replaceAll(/^ {2}/gm, '').trim());
-    } else {
-      set('rf-thresholds', '');
-    }
-    const patternsMatch = fm.match(/patterns:\n((?:\s{2,}\S.*\n?)*)/);
-    set('rf-patterns', patternsMatch ? patternsMatch[1].trim().replaceAll(/^/gm, '  ') : '');
-    const fileTypesMatch = fm.match(/fileTypes:\n((?:\s{2,}\S.*\n?)*)/);
-    set('rf-filetypes', fileTypesMatch ? fileTypesMatch[1].trim().replaceAll(/^/gm, '  ') : '');
-    const extraFmParts: string[] = [];
-    const reqIdeMatch = fm.match(/^requiresIdeContext:\s*(.+)$/m);
-    if (reqIdeMatch) extraFmParts.push(`requiresIdeContext: ${reqIdeMatch[1].trim()}`);
-    const extendsMatch = fm.match(/^extends:\s*(.+)$/m);
-    if (extendsMatch) extraFmParts.push(`extends: ${extendsMatch[1].trim()}`);
-    set('rf-extra-fm', extraFmParts.join('\n'));
+const SOURCE_ONLY_HINT = 'This section starts inside the detect block, so edit it in the Source tab.';
+
+/** Makes the given text sections read-only, with a hint: the form shows them but doesn't write them. */
+function lockSourceOnlyFields(c: HTMLElement, sourceOnly: ReadonlySet<RuleFormField>): void {
+  for (const field of TEXT_SECTION_FIELDS) {
+    const input = c.querySelector<HTMLTextAreaElement>(`#${FIELD_INPUTS[field]}`);
+    if (!input) continue;
+    input.readOnly = sourceOnly.has(field);
+    if (input.readOnly) input.title = SOURCE_ONLY_HINT;
+    else input.removeAttribute('title');
   }
-  const section = (heading: string) => {
-    const re = new RegExp(`# ${heading}\\n([\\s\\S]*?)(?=\\n# |$)`);
-    const m = md.match(re);
-    return m ? m[1].trim() : '';
-  };
-  set('rf-description', section('Description'));
-  set('rf-when-triggered', section('When Triggered'));
-  set('rf-how-to-improve', section('How to Improve'));
-  const exSection = section('Examples');
-  const exClean = exSection.replaceAll(/```detect[\s\S]*?```/g, '').trim();
-  set('rf-examples', exClean);
-  const detectMatch = md.match(/```detect\n([\s\S]*?)```/);
-  set('rf-detect', detectMatch ? detectMatch[1].trim() : '');
+}
+
+/** Fills the form from rule markdown, and keeps that markdown as the Source text that formToMarkdown edits. */
+export function markdownToForm(c: HTMLElement, markdown: string): void {
+  const fields = readRuleFields(markdown);
+  for (const field of FORM_FIELDS) {
+    const input = c.querySelector<FieldInput>(`#${FIELD_INPUTS[field]}`);
+    const value = fields[field];
+    if (input && value !== undefined) input.value = value;
+  }
+  lockSourceOnlyFields(c, sourceOnlyFields(markdown));
+  loadedRules.set(c, { markdown, fields: readForm(c) });
+  newRuleForms.delete(c);
+  const source = c.querySelector<HTMLTextAreaElement>('#rule-editor-raw');
+  if (source) source.value = markdown;
+}
+
+/**
+ * Builds rule markdown from the form. A new rule gets the whole template; a loaded rule gets the fields changed
+ * since it was loaded written into its Source text (or, without a Source view, into the markdown it was loaded
+ * from), so everything the form doesn't show is kept. With its Source text deleted, a loaded rule is rebuilt from
+ * the form, without the template's detect logic.
+ */
+export function formToMarkdown(c: HTMLElement): string {
+  const loaded = loadedRules.get(c);
+  const source = c.querySelector<HTMLTextAreaElement>('#rule-editor-raw')?.value ?? loaded?.markdown ?? '';
+  const base = source.trim() ? source : '';
+  const fields = readForm(c);
+  const changed = FORM_FIELDS.filter(field => !base || fields[field] !== loaded?.fields[field]);
+  return mergeRuleMarkdown(base, fields, new Set(changed), newRuleForms.has(c));
 }
 
 export function openRuleEditor(container: HTMLElement, existingRuleId: string | null, markdown?: string): void {
@@ -171,8 +159,7 @@ export function openRuleEditor(container: HTMLElement, existingRuleId: string | 
   title.textContent = existingRuleId ? 'Edit Rule' : 'New Rule';
 
   const fields = ['rf-id', 'rf-name', 'rf-tags', 'rf-description', 'rf-when-triggered',
-    'rf-how-to-improve', 'rf-examples', 'rf-thresholds', 'rf-detect',
-    'rf-patterns', 'rf-filetypes', 'rf-extra-fm'];
+    'rf-how-to-improve', 'rf-examples', 'rf-thresholds', 'rf-detect', 'rule-editor-raw'];
   for (const id of fields) {
     const el = container.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement;
     if (el) el.value = '';
@@ -186,16 +173,15 @@ export function openRuleEditor(container: HTMLElement, existingRuleId: string | 
   const testResults = container.querySelector<HTMLElement>('#rule-test-results');
   if (testResults) { testResults.style.display = 'none'; render(null, testResults); }
 
+  if (existingRuleId || markdown) newRuleForms.delete(container);
+  else newRuleForms.add(container);
+  lockSourceOnlyFields(container, new Set());
   if (markdown) {
     markdownToForm(container, markdown);
-    (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = markdown;
   } else if (existingRuleId) {
     rpc<{ source: string }>('getRuleSource', { ruleId: existingRuleId }).then(res => {
       markdownToForm(container, res.source);
-      (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = res.source;
     }).catch(() => {});
-  } else {
-    (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = '';
   }
 
   switchEditorTab(container, 'form');
@@ -211,7 +197,7 @@ function switchEditorTab(container: HTMLElement, tab: 'form' | 'source'): void {
     formPanel.style.display = '';
     sourcePanel.style.display = 'none';
   } else {
-    (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = formToMarkdown(container);
+    markdownToForm(container, formToMarkdown(container));
     formPanel.style.display = 'none';
     sourcePanel.style.display = '';
   }
@@ -252,6 +238,10 @@ export function wireRuleEditorModal(
         markdown = formToMarkdown(container);
       }
       if (!markdown.trim()) return;
+      if (!hasDetectionLogic(markdown)) {
+        alert(`Failed to save: ${NO_DETECTION_LOGIC}`);
+        return;
+      }
       const ruleId = modal.dataset.ruleId || undefined;
       try {
         await rpc<{ ok: boolean }>('saveRule', { markdown, ruleId });
@@ -272,6 +262,13 @@ export function wireRuleEditorModal(
       markdown = formToMarkdown(container);
     }
     if (!markdown.trim()) return;
+    if (!hasDetectionLogic(markdown)) {
+      const results = container.querySelector<HTMLElement>('#rule-test-results')!;
+      results.style.display = '';
+      results.className = 'rule-test-results rule-test-error';
+      render(html`<strong>Error:</strong> ${NO_DETECTION_LOGIC}`, results);
+      return;
+    }
 
     if (overrides && Object.keys(overrides).length > 0) {
       markdown = applyThresholdOverrides(markdown, overrides);
@@ -360,7 +357,6 @@ export function wireRuleEditorModal(
       const result = await rpc<{ markdown: string }>('generateRule', { prompt });
       const md = result.markdown;
       markdownToForm(container, md);
-      (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = md;
       const idField = container.querySelector('#rf-id') as HTMLInputElement;
       if (!idField.value) {
         idField.value = prompt.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '').substring(0, 40);

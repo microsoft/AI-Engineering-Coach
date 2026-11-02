@@ -144,6 +144,72 @@ describe('generateRuleMarkdown', () => {
     expect(ask).toHaveBeenCalledTimes(3);
     expect(ask.mock.calls[2][0]?.reply).toBe('draft two');
   });
+
+  it('accepts a reply with CRLF line endings and returns it with LF', async () => {
+    const ask = asker().mockResolvedValueOnce(VALID_RULE.replaceAll('\n', '\r\n'));
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['scope: both', 'scope: "both"'])('accepts %s', async scope => {
+    const rule = VALID_RULE.replace('scope: sessions', scope);
+    const ask = asker().mockResolvedValueOnce(rule);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: rule });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again when the scope only starts with an allowed one', async () => {
+    const ask = asker()
+      .mockResolvedValueOnce(VALID_RULE.replace('scope: sessions', 'scope: both requests and sessions'))
+      .mockResolvedValueOnce(VALID_RULE);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask.mock.calls[1][0]?.issues).toContain('Missing or invalid "scope:" (must be requests, sessions, or both)');
+  });
+});
+
+/** A rule that ends with its detect block, as the generator prompt asks for. */
+const RULE_ENDING_WITH_DETECT = [
+  '---', 'id: long-sessions', 'name: Long sessions', 'group: session-hygiene', 'severity: medium', 'scope: sessions', '---', '',
+  '# Description', 'Sessions that run for too long.', '',
+  '# When Triggered', '{{count}} long sessions.', '',
+  '# How to Improve', 'Start a new chat for each task.', '',
+  '# Detection Logic', '```detect', 'scan: sessions', 'match: requestCount > 50', 'check: count >= 1', '```',
+].join('\n');
+
+describe('generateRuleMarkdown fences', () => {
+  it('keeps the closing fence of a rule that ends with its detect block', async () => {
+    const ask = asker().mockResolvedValueOnce(`${RULE_ENDING_WITH_DETECT}\n`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['an outer fence', '```markdown\n', '\n```\n'],
+    ['an outer fence without a language', '```\n', '\n```'],
+    ['prose and an outer fence', 'Here is the rule:\n\n```md\n', '\n```'],
+    ['a closed example and an outer fence', 'For example:\n```\nscan: requests\n```\nThe rule:\n```markdown\n', '\n```'],
+  ])('strips %s around the rule', async (_name, before, after) => {
+    const ask = asker().mockResolvedValueOnce(`${before}${RULE_ENDING_WITH_DETECT}${after}`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+
+  it('keeps the closing fence of a rule after a closed example in the prose', async () => {
+    const ask = asker().mockResolvedValueOnce(`For example:\n\`\`\`\nscan: requests\n\`\`\`\n\n${RULE_ENDING_WITH_DETECT}`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+
+  it('strips an outer fence around a rule without front matter', async () => {
+    const body = RULE_ENDING_WITH_DETECT.slice(RULE_ENDING_WITH_DETECT.indexOf('# Description'));
+    const ask = asker().mockResolvedValue(`\`\`\`markdown\n${body}\n\`\`\``);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: body });
+  });
 });
 
 describe('generateRuleMarkdown failures', () => {
