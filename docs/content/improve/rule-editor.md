@@ -57,4 +57,6 @@ check: ratio > thresholds.maxRatio AND count > thresholds.minSample
 examples: "{{messageText | truncate:80}}" ({{messageLength}} chars)
 ```
 
+A rule can keep regular expressions in its front matter under `patterns:` and pass `patterns.<name>` to `matches()`, `matchesAny()` or `anyMatch()`. Each entry is an array of patterns, and these functions match when any of them does. Quote a pattern that contains a comma, such as `"!{3,}"`. In double quotes, `\\` is one backslash and `\"` is a double quote; any other backslash stays as written, so `"\d"` and `"\\d"` both mean `\d`.
+
 The full function catalog, field schema, and metric list are browsable inside the [Rule Playground](/improve/rule-playground/) or via the **DSL Reference** modal (accessible from both Rule Editor and Rule Playground). The DSL Reference includes four tabs: Fields, Functions, Metrics, and Parser Coverage (showing which fields each harness parser can populate).

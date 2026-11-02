@@ -14,7 +14,7 @@
  *   - contains(s, sub)    string contains
  *   - startsWith(s, sub)  string starts with
  *   - endsWith(s, sub)    string ends with
- *   - matches(s, /re/)    regex match
+ *   - matches(s, re)      regex match; re may be an array of patterns (true if any matches)
  *   - lower(s)            to lower case
  *   - upper(s)            to upper case
  *   - trim(s)             strip whitespace
@@ -298,6 +298,27 @@ function parseRegexFlags(pattern: string): { pattern: string; flags: string } {
   const m = pattern.match(/^\(\?([gimsuy]+)\)/);
   if (m) return { pattern: pattern.substring(m[0].length), flags: m[1] };
   return { pattern, flags: '' };
+}
+
+/**
+ * The pattern strings of a pattern argument: one string, or an array such as a rule's `patterns.*`
+ * entry (always an array). Empty strings and values that aren't strings are skipped: they never match,
+ * where the empty regex would match everything. A front matter `[]` or blank entry reads as `['']`.
+ */
+function patternStrings(pattern: unknown): string[] {
+  if (Array.isArray(pattern)) return pattern.filter((p): p is string => typeof p === 'string' && p !== '');
+  return typeof pattern === 'string' && pattern !== '' ? [pattern] : [];
+}
+
+/** One pattern string, with optional inline flags such as (?i), compiled through the ReDoS guard. */
+function compilePattern(pattern: string): RegExp | null {
+  const pf = parseRegexFlags(pattern);
+  return compileSafe(pf.pattern, pf.flags);
+}
+
+/** True when `text` matches any pattern of a pattern argument (see patternStrings). */
+function matchesPattern(pattern: unknown, text: string): boolean {
+  return patternStrings(pattern).some(p => testSafe(compilePattern(p), text));
 }
 
 const WORK_TYPE_PATTERNS: [RegExp, string][] = [
@@ -912,11 +933,12 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
 
     {
       const [s, pattern] = args();
-      if (typeof s !== 'string' || typeof pattern !== 'string') return false;
-      const m = pattern.match(/^\/(.+)\/([gimsuy]*)$/);
-      if (m) return testSafe(compileSafe(m[1], m[2]), s);
-      const pf = parseRegexFlags(pattern);
-      return testSafe(compileSafe(pf.pattern, pf.flags), s);
+      if (typeof s !== 'string') return false;
+      // A pattern array, such as a rule's patterns.* entry, matches when any of its patterns does
+      return patternStrings(pattern).some(p => {
+        const m = p.match(/^\/(.+)\/([gimsuy]*)$/);
+        return testSafe(m ? compileSafe(m[1], m[2]) : compilePattern(p), s);
+      });
     }
   },
   'lower': (argNodes: ASTNode[], ctx: Record<string, unknown>) => {
@@ -1144,18 +1166,15 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
 
     // ── Extended functions for rule pipeline ──
 
-    /** matchesAny(text, patternArray) – true if text matches ANY regex in the array */
+    /** matchesAny(text, patterns) – true if text matches any pattern (an array, or one pattern string) */
   },
   'matchesAny': (argNodes: ASTNode[], ctx: Record<string, unknown>) => {
     const args = () => argNodes.map(a => evaluate(a, ctx));
 
     {
       const [text, patterns] = args();
-      if (typeof text !== 'string' || !Array.isArray(patterns)) return false;
-      return patterns.some(p => {
-        const pf = parseRegexFlags(asStr(p));
-        return testSafe(compileSafe(pf.pattern, pf.flags), text);
-      });
+      if (typeof text !== 'string') return false;
+      return matchesPattern(patterns, text);
     }
 
     /** capsLetterRatio(text) – ratio of uppercase letters to total letters */
@@ -1310,17 +1329,14 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
 
     // ── Generic array/regex utility functions ──
 
-    /** anyMatch(strArr, pattern) – 1 if any string in array matches regex */
+    /** anyMatch(strArr, pattern) – 1 if any string in the array matches the pattern, or any pattern of an array */
   },
   'anyMatch': (argNodes: ASTNode[], ctx: Record<string, unknown>) => {
     {
       const arr = evaluate(argNodes[0], ctx);
-      const pattern = asStr(evaluate(argNodes[1], ctx));
+      const patterns = patternStrings(evaluate(argNodes[1], ctx)).map(compilePattern);
       if (!Array.isArray(arr)) return 0;
-      const pf = parseRegexFlags(pattern);
-      const re = compileSafe(pf.pattern, pf.flags);
-      if (!re) return 0;
-      return arr.some(item => testSafe(re, asStr(item))) ? 1 : 0;
+      return arr.some(item => patterns.some(re => testSafe(re, asStr(item)))) ? 1 : 0;
     }
 
     /** flatSumField(arr, arrayField, sumField) – sum field across nested arrays */
@@ -1375,10 +1391,7 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
           case '>=': return toNum(fv) >= toNum(value);
           case '<':  return toNum(fv) < toNum(value);
           case '<=': return toNum(fv) <= toNum(value);
-          case 'matches': {
-            const pf = parseRegexFlags(asStr(value));
-            return testSafe(compileSafe(pf.pattern, pf.flags), asStr(fv));
-          }
+          case 'matches': return matchesPattern(value, asStr(fv));
           default: return looseEquals(fv, value);
         }
       }) ? 1 : 0;
@@ -1465,10 +1478,7 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
           case '<=': return toNum(fv) <= toNum(value);
           case '==': return looseEquals(fv, value);
           case '!=': return !looseEquals(fv, value);
-          case 'matches': {
-            const pf = parseRegexFlags(asStr(value));
-            return testSafe(compileSafe(pf.pattern, pf.flags), asStr(fv));
-          }
+          case 'matches': return matchesPattern(value, asStr(fv));
           default:   return toBool(fv);
         }
       }).length;
@@ -1534,10 +1544,7 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
           case '!=': return !looseEquals(fv, target);
           case 'startsWith': return asStr(fv).startsWith(asStr(target));
           case 'contains': return asStr(fv).includes(asStr(target));
-          case 'matches': {
-            const pf = parseRegexFlags(asStr(target));
-            return testSafe(compileSafe(pf.pattern, pf.flags), asStr(fv));
-          }
+          case 'matches': return matchesPattern(target, asStr(fv));
           default: return looseEquals(fv, target);
         }
       };
@@ -1635,16 +1642,13 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
   'hasSkillByPattern': (argNodes: ASTNode[], ctx: Record<string, unknown>) => {
     {
       const reqs = evaluate(argNodes[0], ctx);
-      const pattern = asStr(evaluate(argNodes[1], ctx));
-      if (!Array.isArray(reqs) || !pattern) return 0;
-      const pf = parseRegexFlags(pattern);
-      const re = compileSafe(pf.pattern, pf.flags);
-      if (!re) return 0;
+      const patterns = patternStrings(evaluate(argNodes[1], ctx)).map(compilePattern);
+      if (!Array.isArray(reqs) || patterns.length === 0) return 0;
       for (const r of reqs) {
         const skills = (r as Record<string, unknown>).skillsUsed;
         if (Array.isArray(skills)) {
           for (const s of skills) {
-            if (testSafe(re, asStr(s))) return 1;
+            if (patterns.some(re => testSafe(re, asStr(s)))) return 1;
           }
         }
       }
@@ -1691,10 +1695,7 @@ const CALL_DISPATCH: Record<string, (argNodes: ASTNode[], ctx: Record<string, un
           case '>=': return toNum(fv) >= toNum(value);
           case '<':  return toNum(fv) < toNum(value);
           case '<=': return toNum(fv) <= toNum(value);
-          case 'matches': {
-            const pf = parseRegexFlags(asStr(value));
-            return testSafe(compileSafe(pf.pattern, pf.flags), asStr(fv));
-          }
+          case 'matches': return matchesPattern(value, asStr(fv));
           default:   return looseEquals(fv, value);
         }
       }) ? 1 : 0;
