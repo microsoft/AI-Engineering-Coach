@@ -149,6 +149,24 @@ function getDatasetValue(element: HTMLElement, key: string): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/**
+ * Listeners by container and by what added them. Saving a rule renders the page again into the same elements, and
+ * each rule detail renders into the same panel, so wiring them again first removes what the last wiring added.
+ */
+const listenerOwners = new WeakMap<HTMLElement, Map<'tabs' | 'rules' | 'detail', AbortController>>();
+
+function replaceListeners(container: HTMLElement, owner: 'tabs' | 'rules' | 'detail'): AbortSignal {
+  let owners = listenerOwners.get(container);
+  if (!owners) {
+    owners = new Map();
+    listenerOwners.set(container, owners);
+  }
+  owners.get(owner)?.abort();
+  const controller = new AbortController();
+  owners.set(owner, controller);
+  return controller.signal;
+}
+
 function severityIcon(sev: string): ComponentChildren {
   if (sev === 'high') return html`<span class="sev-icon sev-high" title="High impact">!</span>`;
   if (sev === 'medium') return html`<span class="sev-icon sev-medium" title="Medium impact">~</span>`;
@@ -404,7 +422,8 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
             </div>
             <div class="rule-form-field">
               <label>Version</label>
-              <input type="number" id="rf-version" value="1" min="1" />
+              <!-- No value prop: a save renders the page again, and Preact would reset an open editor's version. -->
+              <input type="number" id="rf-version" min="1" />
             </div>
           </div>
           <div class="rule-form-field">
@@ -550,6 +569,7 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
 /* ── Tab switching ── */
 
 function wireTabBar(container: HTMLElement): void {
+  const signal = replaceListeners(container, 'tabs');
   const tabs = container.querySelectorAll<HTMLElement>('.ap-tab');
   const panels = container.querySelectorAll<HTMLElement>('.ap-tab-content');
 
@@ -561,7 +581,7 @@ function wireTabBar(container: HTMLElement): void {
       for (const p of panels) {
         p.style.display = p.id === `tab-${target}` ? '' : 'none';
       }
-    });
+    }, { signal });
   }
 }
 
@@ -952,6 +972,7 @@ function wireRulesSection(
   previewMap: Map<string, RulePreview>,
   currentFilter: DateFilter,
 ): void {
+  const signal = replaceListeners(container, 'rules');
   // Search + local-only filter
   const searchInput = container.querySelector<HTMLInputElement>('#rule-search');
   const localOnly = container.querySelector<HTMLInputElement>('#rule-filter-local');
@@ -974,14 +995,14 @@ function wireRulesSection(
       section.style.display = visible.length > 0 ? '' : 'none';
     }
   };
-  searchInput?.addEventListener('input', applyFilters);
-  localOnly?.addEventListener('change', applyFilters);
+  searchInput?.addEventListener('input', applyFilters, { signal });
+  localOnly?.addEventListener('change', applyFilters, { signal });
 
   // Review pending local rules banner
   container.querySelector('#rule-review-pending-btn')?.addEventListener('click', toEventListener(async () => {
     await rpc<{ ok: boolean }>('reviewLocalRules');
     // The command itself reloads the dashboard; no follow-up render needed here.
-  }));
+  }), { signal });
 
   // Rule card click -> detail
   container.querySelector('#rule-list')?.addEventListener('click', (e) => {
@@ -992,7 +1013,7 @@ function wireRulesSection(
     if (!card) return;
     const ruleId = getDatasetValue(card, 'ruleId');
     if (ruleId) showRuleDetail(container, ruleId, rules, previewMap, currentFilter);
-  });
+  }, { signal });
 
   // Back button
   container.querySelector('#rule-back-btn')?.addEventListener('click', () => {
@@ -1000,23 +1021,23 @@ function wireRulesSection(
     container.querySelector<HTMLElement>('#rule-detail-panel')!.style.display = 'none';
     container.querySelector<HTMLElement>('#rule-search-bar')!.style.display = '';
     container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = '';
-  });
+  }, { signal });
 
   // Unified Rule Editor
-  wireRuleEditorModal(container, currentFilter, () => renderAntiPatterns(container, currentFilter));
+  wireRuleEditorModal(container, currentFilter, () => renderAntiPatterns(container, currentFilter), signal);
 
   // New rule button -> open editor in create mode
   container.querySelector('#rule-new-btn')?.addEventListener('click', () => {
     openRuleEditor(container, null);
-  });
+  }, { signal });
 
   // Help
   container.querySelector('#rule-help-btn')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-help-modal')!.style.display = 'flex';
-  });
+  }, { signal });
   container.querySelector('#rule-help-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-help-modal')!.style.display = 'none';
-  });
+  }, { signal });
 
   // DSL Reference modal
   let dslRefLoaded = false;
@@ -1033,20 +1054,20 @@ function wireRulesSection(
         dslRefLoaded = false;
       }
     }
-  }));
+  }), { signal });
   container.querySelector('#rule-dsl-ref-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-dsl-ref-modal')!.style.display = 'none';
-  });
+  }, { signal });
 
   // Coverage heatmap
   container.querySelector('#rule-coverage-btn')?.addEventListener('click', () => {
     const modal = container.querySelector<HTMLElement>('#rule-coverage-modal')!;
     modal.style.display = 'flex';
     void renderCoverageHeatmap(container, currentFilter);
-  });
+  }, { signal });
   container.querySelector('#rule-coverage-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-coverage-modal')!.style.display = 'none';
-  });
+  }, { signal });
 }
 
 /* ── Rule detail view ── */
@@ -1118,7 +1139,7 @@ function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefi
   </div>`;
 }
 
-function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFilter: DateFilter): void {
+function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFilter: DateFilter, signal: AbortSignal): void {
   for (const input of content.querySelectorAll<HTMLInputElement>('.rule-threshold-input')) {
     input.addEventListener('change', toEventListener(async (e: Event) => {
       const target = e.target;
@@ -1131,6 +1152,8 @@ function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFi
       try {
         await rpc<{ ok: boolean }>('updateRuleThreshold', { ruleId, key, value });
         const preview = await rpc<RulePreview>('getRulePreview', { ruleId, ...(currentFilter as Record<string, unknown>) });
+        // Another rule's detail may be shown by now.
+        if (signal.aborted) return;
         const stats = content.querySelector<HTMLElement>('.rule-preview-stats');
         if (stats) {
           render(renderRulePreviewStats(preview), stats);
@@ -1138,7 +1161,7 @@ function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFi
       } catch {
         /* ignore */
       }
-    }));
+    }), { signal });
   }
 }
 
@@ -1172,11 +1195,13 @@ function showRuleDetail(
   const content = container.querySelector<HTMLElement>('#rule-detail-content')!;
   render(renderRuleDetailContent(rule, preview, ruleId), content);
 
-  wireRuleThresholdInputs(content, ruleId, currentFilter);
+  // Every detail renders into the same panel and reuses its elements: drop the last detail's handlers first.
+  const signal = replaceListeners(container, 'detail');
+  wireRuleThresholdInputs(content, ruleId, currentFilter, signal);
 
   container.querySelector('#rule-edit-source-btn')?.addEventListener('click', () => {
     openRuleEditor(container, ruleId);
-  });
+  }, { signal });
 
   wireRuleDetailExplainButtons(content, currentFilter);
 }

@@ -16,7 +16,7 @@ Use the filter bar to search by tag or group, and click any rule to open its det
 
 ## Editing a Rule
 
-Click **Edit** on any rule to open the modal editor. The editor has two tabs:
+Click **Edit Source** in a rule's detail view to open the modal editor for that rule. **Save** and **Test Rule** wait until the rule's source has loaded. The editor has two tabs:
 
 | Tab | Purpose |
 |---|---|

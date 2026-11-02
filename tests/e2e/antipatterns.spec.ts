@@ -302,6 +302,10 @@ const BOTH_SCOPE_RULE = [
 ].join('\n');
 
 type RuleEditorWindow = MockWindow & { ruleEditorCalls?: Array<{ method: string; params: Record<string, unknown> }> };
+type RuleListWindow = RuleEditorWindow & { releaseRuleSource?: (id: string) => void };
+
+/** The both-scope rule under another id and name. */
+const ruleCalled = (id: string) => BOTH_SCOPE_RULE.replace('id: context-both', `id: ${id}`).replace('name: Context both', `name: ${id}`);
 
 /** Lists one rule whose source is `source`, then opens it with Edit Source. */
 async function editRuleSource(page: Page, source: string) {
@@ -348,6 +352,52 @@ async function testRuleMarkdown(page: Page): Promise<string> {
     const call = (window as RuleEditorWindow).ruleEditorCalls?.find(c => c.method === 'testRuleLive');
     return String(call?.params.markdown);
   });
+}
+
+/** Lists the rules `ids` on the Rules tab. The source of a rule in `held` answers only once the test releases it. */
+async function listRules(page: Page, ids: string[], held: string[] = []) {
+  const sources = Object.fromEntries(ids.map(id => [id, ruleCalled(id)]));
+  await page.evaluate(({ ids, held, sources }) => {
+    const root = window as RuleListWindow;
+    const original = root.getMockData;
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const waiting = new Map<string, Array<() => void>>();
+    root.ruleEditorCalls = calls;
+    root.releaseRuleSource = id => {
+      for (const release of waiting.get(id) ?? []) release();
+      waiting.delete(id);
+    };
+    root.getMockData = (method, params) => {
+      calls.push({ method, params });
+      if (method === 'getRuleEditor') {
+        return {
+          rules: ids.map(id => ({
+            id, name: id, group: 'prompt-quality', severity: 'medium', scope: 'both', requiresIdeContext: false,
+            description: `Rule ${id}.`, descriptionTemplate: '', suggestionTemplate: '', exampleTemplate: '',
+            thresholds: { minReqs: 30 }, tags: ['context'], source: 'built-in', sourceFilePath: '', version: 1,
+            rawSource: sources[id],
+          })),
+          previews: [], layers: [], pending: [],
+        };
+      }
+      if (method === 'getRuleSource') {
+        const id = String(params.ruleId);
+        const answer = { source: sources[id] };
+        if (!held.includes(id)) return answer;
+        return new Promise(resolve => waiting.set(id, [...(waiting.get(id) ?? []), () => resolve(answer)]));
+      }
+      if (method === 'saveRule') return { ok: true };
+      return original(method, params);
+    };
+  }, { ids, held, sources });
+  await page.locator('#sidebar [data-page="anti-patterns"]').click();
+  await page.locator('.ap-tab[data-tab="rules"]').click();
+}
+
+/** The parameters the editor sent with each call of `method`. */
+function sentParams(page: Page, method: string): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate(name => (window as RuleEditorWindow).ruleEditorCalls!
+    .filter(call => call.method === name).map(call => call.params), method);
 }
 
 test.describe('Anti-Patterns Rule Editor', () => {
@@ -397,5 +447,48 @@ test.describe('Anti-Patterns Rule Editor', () => {
     await expect(page.locator('#rf-detect')).toHaveValue('scan: requests\nmatch: true\ncheck: count >= thresholds.minReqs');
 
     expect(await testRuleMarkdown(page)).toBe(BOTH_SCOPE_RULE);
+  });
+
+  test('opens one editor, for the rule shown, after other rules were shown', async ({ page }) => {
+    await listRules(page, ['rule-a', 'rule-b', 'rule-c']);
+    for (const id of ['rule-a', 'rule-b']) {
+      await page.locator(`.rule-card[data-rule-id="${id}"]`).click();
+      await expect(page.locator('#rule-detail-panel')).toBeVisible();
+      await page.locator('#rule-back-btn').click();
+    }
+    await page.locator('.rule-card[data-rule-id="rule-c"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+
+    await expect(page.locator('#rf-id')).toHaveValue('rule-c');
+    expect(await sentParams(page, 'getRuleSource')).toEqual([{ ruleId: 'rule-c' }]);
+  });
+
+  test('keeps the rule opened last when an earlier rule\'s source answers after it, and saves that rule', async ({ page }) => {
+    await listRules(page, ['rule-a', 'rule-b'], ['rule-a']);
+    await page.locator('.rule-card[data-rule-id="rule-a"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+    await expect(page.locator('#rule-editor-modal')).toBeVisible();
+    await page.locator('#rule-editor-cancel').click();
+    await page.locator('#rule-back-btn').click();
+    await page.locator('.rule-card[data-rule-id="rule-b"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+    await expect(page.locator('#rf-id')).toHaveValue('rule-b');
+
+    // Release rule A's source, and return once the page has handled it.
+    await page.evaluate(() => new Promise<void>(resolve => {
+      const handled = (event: MessageEvent<{ type?: string; data?: { source?: string } }>) => {
+        if (event.data?.type !== 'response' || !event.data.data?.source?.includes('id: rule-a')) return;
+        window.removeEventListener('message', handled);
+        setTimeout(resolve, 0);
+      };
+      window.addEventListener('message', handled);
+      (window as RuleListWindow).releaseRuleSource!('rule-a');
+    }));
+    await expect(page.locator('#rf-id')).toHaveValue('rule-b');
+    await expect(page.locator('#rule-editor-raw')).toHaveValue(ruleCalled('rule-b'));
+
+    await page.locator('#rule-editor-save').click();
+    await expect(page.locator('#rule-editor-modal')).toBeHidden();
+    expect(await sentParams(page, 'saveRule')).toEqual([{ markdown: ruleCalled('rule-b'), ruleId: 'rule-b' }]);
   });
 });
