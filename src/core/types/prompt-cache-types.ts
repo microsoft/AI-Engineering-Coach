@@ -12,9 +12,18 @@
 /** Which model calls a row covers: the main agent, sub-agents, or compaction summaries. */
 export type CacheStream = 'main' | 'subagent' | 'compaction';
 
-/** Sums over the model calls a request made on one stream with one model. Neutral: prompt-cache fields
- *  today; other per-call sums can be added. */
-export interface ModelCallRow {
+/** Output and reasoning tokens of a row's calls at one reasoning effort. */
+export interface EffortReasoning {
+  effort: 'max' | 'high' | 'medium' | 'low' | 'unknown';
+  calls: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+/** Sums over the model calls a request made on one stream with one model: what every call logs, and its token
+ *  types. Calls that reported their cache usage are `ModelCallRow`s; the others are `CallRow`s, without cache fields,
+ *  so their cache usage stays unknown rather than zero. */
+export interface CallRow {
   stream: CacheStream;
   model: string;
   calls: number;
@@ -22,6 +31,35 @@ export interface ModelCallRow {
   reasoningEffort?: string;
   /** Prompt tokens, including tokens read from and written to the cache. */
   input: number;
+  /* Token types (see call-outputs.ts). Each is absent when the harness doesn't log it per call. */
+  /** Output tokens, including reasoning (Copilot CLI and Copilot App). */
+  outputTokens?: number;
+  /** Reasoning tokens, part of `outputTokens` (Copilot CLI and Copilot App). */
+  reasoningTokens?: number;
+  /** Reasoning by effort over the calls that logged reasoning tokens. Only stored when the row-level fields
+   *  can't say it: the calls ran at more than one effort, or not every call logged reasoning. Otherwise it is
+   *  `reasoningEffort` with `calls`, `outputTokens` and `reasoningTokens`. */
+  reasoningByEffort?: EffortReasoning[];
+  /** Calls that stopped at the output-token limit (Copilot CLI and Copilot App, Claude Code, OpenCode). */
+  truncatedCalls?: number;
+  /** Calls that logged why they stopped: the denominator of `truncatedCalls`. Absent when it equals `calls`. */
+  stopCalls?: number;
+  /** Calls the content filter stopped or changed, of the calls that logged it (Copilot CLI and Copilot App). */
+  filteredCalls?: number;
+  /** Time to first token of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
+  ttftMs?: number[];
+  /** Duration of these calls, in ms (at most `MAX_LATENCY_SAMPLES`, evenly thinned). */
+  durationMs?: number[];
+  /** Calls that logged their time to first token, when thinning kept fewer `ttftMs` samples: each sample stands for
+   *  `ttftCalls / ttftMs.length` calls, so a row keeps its weight in percentiles across rows. Absent when every
+   *  logged value was kept. */
+  ttftCalls?: number;
+  /** The same for `durationMs`. */
+  durationCalls?: number;
+}
+
+/** A `CallRow` of calls that reported their cache usage, with their cache sums. */
+export interface ModelCallRow extends CallRow {
   cacheRead: number;
   cacheWrite: number;
   /** Input cost of the calls that logged prices, in the harness's price unit (Copilot: nano-AIU, one unit for

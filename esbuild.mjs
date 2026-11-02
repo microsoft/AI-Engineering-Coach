@@ -117,6 +117,7 @@ const cssSources = [
   'src/webview/styles-github-app-issue-credits.css',
   'src/webview/styles-skills.css',
   'src/webview/styles-learning.css',
+  'src/webview/styles-token-types.css',
 ];
 
 function bundleCss() {

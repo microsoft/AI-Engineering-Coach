@@ -6,7 +6,11 @@
 /* Reusable, layered chart of a session's call timeline (`CallTimeline`). Each layer contributes datasets
  * (one value per bucket) and/or markers keyed by bucket; markers that several layers put on the same bucket
  * merge into one labelled marker. The prompt-cache view adds cache-token and cache-break layers; other
- * views can add their own (for example a context limit or compaction markers) on the same chart. */
+ * views can add their own (for example a context limit or compaction markers) on the same chart.
+ *
+ * Datasets that share a label form one series: one legend entry that shows or hides all of them, and one table
+ * column listing all their values. A layer uses this to give a bucket several points, such as several turns
+ * that ended in one bar. */
 
 import type { CallTimeline, CallTimelineBucket } from '../core/types';
 import { Chart, destroyChartById, formatNum, trackChart } from './shared';
@@ -36,6 +40,8 @@ export interface CallTimelineChartOptions {
   /** `calls`: one point per main-agent model call; `requests`: one per request. */
   unit: 'calls' | 'requests';
   yTitle: string;
+  /** Title of the right-hand axis, for datasets with `yAxisID: 'y1'`; the axis shows only when one is drawn. */
+  y1Title?: string;
 }
 
 const MAX_MARKER_LABELS = 12;
@@ -107,6 +113,31 @@ function markerPlugin(markers: Map<number, CallTimelineMarker[]>) {
 
 interface TooltipItem { dataIndex: number; dataset: { label?: string }; parsed: { y: number | null } }
 
+interface LegendItem { text: string; datasetIndex?: number }
+
+/** One legend entry per series: only the first dataset with a label gets one (see the module comment). */
+function firstOfSeries(item: LegendItem, data: { datasets: { label?: string }[] }): boolean {
+  return !item.text || data.datasets.findIndex(dataset => dataset.label === item.text) === item.datasetIndex;
+}
+
+/** Show or hide every dataset of the clicked series. */
+function toggleSeries(_event: unknown, item: LegendItem, legend: { chart: Chart }): void {
+  const chart = legend.chart;
+  if (item.datasetIndex == null) return;
+  const visible = chart.isDatasetVisible(item.datasetIndex);
+  for (const [index, dataset] of chart.data.datasets.entries()) {
+    if (index === item.datasetIndex || (item.text && dataset.label === item.text)) chart.setDatasetVisibility(index, !visible);
+  }
+  chart.update();
+}
+
+/** Right-hand axis for datasets with `yAxisID: 'y1'`, which are on a much smaller scale than the bars. */
+function rightAxis(title: string | undefined): Record<string, unknown> {
+  return {
+    y1: { position: 'right', beginAtZero: true, title: { display: Boolean(title), text: title ?? '', color: '#8b949e' }, ticks: { color: '#8b949e', callback: (value: number | string) => formatNum(Number(value)) }, grid: { drawOnChartArea: false } },
+  };
+}
+
 /** Draw the chart for the enabled layers; returns the chart, or `null` when the canvas isn't in the DOM. */
 export function renderCallTimelineChart(
   canvasId: string,
@@ -120,9 +151,10 @@ export function renderCallTimelineChart(
   const active = layers.filter(layer => options.enabled.has(layer.id));
   const markers = mergeMarkers(timeline, active);
   const labels = timeline.buckets.map(bucket => bucketLabel(bucket, options.unit));
+  const datasets = active.flatMap(layer => layer.datasets?.(timeline) ?? []);
   const chart = new Chart(canvas, {
     type: 'bar',
-    data: { labels, datasets: active.flatMap(layer => layer.datasets?.(timeline) ?? []) as never },
+    data: { labels, datasets: datasets as never },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -132,9 +164,10 @@ export function renderCallTimelineChart(
       scales: {
         x: { stacked: true, ticks: { color: '#8b949e', maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { display: false } },
         y: { stacked: true, beginAtZero: true, title: { display: true, text: options.yTitle, color: '#8b949e' }, ticks: { color: '#8b949e', callback: (value: number | string) => formatNum(Number(value)) }, grid: { color: 'rgba(48,54,61,0.6)' } },
+        ...(datasets.some(dataset => dataset.yAxisID === 'y1') ? rightAxis(options.y1Title) : {}),
       },
       plugins: {
-        legend: { position: 'top', labels: { boxWidth: 10 } },
+        legend: { position: 'top', labels: { boxWidth: 10, filter: firstOfSeries }, onClick: toggleSeries },
         tooltip: {
           callbacks: {
             title: (items: TooltipItem[]) => {
@@ -160,8 +193,24 @@ function seriesOf(dataset: Record<string, unknown>): unknown[] {
   return Array.isArray(data) ? (data as unknown[]) : [];
 }
 
-function cellText(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value) ? formatNum(value) : '\u2014';
+interface TableColumn { label: string; series: unknown[][] }
+
+/** One column per series: datasets that share a label list all their values in one column. */
+function tableColumns(datasets: Record<string, unknown>[]): TableColumn[] {
+  const columns: TableColumn[] = [];
+  for (const dataset of datasets) {
+    const label = typeof dataset.label === 'string' ? dataset.label : '';
+    const column = label ? columns.find(c => c.label === label) : undefined;
+    if (column) column.series.push(seriesOf(dataset));
+    else columns.push({ label, series: [seriesOf(dataset)] });
+  }
+  return columns;
+}
+
+/** A bucket's values in one column, in dataset order; a dash when it has none. */
+function cellText(column: TableColumn, index: number): string {
+  const values = column.series.map(values => values[index]).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  return values.length > 0 ? values.map(value => formatNum(value)).join(', ') : '\u2014';
 }
 
 /** Text equivalent of the chart for keyboard and screen-reader users, in a collapsed disclosure below it: one
@@ -172,9 +221,7 @@ export function callTimelineTable(
   unit: CallTimelineChartOptions['unit'],
   caption: string,
 ): ComponentChildren {
-  const datasets = layers.flatMap(layer => layer.datasets?.(timeline) ?? []);
-  const columns = datasets.map(dataset => (typeof dataset.label === 'string' ? dataset.label : ''));
-  const series = datasets.map(seriesOf);
+  const columns = tableColumns(layers.flatMap(layer => layer.datasets?.(timeline) ?? []));
   const markers = mergeMarkers(timeline, layers);
   return html`<details class="call-timeline-data">
     <summary>Show the chart as a table</summary>
@@ -184,13 +231,13 @@ export function callTimelineTable(
         <thead><tr>
           <th scope="col">${unit === 'calls' ? 'Model calls' : 'Requests'}</th>
           <th scope="col">Time</th>
-          ${columns.map(column => html`<th scope="col" class="num">${column}</th>`)}
+          ${columns.map(column => html`<th scope="col" class="num">${column.label}</th>`)}
           ${markers.size > 0 ? html`<th scope="col">Markers</th>` : null}
         </tr></thead>
         <tbody>${timeline.buckets.map((bucket, index) => html`<tr>
           <th scope="row">${bucketLabel(bucket, unit)}</th>
           <td>${[...new Set([formatClock(bucket.startTs), formatClock(bucket.endTs)].filter(Boolean))].join('\u2013')}</td>
-          ${series.map(values => html`<td class="num">${cellText(values[index])}</td>`)}
+          ${columns.map(column => html`<td class="num">${cellText(column, index)}</td>`)}
           ${markers.size > 0 ? html`<td class="call-timeline-markers">${(markers.get(index) ?? []).map(marker => marker.detail).join('; ')}</td>` : null}
         </tr>`)}</tbody>
       </table>

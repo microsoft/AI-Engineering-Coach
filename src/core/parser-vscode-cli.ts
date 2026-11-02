@@ -19,7 +19,10 @@ import { compositionFromCliUsage, readSystemSegments, type CliTurnUsage } from '
 import { readCliModelCall, type CliModelCall } from './cli-model-calls';
 import { CallTimelineBuilder } from './call-timeline';
 import { CliCacheTracker } from './prompt-cache-cli';
-import { uncachedTokens } from './prompt-cache-usage';
+import { cacheModelName, uncachedTokens } from './prompt-cache-usage';
+import { addTurnCompaction, readCliCompaction } from './cli-compaction';
+import { SubagentRunTracker } from './cli-subagents';
+import { TurnContextAccumulator } from './cli-turn-context';
 import { EditLocIndex } from './edit-loc-diff';
 import {
   FileEditLocMap,
@@ -68,6 +71,8 @@ interface TurnState {
   modelId: string;
   isCanceled: boolean;
   compaction: CompactionEvent | null;
+  /** Every compaction of the turn; `compaction` is the first. */
+  compactions: CompactionEvent[];
   reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null;
   imageCount: number;
   editLocs: FileEditLocMap;
@@ -106,6 +111,12 @@ interface CLIParseState {
   timeline: CallTimelineBuilder;
   /** Prompt-cache usage and breaks (`SessionRequest.promptCache`, `Session.promptCache`). */
   cache: CliCacheTracker;
+  /** Sub-agent runs, attributed to the turn that launched them when the session is finalized. */
+  subagents: SubagentRunTracker;
+  /** Main-agent context of the turn being built (`SessionRequest.contextUsage`). */
+  context: TurnContextAccumulator;
+  /** Main-agent calls logged so far: the index of the next call in the call timeline. */
+  mainCalls: number;
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -128,6 +139,7 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     modelId: '',
     isCanceled: false,
     compaction: null,
+    compactions: [],
     reasoningEffort,
     imageCount: 0,
     editLocs: new Map(),
@@ -230,14 +242,20 @@ function flushTurn(state: CLIParseState): void {
     curiosity: turn.nonUser ? { kind: 'excluded', excerpts: [] } : undefined,
   });
   state.requests.push(request);
+  if (turn.compactions.length > 1) request.compactions = turn.compactions;
   attachTurnUsage(state, turn, request);
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
 
-/** Attach the turn's prompt-cache usage and composition (deferred until a system-prompt size is known). */
+/** Attach the turn's prompt-cache usage and the rows of its calls without cache data, its context and its composition
+ *  (deferred until a system-prompt size is known). */
 function attachTurnUsage(state: CLIParseState, turn: TurnState, request: SessionRequest): void {
   const promptCache = state.cache.takeRequest();
   if (promptCache) request.promptCache = promptCache;
+  const callRowsWithoutCacheData = state.cache.takeRowsWithoutCacheData();
+  if (callRowsWithoutCacheData) request.callRowsWithoutCacheData = callRowsWithoutCacheData;
+  const contextUsage = state.context.take();
+  if (contextUsage) request.contextUsage = contextUsage;
   if (turn.usage.calls > 0) {
     if (state.systemTokens == null) state.pendingCompositions.push({ request, usage: turn.usage });
     else attachComposition(request, turn.usage, state.systemTokens);
@@ -266,11 +284,13 @@ function eventTime(ev: CLIEvent): number | null {
   return Number.isFinite(ts) ? ts : null;
 }
 
-/** One model call: read it once, then feed the call timeline, the prompt-cache tracker and the turn's
- *  composition. Records logged before the first prompt are taken by the first turn. */
+/** One model call: read it once, then feed the call timeline, the prompt-cache tracker, the turn's context
+ *  and the turn's composition. Records logged before the first prompt are taken by the first turn. */
 function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
   const call = readCliModelCall(ev.data || {}, eventTime(ev), state.currentModelId);
   if (!call) return;
+  // The limit the turn's context rule gives the call, so the timeline's limit agrees with the turn's.
+  const contextLimit = state.context.addCall(call);
   const callIndex = call.stream === 'main'
     ? state.timeline.add({
       timestamp: call.timestamp,
@@ -279,8 +299,14 @@ function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
       cacheRead: call.cacheReadTokens,
       cacheWrite: call.cacheWriteTokens,
       uncached: uncachedTokens({ input: call.inputTokens, cacheRead: call.cacheReadTokens, cacheWrite: call.cacheWriteTokens }),
+      promptTokens: call.inputTokens,
+      contextLimit,
+      outputTokens: call.outputTokens,
+      reasoningTokens: call.reasoningTokens,
+      truncated: call.finishReason === 'length',
     })
     : null;
+  if (callIndex != null) state.mainCalls = callIndex + 1;
   state.cache.onCall(call, callIndex, state.requests.length);
   addCompositionUsage(state.turn, call);
 }
@@ -511,17 +537,13 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
 function handleCompactionComplete(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
   state.cache.onCompactionComplete(data, at);
   setSystemTokens(state, data.systemTokens);
+  const event = readCliCompaction(data);
+  state.context.addLimit(event.tokenLimit, cacheModelName(state.currentModelId));
   const turn = state.turn;
   if (!turn) return;
-  turn.compaction = {
-    mode: str(data.mode) === 'simple' ? 'simple' : 'full',
-    numRounds: typeof data.numRounds === 'number' ? data.numRounds : 0,
-    numRoundsSinceLastSummarization: typeof data.numRoundsSinceLastSummarization === 'number' ? data.numRoundsSinceLastSummarization : 0,
-    contextLengthBefore: typeof data.contextLengthBefore === 'number' ? data.contextLengthBefore : 0,
-    durationMs: typeof data.durationMs === 'number' ? data.durationMs : 0,
-    model: typeof data.model === 'string' ? data.model : '',
-    outcome: typeof data.outcome === 'string' ? data.outcome : '',
-  };
+  if (state.mainCalls > 0) event.atCall = state.mainCalls;
+  addTurnCompaction(turn.compactions, event);
+  turn.compaction ??= event;
 }
 
 function addModelUsage(collected: Record<string, ModelUsage>, rawModel: string, info: unknown): void {
@@ -609,6 +631,12 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
     case 'session.compaction_complete':
       handleCompactionComplete(ev.data || {}, state, eventTime(ev));
       return;
+    case 'subagent.started':
+      state.subagents.start(ev.data || {}, state.turn ? state.requests.length : null);
+      return;
+    case 'subagent.completed':
+      state.subagents.complete(ev.data || {}, state.turn ? state.requests.length : null);
+      return;
     case 'session.shutdown':
       handleShutdown(ev.data || {}, state);
       return;
@@ -635,6 +663,9 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     compactionSnapshots: [],
     timeline: new CallTimelineBuilder(),
     cache: new CliCacheTracker(),
+    subagents: new SubagentRunTracker(),
+    context: new TurnContextAccumulator(),
+    mainCalls: 0,
   };
 }
 
@@ -648,6 +679,7 @@ function finalizeCliSession(
   // No system-prompt size was ever recorded: keep the non-tool remainder unattributed.
   for (const pending of state.pendingCompositions) attachComposition(pending.request, pending.usage, null);
   state.pendingCompositions = [];
+  state.subagents.attach(state.requests);
 
   if (state.requests.length === 0) return null;
 

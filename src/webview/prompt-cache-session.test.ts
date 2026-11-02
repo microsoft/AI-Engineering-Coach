@@ -62,7 +62,7 @@ describe('Prompt Cache session list', () => {
 describe('Prompt Cache session detail', () => {
   it('shows a Codex session\u2019s totals without a count of model calls', async () => {
     const data: SessionTimelineData = {
-      sessionId: 'Codex-1', harness: 'Codex', unit: 'requests', timeline: null,
+      sessionId: 'Codex-1', harness: 'Codex', unit: 'requests', timeline: null, context: null,
       cache: {
         reporting: 'per-session',
         main: { calls: 0, input: 200_000, cacheRead: 180_000, cacheWrite: 0, uncached: 20_000, hitPct: 90, writePct: 0, uncachedPct: 10 },
@@ -81,7 +81,7 @@ describe('Prompt Cache session detail', () => {
 
   it('keeps the count of model calls for harnesses that log every call', async () => {
     const data: SessionTimelineData = {
-      sessionId: 'Claude-1', harness: 'Claude', unit: 'requests', timeline: null,
+      sessionId: 'Claude-1', harness: 'Claude', unit: 'requests', timeline: null, context: null,
       cache: {
         reporting: 'per-call',
         main: { calls: 64, input: 3_000_000, cacheRead: 2_730_000, cacheWrite: 255_000, uncached: 15_000, hitPct: 91, writePct: 8.5, uncachedPct: 0.5 },

@@ -34,8 +34,8 @@ import {
 import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromContent, type ImageReference } from './image-data';
 import type { SessionSource } from './cache';
-import type { RequestPromptCache } from './types';
 import { RequestCacheBuilder, cacheModelName, missTokens } from './prompt-cache-usage';
+import { stopReasonSample } from './call-outputs';
 
 interface OcSession {
   id: string;
@@ -412,25 +412,36 @@ function tokenCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** Cache usage of every model call of a request. OpenCode writes one assistant message per call, and its
- *  `tokens.input` excludes the cached tokens. */
-function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawMain: boolean }): RequestPromptCache | undefined {
+/** Cache usage of every model call of a request, and whether each stopped at the output-token limit
+ *  (`finish: length`; unknown while a call has no `finish`). OpenCode writes one assistant message per call,
+ *  and its `tokens.input` excludes the cached tokens. */
+function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawMain: boolean }): Pick<SessionRequest, 'promptCache' | 'callRowsWithoutCacheData'> {
   const builder = new RequestCacheBuilder();
   for (const message of assistantMessages) {
     const tokens = message.tokens;
-    // A message whose tokens carry no cache entry didn't report cache usage; don't count it as uncached.
-    if (!tokens?.cache) continue;
-    const cacheRead = tokenCount(tokens.cache?.read);
-    const cacheWrite = tokenCount(tokens.cache?.write);
+    if (!tokens) continue;
+    const model = cacheModelName(message.modelID || message.model?.modelID);
+    const truncated = typeof message.finish === 'string' && message.finish ? message.finish === 'length' : null;
+    // A message whose tokens carry no cache entry didn't report cache usage; don't count it as uncached. Its stop
+    // reason still counts, on a row without cache data.
+    if (!tokens.cache) {
+      const input = tokenCount(tokens.input);
+      if (input > 0) builder.addCallWithoutCacheData('main', model, { input, outputs: stopReasonSample(truncated) });
+      continue;
+    }
+    const cacheRead = tokenCount(tokens.cache.read);
+    const cacheWrite = tokenCount(tokens.cache.write);
     const sample = { input: tokenCount(tokens.input) + cacheRead + cacheWrite, cacheRead, cacheWrite };
     if (sample.input <= 0) continue;
-    builder.addCall('main', cacheModelName(message.modelID || message.model?.modelID), sample);
+    builder.addCall('main', model, { ...sample, outputs: stopReasonSample(truncated) });
     if (!cacheState.sawMain) {
       cacheState.sawMain = true;
       builder.addColdStart(missTokens(sample), undefined);
     }
   }
-  return builder.take();
+  const promptCache = builder.take();
+  const callRowsWithoutCacheData = builder.takeRowsWithoutCacheData();
+  return { ...(promptCache ? { promptCache } : {}), ...(callRowsWithoutCacheData ? { callRowsWithoutCacheData } : {}) };
 }
 
 function buildOpenCodeSession(
@@ -461,8 +472,7 @@ function buildOpenCodeSession(
     const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
     const request = buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex);
-    const promptCache = openCodeRequestCache(assistantMessages, cacheState);
-    if (promptCache) request.promptCache = promptCache;
+    Object.assign(request, openCodeRequestCache(assistantMessages, cacheState));
     requests.push(request);
   }
 

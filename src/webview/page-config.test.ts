@@ -147,7 +147,7 @@ describe('Context Management range bar with Copilot CLI composition', () => {
 
     expect(rangeButtons(host)).toEqual([]);
     expect(host.querySelector('#ctxRangeBar')?.textContent?.trim()).toBe(
-      'GitHub Copilot CLI recorded neither per-request tokens nor prompt composition, which Context Management needs to chart utilization and composition. Try a different harness, or view consumption in the Output tab.',
+      'These GitHub Copilot CLI sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization or composition. Try a different harness or a more recent range, or view consumption in the Output tab.',
     );
   });
 });

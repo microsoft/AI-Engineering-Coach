@@ -11,6 +11,7 @@ import { rpc, COLORS, Chart, trackChart, destroyCharts } from './shared';
 import { html, render, StatCard, ComponentChildren } from './render';
 import { renderContextManagement } from './page-context-mgmt';
 import { renderPromptCache } from './page-prompt-cache';
+import { renderTokenTypes } from './page-token-types';
 import { llmAvailable, llmUnavailableNote } from './capabilities';
 
 /* Harness colors */
@@ -30,8 +31,14 @@ interface ContextProvisionDetailRow {
 
 let currentProvisionRows: ContextProvisionDetailRow[] = [];
 
+type ContextSubTab = 'config-quality' | 'context-mgmt' | 'prompt-cache' | 'token-types';
+
+/** Sub-tabs that ignore TOKEN_DATA_AVAILABLE_FROM. They don't use per-request prompt sizes: they show what each
+ *  harness logged, including Claude Code, OpenCode and Codex logs from before the cutoff, and mark the rest. */
+const CUTOFF_EXEMPT_TABS: ReadonlySet<ContextSubTab> = new Set<ContextSubTab>(['prompt-cache', 'token-types']);
+
 /** Track the active sub-tab so we can restore it on re-render */
-let activeSubTab: 'config-quality' | 'context-mgmt' | 'prompt-cache' = 'config-quality';
+let activeSubTab: ContextSubTab = 'config-quality';
 
 /** Each Context Health render (a page, tab, range or filter change). A sub-tab's response, or the range check,
  *  for an older render is dropped, so it can't overwrite the tab that is now selected. */
@@ -40,10 +47,11 @@ let renderGeneration = 0;
 /** Track active range (days back) per sub-tab. Default 30 = 1 month. 0 = all time.
  *  Kept independent so context-mgmt's range filter (which auto-hides ranges
  *  with no token data) doesn't override the other tabs' selection. */
-const activeRangeDays: Record<'config-quality' | 'context-mgmt' | 'prompt-cache', number> = {
+const activeRangeDays: Record<ContextSubTab, number> = {
   'config-quality': 30,
   'context-mgmt': 30,
   'prompt-cache': 30,
+  'token-types': 30,
 };
 
 const ALL_RANGES: { days: number; label: string }[] = [
@@ -60,10 +68,11 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
   // Context Management analyze token-driven signals, so any range whose
   // nominal start lies before the cutoff is greyed out with an explanatory
   // tooltip. As time advances and post-cutoff data fills the longer ranges,
-  // the disabled buttons re-enable automatically. Prompt Cache is exempt: it
-  // shows cache tokens wherever a harness logged them, including Claude Code,
-  // OpenCode and Codex logs from before the cutoff.
-  const cutoffApplies = activeSubTab !== 'prompt-cache';
+  // the disabled buttons re-enable automatically. Prompt Cache and Token Types
+  // are exempt (CUTOFF_EXEMPT_TABS): they show cache tokens and token types
+  // wherever a harness logged them, including Claude Code, OpenCode and Codex
+  // logs from before the cutoff.
+  const cutoffApplies = !CUTOFF_EXEMPT_TABS.has(activeSubTab);
   function rangeStartDate(days: number): string {
     if (days === 0) return '0001-01-01';
     const d = new Date();
@@ -129,7 +138,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
         } else if (avail.sessionsWithRequestTokens === 0 && avail.harnessesWithoutRequestTokens.length > 0) {
           // Sessions exist, but none has per-request tokens or composition.
           const harnesses = avail.harnessesWithoutRequestTokens.join(', ');
-          emptyRangeMessage = `${harnesses} recorded neither per-request tokens nor prompt composition, which Context Management needs to chart utilization and composition. Try a different harness, or view consumption in the Output tab.`;
+          emptyRangeMessage = `These ${harnesses} sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization or composition. Try a different harness or a more recent range, or view consumption in the Output tab.`;
         } else {
           emptyRangeMessage = 'No per-request tokens or prompt composition available.';
         }
@@ -178,6 +187,7 @@ export async function renderConfigHealth(container: HTMLElement, currentFilter: 
       <button id="ctxSubTabConfig" class="ctx-sub-tab" data-tab="config-quality" style=${tabStyle(activeSubTab === 'config-quality')}>Context Quality</button>
       <button id="ctxSubTabMgmt" class="ctx-sub-tab" data-tab="context-mgmt" style=${tabStyle(activeSubTab === 'context-mgmt')}>Context Management</button>
       <button id="ctxSubTabCache" class="ctx-sub-tab" data-tab="prompt-cache" style=${tabStyle(activeSubTab === 'prompt-cache')}>Prompt Cache</button>
+      <button id="ctxSubTabTokenTypes" class="ctx-sub-tab" data-tab="token-types" style=${tabStyle(activeSubTab === 'token-types')}>Token Types</button>
     </div>
     <div class="cons-range-bar" id="ctxRangeBar" style="margin-top:12px;display:flex;align-items:center;gap:0;flex-wrap:wrap;">
       ${rangeButtons}
@@ -237,6 +247,8 @@ async function renderSubTab(contentEl: HTMLElement, effectiveFilter: DateFilter,
     await renderContextManagement(contentEl, effectiveFilter, isCurrent);
   } else if (activeSubTab === 'prompt-cache') {
     await renderPromptCache(contentEl, effectiveFilter, isCurrent);
+  } else if (activeSubTab === 'token-types') {
+    await renderTokenTypes(contentEl, effectiveFilter, isCurrent);
   } else {
     await renderConfigQuality(contentEl, effectiveFilter, isCurrent);
   }

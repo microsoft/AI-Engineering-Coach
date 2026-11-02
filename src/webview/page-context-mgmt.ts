@@ -19,6 +19,9 @@ import {
   renderSessionCompositionPanel,
 } from './context-composition-view';
 import { attachCompositionDrilldown } from './context-composition-drilldown';
+import { turnTooltipLines, utilizationSeries, utilizationSparkline, windowFootnote, windowNote, windowSourceHelp, windowTag } from './context-window-view';
+import { closeContextTimeline, renderContextTimeline } from './context-session-timeline';
+import { renderSessionStrip } from './token-types-view';
 
 const VERDICT_COLORS: Record<string, string> = {
   optimal: COLORS.green,
@@ -134,7 +137,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
   if (data.composition) {
     renderCompositionTrendChart(data.composition);
     const compositionSection = document.getElementById('ctxComposition');
-    if (compositionSection) attachCompositionDrilldown(compositionSection, currentFilter);
+    if (compositionSection) attachCompositionDrilldown(compositionSection, currentFilter, true);
   }
 
   function renderTrendChart(mode: 'avg' | 'workspace'): void {
@@ -334,6 +337,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
   function collapseInlineSessions(): void {
     destroyChartById('ctxSessionTokenChart');
     destroyChartById(SESSION_COMPOSITION_CHART_ID);
+    closeContextTimeline();
     expandedSessionIdx = null;
     for (const el of tableWrap.querySelectorAll('.ctx-session-inline')) el.remove();
   }
@@ -423,6 +427,7 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         if (existingChart) {
           destroyChartById('ctxSessionTokenChart');
           destroyChartById(SESSION_COMPOSITION_CHART_ID);
+          closeContextTimeline();
           existingChart.remove();
         }
         for (const button of headerTr.querySelectorAll('.ctx-session-expand')) button.setAttribute('aria-expanded', 'false');
@@ -449,14 +454,20 @@ export async function renderContextManagement(container: HTMLElement, currentFil
         render(html`<td colspan="10" style="padding:12px 16px;background:rgba(22,27,34,0.6);border-bottom:1px solid var(--border-color, #30363d);">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
             <span style="font-size:12px;font-weight:600;color:var(--text-primary,#c9d1d9);">${s.date} — ${s.harness}</span>
-            <span style="font-size:11px;color:var(--text-muted);">${s.requestCount} reqs, ${s.compactionCount} compactions${todoEvents.length > 0 ? ', ' + todoEvents.length + ' todo events' : ''}</span>
+            <span style="font-size:11px;color:var(--text-muted);">${s.requestCount} reqs, ${s.compactionCount} compactions${todoEvents.length > 0 ? ', ' + todoEvents.length + ' todo events' : ''}${windowNote(s)}</span>
           </div>
-          ${s.hasPerRequestTokens ? html`<div style="position:relative;height:226px;"><${CanvasEl} id=${chartId} height=${180} /></div>` : null}
+          ${s.hasCallTimeline ? html`<div class="ctx-tl-panel"></div>`
+            : s.hasPerRequestTokens ? html`<div style="position:relative;height:226px;"><${CanvasEl} id=${chartId} height=${180} /></div>` : null}
+          ${renderSessionStrip(s.tokenTypes)}
           ${renderSessionCompositionPanel(s)}
         </td>`, chartRow);
         targetRow.after(chartRow);
 
-        if (expandedSessionData && s.hasPerRequestTokens) {
+        // Copilot CLI and Copilot App sessions load their per-call timeline; others chart per request.
+        const timelinePanel = chartRow.querySelector<HTMLElement>('.ctx-tl-panel');
+        if (timelinePanel && expandedSessionData) {
+          renderContextTimeline(timelinePanel, s, expandedSessionData.thresholds);
+        } else if (expandedSessionData && s.hasPerRequestTokens) {
           renderSessionTokenChart(chartId, s, expandedSessionData.estimatedContextWindow ?? 1, expandedSessionData.thresholds);
         }
         renderSessionCompositionChart(s);
@@ -594,7 +605,7 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
     }
   }
 
-  const utilData = s.tokenCurve.map(t => t == null ? null : Math.round((t / ctxWindow) * 1000) / 10);
+  const utilData = utilizationSeries(s, ctxWindow);
   const queries = s.requestQueries;
 
   // Color-coded gradient fill (same green/yellow/red zones as trend chart)
@@ -667,6 +678,7 @@ function renderSessionTokenChart(chartId: string, s: SessionContextDetail, ctxWi
             const zone = val >= thresholds.limitedUtilization ? 'limited' : val >= thresholds.optimalUtilization ? 'degraded' : 'optimal';
             return `${val.toFixed(1)}% (${formatNum(tokens)} tokens) — ${zone}`;
           },
+          afterLabel: (item: { dataIndex: number }) => turnTooltipLines(s, item.dataIndex),
         },
       },
     },
@@ -732,7 +744,7 @@ function renderWorkspaceTable(workspaces: WorkspaceContextScore[], page: number,
                 <td style=${'text-align:center;padding:8px 6px;font-weight:700;color:' + sc + ';'}>${w.score}</td>
                 <td style="text-align:center;padding:8px 6px;"><span style=${'padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:' + vc + '22;color:' + vc + ';text-transform:capitalize;'}>${w.verdict}</span></td>
                 <td style="text-align:right;padding:8px 6px;">${formatNum(w.avgPromptTokens)}</td>
-                <td style="padding:8px 6px;">${utilBar(w.avgUtilization)}</td>
+                <td style="padding:8px 6px;" title=${windowSourceHelp(w.windowSource)}>${utilBar(w.avgUtilization)}${windowTag(w.windowSource)}</td>
                 <td style=${'text-align:center;padding:8px 6px;color:' + satColor + ';font-weight:' + (w.saturation > 10 ? '600' : '400') + ';'}>${w.saturation.toFixed(1)}%</td>
                 <td style=${'text-align:center;padding:8px 6px;' + (w.compactionCount > 0 ? 'color:' + COLORS.yellow + ';font-weight:600;' : '')}>${w.compactionCount}</td>
                 <td style="text-align:right;padding:8px 6px;">${w.sessionCount}</td>
@@ -741,6 +753,7 @@ function renderWorkspaceTable(workspaces: WorkspaceContextScore[], page: number,
         </tbody>
       </table>
     </div>
+    ${windowFootnote(workspaces)}
     ${totalPages > 1 ? html`
       <div style="display:flex;justify-content:center;gap:6px;margin:12px 0 4px;">
         ${Array.from({ length: totalPages }, (_, i) => {
@@ -792,11 +805,11 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
   const clickable = s.hasPerRequestTokens || s.composition != null;
   const cursorStyle = clickable ? 'cursor:pointer;' : 'cursor:default;opacity:0.85;';
   const sparklineContent = s.hasPerRequestTokens
-    ? renderSparkline(s.tokenCurve, s.contextWindow || ctxWindow, thresholds)
-    : html`<span style="color:var(--text-muted);font-size:10px;" title="Session-level data only — no per-turn breakdown available">—</span>`;
+    ? utilizationSparkline(s, ctxWindow, utilization => contextColor(utilization, thresholds))
+    : html`<span style="color:var(--text-muted);font-size:10px;" title="Session-level data only — no per-turn breakdown available (older Copilot CLI builds log usage only at session end)">—</span>`;
 
   const utilContent = s.hasPerRequestTokens
-    ? utilBar(s.avgUtilization)
+    ? html`<div title=${windowSourceHelp(s.windowSource)}>${utilBar(s.avgUtilization)}${windowTag(s.windowSource)}</div>`
     : html`<span style="color:var(--text-muted);" title="No per-turn token data">—</span>`;
   const satContent = s.hasPerRequestTokens
     ? html`<span style=${'color:' + satColor + ';font-weight:' + (s.saturation > 10 ? '600' : '400') + ';'}>${s.saturation.toFixed(1)}%</span>`
@@ -822,43 +835,4 @@ function renderSessionRow(s: SessionContextDetail, ctxWindow: number, idx: numbe
         ? html`<button type="button" class="ctx-session-expand" aria-expanded="false" aria-label=${`Show details for the ${s.harness} session on ${s.date}`}>${compositionMiniBar(s.composition, false)}</button>`
         : compositionMiniBar(s.composition)}</td>
     </tr>`;
-}
-
-/** Render an inline SVG sparkline showing token usage across a session's requests.
- *  Null entries (requests with no native token data) are bridged so the curve
- *  reads as continuous — gaps in source data shouldn't visually look like
- *  a request was made with zero tokens. */
-    function renderSparkline(tokenCurve: (number | null)[], ctxWindow: number, thresholds: ContextVerdictThresholds): ComponentChildren {
-  const validValues = tokenCurve.filter((v): v is number => v != null && v > 0);
-  if (validValues.length === 0) return html`<span style="color:var(--text-muted);">-</span>`;
-
-  const width = 80;
-  const height = 20;
-  const maxVal = Math.max(ctxWindow, ...validValues);
-  const step = tokenCurve.length > 1 ? width / (tokenCurve.length - 1) : 0;
-
-  // Project every non-null point to (x, y); skip nulls. Drawing a single
-  // polyline through these points bridges across gaps (Chart.js spanGaps
-  // equivalent) so the sparkline reads as a continuous trend.
-  const points: { x: number; y: number }[] = [];
-  for (const [i, v] of tokenCurve.entries()) {
-    if (v == null || v <= 0) continue;
-    const x = tokenCurve.length === 1 ? width / 2 : i * step;
-    const y = height - (v / maxVal) * height;
-    points.push({ x, y });
-  }
-  if (points.length === 0) return html`<span style="color:var(--text-muted);">-</span>`;
-
-  const peakUtil = (Math.max(...validValues) / ctxWindow) * 100;
-  const color = contextColor(peakUtil, thresholds);
-
-  const pointsStr = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const firstX = points[0].x;
-  const lastX = points[points.length - 1].x;
-  const fillPath = `M${firstX.toFixed(1)},${height} ${points.map(p => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')} L${lastX.toFixed(1)},${height} Z`;
-
-  return html`<svg width=${width} height=${height} style="vertical-align:middle;" title=${'Token usage across ' + validValues.length + ' of ' + tokenCurve.length + ' requests'}>
-    <path d=${fillPath} fill=${color} fill-opacity="0.15"/>
-    <polyline points=${pointsStr} fill="none" stroke=${color} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
-  </svg>`;
 }
