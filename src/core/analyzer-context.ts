@@ -23,6 +23,7 @@ import {
   SessionContextDetail,
   SessionRangeMatch,
   SessionTimelineEvent,
+  TodoItem,
   WorkspaceContextSessionsData,
 } from './types';
 import { toDateStr } from './helpers';
@@ -66,6 +67,13 @@ function compactionLabel(compaction: CompactionEvent): string {
 function withTokenTypes(session: Session): Pick<SessionContextDetail, 'tokenTypes'> {
   const tokenTypes = sessionTokenTypes(session);
   return tokenTypes ? { tokenTypes } : {};
+}
+
+/** A to-do item's first appearance in a snapshot, with its status when it was already in progress or completed, so
+ *  its band doesn't start as not started or stay open to the last request. */
+function todoAddEvent(item: TodoItem, requestIndex: number): SessionTimelineEvent {
+  const status = item.status === 'in-progress' || item.status === 'completed' ? item.status : undefined;
+  return { requestIndex, type: 'todo-add', label: item.title, ...(status ? { status } : {}) };
 }
 
 export class ContextAnalyzer extends AnalyzerBase {
@@ -162,7 +170,7 @@ export class ContextAnalyzer extends AnalyzerBase {
 
   /**
    * Per-request context-size series for a session: the prompt of each request's last model call
-   * (Copilot CLI and Codex: `contextUsage`; other harnesses: native `promptTokens`), `0` for a request
+   * (`contextUsage` when the harness logs per-call usage; VS Code: native `promptTokens`), `0` for a request
    * without native data. No token approximation (see helpers.ts).
    */
   private estimateSessionTokens(session: Session): number[] {
@@ -322,8 +330,8 @@ export class ContextAnalyzer extends AnalyzerBase {
     return sessionTokens.some(tokens => tokens > 0);
   }
 
-  /** Compute average input tokens per request from session-level modelUsage.
-   *  Returns 0 if no modelUsage data is available.
+  /** Compute average prompt tokens (uncached, read from and written to the cache) per request from
+   *  session-level modelUsage. Returns 0 if no modelUsage data is available.
    *  NOTE: This is the billing-total average, NOT the context window size.
    *  Used only to determine whether a session has *any* token data at all,
    *  not for utilization computation. */
@@ -331,7 +339,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     if (!session.modelUsage || session.requests.length === 0) return 0;
     let totalInput = 0;
     for (const usage of Object.values(session.modelUsage)) {
-      totalInput += usage.inputTokens + usage.cacheReadTokens;
+      totalInput += usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
     }
     return totalInput > 0 ? Math.round(totalInput / session.requests.length) : 0;
   }
@@ -796,7 +804,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     const currentSnapshot = new Map(snapshot.map(item => [item.id, item.status]));
     if (prevSnapshot == null) {
       for (const item of snapshot) {
-        events.push({ requestIndex, type: 'todo-add', label: item.title });
+        events.push(todoAddEvent(item, requestIndex));
       }
       return currentSnapshot;
     }
@@ -804,7 +812,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     for (const item of snapshot) {
       const previousStatus = prevSnapshot.get(item.id);
       if (previousStatus == null) {
-        events.push({ requestIndex, type: 'todo-add', label: item.title });
+        events.push(todoAddEvent(item, requestIndex));
         continue;
       }
       if (previousStatus !== item.status) {

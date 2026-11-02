@@ -5,19 +5,21 @@
 
 /* Context size and context window of requests and sessions, shared by the context analyzers.
  *
- * A request's context size is the prompt of its last model call. Copilot CLI, Copilot App and Codex
- * record it per turn (`contextUsage`); the other harnesses in `promptTokens`. The window is the limit
- * the harness reported for the turn when it logs one (`reported`); otherwise it's estimated from the
+ * A request's context size is the prompt of its last model call. Copilot CLI, Copilot App, Codex, Claude Code
+ * and OpenCode record it per turn (`contextUsage`); VS Code in `promptTokens`. The window is the limit
+ * the harness reported for the turn or for its model (VS Code) when it logs one (`reported`); otherwise it's estimated from the
  * largest prompt seen in the session's turns without a reported limit, peaks within a turn included and
  * rounded up (`estimated`), which overstates utilization near the top. */
 
 import type { CompactionEvent, ContextWindowSource, Session, SessionRequest } from './types';
 import { CONTEXT_WINDOW_DEFAULT } from './constants';
 
-/** Prompt tokens of the request's last model call; 0 when not recorded. */
+/** Prompt tokens of the request's last model call; 0 when not recorded, or when the turn made no call of its own
+ *  (`contextUsage.calls` 0: its prompt tokens are its sub-agents'). */
 export function requestContextTokens(request: SessionRequest): number {
-  const last = request.contextUsage?.lastPromptTokens;
-  if (last != null && last > 0) return last;
+  const usage = request.contextUsage;
+  if (usage && usage.lastPromptTokens > 0) return usage.lastPromptTokens;
+  if (usage?.calls === 0) return 0;
   return request.promptTokens != null && request.promptTokens > 0 ? request.promptTokens : 0;
 }
 
@@ -27,9 +29,10 @@ export function requestPeakTokens(request: SessionRequest): number {
   return Math.max(requestContextTokens(request), request.contextUsage?.peakPromptTokens ?? 0);
 }
 
-/** Context limit the harness reported for the request; `null` when it didn't report one. */
+/** Context limit the harness reported for the request: per call (`contextUsage`), else for its model (VS Code);
+ *  `null` when it didn't report one. */
 export function requestContextLimit(request: SessionRequest): number | null {
-  const limit = request.contextUsage?.contextLimit;
+  const limit = request.contextUsage?.contextLimit ?? request.modelContextLimit;
   return limit != null && limit > 0 ? limit : null;
 }
 
