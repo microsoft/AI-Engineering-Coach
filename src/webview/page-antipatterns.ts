@@ -1004,6 +1004,14 @@ function wireRulesSection(
     container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = '';
   });
 
+  // Edit Source -> open editor for the rule whose detail is shown. Bound once
+  // here because the button outlives each showRuleDetail call.
+  container.querySelector('#rule-edit-source-btn')?.addEventListener('click', () => {
+    const panel = container.querySelector<HTMLElement>('#rule-detail-panel');
+    const ruleId = panel ? getDatasetValue(panel, 'ruleId') : null;
+    if (ruleId) openRuleEditor(container, ruleId);
+  });
+
   // Unified Rule Editor
   wireRuleEditorModal(container, currentFilter, () => renderAntiPatterns(container, currentFilter));
 
@@ -1169,16 +1177,13 @@ function showRuleDetail(
   container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = 'none';
 
   const panel = container.querySelector<HTMLElement>('#rule-detail-panel')!;
+  panel.dataset.ruleId = ruleId;
   panel.style.display = '';
 
   const content = container.querySelector<HTMLElement>('#rule-detail-content')!;
   render(renderRuleDetailContent(rule, preview, ruleId), content);
 
   wireRuleThresholdInputs(content, ruleId, currentFilter);
-
-  container.querySelector('#rule-edit-source-btn')?.addEventListener('click', () => {
-    openRuleEditor(container, ruleId);
-  });
 
   wireRuleDetailExplainButtons(content, currentFilter);
 }
