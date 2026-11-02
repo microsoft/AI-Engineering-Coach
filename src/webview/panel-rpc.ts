@@ -26,6 +26,7 @@ import {
 import { runDetectors, runEmitters } from '../core/detector-registry';
 import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from '../core/rule-pipeline';
 import { parseRule, serializeRule } from '../core/rule-parser';
+import { ruleSummary } from '../core/rule-summary';
 import { getRuleLayerInfo, getPersonalRulesDir, getProjectRulesDir } from '../core/rule-loader';
 import { getPending } from '../core/rule-trust';
 import { spotlight } from '../core/spotlight';
@@ -625,9 +626,14 @@ examples: {{workspaceName}}: {{requestCount}} messages
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
 
 function cleanRuleMarkdown(raw: string): string {
-  let md = raw.trim();
-  // Strip outer code fences
-  md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+  let md = raw.replaceAll(/\r\n?/g, '\n').trim();
+  // Strip an outer code fence: one still open where the rule starts, at its front matter (or, without front
+  // matter, its first heading). Only then is the reply's last fence its closing one; otherwise the last fence
+  // closes the rule's detect block.
+  const fmStart = md.indexOf('---');
+  const ruleStart = fmStart >= 0 ? fmStart : Math.max(md.search(/^#/m), 0);
+  const fencesBefore = md.slice(0, ruleStart).split('\n').filter(line => line.startsWith('```')).length;
+  if (fencesBefore % 2 === 1) md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
   // Strip leading prose before the frontmatter
   const fmIdx = md.indexOf('---');
   if (fmIdx > 0) md = md.substring(fmIdx);
@@ -644,7 +650,7 @@ function validateRuleMarkdown(md: string): string[] {
     issues.push('Missing or invalid "group:" (must be one of: prompt-quality, session-hygiene, code-review, tool-mastery, context-management)');
   }
   if (!md.match(/^severity:\s*(low|medium|high)/m)) issues.push('Missing or invalid "severity:" (must be low, medium, or high)');
-  if (!md.match(/^scope:\s*(requests|sessions)/m)) issues.push('Missing or invalid "scope:" (must be requests or sessions)');
+  if (!md.match(/^scope:[ \t]*(['"]?)(requests|sessions|both)\1[ \t]*$/m)) issues.push('Missing or invalid "scope:" (must be requests, sessions, or both)');
   if (!md.includes('# Description')) issues.push('Missing "# Description" section');
   if (!md.includes('# When Triggered')) issues.push('Missing "# When Triggered" section');
   if (!md.includes('# How to Improve')) issues.push('Missing "# How to Improve" section');
@@ -807,6 +813,19 @@ const rpcHandlers: TypedRpcHandlers = {
     return a.getWorkspaceContextSessions(workspaceId, filter, params?.rangeMatch === 'requests' ? 'requests' : 'lastActivity');
   },
   getContextRangeAvailability: (a, _p, params) => a.getContextRangeAvailability(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
+  getPromptCache: (a, _p, params) => a.getPromptCache(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
+  getPromptCacheSessions: (a, _p, params) => {
+    const workspaceId = isString(params?.workspaceId) ? params.workspaceId : '';
+    if (!workspaceId) return { workspaceName: '', harness: null, sessions: [], total: 0 };
+    const harness = isString(params?.harness) && params.harness ? params.harness : undefined;
+    const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
+    return a.getPromptCacheSessions(workspaceId, harness, filter);
+  },
+  getSessionTimeline: (a, _p, params) => {
+    const sessionId = isString(params?.sessionId) ? params.sessionId : '';
+    return sessionId ? a.getSessionTimeline(sessionId) : null;
+  },
+  getTokenTypes: (a, _p, params) => a.getTokenTypes(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
   getCalendarActivity: (a, _p, params) => a.getCalendarActivity(validateDateFilter(params)),
   getProjectOverview: (a, _p, params) => a.getProjectOverview(validateDateFilter(params)),
   getImageGallery: (a, _p, params) => a.getImageGallery(validateDateFilter(params)),
@@ -841,9 +860,7 @@ const rpcHandlers: TypedRpcHandlers = {
       severity: r.severity,
       scope: r.scope,
       requiresIdeContext: r.requiresIdeContext,
-      description: r.descriptionTemplate
-        ? r.descriptionTemplate.replaceAll(/\{\{[^}]+\}\}/g, '...').substring(0, 200)
-        : r.name,
+      description: ruleSummary(r),
       descriptionTemplate: r.descriptionTemplate,
       suggestionTemplate: r.suggestionTemplate,
       exampleTemplate: r.exampleTemplate,

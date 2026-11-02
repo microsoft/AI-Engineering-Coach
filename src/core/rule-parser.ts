@@ -43,7 +43,9 @@
  * ```
  */
 
+import { defaultRuleDescription } from './rule-summary';
 import { DetectionRule, RuleCondition, RuleSeverity, RuleScope, PracticeGroup, PRACTICE_GROUPS  } from './types';
+import { formatInlineList, quoteScalar, readQuotedScalar, splitInlineList } from './frontmatter-values';
 
 interface ParsedFrontmatter {
   id: string;
@@ -64,12 +66,21 @@ interface ParsedFrontmatter {
   requires?: string[];
 }
 
+/**
+ * A front matter value with its quotes and escapes processed (see frontmatter-values.ts). A value that
+ * isn't one closed quoted scalar is read as before: one quote is stripped from each end.
+ */
+function parseScalar(raw: string): string {
+  const text = raw.trim();
+  return readQuotedScalar(text) ?? text.replaceAll(/^['"]|['"]$/g, '');
+}
+
 function parseNestedValue(line: string, nestedObj: Record<string, number | string | string[]>): void {
   const colonIdx = line.indexOf(':');
   const k = line.substring(0, colonIdx).trim();
   const v = line.substring(colonIdx + 1).trim();
   if (v.startsWith('[') && v.endsWith(']')) {
-    nestedObj[k] = v.slice(1, -1).split(',').map(s => s.trim().replaceAll(/^['"]|['"]$/g, ''));
+    nestedObj[k] = splitInlineList(v.slice(1, -1)).map(item => parseScalar(item));
     return;
   }
   const num = Number.parseFloat(v);
@@ -77,18 +88,18 @@ function parseNestedValue(line: string, nestedObj: Record<string, number | strin
     nestedObj[k] = num;
     return;
   }
-  nestedObj[k] = v.replaceAll(/^['"]|['"]$/g, '');
+  nestedObj[k] = parseScalar(v);
 }
 
 function parseTopLevelValue(value: string): unknown {
   if (value.startsWith('[') && value.endsWith(']')) {
-    return value.slice(1, -1).split(',').map(s => s.trim().replaceAll(/^['"]|['"]$/g, ''));
+    return splitInlineList(value.slice(1, -1)).map(item => parseScalar(item));
   }
   if (value === 'true') return true;
   if (value === 'false') return false;
   const num = Number.parseFloat(value);
   if (!Number.isNaN(num) && String(num) === value) return num;
-  return value.replaceAll(/^['"]|['"]$/g, '');
+  return parseScalar(value);
 }
 
 function parseFrontmatter(raw: string): { frontmatter: ParsedFrontmatter; body: string } | null {
@@ -345,7 +356,7 @@ export function parseRule(markdown: string): DetectionRule | null {
     severity: fm.severity as RuleSeverity,
     requiresIdeContext: fm.requiresIdeContext ?? false,
     scope,
-    description: description || `Detects ${fm.name.toLowerCase()} patterns.`,
+    description: description || defaultRuleDescription(fm.name),
     descriptionTemplate: descriptionTemplate || '{{count}} occurrences detected.',
     suggestionTemplate: suggestionTemplate || 'Review your practices.',
     exampleTemplate: exampleTemplate || '',
@@ -402,7 +413,7 @@ export function serializeRule(rule: DetectionRule): string {
   lines.push(`scope: ${rule.scope}`);
   if (rule.requiresIdeContext) lines.push(`requiresIdeContext: true`);
   lines.push(`version: ${rule.version}`);
-  if (rule.tags.length > 0) lines.push(`tags: [${rule.tags.join(', ')}]`);
+  if (rule.tags.length > 0) lines.push(`tags: ${formatInlineList(rule.tags)}`);
   if (rule.extendsRule) lines.push(`extends: ${rule.extendsRule}`);
   if (Object.keys(rule.thresholds).length > 0) {
     lines.push('thresholds:');
@@ -413,13 +424,13 @@ export function serializeRule(rule: DetectionRule): string {
   if (Object.keys(rule.patterns).length > 0) {
     lines.push('patterns:');
     for (const [k, v] of Object.entries(rule.patterns)) {
-      lines.push(`  ${k}: [${v.map(s => `"${s}"`).join(', ')}]`);
+      lines.push(`  ${k}: [${v.map(s => quoteScalar(s)).join(', ')}]`);
     }
   }
   if (Object.keys(rule.fileTypes).length > 0) {
     lines.push('fileTypes:');
     for (const [k, v] of Object.entries(rule.fileTypes)) {
-      lines.push(`  ${k}: [${v.join(', ')}]`);
+      lines.push(`  ${k}: ${formatInlineList(v)}`);
     }
   }
   lines.push('---');

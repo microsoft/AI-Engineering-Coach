@@ -270,6 +270,23 @@ describe('Codex data source (no native tokens)', () => {
 
 /* ── Mixed harness end-to-end ────────────────────────────────────── */
 
+describe('session-level usage totals', () => {
+  it('counts a session whose session-level prompt tokens were all written to the cache', () => {
+    const withTokens = sess({
+      sessionId: 's-tokens', harness: 'GitHub Copilot CLI', workspaceId: 'ws-cli', workspaceName: 'cli-project',
+      requests: flatTokenRequests(5, 50_000),
+    });
+    const totalsOnly: Session = {
+      ...sess({
+        sessionId: 's-totals', harness: 'GitHub Copilot CLI', workspaceId: 'ws-cli', workspaceName: 'cli-project',
+        requests: [req({ requestId: 'r-totals', timestamp: BASE_TS + 3_600_000 })],
+      }),
+      modelUsage: { 'claude-opus-5.5': { inputTokens: 0, outputTokens: 900, cacheReadTokens: 0, cacheWriteTokens: 40_000 } },
+    };
+    expect(getCtxMgmt([withTokens, totalsOnly]).sessionsWithTokenData).toBe(2);
+  });
+});
+
 describe('mixed harness end-to-end', () => {
   it('combines VS Code + Claude + Codex sessions correctly', () => {
     const sessions = [
@@ -1251,6 +1268,19 @@ describe('getContextRangeAvailability', () => {
     expect(out.rangesWithTokens).toEqual([30, 365]);
     expect(out.sessionsWithRequestTokens).toBe(1);
     expect(out.harnessesWithoutRequestTokens).toEqual(['GitHub Copilot CLI']);
+  });
+
+  it('counts a Copilot CLI turn with per-turn context and composition as token data', () => {
+    const sessions = [sess({ harness: 'GitHub Copilot CLI', requests: [
+      req({
+        requestId: 'r1', promptTokens: null, timestamp: NOW - 60 * DAY, promptComposition: cliComposition({ toolDefinitions: 10, conversation: 90 }),
+        contextUsage: { lastPromptTokens: 150_000, peakPromptTokens: 150_000, contextLimit: 968_000, calls: 3 },
+      }),
+    ] })];
+    const out = new Analyzer(sessions).getContextRangeAvailability({ harness: 'GitHub Copilot CLI' });
+    expect(out.rangesWithTokens).toEqual([90]);
+    expect(out.sessionsWithRequestTokens).toBe(1);
+    expect(out.harnessesWithoutRequestTokens).toEqual([]);
   });
 
   it('ignores composition the card cannot show', () => {

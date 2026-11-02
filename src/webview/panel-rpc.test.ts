@@ -8,7 +8,7 @@ import { Analyzer } from '../core/analyzer';
 import { createSession, createRequest } from '../core/parser-shared';
 import { detectCuriosity } from '../core/curiosity';
 import type { ParseResult } from '../core/cache';
-import type { WorkspaceContextSessionsData } from '../core/types';
+import type { PromptCacheData, PromptCacheSessionsData, SessionTimelineData, TokenTypesData, WorkspaceContextSessionsData } from '../core/types';
 import { loadSessionImages } from '../core/session-image-loader';
 import { generateRuleMarkdown, getRpcHandler, validateDateFilter, type RuleFeedback } from './panel-rpc';
 
@@ -31,6 +31,50 @@ describe('panel-rpc', () => {
   it('exposes handlers for the newer analyzer-backed methods', () => {
     expect(getRpcHandler('getInsights')).toBeTypeOf('function');
     expect(getRpcHandler('getWorkspaceContextSessions')).toBeTypeOf('function');
+    expect(getRpcHandler('getPromptCache')).toBeTypeOf('function');
+    expect(getRpcHandler('getPromptCacheSessions')).toBeTypeOf('function');
+    expect(getRpcHandler('getSessionTimeline')).toBeTypeOf('function');
+  });
+
+  it('validates Prompt Cache params and serves session timelines from memory', () => {
+    const promptCache = { rows: [{ stream: 'main' as const, model: 'claude-opus-5.5', calls: 3, input: 90_000, cacheRead: 80_000, cacheWrite: 10_000 }] };
+    const session = createSession({
+      sessionId: 'app', workspaceId: 'ws', workspaceName: 'Project', harness: 'GitHub Copilot App',
+      requests: [createRequest({ timestamp: new Date(2026, 9, 1, 12).getTime(), messageText: 'Fix it', responseText: 'Done', promptCache })],
+      promptCache: { breaks: [] },
+    });
+    const analyzer = new Analyzer([session], new Map());
+    const parsed: ParseResult = { sessions: [session], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    const call = (method: 'getPromptCache' | 'getPromptCacheSessions' | 'getSessionTimeline', params: unknown) => getRpcHandler(method)!(analyzer, parsed, params as never);
+
+    expect((call('getPromptCache', { filter: { fromDate: '2026-10-01', toDate: '2026-10-01' } }) as PromptCacheData).harnesses[0].all?.hitPct).toBe(88.9);
+    expect((call('getPromptCache', { filter: { fromDate: '2026-10-02' } }) as PromptCacheData).harnesses).toEqual([]);
+    expect(call('getPromptCacheSessions', { filter: {} })).toEqual({ workspaceName: '', harness: null, sessions: [], total: 0 });
+    expect((call('getPromptCacheSessions', { workspaceId: 'ws', harness: 'GitHub Copilot App' }) as PromptCacheSessionsData).sessions.map(s => s.sessionId)).toEqual(['app']);
+    expect((call('getPromptCacheSessions', { workspaceId: 'ws', harness: 'Claude' }) as PromptCacheSessionsData).total).toBe(0);
+    expect((call('getSessionTimeline', { sessionId: 'app' }) as SessionTimelineData).unit).toBe('requests');
+    expect(call('getSessionTimeline', { sessionId: 42 })).toBeNull();
+    expect(call('getSessionTimeline', { sessionId: 'missing' })).toBeNull();
+  });
+
+  it('serves Token Types for the requested range, with Copilot App row data and its sub-agents', () => {
+    const promptCache = { rows: [{ stream: 'main' as const, model: 'claude-opus-5.5', calls: 4, reasoningEffort: 'high', input: 400_000, cacheRead: 380_000, cacheWrite: 20_000, outputTokens: 8_000, reasoningTokens: 4_800, truncatedCalls: 1, filteredCalls: 0, ttftMs: [3_000, 3_400], durationMs: [8_000, 9_000] }] };
+    const subagentRuns = [{ agentType: 'research' as const, model: 'claude-sonnet-5', mode: 'background' as const, totalTokens: 100_000, toolCalls: 12, durationMs: 60_000, cancelled: false }];
+    const session = createSession({
+      sessionId: 'app', workspaceId: 'ws', workspaceName: 'Project', harness: 'GitHub Copilot App',
+      requests: [createRequest({ timestamp: new Date(2026, 9, 1, 12).getTime(), messageText: 'Fix it', responseText: 'Done', promptCache, subagentRuns })],
+    });
+    const analyzer = new Analyzer([session], new Map());
+    const parsed: ParseResult = { sessions: [session], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    expect(getRpcHandler('getTokenTypes')).toBeTypeOf('function');
+    const call = (params: unknown) => getRpcHandler('getTokenTypes')!(analyzer, parsed, params as never) as TokenTypesData;
+
+    const [source] = call({ filter: { fromDate: '2026-10-01', toDate: '2026-10-01' } }).sources;
+    expect(source).toMatchObject({ source: 'copilot-cli', label: 'Copilot App', requests: 1 });
+    expect(source.reasoning?.main?.sharePct).toBe(60);
+    expect(source.truncation).toEqual({ calls: 4, truncatedCalls: 1, filteredCalls: 0 });
+    expect(source.subagents?.shareOfAllTokensPct).toBe(19.7);
+    expect(call({ filter: { fromDate: '2026-10-02' } }).sources).toEqual([]);
   });
 
   it('matches workspace sessions by request overlap only when the caller asks for it', () => {
@@ -212,6 +256,72 @@ describe('generateRuleMarkdown', () => {
     await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: 'final reply' });
     expect(ask).toHaveBeenCalledTimes(3);
     expect(ask.mock.calls[2][0]?.reply).toBe('draft two');
+  });
+
+  it('accepts a reply with CRLF line endings and returns it with LF', async () => {
+    const ask = asker().mockResolvedValueOnce(VALID_RULE.replaceAll('\n', '\r\n'));
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['scope: both', 'scope: "both"'])('accepts %s', async scope => {
+    const rule = VALID_RULE.replace('scope: sessions', scope);
+    const ask = asker().mockResolvedValueOnce(rule);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: rule });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again when the scope only starts with an allowed one', async () => {
+    const ask = asker()
+      .mockResolvedValueOnce(VALID_RULE.replace('scope: sessions', 'scope: both requests and sessions'))
+      .mockResolvedValueOnce(VALID_RULE);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: VALID_RULE });
+    expect(ask.mock.calls[1][0]?.issues).toContain('Missing or invalid "scope:" (must be requests, sessions, or both)');
+  });
+});
+
+/** A rule that ends with its detect block, as the generator prompt asks for. */
+const RULE_ENDING_WITH_DETECT = [
+  '---', 'id: long-sessions', 'name: Long sessions', 'group: session-hygiene', 'severity: medium', 'scope: sessions', '---', '',
+  '# Description', 'Sessions that run for too long.', '',
+  '# When Triggered', '{{count}} long sessions.', '',
+  '# How to Improve', 'Start a new chat for each task.', '',
+  '# Detection Logic', '```detect', 'scan: sessions', 'match: requestCount > 50', 'check: count >= 1', '```',
+].join('\n');
+
+describe('generateRuleMarkdown fences', () => {
+  it('keeps the closing fence of a rule that ends with its detect block', async () => {
+    const ask = asker().mockResolvedValueOnce(`${RULE_ENDING_WITH_DETECT}\n`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['an outer fence', '```markdown\n', '\n```\n'],
+    ['an outer fence without a language', '```\n', '\n```'],
+    ['prose and an outer fence', 'Here is the rule:\n\n```md\n', '\n```'],
+    ['a closed example and an outer fence', 'For example:\n```\nscan: requests\n```\nThe rule:\n```markdown\n', '\n```'],
+  ])('strips %s around the rule', async (_name, before, after) => {
+    const ask = asker().mockResolvedValueOnce(`${before}${RULE_ENDING_WITH_DETECT}${after}`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+
+  it('keeps the closing fence of a rule after a closed example in the prose', async () => {
+    const ask = asker().mockResolvedValueOnce(`For example:\n\`\`\`\nscan: requests\n\`\`\`\n\n${RULE_ENDING_WITH_DETECT}`);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: RULE_ENDING_WITH_DETECT });
+  });
+
+  it('strips an outer fence around a rule without front matter', async () => {
+    const body = RULE_ENDING_WITH_DETECT.slice(RULE_ENDING_WITH_DETECT.indexOf('# Description'));
+    const ask = asker().mockResolvedValue(`\`\`\`markdown\n${body}\n\`\`\``);
+
+    await expect(generateRuleMarkdown(ask)).resolves.toEqual({ markdown: body });
   });
 });
 

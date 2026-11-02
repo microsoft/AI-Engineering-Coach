@@ -9,6 +9,7 @@ import { DateFilter } from '../core/types';
 import { rpc } from './shared';
 import { html, render, type ComponentChildren } from './render';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
+import { activeThresholdLines, hasDetectionLogic, mergeRuleMarkdown, normalizeLineEndings, readRuleFields, sourceOnlyFields, TEXT_SECTION_FIELDS, type RuleFormField, type RuleFormFields } from './rule-form-markdown';
 
 const RULE_EDITOR_SYSTEM_PROMPT = `You are an expert at writing detection rules for the AI Engineer Coach VS Code extension.
 Rules are markdown files with YAML frontmatter and a Detection Logic block using a custom DSL.
@@ -17,13 +18,15 @@ ${DSL_CHEATSHEET}
 
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
 
-export function parseThresholdsFromMarkdown(md: string): Record<string, number> {
+const NO_DETECTION_LOGIC = 'This rule has no detection logic, so it would match everything. Add a detect block with a match: or check: line under Detection Logic first.';
+
+/** Reads the sliders' thresholds from the `thresholds:` block that the rule parser and the form use. */
+export function parseThresholdsFromMarkdown(markdown: string): Record<string, number> {
   const result: Record<string, number> = {};
-  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return result;
-  const threshMatch = fmMatch[1].match(/thresholds:\n((?:\s{2,}\S.*\n?)*)/);
-  if (!threshMatch) return result;
-  for (const line of threshMatch[1].split('\n')) {
+  const md = normalizeLineEndings(markdown);
+  const active = activeThresholdLines(md);
+  if (!active) return result;
+  for (const line of md.split('\n').slice(active.start, active.end)) {
     const m = line.match(/^\s+(\w+):\s*([-\d.]+)\s*$/);
     if (m) {
       const n = Number.parseFloat(m[2]);
@@ -33,9 +36,12 @@ export function parseThresholdsFromMarkdown(md: string): Record<string, number> 
   return result;
 }
 
+/** Sets the sliders' values in the block parseThresholdsFromMarkdown reads, and keeps the rest of the markdown. */
 export function applyThresholdOverrides(md: string, overrides: Record<string, number>): string {
-  return md.replace(/(thresholds:\n)((?:\s{2,}\S.*\n?)*)/, (_full, head: string, body: string) => {
-    const newBody = body.replaceAll(/^(\s+)(\w+):[ \t]*([-\d.]+)[ \t]*$/gm, (line, indent: string, key: string, _val: string) => {
+  const lines = normalizeLineEndings(md).split('\n');
+  const { start, end } = activeThresholdLines(md) ?? { start: 0, end: 0 };
+  for (let at = start; at < end; at++) {
+    lines[at] = lines[at].replace(/^(\s+)(\w+):[ \t]*([-\d.]+)[ \t]*$/, (line, indent: string, key: string) => {
       if (overrides[key] !== undefined) {
         const v = overrides[key];
         const formatted = Number.isInteger(v) ? String(v) : String(Math.round(v * 1000) / 1000);
@@ -43,8 +49,8 @@ export function applyThresholdOverrides(md: string, overrides: Record<string, nu
       }
       return line;
     });
-    return head + newBody;
-  });
+  }
+  return lines.join('\n');
 }
 
 function sliderRange(value: number): { min: number; max: number; step: number } {
@@ -73,106 +79,156 @@ function buildThresholdSliders(thresholds: Record<string, number>, overrides: Re
   return html`<div class="rule-test-sliders"><div class="rule-test-sliders-title">Tune thresholds (live)</div>${rows}</div>`;
 }
 
-function formToMarkdown(c: HTMLElement): string {
-  const val = (id: string) => (c.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement)?.value?.trim() || '';
-  const thresholds = val('rf-thresholds').split('\n').filter(l => l.includes(':')).map(l => '  ' + l.trim()).join('\n');
-  const tags = val('rf-tags').split(',').map(t => t.trim()).filter(Boolean);
-  const patternsRaw = val('rf-patterns');
-  const fileTypesRaw = val('rf-filetypes');
-  const extraFm = val('rf-extra-fm');
-  return `---
-id: ${val('rf-id') || 'my-custom-rule'}
-name: ${val('rf-name') || 'My Custom Rule'}
-group: ${val('rf-group')}
-severity: ${val('rf-severity')}
-scope: ${val('rf-scope')}
-version: ${val('rf-version') || '1'}
-tags: [${tags.join(', ')}]
-${thresholds ? `thresholds:\n${thresholds}` : 'thresholds: {}'}
-${patternsRaw ? `patterns:\n${patternsRaw}` : ''}${fileTypesRaw ? `\nfileTypes:\n${fileTypesRaw}` : ''}${extraFm ? `\n${extraFm}` : ''}
----
-
-# Description
-${val('rf-description') || 'Describe what this rule detects.'}
-
-# When Triggered
-${val('rf-when-triggered') || '{{count}} occurrences detected ({{pct}} of requests).'}
-
-# How to Improve
-${val('rf-how-to-improve') || 'Explain how to fix this anti-pattern.'}
-
-# Examples
-${val('rf-examples') || '"{{message}}..."'}
-
-# Detection Logic
-\`\`\`detect
-${val('rf-detect') || 'scan: requests\nmatch: messageLength > 0\naggregate: count\ncheck: count >= 1'}
-\`\`\`
-`;
+/**
+ * Wires the sliders a test drew: moving one reruns the test with its value. The next test's render reuses these
+ * sliders, so this replaces their handlers rather than adding to them.
+ */
+function wireThresholdSliders(results: HTMLElement, overrides: Record<string, number>, rerun: (next: Record<string, number>) => void): void {
+  for (const slider of results.querySelectorAll<HTMLInputElement>('.rule-threshold-slider')) {
+    const valSpan = results.querySelector<HTMLElement>(`[data-threshold-value="${slider.dataset.key}"]`);
+    slider.oninput = () => {
+      if (valSpan) valSpan.textContent = slider.value;
+    };
+    slider.onchange = () => {
+      const key = slider.dataset.key;
+      if (!key) return;
+      rerun({ ...overrides, [key]: Number.parseFloat(slider.value) });
+    };
+  }
 }
 
-function markdownToForm(c: HTMLElement, md: string): void {
-  const set = (id: string, v: string) => {
-    const el = c.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-    if (el) el.value = v;
-  };
-  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
-  if (fmMatch) {
-    const fm = fmMatch[1];
-    const field = (key: string) => {
-      const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-      return m ? m[1].trim() : '';
-    };
-    set('rf-id', field('id'));
-    set('rf-name', field('name'));
-    set('rf-group', field('group'));
-    set('rf-severity', field('severity'));
-    set('rf-scope', field('scope'));
-    set('rf-version', field('version') || '1');
-    const tagsMatch = field('tags');
-    const tags = tagsMatch.replaceAll(/^\[|\]$/g, '').split(',').map(t => t.trim()).filter(Boolean);
-    set('rf-tags', tags.join(', '));
-    const threshMatch = fm.match(/thresholds:\n((?:\s{2,}\S.*\n?)*)/);
-    if (threshMatch) {
-      set('rf-thresholds', threshMatch[1].replaceAll(/^ {2}/gm, '').trim());
-    } else {
-      set('rf-thresholds', '');
-    }
-    const patternsMatch = fm.match(/patterns:\n((?:\s{2,}\S.*\n?)*)/);
-    set('rf-patterns', patternsMatch ? patternsMatch[1].trim().replaceAll(/^/gm, '  ') : '');
-    const fileTypesMatch = fm.match(/fileTypes:\n((?:\s{2,}\S.*\n?)*)/);
-    set('rf-filetypes', fileTypesMatch ? fileTypesMatch[1].trim().replaceAll(/^/gm, '  ') : '');
-    const extraFmParts: string[] = [];
-    const reqIdeMatch = fm.match(/^requiresIdeContext:\s*(.+)$/m);
-    if (reqIdeMatch) extraFmParts.push(`requiresIdeContext: ${reqIdeMatch[1].trim()}`);
-    const extendsMatch = fm.match(/^extends:\s*(.+)$/m);
-    if (extendsMatch) extraFmParts.push(`extends: ${extendsMatch[1].trim()}`);
-    set('rf-extra-fm', extraFmParts.join('\n'));
+type FieldInput = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+const FIELD_INPUTS: Record<RuleFormField, string> = {
+  id: 'rf-id',
+  name: 'rf-name',
+  group: 'rf-group',
+  severity: 'rf-severity',
+  scope: 'rf-scope',
+  version: 'rf-version',
+  tags: 'rf-tags',
+  thresholds: 'rf-thresholds',
+  description: 'rf-description',
+  whenTriggered: 'rf-when-triggered',
+  howToImprove: 'rf-how-to-improve',
+  examples: 'rf-examples',
+  detect: 'rf-detect',
+};
+const FORM_FIELDS = Object.keys(FIELD_INPUTS) as RuleFormField[];
+
+/** What the form was loaded from: the rule markdown, and the form's values then. */
+const loadedRules = new WeakMap<HTMLElement, { markdown: string; fields: RuleFormFields }>();
+/** Forms opened for a new rule: until a rule or draft is loaded, an empty Detection Logic gets the template's. */
+const newRuleForms = new WeakSet<HTMLElement>();
+
+/**
+ * The editor last opened in each container. `formRuleId` is the rule whose source the form holds: '' for a new rule,
+ * unset until an existing rule's source loads. Opening or closing the editor replaces it, so an answer that arrives
+ * for an earlier editor is dropped.
+ */
+interface EditorSession { formRuleId?: string }
+const editorSessions = new WeakMap<HTMLElement, EditorSession>();
+
+function isOpenEditor(container: HTMLElement, session: EditorSession | undefined): boolean {
+  return session !== undefined && editorSessions.get(container) === session;
+}
+
+/** Save and Test act only on a form that holds the source of the rule Save writes. */
+function formHoldsSavedRule(container: HTMLElement): boolean {
+  const ruleId = container.querySelector<HTMLElement>('#rule-editor-modal')?.dataset.ruleId ?? '';
+  return editorSessions.get(container)?.formRuleId === ruleId;
+}
+
+function enableSaveAndTest(container: HTMLElement, enabled: boolean): void {
+  for (const id of ['rule-editor-save', 'rule-editor-test']) {
+    const button = container.querySelector<HTMLButtonElement>(`#${id}`);
+    if (button) button.disabled = !enabled;
   }
-  const section = (heading: string) => {
-    const re = new RegExp(`# ${heading}\\n([\\s\\S]*?)(?=\\n# |$)`);
-    const m = md.match(re);
-    return m ? m[1].trim() : '';
-  };
-  set('rf-description', section('Description'));
-  set('rf-when-triggered', section('When Triggered'));
-  set('rf-how-to-improve', section('How to Improve'));
-  const exSection = section('Examples');
-  const exClean = exSection.replaceAll(/```detect[\s\S]*?```/g, '').trim();
-  set('rf-examples', exClean);
-  const detectMatch = md.match(/```detect\n([\s\S]*?)```/);
-  set('rf-detect', detectMatch ? detectMatch[1].trim() : '');
+}
+
+function closeRuleEditor(container: HTMLElement): void {
+  const modal = container.querySelector<HTMLElement>('#rule-editor-modal');
+  if (modal) modal.style.display = 'none';
+  editorSessions.delete(container);
+}
+
+/** Fills the form with the rule's source when it arrives, unless the editor was closed or reopened meanwhile. */
+function loadRuleSource(container: HTMLElement, session: EditorSession, ruleId: string): void {
+  rpc<{ source: string }>('getRuleSource', { ruleId }).then(res => {
+    if (!isOpenEditor(container, session)) return;
+    // The extension answers an empty source for a rule it doesn't have (any more).
+    if (!res.source.trim()) throw new Error(`No rule "${ruleId}" was found.`);
+    markdownToForm(container, res.source);
+    session.formRuleId = ruleId;
+    enableSaveAndTest(container, true);
+  }).catch((err: unknown) => {
+    const results = container.querySelector<HTMLElement>('#rule-test-results');
+    if (!isOpenEditor(container, session) || !results) return;
+    results.style.display = '';
+    results.className = 'rule-test-results rule-test-error';
+    render(html`<strong>Error:</strong> This rule's source didn't load, so it can't be tested or saved: ${err instanceof Error ? err.message : String(err)}`, results);
+  });
+}
+
+function readForm(c: HTMLElement): RuleFormFields {
+  const fields = {} as RuleFormFields;
+  for (const field of FORM_FIELDS) fields[field] = c.querySelector<FieldInput>(`#${FIELD_INPUTS[field]}`)?.value.trim() ?? '';
+  return fields;
+}
+
+const SOURCE_ONLY_HINT = 'This section starts inside the detect block, so edit it in the Source tab.';
+
+/** Makes the given text sections read-only, with a hint: the form shows them but doesn't write them. */
+function lockSourceOnlyFields(c: HTMLElement, sourceOnly: ReadonlySet<RuleFormField>): void {
+  for (const field of TEXT_SECTION_FIELDS) {
+    const input = c.querySelector<HTMLTextAreaElement>(`#${FIELD_INPUTS[field]}`);
+    if (!input) continue;
+    input.readOnly = sourceOnly.has(field);
+    if (input.readOnly) input.title = SOURCE_ONLY_HINT;
+    else input.removeAttribute('title');
+  }
+}
+
+/** Fills the form from rule markdown, and keeps that markdown as the Source text that formToMarkdown edits. */
+export function markdownToForm(c: HTMLElement, markdown: string): void {
+  const fields = readRuleFields(markdown);
+  for (const field of FORM_FIELDS) {
+    const input = c.querySelector<FieldInput>(`#${FIELD_INPUTS[field]}`);
+    const value = fields[field];
+    if (input && value !== undefined) input.value = value;
+  }
+  lockSourceOnlyFields(c, sourceOnlyFields(markdown));
+  loadedRules.set(c, { markdown, fields: readForm(c) });
+  newRuleForms.delete(c);
+  const source = c.querySelector<HTMLTextAreaElement>('#rule-editor-raw');
+  if (source) source.value = markdown;
+}
+
+/**
+ * Builds rule markdown from the form. A new rule gets the whole template; a loaded rule gets the fields changed
+ * since it was loaded written into its Source text (or, without a Source view, into the markdown it was loaded
+ * from), so everything the form doesn't show is kept. With its Source text deleted, a loaded rule is rebuilt from
+ * the form, without the template's detect logic.
+ */
+export function formToMarkdown(c: HTMLElement): string {
+  const loaded = loadedRules.get(c);
+  const source = c.querySelector<HTMLTextAreaElement>('#rule-editor-raw')?.value ?? loaded?.markdown ?? '';
+  const base = source.trim() ? source : '';
+  const fields = readForm(c);
+  const changed = FORM_FIELDS.filter(field => !base || fields[field] !== loaded?.fields[field]);
+  return mergeRuleMarkdown(base, fields, new Set(changed), newRuleForms.has(c));
 }
 
 export function openRuleEditor(container: HTMLElement, existingRuleId: string | null, markdown?: string): void {
   const modal = container.querySelector<HTMLElement>('#rule-editor-modal')!;
   const title = container.querySelector<HTMLElement>('#rule-editor-modal-title')!;
+  const session: EditorSession = {};
+  editorSessions.set(container, session);
   modal.dataset.ruleId = existingRuleId || '';
   title.textContent = existingRuleId ? 'Edit Rule' : 'New Rule';
 
   const fields = ['rf-id', 'rf-name', 'rf-tags', 'rf-description', 'rf-when-triggered',
-    'rf-how-to-improve', 'rf-examples', 'rf-thresholds', 'rf-detect',
-    'rf-patterns', 'rf-filetypes', 'rf-extra-fm'];
+    'rf-how-to-improve', 'rf-examples', 'rf-thresholds', 'rf-detect', 'rule-editor-raw'];
   for (const id of fields) {
     const el = container.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement;
     if (el) el.value = '';
@@ -185,18 +241,24 @@ export function openRuleEditor(container: HTMLElement, existingRuleId: string | 
   container.querySelector<HTMLElement>('#rule-ai-status')!.style.display = 'none';
   const testResults = container.querySelector<HTMLElement>('#rule-test-results');
   if (testResults) { testResults.style.display = 'none'; render(null, testResults); }
+  // A test or generation still running for an earlier editor no longer updates these buttons.
+  const testButton = container.querySelector<HTMLButtonElement>('#rule-editor-test');
+  if (testButton) testButton.textContent = 'Test Rule';
+  const generateButton = container.querySelector<HTMLButtonElement>('#rule-ai-generate');
+  if (generateButton) { generateButton.disabled = false; generateButton.textContent = 'Generate'; }
 
+  if (existingRuleId || markdown) newRuleForms.delete(container);
+  else newRuleForms.add(container);
+  lockSourceOnlyFields(container, new Set());
   if (markdown) {
     markdownToForm(container, markdown);
-    (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = markdown;
+    session.formRuleId = existingRuleId || '';
   } else if (existingRuleId) {
-    rpc<{ source: string }>('getRuleSource', { ruleId: existingRuleId }).then(res => {
-      markdownToForm(container, res.source);
-      (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = res.source;
-    }).catch(() => {});
+    loadRuleSource(container, session, existingRuleId);
   } else {
-    (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = '';
+    session.formRuleId = '';
   }
+  enableSaveAndTest(container, session.formRuleId !== undefined);
 
   switchEditorTab(container, 'form');
   modal.style.display = 'flex';
@@ -211,7 +273,7 @@ function switchEditorTab(container: HTMLElement, tab: 'form' | 'source'): void {
     formPanel.style.display = '';
     sourcePanel.style.display = 'none';
   } else {
-    (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = formToMarkdown(container);
+    markdownToForm(container, formToMarkdown(container));
     formPanel.style.display = 'none';
     sourcePanel.style.display = '';
   }
@@ -219,17 +281,19 @@ function switchEditorTab(container: HTMLElement, tab: 'form' | 'source'): void {
 
 /**
  * Wire the rule editor modal's event handlers. `onSaved` is invoked after a
- * successful save so the caller can re-render the parent view.
+ * successful save so the caller can re-render the parent view, which renders
+ * into the same elements: aborting `signal` removes these handlers first.
  */
 export function wireRuleEditorModal(
   container: HTMLElement,
   currentFilter: DateFilter,
   onSaved: () => Promise<void> | void,
+  signal: AbortSignal,
 ): void {
   const modal = container.querySelector<HTMLElement>('#rule-editor-modal')!;
 
-  container.querySelector('#rule-editor-close')?.addEventListener('click', () => { modal.style.display = 'none'; });
-  container.querySelector('#rule-editor-cancel')?.addEventListener('click', () => { modal.style.display = 'none'; });
+  container.querySelector('#rule-editor-close')?.addEventListener('click', () => { closeRuleEditor(container); }, { signal });
+  container.querySelector('#rule-editor-cancel')?.addEventListener('click', () => { closeRuleEditor(container); }, { signal });
 
   for (const tab of container.querySelectorAll('.rule-editor-tab')) {
     tab.addEventListener('click', () => {
@@ -239,11 +303,13 @@ export function wireRuleEditorModal(
         if (raw.trim()) markdownToForm(container, raw);
       }
       switchEditorTab(container, t);
-    });
+    }, { signal });
   }
 
   container.querySelector('#rule-editor-save')?.addEventListener('click', () => {
     void (async () => {
+      if (!formHoldsSavedRule(container)) return;
+      const session = editorSessions.get(container);
       const activeTab = container.querySelector('.rule-editor-tab.active') as HTMLElement;
       let markdown: string;
       if (activeTab?.dataset.editorTab === 'source') {
@@ -252,18 +318,24 @@ export function wireRuleEditorModal(
         markdown = formToMarkdown(container);
       }
       if (!markdown.trim()) return;
+      if (!hasDetectionLogic(markdown)) {
+        alert(`Failed to save: ${NO_DETECTION_LOGIC}`);
+        return;
+      }
       const ruleId = modal.dataset.ruleId || undefined;
       try {
         await rpc<{ ok: boolean }>('saveRule', { markdown, ruleId });
-        modal.style.display = 'none';
+        if (isOpenEditor(container, session)) closeRuleEditor(container);
         await onSaved();
       } catch (err: unknown) {
         alert('Failed to save: ' + (err instanceof Error ? err.message : String(err)));
       }
     })();
-  });
+  }, { signal });
 
   const runTest = async (overrides?: Record<string, number>) => {
+    if (!formHoldsSavedRule(container)) return;
+    const session = editorSessions.get(container);
     const activeTab = container.querySelector('.rule-editor-tab.active') as HTMLElement;
     let markdown: string;
     if (activeTab?.dataset.editorTab === 'source') {
@@ -272,9 +344,17 @@ export function wireRuleEditorModal(
       markdown = formToMarkdown(container);
     }
     if (!markdown.trim()) return;
+    if (!hasDetectionLogic(markdown)) {
+      const results = container.querySelector<HTMLElement>('#rule-test-results')!;
+      results.style.display = '';
+      results.className = 'rule-test-results rule-test-error';
+      render(html`<strong>Error:</strong> ${NO_DETECTION_LOGIC}`, results);
+      return;
+    }
 
-    if (overrides && Object.keys(overrides).length > 0) {
-      markdown = applyThresholdOverrides(markdown, overrides);
+    const sliderOverrides = overrides ?? {};
+    if (Object.keys(sliderOverrides).length > 0) {
+      markdown = applyThresholdOverrides(markdown, sliderOverrides);
     }
 
     const testBtn = container.querySelector('#rule-editor-test') as HTMLButtonElement;
@@ -295,9 +375,10 @@ export function wireRuleEditorModal(
         pct: string; severity: string; description: string; suggestion: string;
         examples: string[]; error?: string;
       }>('testRuleLive', { markdown, filter: currentFilter as Record<string, unknown> });
+      if (!isOpenEditor(container, session)) return;
 
       const thresholds = parseThresholdsFromMarkdown(markdown);
-      const slidersVNode = buildThresholdSliders(thresholds, overrides || {});
+      const slidersVNode = buildThresholdSliders(thresholds, sliderOverrides);
 
       let bodyVNode: ComponentChildren;
       let className: string;
@@ -317,32 +398,22 @@ export function wireRuleEditorModal(
       }
       resultsDiv.className = className;
       render(html`${slidersVNode}<div class="rule-test-body">${bodyVNode}</div>`, resultsDiv);
-
-      for (const slider of resultsDiv.querySelectorAll<HTMLInputElement>('.rule-threshold-slider')) {
-        const valSpan = resultsDiv.querySelector<HTMLElement>(`[data-threshold-value="${slider.dataset.key}"]`);
-        slider.addEventListener('input', () => {
-          if (valSpan) valSpan.textContent = slider.value;
-        });
-        slider.addEventListener('change', () => {
-          const key = slider.dataset.key;
-          if (!key) return;
-          const next: Record<string, number> = { ...(overrides || {}) };
-          next[key] = Number.parseFloat(slider.value);
-          void runTest(next);
-        });
-      }
+      wireThresholdSliders(resultsDiv, sliderOverrides, next => { void runTest(next); });
     } catch (err: unknown) {
+      if (!isOpenEditor(container, session)) return;
       resultsDiv.className = 'rule-test-results rule-test-error';
       render(html`<strong>Error:</strong> ${err instanceof Error ? err.message : String(err)}`, resultsDiv);
     } finally {
-      testBtn.disabled = false;
-      testBtn.textContent = 'Test Rule';
+      if (isOpenEditor(container, session)) {
+        testBtn.disabled = false;
+        testBtn.textContent = 'Test Rule';
+      }
     }
   };
 
   container.querySelector('#rule-editor-test')?.addEventListener('click', () => {
     void runTest();
-  });
+  }, { signal });
 
   const aiBtn = container.querySelector('#rule-ai-generate') as HTMLButtonElement;
   const aiInput = container.querySelector('#rule-ai-input') as HTMLInputElement;
@@ -351,6 +422,7 @@ export function wireRuleEditorModal(
   const doGenerate = async () => {
     const prompt = aiInput.value.trim();
     if (!prompt) return;
+    const session = editorSessions.get(container);
     aiBtn.disabled = true;
     aiBtn.textContent = 'Generating...';
     aiStatus.style.display = '';
@@ -358,9 +430,9 @@ export function wireRuleEditorModal(
     aiStatus.textContent = 'AI is generating your rule...';
     try {
       const result = await rpc<{ markdown: string }>('generateRule', { prompt });
+      if (!isOpenEditor(container, session)) return;
       const md = result.markdown;
       markdownToForm(container, md);
-      (container.querySelector('#rule-editor-raw') as HTMLTextAreaElement).value = md;
       const idField = container.querySelector('#rf-id') as HTMLInputElement;
       if (!idField.value) {
         idField.value = prompt.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, '').substring(0, 40);
@@ -369,30 +441,33 @@ export function wireRuleEditorModal(
       aiStatus.textContent = 'Rule generated. Review and edit the fields below, then save.';
       switchEditorTab(container, 'form');
     } catch (err: unknown) {
+      if (!isOpenEditor(container, session)) return;
       aiStatus.className = 'rule-ai-status rule-ai-status-error';
       aiStatus.textContent = 'Failed: ' + (err instanceof Error ? err.message : String(err));
     } finally {
-      aiBtn.disabled = false;
-      aiBtn.textContent = 'Generate';
+      if (isOpenEditor(container, session)) {
+        aiBtn.disabled = false;
+        aiBtn.textContent = 'Generate';
+      }
     }
   };
   aiBtn?.addEventListener('click', () => {
     void doGenerate();
-  });
+  }, { signal });
   aiInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       void doGenerate();
     }
-  });
+  }, { signal });
 
   container.querySelector('#rule-ai-prompt-info')?.addEventListener('click', () => {
     const promptModal = container.querySelector<HTMLElement>('#rule-ai-prompt-modal')!;
     const view = container.querySelector('#rule-ai-prompt-view')!;
     view.textContent = RULE_EDITOR_SYSTEM_PROMPT;
     promptModal.style.display = 'flex';
-  });
+  }, { signal });
   container.querySelector('#rule-ai-prompt-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-ai-prompt-modal')!.style.display = 'none';
-  });
+  }, { signal });
 }
