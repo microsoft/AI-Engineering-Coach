@@ -74,9 +74,9 @@ function firstStringProperty(value: Record<string, unknown>, ...keys: string[]):
 
 export function resolveWorkspaceRoot(id: string, ws: Workspace): string | null {
   if (id.startsWith('claude-')) {
-    // `ws.path` is normally the project root already, as it is for the other
-    // CLI harnesses. Fall back to reading `cwd` out of a session file for
-    // workspaces whose path still points at ~/.claude/projects/<encoded>.
+    // `ws.path` is the session's cwd when that folder still exists, as for the
+    // other CLI harnesses; otherwise addSession falls back to ~/.claude/projects.
+    // Keep the session-file lookup for paths that point into the session store.
     if (isProjectRoot(ws.path)) return ws.path;
     return resolveClaudeRoot(ws.path);
   }
@@ -94,7 +94,14 @@ function isProjectRoot(p: string): boolean {
   } catch {
     return false;
   }
-  return path.basename(path.dirname(p)) !== 'projects' || !path.dirname(p).includes('.claude');
+  return !isClaudeSessionStore(p);
+}
+
+/** `~/.claude/projects` itself, or one `<encoded>` folder inside it. */
+function isClaudeSessionStore(p: string): boolean {
+  const dir = path.resolve(p);
+  const isStoreRoot = (d: string) => path.basename(d) === 'projects' && path.basename(path.dirname(d)) === '.claude';
+  return isStoreRoot(dir) || isStoreRoot(path.dirname(dir));
 }
 
 function resolveVsCodeRoot(storagePath: string): string | null {
