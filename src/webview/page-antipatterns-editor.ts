@@ -366,7 +366,7 @@ export function wireRuleEditorModal(
     const existingSliders = resultsDiv.querySelector('.rule-test-sliders')?.outerHTML || '';
     if (!existingSliders) {
       resultsDiv.className = 'rule-test-results rule-test-loading';
-      resultsDiv.textContent = 'Running rule against your data...';
+      render('Running rule against your data...', resultsDiv);
     }
 
     try {
