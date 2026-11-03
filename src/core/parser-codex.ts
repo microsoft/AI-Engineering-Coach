@@ -662,7 +662,7 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
     meta.sessionId = stringValue(payload.id) || meta.sessionId;
     meta.cwd = stringValue(payload.cwd) || meta.cwd;
     meta.source = stringValue(payload.source) || meta.source;
-    meta.nonHumanKind ??= codexSessionNonHumanKind(payload.source);
+    meta.nonHumanKind ??= codexSessionNonHumanKind(payload.source, payload.originator);
   }
   if (line.type === 'turn_context' && !meta.model) {
     meta.model = stringValue(line.payload?.model);

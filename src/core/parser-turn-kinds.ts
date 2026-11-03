@@ -229,6 +229,12 @@ interface ClaudeTurnLine {
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
+  /** Who sent the line: `{ kind: "human" }` on a typed prompt, `task-notification` or `peer` for other senders. */
+  origin?: unknown;
+  /** `sdk` on a prompt sent through the SDK (`claude -p`) rather than typed. */
+  promptSource?: unknown;
+  turnOrigin?: unknown;
+  version?: unknown;
   message?: { content?: unknown };
 }
 
@@ -246,6 +252,8 @@ function claudeText(line: ClaudeTurnLine): string {
 const CLAUDE_TYPED_COMMAND = /^<command-(?:name|message)>/;
 /** Output of `!` shell commands and local commands, which Claude logs as user lines. */
 const CLAUDE_COMMAND_OUTPUT = /^<(?:bash-stdout|bash-stderr|local-command-stdout|local-command-stderr)>/;
+/** A `!` shell command the user typed. */
+const CLAUDE_TYPED_SHELL = /^<bash-input>/;
 
 /** True when the nearest earlier user line, before any assistant line, is a typed slash command. */
 function expandsTypedCommand(lines: readonly ClaudeTurnLine[], index: number): boolean {
@@ -257,31 +265,89 @@ function expandsTypedCommand(lines: readonly ClaudeTurnLine[], index: number): b
   return false;
 }
 
+/** The `<system-reminder>` blocks Claude adds to a turn. */
+const CLAUDE_REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+
+/** True when the text is only `<system-reminder>` blocks. */
+function onlyReminders(start: string): boolean {
+  return start.startsWith('<system-reminder>') && start.replace(CLAUDE_REMINDER, '').trim() === '';
+}
+
+function claudeOriginKind(line: ClaudeTurnLine): string {
+  return isRecord(line.origin) ? text(line.origin.kind) : '';
+}
+
+/** Compares dotted version numbers; a missing part counts as 0. */
+function compareVersions(a: string, b: string): number {
+  const left = a.split('.').map(part => parseInt(part, 10) || 0);
+  const right = b.split('.').map(part => parseInt(part, 10) || 0);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/** The earliest Claude Code version in a transcript that wrote `origin` on a user line, if any did. Lines that
+ *  version or later without `origin` were not typed. */
+export function claudeOriginSince(lines: readonly ClaudeTurnLine[]): string | undefined {
+  let since: string | undefined;
+  for (const line of lines) {
+    if (line.type !== 'user' || !isRecord(line.origin) || typeof line.version !== 'string') continue;
+    if (since === undefined || compareVersions(line.version, since) < 0) since = line.version;
+  }
+  return since;
+}
+
+/** True when the line comes from a build that writes `origin` on every typed prompt: it has the `turnOrigin` or
+ *  `promptSource` those builds write, or the transcript wrote `origin` from an earlier or the same version. */
+function writesOrigin(line: ClaudeTurnLine, originSince: string | undefined): boolean {
+  if (typeof line.turnOrigin === 'string' || typeof line.promptSource === 'string') return true;
+  if (originSince === undefined) return false;
+  return typeof line.version !== 'string' || compareVersions(line.version, originSince) >= 0;
+}
+
 /**
  * Claude marks sub-agent transcripts `isSidechain` (and `parseClaudeSessionFile` marks every turn of a file under
  * `subagents/`, with or without that field), the turn that replays a compacted conversation
  * `isCompactSummary`, and lines it wrote itself `isMeta` (the local-command caveat, skill bodies). A typed prompt
  * command is the exception: Claude logs the `<command-name>` line, then the expanded prompt as an `isMeta` line,
  * which is the user's turn. Background task results arrive as `<task-notification>` lines.
+ *
+ * Newer builds also write `origin` on user lines: `human` for a typed prompt, `task-notification` and `peer` for
+ * other senders. From the first build that writes it (`originSince`, see `claudeOriginSince`), a line without it was
+ * not typed: a prompt sent through the SDK (`promptSource: "sdk"`, as `claude -p` from a script) or one the harness
+ * sent, such as a scheduled run. Older logs keep the rules above.
  */
-export function claudeNonHumanKind(lines: readonly ClaudeTurnLine[], index: number): NonHumanKind | undefined {
+export function claudeNonHumanKind(lines: readonly ClaudeTurnLine[], index: number, originSince?: string): NonHumanKind | undefined {
   const line = lines[index];
   if (line.isSidechain) return 'subagent';
   if (line.isCompactSummary) return 'compaction';
   const start = claudeText(line).trimStart();
-  if (start.startsWith('<task-notification>')) return 'system';
+  const origin = claudeOriginKind(line);
+  if (origin === 'task-notification' || start.startsWith('<task-notification>')) return 'system';
   if (CLAUDE_COMMAND_OUTPUT.test(start)) return 'output';
-  if (line.isMeta && !expandsTypedCommand(lines, index)) return 'meta';
+  if (origin === 'peer') return 'relayed';
+  if (origin && origin !== 'human') return 'system';
+  const expandsCommand = expandsTypedCommand(lines, index);
+  if (line.isMeta && !expandsCommand) return 'meta';
+  if (onlyReminders(start)) return 'meta';
+  if (!origin && !expandsCommand && !CLAUDE_TYPED_SHELL.test(start) && writesOrigin(line, originSince)) {
+    return line.promptSource === 'sdk' || line.turnOrigin === 'sdk' ? 'scripted' : 'system';
+  }
   return undefined;
 }
 
 /* ---- Codex rollout files ---- */
 
 /** `session_meta.source` is `{ subagent: … }` for review, compact and spawned threads, and `{ internal: … }` for
- *  internal sessions; their prompts come from the parent agent. `cli`, `vscode`, `exec` and `mcp` don't say who typed. */
-export function codexSessionNonHumanKind(source: unknown): NonHumanKind | undefined {
+ *  internal sessions; their prompts come from the parent agent. `exec` (originator `codex_exec`) is a
+ *  non-interactive `codex exec` run, which scripts and other agents start. `cli`, `vscode` and `mcp` don't say who
+ *  typed. */
+export function codexSessionNonHumanKind(source: unknown, originator?: unknown): NonHumanKind | undefined {
   if (isRecord(source) && ('subagent' in source || 'internal' in source)) return 'subagent';
   if (/^(?:subagent|internal)(?:_|$)/i.test(text(source))) return 'subagent';
+  if (/^exec$/i.test(text(source)) || /^codex_exec$/i.test(text(originator))) return 'scripted';
   return undefined;
 }
 
