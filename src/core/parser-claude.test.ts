@@ -646,3 +646,41 @@ describe('parseClaudeSessions', () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 });
+
+describe('parseClaudeSessions: each transcript and turn counted once', () => {
+  function withProjects(files: Record<string, object[]>, run: (projectsDir: string) => void): void {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-parser-test-'));
+    const projectsDir = path.join(root, 'projects');
+    for (const [relative, lines] of Object.entries(files)) {
+      const file = path.join(projectsDir, ...relative.split('/'));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+    }
+    try { run(projectsDir); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
+  it('parses a transcript hard-linked into two project folders once, from its working folder', () => {
+    withProjects({
+      '-Users-me-proj/s1.jsonl': [makeUser('Why?', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 's1' }), makeAssistant('Because.')],
+      '-Users-me-notes/s1/subagents/agent-a.jsonl': [makeUser('Find it.', '2025-06-15T10:00:05Z', { uuid: 'sub1', sessionId: 's1' }), makeAssistant('Found.')],
+    }, projectsDir => {
+      fs.linkSync(path.join(projectsDir, '-Users-me-proj', 's1.jsonl'), path.join(projectsDir, '-Users-me-notes', 's1.jsonl'));
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.workspaceId, session.sessionId])).toEqual([['claude--Users-me-proj', 's1']]);
+      expect(sessions[0].requests.map(request => [request.userEventId, request.nonHumanKind])).toEqual([['u1', undefined], ['sub1', 'subagent']]);
+    });
+  });
+
+  it('counts a turn replayed into a resumed transcript once', () => {
+    withProjects({
+      '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
+      '-Users-me-proj/b.jsonl': [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'b' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:00Z', { uuid: 'u2', sessionId: 'b' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const requests = parseClaudeSessions(projectsDir).flatMap(result => result.sessions).flatMap(session => session.requests);
+      expect(requests.map(request => request.userEventId).sort()).toEqual(['u1', 'u2']);
+    });
+  });
+});

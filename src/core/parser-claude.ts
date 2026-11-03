@@ -555,11 +555,104 @@ function projectNameFromEncoded(encoded: string, _projectsDir: string): string {
   return path.basename(resolved);
 }
 
+/**
+ * What to leave out across project folders. A transcript can be hard-linked into a second project folder, and Claude
+ * replays earlier turns, with the same `uuid`, into a resumed or forked transcript; each is counted once.
+ */
+interface ClaudeDiscovery {
+  /** Top-level transcripts to skip: hard links of one parsed from another project folder. */
+  skipFiles: Set<string>;
+  /** `subagents/` folders beside skipped transcripts, by the project folder and session id they merge into. */
+  extraSubagentDirs: Map<string, string[]>;
+  /** User line uuids already counted. */
+  seenTurns: Set<string>;
+}
+
+function discoveryKey(dirName: string, sessionName: string): string {
+  return `${dirName}\0${sessionName}`;
+}
+
+/** The project folder name Claude Code uses for a working folder: every character but a letter or digit becomes `-`. */
+function encodeClaudeProjectDir(cwd: string): string {
+  return cwd.replaceAll(/[^A-Za-z0-9]/g, '-');
+}
+
+/** The first `cwd` a transcript records. */
+function readClaudeCwd(filePath: string): string | undefined {
+  let cwd: string | undefined;
+  let read = 0;
+  forEachJsonlLine(filePath, raw => {
+    read++;
+    if (!raw.includes('"cwd"')) return;
+    const line = parseClaudeLine(raw);
+    if (line?.cwd) cwd = line.cwd;
+  }, () => cwd !== undefined || read >= 200);
+  return cwd;
+}
+
+/**
+ * Finds transcripts that are one file under two project folders (the same device and inode). The copy in the folder
+ * Claude Code would use for the transcript's working folder is parsed, or the first by folder name; the others are
+ * skipped, and their `subagents/` folders merge into the parsed copy's session.
+ */
+function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
+  const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), seenTurns: new Set() };
+  const byFile = new Map<string, { dirName: string; filePath: string }[]>();
+  for (const dirName of [...dirNames].sort()) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(projectsDir, dirName), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      const filePath = path.join(projectsDir, dirName, entry.name);
+      let key: string;
+      try {
+        const stat = fs.statSync(filePath);
+        key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
+      } catch {
+        continue;
+      }
+      const copies = byFile.get(key) ?? [];
+      copies.push({ dirName, filePath });
+      byFile.set(key, copies);
+    }
+  }
+  for (const copies of byFile.values()) {
+    if (copies.length < 2) continue;
+    const cwd = readClaudeCwd(copies[0].filePath);
+    const kept = copies.find(copy => cwd !== undefined && copy.dirName === encodeClaudeProjectDir(cwd)) ?? copies[0];
+    for (const copy of copies) {
+      if (copy === kept) continue;
+      discovery.skipFiles.add(copy.filePath);
+      const sessionName = path.basename(copy.filePath, '.jsonl');
+      const key = discoveryKey(kept.dirName, sessionName);
+      const dirs = discovery.extraSubagentDirs.get(key) ?? [];
+      dirs.push(path.join(path.dirname(copy.filePath), sessionName, 'subagents'));
+      discovery.extraSubagentDirs.set(key, dirs);
+    }
+  }
+  return discovery;
+}
+
+/** Leaves out the requests whose user line was already counted, and records the rest. */
+function dropSeenTurns(session: Session, seenTurns: Set<string>): void {
+  session.requests = session.requests.filter(request => {
+    if (!request.userEventId) return true;
+    if (seenTurns.has(request.userEventId)) return false;
+    seenTurns.add(request.userEventId);
+    return true;
+  });
+}
+
 function parseClaudeProjectSessions(
   projectsDir: string,
   dirName: string,
   editLocIndex?: EditLocIndex,
   sessionSourceIndex?: Map<string, SessionSource>,
+  discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), seenTurns: new Set() },
 ): { sessions: Session[]; workspaceId: string; workspaceName: string } | null {
   const projPath = path.join(projectsDir, dirName);
   const workspaceId = `claude-${dirName}`;
@@ -578,11 +671,18 @@ function parseClaudeProjectSessions(
   const sessionsById = new Map<string, Session>();
   const sessions: Session[] = [];
   const sessionFiles = new Map<string, string[]>();
+  const skippedSessions = new Set<string>();
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const filePath = path.join(projPath, entry.name);
+    if (discovery.skipFiles.has(filePath)) {
+      skippedSessions.add(path.basename(entry.name, '.jsonl'));
+      continue;
+    }
     const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
+    dropSeenTurns(session, discovery.seenTurns);
+    if (session.requests.length === 0) continue;
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
     sessionFiles.set(session.sessionId, [filePath]);
@@ -594,65 +694,80 @@ function parseClaudeProjectSessions(
   // session. Orphans (subagent dir whose parent session is missing) become
   // standalone programmatic sessions — they're still GHCP-spawned work.
   // Either way, every call in the file is sub-agent work, marked or not.
+  // The folders beside a skipped hard-linked transcript merge into its parsed copy instead.
+  const subagentDirs = new Map<string, string[]>();
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const subagentDir = path.join(projPath, entry.name, 'subagents');
-    let subagentEntries: fs.Dirent[];
-    try {
-      subagentEntries = fs.readdirSync(subagentDir, { withFileTypes: true });
-    } catch {
-      continue; // no subagents/ folder under this session — fine
-    }
+    if (!entry.isDirectory() || skippedSessions.has(entry.name)) continue;
+    subagentDirs.set(entry.name, [path.join(projPath, entry.name, 'subagents')]);
+  }
+  const prefix = discoveryKey(dirName, '');
+  for (const [key, dirs] of discovery.extraSubagentDirs) {
+    if (!key.startsWith(prefix)) continue;
+    const sessionName = key.slice(prefix.length);
+    subagentDirs.set(sessionName, [...(subagentDirs.get(sessionName) ?? []), ...dirs]);
+  }
 
-    const parent = sessionsById.get(entry.name);
+  for (const [sessionName, dirs] of subagentDirs) {
+    const parent = sessionsById.get(sessionName);
     const orphanRequests: SessionRequest[] = [];
     let orphanFirstTs: number | null = null;
     let orphanLastTs: number | null = null;
     let orphanEntrypoint: string | undefined;
 
-    for (const subEntry of subagentEntries) {
-      if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
-      const filePath = path.join(subagentDir, subEntry.name);
-      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
-      if (!subSession) continue;
-      const sourceId = parent?.sessionId ?? entry.name;
-      const files = sessionFiles.get(sourceId) ?? [];
-      files.push(filePath);
-      sessionFiles.set(sourceId, files);
+    for (const subagentDir of dirs) {
+      let subagentEntries: fs.Dirent[];
+      try {
+        subagentEntries = fs.readdirSync(subagentDir, { withFileTypes: true });
+      } catch {
+        continue; // no subagents/ folder under this session — fine
+      }
 
-      if (parent) {
-        // Merge subagent requests into parent. Sorting happens after all
-        // subagents are collected, below.
-        for (const r of subSession.requests) parent.requests.push(r);
-        // Extend parent's last-message timestamp if the subagent ran longer.
-        if (subSession.lastMessageDate &&
-            (!parent.lastMessageDate || subSession.lastMessageDate > parent.lastMessageDate)) {
-          parent.lastMessageDate = subSession.lastMessageDate;
+      for (const subEntry of subagentEntries) {
+        if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
+        const filePath = path.join(subagentDir, subEntry.name);
+        const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
+        if (!subSession) continue;
+        dropSeenTurns(subSession, discovery.seenTurns);
+        if (subSession.requests.length === 0) continue;
+        const sourceId = parent?.sessionId ?? sessionName;
+        const files = sessionFiles.get(sourceId) ?? [];
+        files.push(filePath);
+        sessionFiles.set(sourceId, files);
+
+        if (parent) {
+          // Merge subagent requests into parent. Sorting happens after all
+          // subagents are collected, below.
+          for (const r of subSession.requests) parent.requests.push(r);
+          // Extend parent's last-message timestamp if the subagent ran longer.
+          if (subSession.lastMessageDate &&
+              (!parent.lastMessageDate || subSession.lastMessageDate > parent.lastMessageDate)) {
+            parent.lastMessageDate = subSession.lastMessageDate;
+          }
+        } else {
+          for (const r of subSession.requests) orphanRequests.push(r);
+          if (subSession.creationDate &&
+              (!orphanFirstTs || subSession.creationDate < orphanFirstTs)) {
+            orphanFirstTs = subSession.creationDate;
+          }
+          if (subSession.lastMessageDate &&
+              (!orphanLastTs || subSession.lastMessageDate > orphanLastTs)) {
+            orphanLastTs = subSession.lastMessageDate;
+          }
+          if (!orphanEntrypoint && subSession.entrypoint) orphanEntrypoint = subSession.entrypoint;
         }
-      } else {
-        for (const r of subSession.requests) orphanRequests.push(r);
-        if (subSession.creationDate &&
-            (!orphanFirstTs || subSession.creationDate < orphanFirstTs)) {
-          orphanFirstTs = subSession.creationDate;
-        }
-        if (subSession.lastMessageDate &&
-            (!orphanLastTs || subSession.lastMessageDate > orphanLastTs)) {
-          orphanLastTs = subSession.lastMessageDate;
-        }
-        if (!orphanEntrypoint && subSession.entrypoint) orphanEntrypoint = subSession.entrypoint;
       }
     }
 
     if (parent) continue;
 
     if (orphanRequests.length > 0) {
-      warnCore('parser-claude', `subagent dir without parent session: ${entry.name}`, {
+      warnCore('parser-claude', `subagent dir without parent session: ${sessionName}`, {
         requestCount: orphanRequests.length,
       });
       orphanRequests.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
       const launcherKind: 'interactive' | 'programmatic' = 'programmatic';
       const orphan = createSession({
-        sessionId: entry.name,
+        sessionId: sessionName,
         workspaceId,
         workspaceName,
         location: 'terminal',
@@ -705,8 +820,9 @@ export function parseClaudeSessions(
     return results;
   }
 
+  const discovery = planClaudeDiscovery(projectsDir, projectDirs.map(dir => dir.name));
   for (const projDir of projectDirs) {
-    const result = parseClaudeProjectSessions(projectsDir, projDir.name, editLocIndex, sessionSourceIndex);
+    const result = parseClaudeProjectSessions(projectsDir, projDir.name, editLocIndex, sessionSourceIndex, discovery);
     if (result) results.push(result);
   }
 
@@ -730,13 +846,14 @@ export async function parseClaudeSessionsAsync(
     return results;
   }
 
+  const discovery = planClaudeDiscovery(projectsDir, projectDirs);
   for (let i = 0; i < projectDirs.length; i++) {
     const dirName = projectDirs[i];
     const workspaceName = projectNameFromEncoded(dirName, projectsDir);
 
     if (onProject) onProject(i + 1, projectDirs.length, workspaceName);
 
-    const result = parseClaudeProjectSessions(projectsDir, dirName, editLocIndex, sessionSourceIndex);
+    const result = parseClaudeProjectSessions(projectsDir, dirName, editLocIndex, sessionSourceIndex, discovery);
     if (result) results.push(result);
 
     // Yield every 5 projects so the event loop stays responsive
