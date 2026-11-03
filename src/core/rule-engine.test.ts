@@ -3,10 +3,15 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AntiPattern, DetectionRule, DetectorEmission, PracticeGroup, Session, SessionRequest } from './types';
 
 let ruleEngine: typeof import('./rule-engine');
+
+const RULES_DIR = join(__dirname, 'rules');
+const BUILTIN_RULE_FILES = readdirSync(RULES_DIR).filter(f => f.endsWith('.md'));
 
 interface RuleOptions {
   id?: string;
@@ -400,6 +405,78 @@ describe('rule-engine', () => {
 
     it('returns null for a missing rule', () => {
       expect(ruleEngine.updateRuleThresholds('missing-rule', { maxRatio: 0.5 })).toBeNull();
+    });
+
+    it.each(BUILTIN_RULE_FILES)('keeps %s byte-identical after a same-value edit', file => {
+      const markdown = readFileSync(join(RULES_DIR, file), 'utf8');
+      const id = file.replace(/\.md$/, '');
+      ruleEngine.registerBuiltinRuleSource(id, markdown);
+      const original = ruleEngine.getRule(id)!;
+      expect(original).toBeDefined();
+
+      for (const [key, value] of Object.entries(original.thresholds)) {
+        const updated = ruleEngine.updateRuleThresholds(id, { [key]: value });
+        expect(updated?.rawSource).toBe(markdown);
+      }
+      expect(ruleEngine.getRuleSource(id)).toBe(markdown);
+      expect(ruleEngine.getRule(id)).toMatchObject({
+        conditions: original.conditions,
+        thresholds: original.thresholds,
+        tests: original.tests,
+      });
+    });
+
+    it('changes only the edited threshold line and keeps tests and the detect block', () => {
+      const markdown = readFileSync(join(RULES_DIR, 'lazy-prompting.md'), 'utf8');
+      ruleEngine.registerBuiltinRuleSource('lazy-prompting', markdown);
+      const original = ruleEngine.getRule('lazy-prompting')!;
+      const [key, value] = Object.entries(original.thresholds)[0];
+
+      const updated = ruleEngine.updateRuleThresholds('lazy-prompting', { [key]: value + 7 })!;
+
+      const before = markdown.split('\n');
+      const after = updated.rawSource.split('\n');
+      expect(after).toHaveLength(before.length);
+      const changed = before.flatMap((line, i) => (line === after[i] ? [] : [i]));
+      expect(changed).toHaveLength(1);
+      expect(after[changed[0]]).toBe(before[changed[0]].replace(String(value), String(value + 7)));
+      expect(updated.rawSource).toContain('# Tests');
+      expect(updated.thresholds[key]).toBe(value + 7);
+      expect(updated.conditions).toEqual(original.conditions);
+      expect(updated.tests).toEqual(original.tests);
+      expect(updated.tests.length).toBeGreaterThan(0);
+    });
+
+    it('keeps copy-paste-blindness parseable after an edit', async () => {
+      const markdown = readFileSync(join(RULES_DIR, 'copy-paste-blindness.md'), 'utf8');
+      ruleEngine.registerBuiltinRuleSource('copy-paste-blindness', markdown);
+      const original = ruleEngine.getRule('copy-paste-blindness')!;
+      const [key, value] = Object.entries(original.thresholds)[0];
+
+      const updated = ruleEngine.updateRuleThresholds('copy-paste-blindness', { [key]: value + 1 });
+
+      expect(updated?.conditions).toEqual(original.conditions);
+      const { parsePipeline } = await import('./rule-pipeline');
+      expect(() => parsePipeline(updated!)).not.toThrow();
+    });
+
+    it('keeps CRLF line endings', () => {
+      const markdown = makeRuleMarkdown({ id: 'crlf-rule', thresholds: { minChars: 10, maxRatio: 0.3 } }).replaceAll('\n', '\r\n');
+      ruleEngine.registerBuiltinRuleSource('crlf-rule', markdown);
+
+      const updated = ruleEngine.updateRuleThresholds('crlf-rule', { maxRatio: 0.5 })!;
+
+      expect(updated.rawSource).toBe(markdown.replace('maxRatio: 0.3\r\n', 'maxRatio: 0.5\r\n'));
+      expect(updated.thresholds).toEqual({ minChars: 10, maxRatio: 0.5 });
+    });
+
+    it('adds a threshold that is not yet in the source', () => {
+      ruleEngine.registerBuiltinRuleSource('threshold-rule', makeRuleMarkdown({ id: 'threshold-rule', thresholds: { minChars: 10 } }));
+
+      const updated = ruleEngine.updateRuleThresholds('threshold-rule', { maxRatio: 0.5 })!;
+
+      expect(updated.rawSource).toContain('  minChars: 10\n  maxRatio: 0.5\n');
+      expect(updated.thresholds).toEqual({ minChars: 10, maxRatio: 0.5 });
     });
   });
 
