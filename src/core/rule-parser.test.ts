@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { parseRule, serializeRule } from './rule-parser';
+import { parseRule, readFrontmatter, serializeRule, type FrontmatterLine } from './rule-parser';
 import type { DetectionRule } from './types';
 
 const RULES_DIR = path.join(__dirname, 'rules');
@@ -88,6 +88,48 @@ describe('parseRule front matter: unquoted, unclosed and CRLF values', () => {
     expect(crlf.thresholds).toEqual({ minReqs: 2 });
     expect(crlf.patterns).toEqual({ frustration: ['!{3,}', String.raw`\?{3,}`], numbered: [String.raw`(?m)^\d+[.)]\s`] });
     expect(crlf.patterns).toEqual(lf.patterns);
+  });
+});
+
+describe.each([['LF', '\n'], ['CRLF', '\r\n']])('readFrontmatter, the grammar parsing and editing share, with %s line endings', (_label, eol) => {
+  const markdown = [
+    '---', 'id: sample', '# a comment', '', 'thresholds:', '  minChars:   30  ', '    # minChars: 1', '\t\tmaxRatio:\t0.3',
+    ' version: 2', 'patterns: |', '  words: [fix, "a: b"]', 'not a key line', '  orphan: 1', '---', '# Body', '',
+  ].join(eol);
+  const read = readFrontmatter(markdown);
+
+  /** The line's key, the text before its value on its line, and the text at its value's offset. */
+  function located(line: FrontmatterLine): [string, string, string] {
+    const lineStart = markdown.lastIndexOf('\n', line.valueStart - 1) + 1;
+    return [line.key, markdown.slice(lineStart, line.valueStart), markdown.slice(line.valueStart, line.valueStart + line.value.length)];
+  }
+
+  it('reads the keys in source order, with each block line under the key that opens its block', () => {
+    expect(read?.fields.map(field => [field.key, field.value, field.block?.map(line => [line.key, line.value])])).toEqual([
+      ['id', 'sample', undefined],
+      ['thresholds', '', [['minChars', '30'], ['maxRatio', '0.3']]],
+      ['version', '2', undefined],
+      ['patterns', '|', [['words', '[fix, "a: b"]']]],
+      ['orphan', '1', undefined],
+    ]);
+    expect(read?.body).toBe(['# Body', ''].join(eol));
+  });
+
+  it('gives where each value starts in the markdown', () => {
+    const lines = read!.fields.flatMap(field => [field, ...(field.block ?? [])]).filter(line => line.value !== '');
+    expect(lines.map(located)).toEqual([
+      ['id', 'id: ', 'sample'],
+      ['minChars', '  minChars:   ', '30'],
+      ['maxRatio', '\t\tmaxRatio:\t', '0.3'],
+      ['version', ' version: ', '2'],
+      ['patterns', 'patterns: ', '|'],
+      ['words', '  words: ', '[fix, "a: b"]'],
+      ['orphan', '  orphan: ', '1'],
+    ]);
+  });
+
+  it('is null without front matter', () => {
+    expect(readFrontmatter(['# Description', 'id: sample', ''].join(eol))).toBeNull();
   });
 });
 

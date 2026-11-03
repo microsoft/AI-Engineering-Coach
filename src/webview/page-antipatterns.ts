@@ -7,10 +7,10 @@
 
 import { DateFilter, PracticeGroup, PRACTICE_GROUPS } from '../core/types';
 import { toDateStr } from '../core/helpers';
-import type { RuleSource } from '../core/types/rule-types';
+import type { RuleFailure, RuleSource } from '../core/types/rule-types';
 import { CURIOSITY_TIER_LABELS, type CuriosityTier } from '../core/types/curiosity-types';
 import { rpc, el, COLORS, scoreColor, scoreLabel } from './shared';
-import { html, render, type ComponentChildren, ScoreRing, PctBadge } from './render';
+import { html, render, type ComponentChildren, ScoreRing, PctBadge, IncompleteScoreTip } from './render';
 import { consumeNavHint } from './app';
 import { renderCoverageHeatmap } from './page-antipatterns-heatmap';
 import { openRuleEditor, wireRuleEditorModal } from './page-antipatterns-editor';
@@ -51,6 +51,7 @@ interface GroupScore {
   topIssue: string | null;
   improvements: string[];
   patternCount: number;
+  failedRules?: RuleFailure[];
 }
 
 interface ApData {
@@ -72,6 +73,8 @@ interface RulePreview {
   group: PracticeGroup;
   previewDescription: string;
   previewExamples: string[];
+  /** Why the rule couldn't be evaluated; then it's neither triggered nor clean. */
+  evaluationError?: string;
 }
 
 interface RuleLayerInfo {
@@ -187,6 +190,17 @@ function statPill(label: string, value: string | number, color?: string): Compon
   return html`<span class="rule-stat-pill" style=${color ? `color:${color}` : undefined}><span class="rule-stat-value">${value}</span><span class="rule-stat-label">${label}</span></span>`;
 }
 
+/** The group's rules that couldn't be evaluated, and why: its score and findings leave them out. */
+function notEvaluatedNotice(failed: RuleFailure[]): HTMLElement {
+  const notice = el('div', 'ap-group-incomplete');
+  const rules = failed.length === 1 ? '1 rule' : `${failed.length} rules`;
+  render(html`<span>
+    <div>Incomplete: ${rules} couldn't be evaluated, so this score and these findings leave ${failed.length === 1 ? 'it' : 'them'} out.</div>
+    <ul>${failed.map(rule => html`<li><strong>${rule.ruleName}</strong> (<code>${rule.ruleId}</code>): ${rule.error}</li>`)}</ul>
+  </span>`, notice);
+  return notice;
+}
+
 function sparklineSvg(scores: number[], color: string): ComponentChildren {
   const MAX_WEEKS = 8;
   const pts = scores.slice(-MAX_WEEKS);
@@ -296,11 +310,12 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
               ${spark ? html`<div class="ap-sparkline-row">${spark}</div>` : null}
               ${g.group === 'prompt-quality' && apData.curiosityTier
                 ? html`<div class="ap-score-tip" title="Activity balance has three levels: Balanced, Needs review, Strongly skewed. This does not measure question quality or learning.">Curiosity: <strong>${CURIOSITY_TIER_LABELS[apData.curiosityTier]}</strong></div>` : null}
+              <${IncompleteScoreTip} failed=${g.failedRules} />
               ${g.improvements.length > 0
                 ? html`<div class="ap-score-tip ap-improvements">${g.improvements.map(i => html`<span>${i}</span>`)}</div>`
                 : g.topIssue
                   ? html`<div class="ap-score-tip">${g.topIssue}</div>`
-                  : html`<div class="ap-score-tip muted">No issues detected</div>`}
+                  : g.failedRules?.length ? null : html`<div class="ap-score-tip muted">No issues detected</div>`}
             </div>`;
         })}
       </div>
@@ -621,10 +636,15 @@ function renderFindings(
       <p class="ap-group-desc">${groupDesc}</p>
     `, section);
 
+    const failedRules = gs?.failedRules ?? [];
+    if (failedRules.length > 0) section.appendChild(notEvaluatedNotice(failedRules));
+
     if (groupPatterns.length === 0) {
-      const good = el('div', 'ap-group-clean');
-      good.textContent = 'All checks passing -- no anti-patterns detected.';
-      section.appendChild(good);
+      if (failedRules.length === 0) {
+        const good = el('div', 'ap-group-clean');
+        good.textContent = 'All checks passing -- no anti-patterns detected.';
+        section.appendChild(good);
+      }
     } else {
       if (gs && gs.improvements.length > 0) {
         const banner = el('div', 'ap-improvements-banner');
@@ -930,8 +950,9 @@ function renderRuleCard(
   const occurrences = preview?.occurrences ?? 0;
   const total = preview?.total ?? 0;
   const pct = preview?.pct ?? 0;
-  const statusClass = triggered ? 'rule-card-triggered' : 'rule-card-clean';
-  const histSvg = histogram ? miniHistogramSvg(histogram.counts, histogram.labels, triggered ? COLORS.yellow : groupColor) : null;
+  const error = preview?.evaluationError;
+  const statusClass = error !== undefined ? 'rule-card-failed' : triggered ? 'rule-card-triggered' : 'rule-card-clean';
+  const histSvg = histogram && error === undefined ? miniHistogramSvg(histogram.counts, histogram.labels, triggered ? COLORS.yellow : groupColor) : null;
 
   return html`
     <div class="rule-card ${statusClass}" data-rule-id=${rule.id} data-tags=${rule.tags.join(',')} data-name=${rule.name.toLowerCase()} data-source=${rule.source}>
@@ -944,7 +965,7 @@ function renderRuleCard(
         <div class="rule-card-desc">${rule.description}</div>
       </div>
       <div class="rule-card-bottom">
-        <div class="rule-card-stats">
+        ${error !== undefined ? html`<div class="rule-card-error" title=${error}>Not evaluated: ${error}</div>` : html`<div class="rule-card-stats">
           <div class="rule-card-stat">
             <span class="rule-card-stat-value ${triggered ? 'stat-warn' : 'stat-ok'}">${occurrences}</span>
             <span class="rule-card-stat-label">flagged</span>
@@ -957,7 +978,7 @@ function renderRuleCard(
             <span class="rule-card-stat-value ${triggered ? 'stat-warn' : 'stat-ok'}">${pct}%</span>
             <span class="rule-card-stat-label">rate</span>
           </div>
-        </div>
+        </div>`}
         ${histSvg ? html`<div class="rule-card-histogram" title="Weekly trend">${histSvg}</div>` : null}
       </div>
     </div>
@@ -1073,8 +1094,21 @@ function wireRulesSection(
 /* ── Rule detail view ── */
 
 function renderRulePreviewStats(preview: RulePreview | undefined): ComponentChildren {
+  if (preview?.evaluationError !== undefined) return html`${statPill('Total', preview.total)}${statPill('Status', 'NOT EVALUATED', 'var(--accent-red)')}`;
   const flaggedColor = preview?.triggered ? 'var(--yellow)' : 'var(--green)';
   return html`${statPill('Flagged', preview?.occurrences ?? 0, flaggedColor)}${statPill('Total', preview?.total ?? 0)}${statPill('Rate', `${preview?.pct ?? 0}%`, flaggedColor)}${statPill('Status', preview?.triggered ? 'TRIGGERED' : 'CLEAN', flaggedColor)}`;
+}
+
+/** The preview's description, which says why when the rule couldn't be evaluated, and its examples. */
+function renderRulePreviewDetails(preview: RulePreview | undefined): ComponentChildren {
+  return html`
+    ${preview?.previewDescription ? html`<div class="rule-preview-desc">${preview.previewDescription}</div>` : null}
+    ${preview && preview.previewExamples.length > 0 ? html`
+      <details class="rule-preview-examples">
+        <summary>${preview.previewExamples.length} example(s)</summary>
+        <ul>${preview.previewExamples.map(ex => html`<li>${ex}</li>`)}</ul>
+      </details>
+    ` : null}`;
 }
 
 function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefined, ruleId: string): ComponentChildren {
@@ -1100,13 +1134,7 @@ function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefi
       <div class="rule-detail-section">
         <h3>Current Data Preview</h3>
         <div class="rule-preview-stats">${renderRulePreviewStats(preview)}</div>
-        ${preview?.previewDescription ? html`<div class="rule-preview-desc">${preview.previewDescription}</div>` : null}
-        ${preview && preview.previewExamples.length > 0 ? html`
-          <details class="rule-preview-examples">
-            <summary>${preview.previewExamples.length} example(s)</summary>
-            <ul>${preview.previewExamples.map(ex => html`<li>${ex}</li>`)}</ul>
-          </details>
-        ` : null}
+        <div class="rule-preview-details">${renderRulePreviewDetails(preview)}</div>
       </div>
 
       ${thresholdEntries.length > 0 ? html`
@@ -1158,6 +1186,9 @@ function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFi
         if (stats) {
           render(renderRulePreviewStats(preview), stats);
         }
+        // With the stats, so a rule that now fails shows why, and a fixed one drops its old error.
+        const details = content.querySelector<HTMLElement>('.rule-preview-details');
+        if (details) render(renderRulePreviewDetails(preview), details);
       } catch {
         /* ignore */
       }

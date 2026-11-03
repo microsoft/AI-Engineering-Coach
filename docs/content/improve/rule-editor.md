@@ -14,6 +14,8 @@ The page lists every rule grouped by practice category. Each row shows the rule 
 
 Use the filter bar to search by tag or group, and click any rule to open its detail view.
 
+A rule whose detection logic can't run on your data, such as one with a `match:` expression that doesn't parse, shows **Not evaluated** and the error instead of its counts. The other rules still run, and **Test Rule** shows the same error.
+
 ## Editing a Rule
 
 Click **Edit Source** in a rule's detail view to open the modal editor for that rule. **Save** and **Test Rule** wait until the rule's source has loaded. The editor has two tabs:

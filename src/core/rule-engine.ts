@@ -14,7 +14,9 @@
  */
 
 import { DetectionRule, DetectorEmission, RulePreviewStats, RuleEvalResult, RuleTemplateVars, AntiPattern, PracticeGroup, Session, SessionRequest  } from './types';
+import type { RuleFailure } from './types';
 import { parseRule, fillTemplate, serializeRule } from './rule-parser';
+import { patchThresholds } from './rule-thresholds';
 import { warnCore } from './log';
 
 /* ---- Multi-layer rule storage ---- */
@@ -168,17 +170,44 @@ export function removeUserRule(id: string): boolean {
 }
 
 /**
- * Update thresholds on a rule (user override of built-in).
+ * Set thresholds on a rule (a user override of a built-in). Only the edited numbers change in the rule's markdown, so
+ * its `# Tests`, detection logic and line endings stay as written, and the override is parsed from that markdown.
+ * Setting thresholds to their current values returns the rule unchanged, without an override. Returns null when the
+ * rule doesn't exist or a threshold can't be set: its key isn't in the front matter's `thresholds:` block, its value
+ * isn't written as a number, or the new value isn't finite.
  */
 export function updateRuleThresholds(id: string, thresholds: Record<string, number>): DetectionRule | null {
   const existing = getRule(id);
   if (!existing) return null;
+  // Rules loaded from files or saved from the editor keep their markdown; only a rule built in code has none.
+  if (!existing.rawSource) return overrideSerializedThresholds(existing, thresholds);
 
+  const patch = patchThresholds(existing.rawSource, thresholds);
+  const rule = patch.ok ? parseRule(patch.source) : null;
+  if (!patch.ok || !rule || Object.entries(thresholds).some(([key, value]) => rule.thresholds[key] !== value)) {
+    const reason = patch.ok ? 'a value isn\'t read back as a number' : `${patch.key} (${patch.reason})`;
+    warnCore('RuleEngine', `Threshold not set on ${id}: ${reason}`);
+    return null;
+  }
+  if (patch.source === existing.rawSource) return existing;
+
+  const updated: DetectionRule = {
+    ...rule,
+    source: existing.source,
+    sourceFilePath: existing.sourceFilePath,
+    maxExamples: existing.maxExamples,
+  };
+  setUserRule(updated);
+  return updated;
+}
+
+/** For a rule without markdown: merge the thresholds and serialize the whole rule. */
+function overrideSerializedThresholds(existing: DetectionRule, thresholds: Record<string, number>): DetectionRule {
   const updated: DetectionRule = {
     ...existing,
     thresholds: { ...existing.thresholds, ...thresholds },
     source: existing.source === 'built-in' ? 'personal' : existing.source,
-    rawSource: '',  // Will be regenerated
+    rawSource: '',
   };
   updated.rawSource = serializeRule(updated);
   setUserRule(updated);
@@ -264,7 +293,8 @@ export function evaluateRule(
 
 /**
  * Get preview stats for all rules against current data.
- * Used by the Rule Editor to show how many items each rule would flag.
+ * Used by the Rule Editor to show how many items each rule would flag. A rule in `failures` couldn't be evaluated: its
+ * preview has the `error` and says it wasn't evaluated, instead of reading as clean.
  */
 export function getRulePreviewStats(
   reqs: SessionRequest[],
@@ -272,16 +302,19 @@ export function getRulePreviewStats(
   skipIdeDetectors: boolean,
   detectorResults: AntiPattern[],
   emissions?: Map<string, DetectorEmission>,
+  failures: RuleFailure[] = [],
 ): RulePreviewStats[] {
   const allRules = getAllRules();
   const resultMap = new Map<string, AntiPattern>();
   for (const r of detectorResults) resultMap.set(r.id, r);
+  const failureMap = new Map(failures.map(failure => [failure.ruleId, failure]));
 
   return allRules
     .filter(rule => !skipIdeDetectors || !rule.requiresIdeContext)
     .map(rule => {
       const emission = emissions?.get(rule.id);
       const result = resultMap.get(rule.id);
+      const failure = failureMap.get(rule.id);
       const total = emission?.total ?? (rule.scope === 'sessions' ? sessions.length : reqs.length);
       const occurrences = emission?.count ?? result?.occurrences ?? 0;
       const pct = total > 0 ? (occurrences / total) * 100 : 0;
@@ -295,8 +328,11 @@ export function getRulePreviewStats(
         pct: Math.round(pct * 10) / 10,
         severity: rule.severity,
         group: rule.group,
-        previewDescription: result?.description ?? 'Not triggered with current data.',
+        previewDescription: failure
+          ? `Not evaluated: ${failure.error}`
+          : result?.description ?? 'Not triggered with current data.',
         previewExamples: result?.examples ?? [],
+        ...(failure && { evaluationError: failure.error }),
       };
     });
 }

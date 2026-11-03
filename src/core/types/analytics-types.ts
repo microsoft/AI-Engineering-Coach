@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { RuleFailure } from './rule-types';
 import type { CuriosityTier } from './curiosity-types';
 import type { NonHumanKind } from './session-types';
 
@@ -611,6 +612,8 @@ export interface GroupScore {
   topIssue: string | null;
   improvements: string[];
   patternCount: number;
+  /** The group's rules that couldn't be evaluated. When there are any, the score and findings are incomplete. */
+  failedRules: RuleFailure[];
 }
 
 export interface AntiPatternData {
@@ -620,6 +623,8 @@ export interface AntiPatternData {
   groupScores: GroupScore[];
   weeklyScores: { labels: string[]; series: { group: PracticeGroup; scores: number[] }[] };
   curiosityTier?: CuriosityTier;
+  /** Every rule that couldn't be evaluated, including those of groups without a score. */
+  failedRules: RuleFailure[];
 }
 
 export interface WorkLifeBalanceResult {

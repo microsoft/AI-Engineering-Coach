@@ -635,5 +635,22 @@ describe('rule-engine', () => {
       expect(byId.get('request-rule')).toMatchObject({ total: 3, occurrences: 0, previewDescription: 'Not triggered with current data.' });
       expect(byId.get('session-rule')).toMatchObject({ total: 2, occurrences: 0, previewDescription: 'Not triggered with current data.' });
     });
+
+    it('marks a rule that could not be evaluated with its error instead of as not triggered', () => {
+      ruleEngine.registerBuiltinRuleSource('broken-rule', makeRuleMarkdown({ id: 'broken-rule' }));
+      ruleEngine.registerBuiltinRuleSource('other-rule', makeRuleMarkdown({ id: 'other-rule' }));
+      const requests = [makeRequest()];
+      const failure = { ruleId: 'broken-rule', ruleName: 'Broken', group: 'prompt-quality' as const, error: 'Parse error at position 0' };
+
+      const stats = ruleEngine.getRulePreviewStats(requests, [makeSession(requests)], false, [], undefined, [failure]);
+      const byId = new Map(stats.map(stat => [stat.ruleId, stat]));
+
+      expect(byId.get('broken-rule')).toMatchObject({
+        triggered: false, evaluationError: 'Parse error at position 0', previewDescription: 'Not evaluated: Parse error at position 0',
+      });
+      expect(byId.get('broken-rule')).not.toHaveProperty('error');
+      expect(byId.get('other-rule')).not.toHaveProperty('evaluationError');
+      expect(byId.get('other-rule')?.previewDescription).toBe('Not triggered with current data.');
+    });
   });
 });

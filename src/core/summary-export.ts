@@ -75,6 +75,8 @@ export interface SummaryExportReport {
       description: string;
       suggestion: string;
     }>;
+    /** Rules that couldn't be evaluated, so the anti-patterns leave them out. */
+    notEvaluated: Array<{ id: string; name: string; group: string; error: string }>;
   };
 }
 
@@ -180,6 +182,7 @@ export function buildSummaryExport(input: SummaryExportInput): SummaryExportRepo
     antiPatterns: {
       totalOccurrences: input.antiPatterns.totalOccurrences,
       topPatterns: buildTopAntiPatterns(input.antiPatterns),
+      notEvaluated: input.antiPatterns.failedRules.map(rule => ({ id: rule.ruleId, name: rule.ruleName, group: rule.group, error: rule.error })),
     },
   };
 }
@@ -248,7 +251,7 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
 
   lines.push('', '## Top Anti-Patterns');
   if (report.antiPatterns.topPatterns.length === 0) {
-    lines.push('- No anti-patterns detected.');
+    lines.push(report.antiPatterns.notEvaluated.length === 0 ? '- No anti-patterns detected.' : '- No anti-patterns detected by the rules that ran.');
   } else {
     for (const pattern of report.antiPatterns.topPatterns) {
       lines.push(
@@ -257,7 +260,16 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
     }
   }
 
-  return `${lines.join('\n')}\n`;
+  return `${[...lines, ...notEvaluatedLines(report.antiPatterns.notEvaluated)].join('\n')}\n`;
+}
+
+/** The rules that the anti-patterns leave out because they couldn't be evaluated, if any. */
+function notEvaluatedLines(rules: SummaryExportReport['antiPatterns']['notEvaluated']): string[] {
+  if (rules.length === 0) return [];
+  return [
+    '', '### Rules Not Evaluated', 'The anti-patterns above leave out these rules, which could not be evaluated:',
+    ...rules.map(rule => `- ${rule.name} (${rule.id}): ${rule.error}`),
+  ];
 }
 
 export function getSummaryExportFilenames(generatedAt: string | Date = new Date()): { markdown: string; json: string } {

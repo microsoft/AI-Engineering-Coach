@@ -5,7 +5,7 @@
 
 /* Recommendations + anti-pattern detection analytics */
 
-import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPattern, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation } from './types';
+import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation, RuleFailure } from './types';
 import { toDateStr, normalizeModel, modelMultiplier, extToLang } from './helpers';
 import { LONG_SESSION_REQS } from './constants';
 import { AnalyzerBase } from './analyzer-base';
@@ -13,11 +13,18 @@ import { isHumanTurn, splitHumanTurns } from './human-turns';
 import {
   computeWeeklyTrend, computeWeeklyScores,
 } from './detectors';
-import { getDetectorGroupCounts, runDetectors } from './detector-registry';
+import { detectAntiPatterns, getDetectorGroupCounts, type DetectionResult } from './detector-registry';
 import { SEVERITY_PENALTIES } from './detectors/scoring';
 
 function scoreToStatus(score: number): 'good' | 'needs-improvement' | 'critical' {
   return score >= 70 ? 'good' : score >= 40 ? 'needs-improvement' : 'critical';
+}
+
+/** Each group's active detectors, without the rules that couldn't be evaluated: the scores cover the rules that ran. */
+function evaluatedDetectorCounts(skipIdeDetectors: boolean, failedRules: RuleFailure[]): Record<PracticeGroup, number> {
+  const counts = getDetectorGroupCounts(skipIdeDetectors);
+  for (const failure of failedRules) counts[failure.group] -= 1;
+  return counts;
 }
 
 export class PatternsAnalyzer extends AnalyzerBase {
@@ -248,16 +255,16 @@ export class PatternsAnalyzer extends AnalyzerBase {
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
     // Index every session, not only `sessions`: a date filter can keep a request whose session it drops.
-    const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors, this.requestSessionMap);
-    patterns.push(...contribution.patterns);
-    return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors, contribution.weekly);
+    const detection = detectAntiPatterns(enrichedReqs, sessions, skipIdeDetectors, this.requestSessionMap);
+    detection.patterns.push(...contribution.patterns);
+    return this.buildAntiPatternResult(detection, reqs, skipIdeDetectors, contribution.weekly);
   }
 
-  private buildAntiPatternResult(patterns: AntiPattern[], reqs: SessionRequest[], skipIdeDetectors: boolean, weekly: WeeklyPatternObservation[]): AntiPatternData {
+  private buildAntiPatternResult({ patterns, failures: failedRules }: DetectionResult, reqs: SessionRequest[], skipIdeDetectors: boolean, weekly: WeeklyPatternObservation[]): AntiPatternData {
     const groupOrder: Record<string, number> = { 'prompt-quality': 0, 'session-hygiene': 1, 'code-review': 2, 'tool-mastery': 3 };
     patterns.sort((a, b) => (groupOrder[a.group] ?? 9) - (groupOrder[b.group] ?? 9) || b.occurrences - a.occurrences);
 
-    const groupDetectorCount = getDetectorGroupCounts(skipIdeDetectors);
+    const groupDetectorCount = evaluatedDetectorCounts(skipIdeDetectors, failedRules);
     const weeklyTrend = computeWeeklyTrend(reqs, weekly);
     const weeklyScores = computeWeeklyScores(reqs, weekly, groupDetectorCount);
     const totalOccurrences = patterns.reduce((s, p) => s + p.occurrences, 0);
@@ -309,15 +316,16 @@ export class PatternsAnalyzer extends AnalyzerBase {
         improvements.push(`Score up ${momPct}% compared to last month.`);
       }
 
-      // If no patterns detected, that's a strong positive
-      if (gPatterns.length === 0) {
+      // If no patterns detected, that's a strong positive -- unless a rule couldn't be evaluated
+      const groupFailures = failedRules.filter(failure => failure.group === group);
+      if (gPatterns.length === 0 && groupFailures.length === 0) {
         improvements.push('All checks passing -- no anti-patterns detected.');
       }
 
-      return { group, score, wowPct, momPct, topIssue, improvements, patternCount: gPatterns.length };
+      return { group, score, wowPct, momPct, topIssue, improvements, patternCount: gPatterns.length, failedRules: groupFailures };
     });
 
-    return { patterns, totalOccurrences, weeklyTrend, groupScores, weeklyScores };
+    return { patterns, totalOccurrences, weeklyTrend, groupScores, weeklyScores, failedRules };
   }
 
   getProjectOverview(f?: DateFilter): ProjectOverviewData {

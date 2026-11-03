@@ -94,6 +94,7 @@ const antiPatterns: AntiPatternData = {
   weeklyTrend: { labels: [], counts: [] },
   groupScores: [],
   weeklyScores: { labels: [], series: [] },
+  failedRules: [],
   patterns: [
     {
       id: 'low-context',
@@ -179,5 +180,27 @@ describe('summary export', () => {
       markdown: 'ai-engineer-coach-summary-2026-05-25.md',
       json: 'ai-engineer-coach-summary-2026-05-25.json',
     });
+  });
+});
+
+describe('summary export with a rule that could not be evaluated', () => {
+  const failure = { ruleId: 'broken-rule', ruleName: 'Broken Rule', group: 'prompt-quality' as const, error: 'Parse error at position 0' };
+  const build = (data: AntiPatternData) => buildSummaryExport({
+    generatedAt: '2026-05-25T10:00:00.000Z', filter: {}, stats, codeProduction, dailyActivity, workLifeBalance: null, flowState, antiPatterns: data,
+  });
+
+  it('lists the rule, and none when every rule ran', () => {
+    expect(build({ ...antiPatterns, failedRules: [failure] }).antiPatterns.notEvaluated)
+      .toEqual([{ id: 'broken-rule', name: 'Broken Rule', group: 'prompt-quality', error: 'Parse error at position 0' }]);
+    expect(build(antiPatterns).antiPatterns.notEvaluated).toEqual([]);
+    expect(renderSummaryMarkdown(build(antiPatterns))).not.toContain('Rules Not Evaluated');
+  });
+
+  it('says the anti-patterns leave the rule out instead of that none were detected', () => {
+    const markdown = renderSummaryMarkdown(build({ ...antiPatterns, patterns: [], totalOccurrences: 0, failedRules: [failure] }));
+    expect(markdown).not.toContain('- No anti-patterns detected.\n');
+    expect(markdown).toContain('- No anti-patterns detected by the rules that ran.\n');
+    expect(markdown).toContain('### Rules Not Evaluated\n');
+    expect(markdown).toContain('- Broken Rule (broken-rule): Parse error at position 0\n');
   });
 });

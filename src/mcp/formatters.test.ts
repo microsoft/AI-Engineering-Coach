@@ -6,15 +6,20 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Analyzer } from '../core/analyzer';
 import { PromptCacheAnalyzer } from '../core/analyzer-prompt-cache';
 import { TokenTypesAnalyzer } from '../core/analyzer-token-types';
+import { invalidateDetectorRegistry } from '../core/detector-registry';
 import { toDateStr } from '../core/helpers';
 import { createRequest, createSession } from '../core/parser-shared';
+import { clearLayerRules, registerPersonalRuleSource } from '../core/rule-engine';
 import type { ModelUsage, NonHumanKind, Session } from '../core/types';
 import { TODAY, returnedAfterExpiryWithoutCacheData, returnedToday } from '../test/copilot-cache-sessions';
-import { formatActivity, formatFlow, formatInsights, formatPromptCache, formatTokenTypes, formatWellbeing } from './formatters';
+import { formatActivity, formatFlow, formatInsights, formatPatterns, formatPromptCache, formatSummary, formatTokenTypes, formatWellbeing } from './formatters';
+
+// Keeps the broken rule out of the developer's runtime.log.
+vi.mock('../core/runtime-debug', async importOriginal => ({ ...await importOriginal<typeof import('../core/runtime-debug')>(), runtimeDebug: vi.fn() }));
 
 describe('formatPromptCache', () => {
   it('summarizes efficiency per harness and why the cache broke, without session ids or workspace names', () => {
@@ -225,5 +230,36 @@ describe('MCP formatters', () => {
   it('wellbeing: has no data when the user typed no prompt in range', () => {
     const automatedOnly = new Analyzer([session([[NEXT_NIGHT, 'autopilot']])], new Map());
     expect(formatWellbeing(automatedOnly)).toMatchObject({ status: 'no-data' });
+  });
+});
+
+/* ---- Rules that couldn't be evaluated ---- */
+
+const BROKEN = [
+  '---', 'id: broken-rule', 'name: Broken Rule', 'group: prompt-quality', 'severity: high', 'scope: requests', '---', '',
+  '# Description', 'A test rule.', '', '# Detection Logic', '```detect', 'scan: requests', 'match: (', 'check: count > 0', '```', '',
+].join('\n');
+
+const requests = [createRequest({ requestId: 'r0', messageText: 'Explain why the parser drops the last token.', responseText: 'Done.', timestamp: Date.UTC(2026, 9, 1, 12) })];
+const analyzer = new Analyzer([createSession({ sessionId: 's1', workspaceId: 'ws', workspaceName: 'Project', harness: 'Local Agent', requests })], new Map());
+const filter = { harness: 'Local Agent' };
+
+describe('MCP anti-pattern summaries', () => {
+  afterEach(() => {
+    clearLayerRules('personal');
+    invalidateDetectorRegistry();
+  });
+
+  it('list a rule that could not be evaluated, with its group and error', () => {
+    registerPersonalRuleSource('broken-rule', BROKEN, '/home/rules/broken-rule.md');
+    for (const notEvaluated of [formatPatterns(analyzer, filter).antiPatterns.notEvaluated, formatSummary(analyzer, filter).antiPatterns.notEvaluated]) {
+      expect(notEvaluated.map(({ rule, group }) => ({ rule, group }))).toEqual([{ rule: 'Broken Rule', group: 'prompt-quality' }]);
+      expect(notEvaluated[0].error).toMatch(/^Parse error at position \d+/);
+    }
+  });
+
+  it('list none when every rule ran', () => {
+    expect(formatPatterns(analyzer, filter).antiPatterns.notEvaluated).toEqual([]);
+    expect(formatSummary(analyzer, filter).antiPatterns.notEvaluated).toEqual([]);
   });
 });
