@@ -147,6 +147,20 @@ describe('compound secret key names', () => {
     expect(out).not.toContain('ctx7sk-1234abcd');
   });
 
+  it('keeps the fields after an empty secret value', () => {
+    const text = '{"token": "", "user": "bob", "note": ""}';
+    expect(redactSecrets(text)).toBe(text);
+  });
+
+  it('redacts a doubled-quote rule as it is stored in settings.local.json', () => {
+    const settings = JSON.stringify({ permissions: { allow: [
+      'Bash(curl -d \'{""client_secret"":""8bavjPwL9uoXDp""}\')',
+    ] } }, null, 2);
+    const out = redactSecrets(settings);
+    expect(out).not.toContain('8bavjPwL9uoXDp');
+    expect(JSON.parse(out)).toBeTruthy();
+  });
+
   it('leaves ordinary prose mentioning those words intact', () => {
     for (const text of [
       'The token bucket algorithm smooths out traffic spikes.',

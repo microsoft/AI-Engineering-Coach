@@ -12,10 +12,9 @@
  * well-known token prefixes and explicit key/value assignments only -- so
  * ordinary prose and code remain readable.
  *
- * Key names are matched with an optional compound prefix, so `client_secret`
- * and `refresh_token` are caught as well as bare `secret` and `token`. Quote
- * runs of one or two characters are accepted, because JSON embedded in a
- * shell command is commonly escaped by doubling its quotes.
+ * Key names may follow `_` or `-`, so `client_secret` and `refresh_token` are
+ * caught as well as bare `secret` and `token`. JSON embedded in a shell command
+ * is commonly escaped by doubling its quotes, so that form has its own pattern.
  */
 
 const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----|$)/g;
@@ -32,14 +31,19 @@ const SK_API_KEY = /\bsk-[A-Za-z0-9_-]{20,250}\b/g;
 const STRIPE_KEY = /\b[srp]k_(?:live|test)_[0-9A-Za-z]{10,255}\b/g;
 // Credentials embedded in a connection-string URI (scheme://user:pass@host).
 const CONNECTION_STRING_CREDS = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/gi;
+// The key name may follow `_` or `-` (client_secret, refresh_token) but not a letter or digit.
+// Quotes may be backslash-escaped, as in raw JSON files and JSON.stringify output.
+const SECRET_KEY_NAME = String.raw`(?<![A-Za-z0-9])(api[_-]?key|access[_-]?key|secret|token|password|passwd|credentials?)`;
+// JSON escaped by doubling its quotes inside a shell command: ""client_secret"":""value"".
+const DOUBLED_QUOTE_SECRET_ASSIGNMENT = new RegExp(
+  String.raw`${SECRET_KEY_NAME}((?:\\?"){2}\s*:\s*)((?:\\?"){2})((?:(?!\3).){4,512})\3`, 'gi');
 // Quoted assignment whose value may contain spaces: "password": "two words here".
-const SECRET_KEY_NAME = String.raw`(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|credentials?)`;
 const QUOTED_SECRET_ASSIGNMENT = new RegExp(
-  String.raw`\b(${SECRET_KEY_NAME})(["']{0,2}\s*[:=]\s*)(["']{1,2})((?:(?!\3).){4,512})\3`, 'gi');
+  String.raw`${SECRET_KEY_NAME}((?:\\?["'])?\s*[:=]\s*)(\\?["'])((?:(?!\3).){4,512})\3`, 'gi');
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const AUTH_HEADER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,512}/gi;
 const KEY_VALUE_ASSIGNMENT = new RegExp(
-  String.raw`\b(${SECRET_KEY_NAME})(["']{0,2}\s*[:=]\s*)(["']{0,2})[^\s"'\`;,]{8,512}\3`, 'gi');
+  String.raw`${SECRET_KEY_NAME}(["']?\s*[:=]\s*)(["']?)[^\s"'\`;,]{8,512}\3`, 'gi');
 
 /** Mask credential-shaped substrings, keeping surrounding text intact. */
 export function redactSecrets(text: string): string {
@@ -59,6 +63,7 @@ export function redactSecrets(text: string): string {
     .replaceAll(JWT, '[REDACTED:jwt]')
     .replaceAll(CONNECTION_STRING_CREDS, '$1[REDACTED]@')
     .replaceAll(AUTH_HEADER, '$1 [REDACTED]')
+    .replaceAll(DOUBLED_QUOTE_SECRET_ASSIGNMENT, '$1$2$3[REDACTED]$3')
     .replaceAll(QUOTED_SECRET_ASSIGNMENT, '$1$2$3[REDACTED]$3')
     .replaceAll(KEY_VALUE_ASSIGNMENT, '$1$2$3[REDACTED]$3');
 }
