@@ -14,6 +14,7 @@ import { execSync } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import { parseClaudeSessions } from './parser-claude';
+import { MAX_FILE_SIZE } from './parser-shared';
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -644,5 +645,22 @@ describe('parseClaudeSessions', () => {
       expect(session.workspaceRootPath).toBe(cwd);
     });
     fs.rmSync(cwd, { recursive: true, force: true });
+  });
+});
+
+describe('parseClaudeSessions: large transcripts', () => {
+  it('parses a transcript over the size limit by leaving out its API request records', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, () => ({ type: 'api-request', body: blob }));
+    withProjectsDir('s.jsonl', [
+      makeUser('Why?', '2025-06-15T10:00:00Z'),
+      ...apiRequests,
+      makeAssistant('Because.'),
+    ], projectsDir => {
+      const file = path.join(projectsDir, '-Users-me-proj', 's.jsonl');
+      expect(fs.statSync(file).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.responseText])).toEqual([['Why?', 'Because.']]);
+    });
   });
 });
