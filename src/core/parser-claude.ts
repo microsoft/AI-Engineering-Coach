@@ -555,6 +555,28 @@ function projectNameFromEncoded(encoded: string, _projectsDir: string): string {
   return path.basename(resolved);
 }
 
+/** Claude Code encodes a session's launch directory into its project folder
+ *  name: every character outside A-Z, a-z and 0-9 becomes `-`, and a result
+ *  over 200 characters keeps its first 200 plus `-<hash>`. */
+function cwdMatchesProjectDir(cwd: string, dirName: string): boolean {
+  const encoded = cwd.replaceAll(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+  const dir = dirName.toLowerCase();
+  return encoded === dir || (encoded.length > 200 && dir.startsWith(`${encoded.slice(0, 200)}-`));
+}
+
+/** The workspace name from the first recorded `cwd` that belongs to this
+ *  project folder. Unlike decoding the folder name, this works when the folder
+ *  was deleted, the path was truncated, or the log came from another OS. */
+function workspaceNameFromCwd(cwds: (string | undefined)[], dirName: string): string | undefined {
+  for (const cwd of cwds) {
+    if (!cwd || !cwdMatchesProjectDir(cwd, dirName)) continue;
+    // win32 splits on both separators, so a cwd logged on any OS works.
+    const name = path.win32.basename(cwd);
+    if (name) return name;
+  }
+  return undefined;
+}
+
 function parseClaudeProjectSessions(
   projectsDir: string,
   dirName: string,
@@ -563,7 +585,7 @@ function parseClaudeProjectSessions(
 ): { sessions: Session[]; workspaceId: string; workspaceName: string } | null {
   const projPath = path.join(projectsDir, dirName);
   const workspaceId = `claude-${dirName}`;
-  const workspaceName = projectNameFromEncoded(dirName, projectsDir);
+  let workspaceName = projectNameFromEncoded(dirName, projectsDir);
 
   let entries: fs.Dirent[];
   try {
@@ -578,11 +600,13 @@ function parseClaudeProjectSessions(
   const sessionsById = new Map<string, Session>();
   const sessions: Session[] = [];
   const sessionFiles = new Map<string, string[]>();
+  const cwds: (string | undefined)[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const filePath = path.join(projPath, entry.name);
     const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
+    cwds.push(session.workspaceRootPath);
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
     sessionFiles.set(session.sessionId, [filePath]);
@@ -615,6 +639,7 @@ function parseClaudeProjectSessions(
       const filePath = path.join(subagentDir, subEntry.name);
       const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
       if (!subSession) continue;
+      cwds.push(subSession.workspaceRootPath);
       const sourceId = parent?.sessionId ?? entry.name;
       const files = sessionFiles.get(sourceId) ?? [];
       files.push(filePath);
@@ -667,9 +692,13 @@ function parseClaudeProjectSessions(
     }
   }
 
+  const cwdName = workspaceNameFromCwd(cwds, dirName);
+  if (cwdName) workspaceName = cwdName;
+
   // Final pass: re-sort merged parent sessions' requests by timestamp and
   // refresh the cached requestCount.
   for (const session of sessions) {
+    session.workspaceName = workspaceName;
     if (session.requests.length > 1) {
       session.requests.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
     }
