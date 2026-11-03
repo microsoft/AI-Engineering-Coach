@@ -195,8 +195,11 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
   }
 }
 
-/** Raw API request records: most of a large transcript's bytes, and nothing the parser reads. */
-const CLAUDE_API_REQUEST_LINE = /^\s*\{\s*"type"\s*:\s*"api-request/;
+/**
+ * Raw API request records: most of a large transcript's bytes, and nothing the parser reads. Matched wherever `type`
+ * sits among the keys. Quotes inside JSON string values are escaped, so a prompt that mentions the text cannot match.
+ */
+const CLAUDE_API_REQUEST_LINE = /"type"\s*:\s*"api-request/;
 
 /**
  * Streams a transcript's lines, leaving out raw API request records. Stops with a warning once the kept lines pass
