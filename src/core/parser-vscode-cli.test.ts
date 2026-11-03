@@ -15,6 +15,7 @@ import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli
 import { getParseWarningCounts, resetParseWarnings, setCuriosityDetector } from './parser-shared';
 import { detectCuriosity } from './curiosity';
 import { CuriosityAnalyzer } from './analyzer-curiosity';
+import { runDetectors } from './detector-registry';
 
 const tempDirs: string[] = [];
 
@@ -323,5 +324,33 @@ describe('CLI edit delta extraction', () => {
 
     expect(session?.requests[0].editedFiles).toEqual([]);
     expect(editLocIndex.size).toBe(0);
+  });
+});
+
+describe('plan mode from native CLI events', () => {
+  // Each user.message records the mode it was sent in, and untagged messages are in the default mode.
+  // session.mode_changed doesn't log every switch back, so it isn't applied to later messages.
+  function planRule(events: Array<Record<string, unknown>>) {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', timestamp: '2026-09-30T09:00:00Z', data: { sessionId: 'plan-sess', startTime: '2026-09-30T09:00:00Z' } },
+      ...events,
+    ]), 'ws', 'Workspace');
+    if (!session) throw new Error('session did not parse');
+    return runDetectors(session.requests, [session], false).find(pattern => pattern.id === 'no-plan-mode');
+  }
+  const messages = (count: number, data: Record<string, unknown> = {}) => Array.from({ length: count }, (_, index) => ({
+    type: 'user.message', timestamp: `2026-09-30T10:${String(index).padStart(2, '0')}:00Z`, data: { content: `step ${index}`, ...data },
+  }));
+
+  it('flags agent-mode sessions that never plan', () => {
+    expect(planRule(messages(40))?.occurrences).toBe(40);
+  });
+
+  it('stays quiet once a message is sent in plan mode', () => {
+    expect(planRule([
+      { type: 'session.mode_changed', timestamp: '2026-09-30T09:30:00Z', data: { newMode: 'plan' } },
+      ...messages(1, { agentMode: 'plan' }),
+      ...messages(40),
+    ])).toBeUndefined();
   });
 });

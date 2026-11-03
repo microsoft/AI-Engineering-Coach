@@ -53,7 +53,7 @@ export const FIELD_SCHEMA: FieldInfo[] = [
   { name: 'workspaceId',        type: 'string',       description: 'Workspace identifier',                                scope: 'session' },
   { name: 'workspaceName',      type: 'string',       description: 'Workspace display name',                              scope: 'session' },
   { name: 'location',           type: 'string',       description: 'Workspace file path',                                 scope: 'session' },
-  { name: 'harness',            type: 'string',       description: 'IDE harness: VS Code, Local Agent, Xcode, etc.',      scope: 'session', example: '"VS Code"' },
+  { name: 'harness',            type: 'string',       description: 'Harness that logged the session, e.g. Local Agent (VS Code), GitHub Copilot CLI, Claude, Codex, OpenCode. Request rows carry their session\'s harness', scope: 'both', example: '"Local Agent"' },
   { name: 'creationDate',       type: 'number | null', description: 'Session creation timestamp (epoch ms)',              scope: 'session' },
   { name: 'lastMessageDate',    type: 'number | null', description: 'Timestamp of last message (epoch ms)',               scope: 'session' },
   { name: 'requestCount',       type: 'number',       description: 'Number of requests in the session',                   scope: 'session', example: '12' },

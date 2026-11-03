@@ -53,7 +53,8 @@ severity: <boolean expression for dynamic severity upgrade>
 messageText, messageLength, timestamp, totalElapsed, modelId, agentMode, agentName,
 slashCommand, referencedFiles (array), customInstructions (array), skillsUsed (array),
 toolsUsed (array), toolConfirmations (array), aiCode (array of {language, loc}),
-userCode (array), cancelled (boolean), sessionId, workspaceName
+userCode (array), cancelled (boolean), sessionId, workspaceName,
+harness (the request's session harness, e.g. "Local Agent" for VS Code)
 
 ## Available Row Fields (sessions)
 sessionId, workspaceName, requestCount, requests (array), harness, startTime, endTime,

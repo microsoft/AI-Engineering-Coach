@@ -130,7 +130,7 @@ export interface CacheData {
 const cacheFilePath = (): string => path.join(getCacheDir(), 'parsed.json');
 const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');
 
-const CACHE_VERSION = 28;
+const CACHE_VERSION = 29;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */
