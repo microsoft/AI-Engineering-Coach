@@ -10,7 +10,7 @@ The Rule Editor turns anti-pattern detection into an open, editable system. Ever
 
 ## Layout
 
-The page lists every rule grouped by practice category. Each row shows the rule name, group, severity, scope (requests or sessions), and a layer badge indicating whether the rule is built-in, a user override, or a fresh user-authored rule stored under `.ai-engineer-coach/rules/` in your home directory or workspace root.
+The page lists every rule grouped by practice category. Each row shows the rule name, group, severity, scope (requests, sessions, or both), and a layer badge indicating whether the rule is built-in, a user override, or a fresh user-authored rule stored under `.ai-engineer-coach/rules/` in your home directory or workspace root.
 
 Use the filter bar to search by tag or group, and click any rule to open its detail view.
 
@@ -18,14 +18,14 @@ A rule whose detection logic can't run on your data, such as one with a `match:`
 
 ## Editing a Rule
 
-Click **Edit** on any rule to open the modal editor. The editor has two tabs:
+Click **Edit Source** in a rule's detail view to open the modal editor for that rule. **Save** and **Test Rule** wait until the rule's source has loaded. The editor has two tabs:
 
 | Tab | Purpose |
 |---|---|
 | **Form** | Fill in structured fields -- id, name, group, severity, scope, tags, thresholds, description, examples, and detection logic |
 | **Source** | View or edit the full markdown file directly. Useful for advanced edits or for pasting in rules from elsewhere |
 
-Switching tabs syncs both directions, so you can round-trip between the form and the raw source.
+Switching tabs syncs both directions, so you can round-trip between the form and the raw source. The form writes back only the fields you change; everything else in the rule stays as it is, including frontmatter keys and sections the form doesn't show, such as `# Tests`. Rules with Windows (CRLF) line endings load into the form like any other. A section whose heading sits inside the detect block is read-only in the form, because rewriting it would change the detection logic; edit it in the Source tab.
 
 ## Live Testing
 
@@ -36,6 +36,8 @@ Click **Test Rule** to run the current draft against your real session data usin
 - The generated description, suggestion, and up to a handful of real examples
 
 Threshold sliders appear above the result so you can sweep a value without retyping the markdown. Changes are applied to the draft in memory; nothing is persisted until you hit **Save**.
+
+A draft without detection logic -- a detect block with a `match:` or `check:` line -- shows an error instead of running, and isn't saved, because it would match everything. Test Rule and detection run only the detect block, so a `# Filter` section doesn't count.
 
 ## AI Builder
 
@@ -60,3 +62,18 @@ examples: "{{messageText | truncate:80}}" ({{messageLength}} chars)
 A rule can keep regular expressions in its front matter under `patterns:` and pass `patterns.<name>` to `matches()`, `matchesAny()` or `anyMatch()`. Each entry is an array of patterns, and these functions match when any of them does. Quote a pattern that contains a comma, such as `"!{3,}"`. In double quotes, `\\` is one backslash and `\"` is a double quote; any other backslash stays as written, so `"\d"` and `"\\d"` both mean `\d`.
 
 The full function catalog, field schema, and metric list are browsable inside the [Rule Playground](/improve/rule-playground/) or via the **DSL Reference** modal (accessible from both Rule Editor and Rule Playground). The DSL Reference includes four tabs: Fields, Functions, Metrics, and Parser Coverage (showing which fields each harness parser can populate).
+
+Request rows also carry their session's `harness`, so a rule can count only requests from the harnesses that log the field it reads. For example, only VS Code logs custom instructions:
+
+```
+match: startsWith(harness, "Local Agent") AND customInstructions.length == 0
+```
+
+Request rows also carry `humanTurn`: `true` when you typed the turn, and `false` when the harness logged that another agent, autopilot, a parent agent or the harness itself sent it. It's read-only and derived from what each parser recorded, so a message that is only code, a URL or a quote still counts as typed. A rule about your own working hours keys off it, and a ratio counts only typed prompts in its total too, as **Weekend Overwork** does:
+
+```
+match: humanTurn == true AND (dayOfWeek(timestamp) == 0 OR dayOfWeek(timestamp) == 6)
+aggregate: ratio
+typedReqs: countWhere(all, "humanTurn", "==", true)
+emitTotal: typedReqs
+```

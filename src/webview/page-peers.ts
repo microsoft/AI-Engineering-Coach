@@ -5,7 +5,7 @@
 
 /* Share Card -- Generate a personalized stats image to share with peers */
 
-import { DateFilter } from '../core/types';
+import { CalendarActivityData, DateFilter } from '../core/types';
 import { rpc, formatNum } from './shared';
 import { html, render, LoadingScreen } from './render';
 import { SVG } from './svg-icons';
@@ -239,7 +239,7 @@ function computeCurrentStreak(labels: string[], values: number[]): number {
 export async function renderShareCard(container: HTMLElement, filter: DateFilter): Promise<void> {
   render(html`<${LoadingScreen} message="Generating share card..." />`, container);
 
-  const [stats, production, balance, flowState, codeByLang, dailyActivity, antiPatterns] = await Promise.all([
+  const [stats, production, balance, flowState, codeByLang, dailyActivity, antiPatterns, calendar] = await Promise.all([
     rpc<{ totalSessions: number; totalRequests: number }>('getStats', filter as Record<string, unknown>),
     rpc<{ summary: { totalAiLoc: number } }>('getCodeProduction', filter as Record<string, unknown>),
     rpc<{ maxStreak: number } | null>('getWorkLifeBalance', filter as Record<string, unknown>),
@@ -247,10 +247,11 @@ export async function renderShareCard(container: HTMLElement, filter: DateFilter
     rpc<{ byLanguage: { labels: string[] } }>('getCodeProduction', filter as Record<string, unknown>),
     rpc<{ labels: string[]; values: number[] }>('getDailyActivity', filter as Record<string, unknown>),
     rpc<{ patterns: { id: string }[] }>('getAntiPatterns', filter as Record<string, unknown>),
+    rpc<CalendarActivityData>('getCalendarActivity', filter as Record<string, unknown>),
   ]);
 
-  // Fixed: compute current streak using calendar-day consecutiveness
-  const currentStreak = computeCurrentStreak(dailyActivity.labels, dailyActivity.values);
+  // Streaks count days the user typed a prompt (the calendar), like the best streak from work-life balance.
+  const currentStreak = computeCurrentStreak(calendar.days.map(day => day.date), calendar.days.map(day => day.requests));
   const bestStreak = balance?.maxStreak ?? 0;
 
   const activeDays = dailyActivity.values.filter(v => v > 0).length;

@@ -9,6 +9,7 @@ import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternD
 import { toDateStr, normalizeModel, modelMultiplier, extToLang } from './helpers';
 import { LONG_SESSION_REQS } from './constants';
 import { AnalyzerBase } from './analyzer-base';
+import { isHumanTurn, splitHumanTurns } from './human-turns';
 import {
   computeWeeklyTrend, computeWeeklyScores,
 } from './detectors';
@@ -253,7 +254,8 @@ export class PatternsAnalyzer extends AnalyzerBase {
     });
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
-    const detection = detectAntiPatterns(enrichedReqs, sessions, skipIdeDetectors);
+    // Index every session, not only `sessions`: a date filter can keep a request whose session it drops.
+    const detection = detectAntiPatterns(enrichedReqs, sessions, skipIdeDetectors, this.requestSessionMap);
     detection.patterns.push(...contribution.patterns);
     return this.buildAntiPatternResult(detection, reqs, skipIdeDetectors, contribution.weekly);
   }
@@ -328,12 +330,14 @@ export class PatternsAnalyzer extends AnalyzerBase {
 
   getProjectOverview(f?: DateFilter): ProjectOverviewData {
     const sessions = this.filteredSessions(f);
-    const projects = Array.from(this.groupWorkspaceRequests(sessions, f).entries())
+    const workspaces = this.groupWorkspaceRequests(sessions, f);
+    const projects = Array.from(workspaces.entries())
       .map(([workspaceName, data]) => this.buildProjectOverviewItem(workspaceName, data))
       .filter((project): project is ProjectOverviewItem => project !== null)
       .sort((a, b) => b.estimatedHours - a.estimatedHours)
       .slice(0, 20);
-    return { projects };
+    const { basis } = splitHumanTurns([...workspaces.values()].flatMap(data => data.reqs));
+    return { projects, turnBasis: basis };
   }
 
   private groupWorkspaceRequests(
@@ -361,14 +365,16 @@ export class PatternsAnalyzer extends AnalyzerBase {
     workspaceName: string,
     data: { id: string; sessions: Session[]; reqs: SessionRequest[] },
   ): ProjectOverviewItem | null {
-    if (data.reqs.length === 0) return null;
+    // Hours, prompts and work pattern describe the user's time; code output counts every turn.
+    const typed = data.reqs.filter(isHumanTurn);
+    if (typed.length === 0) return null;
     return {
       workspaceName,
       workspaceId: data.id,
-      totalRequests: data.reqs.length,
-      estimatedHours: this.estimateProjectHours(data.reqs),
+      totalRequests: typed.length,
+      estimatedHours: this.estimateProjectHours(typed),
       languages: this.getProjectLanguages(data.reqs),
-      timePattern: this.getProjectTimePattern(data.reqs),
+      timePattern: this.getProjectTimePattern(typed),
       topFiles: this.getTopProjectFiles(data.reqs),
       estimatedLoc: this.getEstimatedProjectLoc(data.reqs),
       gitPath: data.sessions[0]?.location || null,

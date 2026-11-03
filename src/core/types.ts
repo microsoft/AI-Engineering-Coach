@@ -4,6 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 export * from './types/session-types';
+export * from './types/call-timeline-types';
+export * from './types/prompt-cache-types';
+export * from './types/session-timeline-types';
 export * from './types/curiosity-types';
 export * from './types/analytics-types';
 export * from './types/catalog-types';
@@ -13,3 +16,4 @@ export * from './types/context-types';
 export * from './types/github-app-types';
 export * from './types/rule-types';
 export * from './types/rpc-types';
+export * from './types/token-usage-types';

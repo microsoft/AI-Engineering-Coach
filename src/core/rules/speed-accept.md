@@ -4,7 +4,7 @@ name: Speed Accept (No Review)
 group: code-review
 severity: high
 scope: sessions
-version: 1
+version: 2
 tags: [review, speed, accept]
 thresholds:
   minAiLoc: 20
@@ -13,10 +13,10 @@ thresholds:
 ---
 
 # Description
-Detects instances where the next message was sent within seconds of receiving large AI code blocks, indicating no time for review.
+Detects instances where the next message you typed was sent within seconds of receiving large AI code blocks, indicating no time for review. A turn that an agent, autopilot or the harness sent right after the code doesn't count: it isn't you accepting the code.
 
 # When Triggered
-{{count}} times you sent the next message within {{extra.maxGapSec}}s of receiving {{extra.minAiLoc}}+ lines of AI code (avg {{extra.avgLoc}} LOC, avg {{extra.avgGap}}s gap). Not enough time to review.
+{{count}} times you typed the next message within {{extra.maxGapSec}}s of receiving {{extra.minAiLoc}}+ lines of AI code (avg {{extra.avgLoc}} LOC, avg {{extra.avgGap}}s gap). Not enough time to review.
 
 # How to Improve
 Take time to read AI-generated code before moving on. Review for correctness, security issues, and edge cases. A quick glance is not a review.

@@ -65,11 +65,17 @@ AI-Engineering-Coach/
 | Unit tests (vitest) | `npm test` |
 | All checks (CI gate) | `npm run check` |
 | End-to-end (Playwright) | `npm run test:e2e` |
+| End-to-end beside other checkouts | `E2E_PORT=4122 npm run test:e2e` (default 3999; `E2E_REUSE=1` reuses a running server if it serves this checkout) |
 | Package the VSIX | `npm run package` (see [skills/package-extension.md](skills/package-extension.md)) |
 | Bundle-size budget | `npm run check-size` |
 
 CI runs `npm run check` (typecheck + lint + spellcheck + knip + test) plus the size check on
 every PR. Run those locally before pushing.
+
+Unit tests run with HOME, USERPROFILE and the other per-user data roots (APPDATA, LOCALAPPDATA,
+XDG_*, COPILOT_HOME) pointed at a temp dir ([`src/test/hermetic-home.ts`](src/test/hermetic-home.ts)),
+so they never touch your real `~/.copilot-analytics-cache` or session data. Resolve per-user paths
+when they are used, not at module load.
 
 ## Skills
 
@@ -94,15 +100,19 @@ front matter and a small DSL, no code changes required.
 - Trust layers (built-in / personal / project) gated through
   [`src/core/rule-trust.ts`](src/core/rule-trust.ts)
 
-Rules ship with inline `# Tests` blocks that run as part of `npm test`.
+Rules can ship an inline `# Tests` block; `src/core/rule-inline-tests.test.ts` runs every built-in rule's block as part of `npm test`.
 
 ## Workers
 
 Heavy lifting happens off the extension host thread:
 
 - [`src/core/parse-worker.ts`](src/core/parse-worker.ts) — `logsDirs` → `progress` + `result`/`error`.
+  Its host kills it as soon as it posts `done`, so it first awaits `flushCacheWrites()`. Every parse
+  path returns the canonical order of [`src/core/parse-order.ts`](src/core/parse-order.ts), so cached
+  and cold loads give identical results.
 - [`src/core/warm-up-worker.ts`](src/core/warm-up-worker.ts) — `sessions` → `antiPatterns` + `configHealth`.
-- [`src/core/cache-write-worker.ts`](src/core/cache-write-worker.ts) — persists the cache payload.
+- [`src/core/cache-write-worker.ts`](src/core/cache-write-worker.ts) — persists the cache payload
+  crash-safely (temp file + rename, data file before meta; see `src/core/cache-write.ts`).
 
 The warm-up host manages thread and fork lifecycles in
 [`src/core/warm-up-worker-host.ts`](src/core/warm-up-worker-host.ts), using the shared

@@ -1,8 +1,9 @@
 import { test, expect, Page } from '@playwright/test';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 
-async function navigateToContextHealth(page: Page) {
+async function navigateToContextHealth(page: Page, readyText = 'Context Score') {
   await page.goto(HARNESS_URL);
   await page.waitForFunction(() => {
     const content = document.getElementById('content');
@@ -17,10 +18,10 @@ async function navigateToContextHealth(page: Page) {
   const mgmtTab = page.locator('[data-tab="context-mgmt"]');
   if (await mgmtTab.count() > 0) {
     await mgmtTab.first().click();
-    await page.waitForFunction(() => {
+    await page.waitForFunction(text => {
       const content = document.getElementById('content');
-      return content && content.textContent.includes('Context Score') && !content.querySelector('.loading-spinner');
-    }, { timeout: 15000 });
+      return content && content.textContent.includes(text) && !content.querySelector('.loading-spinner');
+    }, readyText, { timeout: 15000 });
   }
 }
 
@@ -79,5 +80,532 @@ test.describe('Context Management', () => {
     await page.waitForTimeout(1000);
     const content = await page.textContent('#content');
     expect(content).toContain('Local Agent');
+  });
+});
+
+test.describe('Context Management chart guides', () => {
+  test('marks the verdict thresholds on the utilization trend, in both modes', async ({ page }) => {
+    await page.addInitScript(() => { (window as Window & { mockWorkspaceTrend?: boolean }).mockWorkspaceTrend = true; });
+    await navigateToContextHealth(page);
+    const trend = page.locator('#ctxMgmtTrendChart');
+    await expect(trend).toHaveAttribute('role', 'img');
+    await expect(trend).toHaveAttribute('aria-label', 'Weekly average context utilization and compactions. Lines: Degraded (45%), Limited (80%).');
+    await expect(trend).toHaveAttribute('data-guides', 'lines=2 markers=0 bands=0');
+    await page.locator('.ctx-trend-mode[data-mode="workspace"]').click();
+    // The degraded line follows the adaptive threshold (45%) in this mode too, not a fixed 50%.
+    await expect(page.locator('#ctxMgmtTrendChart')).toHaveAttribute('aria-label', 'Weekly average context utilization per workspace. Lines: Degraded (45%), Limited (80%).');
+    await expect(page.locator('#ctxMgmtTrendChart')).toHaveAttribute('data-guides', 'lines=2 markers=0 bands=0');
+  });
+
+  test('marks compactions, to-do events and to-do lifetimes on a session chart', async ({ page }) => {
+    await navigateToContextHealth(page);
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(4);
+    await page.locator('.ctx-session-row').nth(2).click();
+    const chart = page.locator('#ctxSessionTokenChart');
+    await expect(chart).toBeVisible();
+    await expect(chart).toHaveAttribute('aria-label', 'Context utilization per request of this session. Lines: 45%, 80%. Markers: Compaction (full) at request 9; Write tests at request 21. Bands: \u2714 Write tests from request 1 to 21.');
+    // Chart.js ran the guides plugin with the real scales: both thresholds, both events and the to-do band.
+    await expect(chart).toHaveAttribute('data-guides', 'lines=2 markers=2 bands=1');
+  });
+});
+
+test.describe('Context Management with reported context limits', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => { (window as Window & { mockReportedLimits?: boolean }).mockReportedLimits = true; });
+    await navigateToContextHealth(page);
+  });
+
+  test('labels utilization measured against reported limits and explains the difference', async ({ page }) => {
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-1"] .ctx-window-tag')).toHaveText('mixed limits');
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-2"] .ctx-window-tag')).toHaveCount(0);
+    await expect(page.locator('.ctx-window-note')).toContainText('Copilot CLI, Copilot App and Codex report their context limit');
+    // A Copilot App workspace is listed, so the table says how to reach its sessions' context timeline.
+    await expect(page.locator('.ctx-ws-row[data-ws-id="ws-6"] .ctx-window-tag')).toHaveText('reported limit');
+    await expect(page.locator('.ctx-timeline-hint')).toContainText('context timeline, with every model call, the context limit and each compaction, click its workspace, then the session');
+  });
+
+  test('opens the Copilot App context timeline from the Context Composition session list, from the keyboard', async ({ page }) => {
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    await workspace.locator('.ctx-comp-ws-toggle').focus();
+    await page.keyboard.press('Enter');
+    const app = workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot App' });
+    await app.focus();
+    await page.keyboard.press('Enter');
+    await expect(app).toHaveAttribute('aria-expanded', 'true');
+    const timeline = workspace.locator('.ctx-comp-tl .ctx-tl');
+    await expect(timeline).toBeVisible();
+    await expect(page.locator('#ctxCompSessionTimelineChart')).toHaveAttribute('aria-label', /with 1 compaction marked/);
+    await expect(timeline.locator('.ctx-cache-layer')).toHaveCount(8);
+    const output = timeline.locator('[data-layer="output"]');
+    await output.focus();
+    await page.keyboard.press('Enter');
+    await expect(output).toHaveAttribute('aria-pressed', 'true');
+    await timeline.locator('.ctx-tl-turns-toggle').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#ctxCompTlTurnTable tbody tr')).toHaveCount(11);
+    await expect(workspace.locator('.ctx-comp-timeline-note')).toContainText('Per-Workspace Context Session Health shows the same timeline');
+
+    // An older Copilot CLI session without a call timeline shows its composition, but no timeline or empty chart.
+    const older = workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot CLI' });
+    await older.focus();
+    await page.keyboard.press('Enter');
+    await expect(older).toHaveAttribute('aria-expanded', 'true');
+    await expect(workspace.locator('.ctx-comp-session').first()).toBeVisible();
+    await expect(workspace.locator('.ctx-comp-tl')).toHaveCount(0);
+    await expect(page.locator('#ctxCompSessionTimelineChart')).toHaveCount(0);
+  });
+
+  test('keeps a timeline open in the workspace table and in Context Composition at once', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    await expect(page.locator('#ctxSessionTimelineChart')).toBeVisible();
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    await workspace.locator('.ctx-comp-ws-toggle').click();
+    await workspace.locator('.ctx-comp-ws-session', { hasText: 'GitHub Copilot App' }).click();
+    await expect(page.locator('#ctxCompSessionTimelineChart')).toBeVisible();
+    await expect(page.locator('#ctxSessionTimelineChart')).toBeVisible();
+    expect(await page.evaluate(() => (window as Window & { promptCacheRequests?: { method: string; params: { sessionId?: string } }[] }).promptCacheRequests
+      ?.filter(r => r.method === 'getSessionTimeline').map(r => r.params.sessionId))).toEqual(['s5', 's5']);
+  });
+
+  test('shows a Copilot App session against the limit it reported', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(5);
+    const appRow = page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' });
+    await expect(appRow.locator('.ctx-window-tag')).toHaveText('reported limit');
+    await expect(appRow).toContainText('19.2%');
+    expect(await appRow.locator('svg').count()).toBeGreaterThan(0);
+
+    await appRow.locator('td').first().click();
+    const detail = page.locator('.ctx-session-chart-row');
+    await expect(detail).toContainText('context limit 968.0K (reported)');
+    await expect(page.locator('#ctxSessionTimelineChart')).toBeVisible();
+    await expect(page.locator('#ctxSessionTokenChart')).toHaveCount(0);
+  });
+
+  test('draws the Copilot App session on its call timeline with context layers', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    const panel = page.locator('.ctx-tl');
+    await expect(panel).toBeVisible();
+    const layers = panel.locator('.ctx-cache-layer');
+    await expect(layers).toHaveText(['Context', 'Limit and thresholds', 'Turn ends', 'Compactions', 'Truncated calls', 'Output and reasoning', 'Cache tokens', 'Cache breaks']);
+    expect(await layers.evaluateAll(buttons => buttons.map(b => b.getAttribute('aria-pressed')))).toEqual(['true', 'true', 'true', 'true', 'true', 'false', 'false', 'false']);
+    await expect(page.locator('#ctxSessionTimelineChart')).toHaveAttribute('aria-label', /with 1 compaction marked/);
+    expect(await page.evaluate(() => (window as Window & { promptCacheRequests?: { method: string; params: { sessionId?: string } }[] }).promptCacheRequests
+      ?.filter(r => r.method === 'getSessionTimeline').map(r => r.params.sessionId))).toEqual(['s5']);
+
+    const output = panel.locator('[data-layer="output"]');
+    await output.click();
+    await expect(output).toHaveAttribute('aria-pressed', 'true');
+    await panel.locator('[data-layer="compactions"]').focus();
+    await page.keyboard.press('Enter');
+    await expect(panel.locator('[data-layer="compactions"]')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('lists the chart values of every bar in the shared table, from the keyboard', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    const data = page.locator('.ctx-tl details.call-timeline-data');
+    await expect(data.locator('summary')).toHaveText('Show the chart as a table');
+    await data.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await expect(data).toHaveAttribute('open', '');
+    await expect(data.locator('thead th')).toHaveText([
+      'Model calls', 'Time', 'Context (largest prompt)', 'Context limit (reported)', 'Limited from 80%', 'Degraded from 45%',
+      'Context at turn end', 'Output per call', 'Reasoning per call', 'Read from cache', 'Written to cache', 'Uncached', 'Markers',
+    ]);
+    const rows = data.locator('tbody tr');
+    await expect(rows).toHaveCount(44);
+    await expect(rows.nth(26)).toContainText('Automatic compaction: Copilot logged 780.0K tokens before');
+    await expect(rows.nth(35)).toContainText('1 call stopped at the output-token limit.');
+  });
+
+  test('lists each turn in a table and sums up the session token types', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await page.locator('.ctx-session-row', { hasText: 'GitHub Copilot App' }).locator('td').first().click();
+    const toggle = page.locator('.ctx-tl-turns-toggle');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('#ctxTlTurnTable')).toBeHidden();
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const rows = page.locator('#ctxTlTurnTable tbody tr');
+    await expect(rows).toHaveCount(11);
+    await expect(rows.nth(6)).toContainText('780.0K');
+    await expect(rows.nth(6)).toContainText('71.5%');
+    await expect(page.locator('.ctx-tt-strip')).toContainText('reasoning 58% of output (high effort)');
+    await expect(page.locator('.ctx-tt-strip')).toContainText('3 sub-agent runs');
+    await expect(page.locator('.ctx-tt-strip')).toContainText('1 of 44 model calls truncated');
+  });
+
+  test('keeps older Copilot CLI builds without per-turn data on a dash', async ({ page }) => {
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    const olderRow = page.locator('.ctx-session-row', { hasText: 'GitHub Copilot CLI' });
+    await expect(olderRow.locator('.ctx-window-tag')).toHaveCount(0);
+    await expect(olderRow).toContainText('\u2014');
+  });
+});
+
+type CompositionMode = 'empty' | 'boundary' | 'boundary-empty' | false;
+type CompositionWindow = Window & { mockCompositionMode?: CompositionMode; workspaceSessionsRequests?: Record<string, unknown>[] };
+
+async function setCompositionMode(page: Page, mode: CompositionMode) {
+  await page.addInitScript(value => { (window as CompositionWindow).mockCompositionMode = value; }, mode);
+}
+
+async function lastWorkspaceSessionsRequest(page: Page): Promise<Record<string, unknown> | undefined> {
+  return page.evaluate(() => {
+    const requests = (window as CompositionWindow).workspaceSessionsRequests ?? [];
+    return requests[requests.length - 1];
+  });
+}
+
+async function openWorkspaceSessions(page: Page) {
+  await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+  await expect(page.locator('.ctx-session-row')).toHaveCount(4);
+}
+
+test.describe('Context Composition', () => {
+  test.beforeEach(async ({ page }) => {
+    await navigateToContextHealth(page);
+    await expect(page.locator('#ctxComposition')).toBeVisible();
+  });
+
+  test('renders a 100% stacked bar per reporting harness with a category legend', async ({ page }) => {
+    const section = page.locator('#ctxComposition');
+    await expect(section.locator('#ctxCompositionTitle')).toContainText('Context Composition');
+    for (const harness of ['GitHub Copilot CLI', 'Local Agent', 'Local Agent (Insiders)']) {
+      await expect(section.locator(`.ctx-comp-row[data-harness="${harness}"] .ctx-comp-bar`)).toBeVisible();
+    }
+    const legend = section.locator('.ctx-comp-legend');
+    for (const label of ['System instructions', 'Tool definitions', 'Messages', 'Tool results', 'Files', 'Conversation']) {
+      await expect(legend).toContainText(label);
+    }
+    await expect(section.locator('.ctx-comp-intro')).toContainText('weighted by prompt tokens');
+    await expect(section.locator('.ctx-comp-intro')).toContainText('Copilot CLI: every main-agent model call counts');
+    await expect(section.locator('.ctx-comp-intro')).toContainText('VS Code and Copilot CLI are shown separately rather than pooled');
+  });
+
+  test('shows percentages, estimated tokens and per-source KPI chips', async ({ page }) => {
+    const vscode = page.locator('.ctx-comp-row[data-harness="Local Agent"]');
+    const tools = vscode.locator('.ctx-comp-seg[data-category="toolDefinitions"]');
+    await expect(tools).toHaveText('36%');
+    await expect(tools).toHaveAttribute('data-tip', 'Tool definitions: 36% \u00b7 \u224818.8K tokens per request');
+    await expect(vscode).toContainText('\u224852.0K tokens per request');
+    await expect(page.locator('.ctx-comp-row[data-harness="GitHub Copilot CLI"] .ctx-comp-seg[data-category="conversation"]'))
+      .toHaveAttribute('data-tip', /Conversation: 85% \u00b7 \u2248265\.2K tokens per call/);
+    // VS Code and Copilot CLI get their own chips instead of one pooled share.
+    const chips = page.locator('.ctx-comp-kpis .ctx-comp-kpi');
+    await expect(chips).toHaveCount(5);
+    await expect(chips.nth(0)).toContainText('38%');
+    await expect(chips.nth(0)).toContainText('Tool definitions');
+    await expect(chips.nth(0)).toContainText('VS Code');
+    await expect(chips.nth(0)).toHaveAttribute('data-tip', /weighted by prompt size\. VS Code records only the last model call of each request, so it is shown separately from Copilot CLI, which records every call\./);
+    await expect(chips.nth(1)).toContainText('26%');
+    await expect(chips.nth(1)).toContainText('Requests \u226550% tools');
+    await expect(chips.nth(2)).toContainText('9.5%');
+    await expect(chips.nth(2)).toContainText('Copilot CLI');
+    await expect(chips.nth(2)).toHaveAttribute('data-tip', /main-agent model calls that went to tool definitions\. Every call counts, so it is shown separately from VS Code, which records only the last model call of each request\./);
+    await expect(chips.nth(3)).toContainText('29.5K');
+    await expect(chips.nth(3)).toContainText('up to 271 tools \u00b7 Copilot CLI');
+    await expect(chips.nth(4)).toContainText('68%');
+  });
+
+  test('gives every bar a text equivalent and explains each harness data source', async ({ page }) => {
+    const bar = page.locator('.ctx-comp-row[data-harness="Local Agent"] .ctx-comp-bar');
+    await expect(bar).toHaveAttribute('role', 'img');
+    await expect(bar).toHaveAttribute('aria-label', /Tool definitions 36%.*Tool results 30%/);
+    const cliInfo = page.locator('.ctx-comp-row[data-harness="GitHub Copilot CLI"] .info-icon');
+    await cliInfo.hover();
+    await expect(cliInfo.locator('.info-popup')).toBeVisible();
+    await expect(cliInfo.locator('.info-popup')).toContainText('every main-agent model call');
+  });
+
+  test('flags partial coverage and harnesses that do not report composition', async ({ page }) => {
+    const claude = page.locator('.ctx-comp-row[data-harness="Claude Code"]');
+    await expect(claude).toContainText('Not reported by this harness');
+    await expect(claude.locator('.ctx-comp-bar')).toHaveCount(0);
+    const partial = page.locator('.ctx-comp-row[data-harness="Local Agent (Insiders)"] .ctx-comp-partial');
+    await expect(partial).toContainText('180 of 240 requests (75%)');
+    await expect(partial).toHaveAttribute('data-tip', /60 requests in range have no composition data/);
+  });
+
+  test('adds composition coaching to the insights box and links to GitHub guidance', async ({ page }) => {
+    await expect(page.locator('#content')).toContainText('Tool definitions take 38% of your VS Code prompts');
+    await expect(page.locator('.ctx-comp-guide')).toHaveAttribute('href', 'https://docs.github.com/en/copilot/tutorials/optimize-ai-usage');
+  });
+
+  test('draws the weekly tool-definition trend, workspace bars and CLI system prompt segments', async ({ page }) => {
+    await expect(page.locator('#ctxCompTrendChart')).toBeVisible();
+    await expect(page.locator('.ctx-comp-ws[data-workspace="frontend-app"]')).toContainText('44% tools');
+    const segments = page.locator('.ctx-comp-segment-list');
+    await expect(segments).toContainText('tool_instructions');
+    await expect(segments).toContainText('\u22489.6K');
+    await expect(segments.locator('li').first()).toHaveAttribute('aria-label', /tool_instructions: about 9\.6K tokens, in 32 of 32 sessions/);
+  });
+
+  test('session drill-down shows a composition bar per session and the not-reported state', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    const rows = page.locator('.ctx-session-row');
+    await expect(rows.nth(0).locator('.ctx-comp-mini .ctx-comp-bar')).toBeVisible();
+    await expect(rows.nth(1).locator('.ctx-comp-mini .ctx-comp-bar')).toBeVisible();
+    // Copilot CLI token estimates are per model call, VS Code's per request.
+    await expect(rows.nth(1).locator('.ctx-comp-mini .ctx-comp-seg[data-category="toolDefinitions"]')).toHaveAttribute('data-tip', /tokens per call$/);
+    await expect(rows.nth(0).locator('.ctx-comp-mini .ctx-comp-seg[data-category="toolDefinitions"]')).toHaveAttribute('data-tip', /tokens per request$/);
+    await expect(rows.nth(3).locator('.ctx-comp-dash')).toHaveAttribute('data-tip', /No composition recorded for this session/);
+  });
+
+  test('expanding a VS Code session aligns per-request composition with the token curve', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    await page.locator('.ctx-session-row').nth(0).click();
+    await expect(page.locator('#ctxSessionTokenChart')).toBeVisible();
+    await expect(page.locator('#ctxSessionCompositionChart')).toBeVisible();
+    const panel = page.locator('.ctx-comp-session');
+    await expect(panel).toContainText('Tool definitions');
+    await expect(panel).toContainText('\u224813.3K per request');
+  });
+
+  test('expanding a Copilot CLI session shows system prompt segments and context at compaction', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    await page.locator('.ctx-session-row').nth(1).click();
+    const panel = page.locator('.ctx-comp-session');
+    await expect(panel).toContainText(/System prompt \(latest checkpoint\)/i);
+    await expect(panel).toContainText('64 tools sent');
+    await expect(panel).toContainText('custom_instructions');
+    await expect(panel).toContainText('774.8K of 968.0K tokens (80%)');
+    await expect(panel.locator('.ctx-comp-snapshot .ctx-comp-seg[data-category="other"]')).toHaveAttribute('data-tip', /Other \/ unattributed: 6\.3% \u00b7 \u224849\.1K tokens/);
+    await expect(page.locator('#ctxSessionCompositionChart')).toBeVisible();
+    await expect(page.locator('#ctxSessionTokenChart')).toHaveCount(0);
+  });
+
+  test('drills into a workspace from the composition card, including Copilot CLI-only workspaces', async ({ page }) => {
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    const toggle = workspace.locator('.ctx-comp-ws-toggle');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    // Only the row's source is listed: the Copilot CLI session, not the VS Code one.
+    const sessions = workspace.locator('.ctx-comp-ws-session');
+    await expect(sessions).toHaveCount(1);
+    await expect(sessions.nth(0)).toContainText('GitHub Copilot CLI');
+    await expect(sessions.nth(0).locator('.ctx-comp-seg[data-category="toolDefinitions"]'))
+      .toHaveAttribute('data-tip', 'Tool definitions: 9.6% \u00b7 \u224829.8K tokens per call');
+    // Matches sessions like the card counts requests: any session with a request in range.
+    expect(await lastWorkspaceSessionsRequest(page)).toMatchObject({ workspaceId: 'infra-tools', rangeMatch: 'requests' });
+    await sessions.nth(0).click();
+    await expect(sessions.nth(0)).toHaveAttribute('aria-expanded', 'true');
+    await expect(workspace.locator('.ctx-comp-session')).toContainText('774.8K of 968.0K tokens (80%)');
+    await expect(page.locator('#ctxCompWsSessionChart')).toBeVisible();
+    await toggle.click();
+    await expect(workspace.locator('.ctx-comp-ws-sessions')).toBeHidden();
+    await expect(page.locator('#ctxCompWsSessionChart')).toHaveCount(0);
+  });
+
+  test('splits a workspace used from VS Code and Copilot CLI into one row per source', async ({ page }) => {
+    const rows = page.locator('.ctx-comp-ws[data-workspace="my-api"]');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute('data-source', 'copilot-cli');
+    await expect(rows.nth(0)).toContainText('10% tools \u00b7 347 req \u00b7 Copilot CLI');
+    await expect(rows.nth(1)).toHaveAttribute('data-source', 'vscode');
+    await expect(rows.nth(1)).toContainText('33% tools \u00b7 173 req \u00b7 VS Code');
+    await rows.nth(1).locator('.ctx-comp-ws-toggle').click();
+    const sessions = rows.nth(1).locator('.ctx-comp-ws-session');
+    await expect(sessions).toHaveCount(1);
+    await expect(sessions.nth(0)).toContainText('Local Agent');
+    await expect(sessions.nth(0).locator('.ctx-comp-seg[data-category="toolDefinitions"]'))
+      .toHaveAttribute('data-tip', 'Tool definitions: 35% \u00b7 \u224813.3K tokens per request');
+  });
+
+  test('keeps the utilization drill-down keyed on last activity', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    const request = await lastWorkspaceSessionsRequest(page);
+    expect(request).toMatchObject({ workspaceId: 'ws-1' });
+    expect(request).not.toHaveProperty('rangeMatch');
+  });
+
+  test('expands a session row from the keyboard through its composition button', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    const rows = page.locator('.ctx-session-row');
+    const cliButton = rows.nth(1).locator('.ctx-session-expand');
+    await expect(cliButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(cliButton).toHaveAttribute('aria-label', 'Show details for the GitHub Copilot CLI session on 2026-05-03');
+    // The bar inside the button is no longer a separate tab stop.
+    await expect(rows.nth(1).locator('.ctx-comp-bar')).not.toHaveAttribute('tabindex');
+    await rows.nth(0).locator('.ctx-session-expand').focus();
+    await page.keyboard.press('Tab');
+    await expect(cliButton).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(cliButton).toHaveAttribute('aria-expanded', 'true');
+    const panel = page.locator('.ctx-session-chart-row .ctx-comp-session');
+    await expect(panel).toContainText(/System prompt \(latest checkpoint\)/i);
+    await expect(panel).toContainText('774.8K of 968.0K tokens (80%)');
+    await page.keyboard.press('Space');
+    await expect(cliButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.ctx-session-chart-row')).toHaveCount(0);
+  });
+
+  test('reads the weekly tool-definition shares from the keyboard, without hover', async ({ page }) => {
+    // Tab from the chart's info icon, past the canvas, onto the disclosure under it, and open it.
+    await page.locator('.ctx-comp-detail .chart-wrap').first().locator('.info-icon').focus();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.ctx-comp-detail details.ctx-comp-table summary')).toBeFocused();
+    await page.keyboard.press('Enter');
+    // The next stop is the table's scroll region. Found by role and name, so it's in the accessibility tree.
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('region', { name: 'Weekly tool-definition share per harness' })).toBeFocused();
+    const table = page.getByRole('table', { name: 'Weekly tool-definition share per harness' });
+    await expect(table.locator('thead th')).toHaveText(['Week of', 'Harness', 'Tool definitions', 'System instructions', 'Based on', 'Weighting']);
+    const rows = table.locator('tbody tr');
+    await expect(rows).toHaveCount(11);
+    await expect(rows.nth(0).locator('th, td')).toHaveText(['2026-04-13', 'GitHub Copilot CLI', '11%', '5.8%', '140 turns', 'Prompt tokens']);
+    await expect(rows.nth(1).locator('th, td')).toHaveText(['2026-04-13', 'Local Agent', '41%', '12%', '110 requests', 'Prompt tokens']);
+    // Local Agent (Insiders) recorded nothing in the first week, so its first row is the second week's.
+    await expect(rows.nth(4).locator('th, td')).toHaveText(['2026-04-20', 'Local Agent (Insiders)', '44%', '10%', '50 requests', 'Prompt tokens']);
+  });
+
+  test('reads each request\u2019s composition from the keyboard, without hover', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    await page.locator('.ctx-session-row').nth(0).locator('.ctx-session-expand').focus();
+    await page.keyboard.press('Enter');
+    // Tab from the session's composition bar, past the per-request chart, onto the disclosure under it.
+    await page.locator('.ctx-session-chart-row .ctx-comp-session > .ctx-comp-bar').focus();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.ctx-session-chart-row details.ctx-comp-table summary')).toBeFocused();
+    await page.keyboard.press('Enter');
+    const table = page.getByRole('table', { name: 'Prompt composition per request' });
+    await expect(table.locator('thead th')).toHaveText(['Request', 'Prompt', 'System instructions', 'Tool definitions', 'Messages', 'Tool results', 'Files']);
+    await expect(table.locator('tbody tr')).toHaveCount(28);
+    await expect(table.locator('tbody tr').nth(0).locator('th, td')).toHaveText(['Request 1', 'Request 1', '12%', '60%', '19%', '8.0%', '1.0%']);
+  });
+});
+
+test.describe('Context Composition without a session in range', () => {
+  test('shows composition when the only sessions with requests in range continue past it', async ({ page }) => {
+    await setCompositionMode(page, 'boundary');
+    await navigateToContextHealth(page, 'Context Composition');
+    const content = page.locator('#content');
+    await expect(page.locator('#ctxComposition')).toBeVisible();
+    await expect(page.locator('#ctxUtilizationEmpty')).toContainText('none falls in this range');
+    await expect(content).not.toContainText('No Session Data');
+    await expect(content).not.toContainText('Context Score');
+    await expect(content).toContainText('Tool definitions take 38% of your VS Code prompts');
+    await expect(page.locator('.ctx-comp-row[data-harness="Local Agent"] .ctx-comp-bar')).toBeVisible();
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="infra-tools"]');
+    await workspace.locator('.ctx-comp-ws-toggle').click();
+    await expect(workspace.locator('.ctx-comp-ws-session')).toHaveCount(1);
+    expect(await lastWorkspaceSessionsRequest(page)).toMatchObject({ rangeMatch: 'requests' });
+  });
+
+  test('still shows No Session Data when nothing in range carries composition', async ({ page }) => {
+    await setCompositionMode(page, 'boundary-empty');
+    await navigateToContextHealth(page, 'No Session Data');
+    await expect(page.locator('#ctxComposition')).toHaveCount(0);
+  });
+});
+
+test.describe('Context Composition empty states', () => {
+  test('explains when no request in range carries composition data', async ({ page }) => {
+    await setCompositionMode(page, 'empty');
+    await navigateToContextHealth(page);
+    const section = page.locator('#ctxComposition');
+    await expect(section).toContainText('No request in this range carries composition data');
+    await expect(section.locator('.ctx-comp-row[data-harness="Local Agent"]')).toContainText('No composition recorded in this range');
+    await expect(section.locator('.ctx-comp-row[data-harness="Claude Code"]')).toContainText('Not reported by this harness');
+    await expect(section.locator('.ctx-comp-kpis')).toHaveCount(0);
+    await expect(section.locator('#ctxCompTrendChart')).toHaveCount(0);
+  });
+
+  test('omits the section when the analyzer sends no composition data', async ({ page }) => {
+    await setCompositionMode(page, false);
+    await navigateToContextHealth(page);
+    await expect(page.locator('#content')).toContainText('Context Score');
+    await expect(page.locator('#ctxComposition')).toHaveCount(0);
+  });
+});
+
+type MockDataWindow = Window & { getMockData: (method: string, params?: unknown) => unknown };
+
+/** The summary row of an expanded workspace in the utilization table ("Avg util:" with a colon, unlike the column header). */
+function expansionSummary(page: Page) {
+  return page.locator('tr.ctx-session-inline', { hasText: /Avg util:/ });
+}
+
+test.describe('Context Management workspace expansion summary', () => {
+  test.beforeEach(async ({ page }) => {
+    await navigateToContextHealth(page);
+  });
+
+  test('averages utilization and saturation over sessions with per-request tokens only', async ({ page }) => {
+    await openWorkspaceSessions(page);
+    const summary = expansionSummary(page);
+    await expect(summary).toContainText('4 sessions');
+    // The Copilot CLI session has no per-request tokens; its placeholder zeros would pull the averages to 29.5% and 9.0%.
+    const util = summary.locator('span', { hasText: /^Avg util:/ });
+    await expect(util).toHaveText('Avg util: 39.3%');
+    await expect(util).toHaveAttribute('title', 'Averaged over the 3 of 4 sessions with per-request token data.');
+    await expect(summary.locator('span', { hasText: /^Saturation:/ })).toHaveText('Saturation: 12.0%');
+    // Its own row shows no utilization or saturation either.
+    await expect(page.locator('.ctx-session-row').nth(1).locator('td').nth(5)).toHaveText('\u2014');
+    await expect(page.locator('.ctx-session-row').nth(1).locator('td').nth(6)).toHaveText('\u2014');
+  });
+
+  test('shows no averages when no session in the workspace has per-request tokens', async ({ page }) => {
+    await page.evaluate(() => {
+      const w = window as MockDataWindow;
+      const original = w.getMockData;
+      w.getMockData = (method, params) => {
+        const data = original(method, params) as { sessions?: { hasPerRequestTokens: boolean }[] };
+        if (method === 'getWorkspaceContextSessions' && data.sessions) data.sessions = data.sessions.filter(s => !s.hasPerRequestTokens);
+        return data;
+      };
+    });
+    await page.locator('.ctx-ws-row[data-ws-id="ws-1"]').click();
+    await expect(page.locator('.ctx-session-row')).toHaveCount(1);
+    const summary = expansionSummary(page);
+    await expect(summary).toContainText('1 session');
+    await expect(summary).not.toContainText('1 sessions');
+    const util = summary.locator('span', { hasText: /^Avg util:/ });
+    await expect(util).toHaveText('Avg util: \u2014');
+    await expect(util).toHaveAttribute('title', 'No session here has per-request token data, so utilization and saturation are unknown.');
+    await expect(summary.locator('span', { hasText: /^Saturation:/ })).toHaveText('Saturation: \u2014');
+  });
+});
+
+type RangeAvailability = { rangesWithTokens: number[]; matchingSessions: number; sessionsWithRequestTokens: number; harnessesWithoutRequestTokens: string[] };
+type RangeScenarioWindow = Window & { mockCompositionMode?: string; mockRangeAvailability?: RangeAvailability };
+
+/** Makes the harness answer like the analyzer does for a scenario: `availability` for the range bar, `mode` for the tab's data. */
+async function setRangeScenario(page: Page, mode: string, availability: RangeAvailability) {
+  await page.addInitScript(([m, a]) => {
+    const w = window as RangeScenarioWindow;
+    w.mockCompositionMode = m;
+    w.mockRangeAvailability = a;
+  }, [mode, availability] as const);
+}
+
+test.describe('Context Management range bar', () => {
+  test('opens the only range that holds Copilot CLI composition recorded without promptTokens', async ({ page }) => {
+    // The analyzer's answer for a Copilot CLI-only workspace whose composition-bearing turns are 60 days old.
+    await setRangeScenario(page, 'cli-older', { rangesWithTokens: [90], matchingSessions: 1, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
+    await navigateToContextHealth(page, 'Context Composition');
+    const buttons = page.locator('#ctxRangeBar .cons-range-btn');
+    await expect(buttons).toHaveText(['Last 3 months']);
+    await expect(buttons.first()).toHaveClass(/\bactive\b/);
+    await expect(page.locator('.ctx-comp-row[data-harness="GitHub Copilot CLI"] .ctx-comp-bar')).toBeVisible();
+    await expect(page.locator('#content')).not.toContainText('No Session Data');
+    // Its sessions open from the keyboard.
+    const workspace = page.locator('.ctx-comp-ws[data-workspace="cli-project"]');
+    await workspace.locator('.ctx-comp-ws-toggle').focus();
+    await page.keyboard.press('Enter');
+    await expect(workspace.locator('.ctx-comp-ws-session')).toHaveCount(1);
+    await expect(workspace.locator('.ctx-comp-ws-session')).toContainText('GitHub Copilot CLI');
+  });
+
+  test('explains an empty range bar when no request recorded per-request tokens or composition', async ({ page }) => {
+    await setRangeScenario(page, 'boundary-empty', { rangesWithTokens: [], matchingSessions: 3, sessionsWithRequestTokens: 0, harnessesWithoutRequestTokens: ['GitHub Copilot CLI'] });
+    await navigateToContextHealth(page, 'No Session Data');
+    await expect(page.locator('#ctxRangeBar .cons-range-btn')).toHaveCount(0);
+    await expect(page.locator('#ctxRangeBar')).toHaveText('These GitHub Copilot CLI sessions log neither per-turn tokens nor prompt composition (older Copilot CLI and Copilot App builds; newer builds log every model call). Context Management needs one of them to chart utilization or composition. Try a different harness or a more recent range, or view consumption in the Output tab.');
   });
 });

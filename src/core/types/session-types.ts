@@ -3,6 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { CallTimeline } from './call-timeline-types';
+import type { CallRow, RequestPromptCache, SessionPromptCache } from './prompt-cache-types';
+
 export interface ToolConfirmation {
   toolId: string;
   confirmationType: number;
@@ -15,10 +18,23 @@ export interface CompactionEvent {
   mode: 'full' | 'simple';
   numRounds: number;
   numRoundsSinceLastSummarization: number;
+  /** Context size in tokens when compaction started (Copilot CLI: `preCompactionTokens`). */
   contextLengthBefore: number;
   durationMs: number;
   model: string;
   outcome: string;
+  /** Context size after compaction (Copilot CLI: `postCompactionTokens`, or before − `tokensRemoved`). */
+  contextLengthAfter?: number;
+  /** Context limit the harness reported (Copilot CLI: `tokenLimit`, the same as the calls' `maxPromptTokens`). */
+  tokenLimit?: number;
+  /** What started it, as logged. Copilot CLI: `threshold` = automatic. */
+  trigger?: string;
+  checkpointNumber?: number;
+  /** Tokens of the compaction call itself (Copilot CLI: `compactionTokensUsed`); input includes cached tokens. */
+  tokensUsed?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** Main-agent model calls the session had logged when the compaction finished: the index of the next call
+   *  in `Session.callTimeline`, where the smaller context first shows (Copilot CLI and Copilot App). */
+  atCall?: number;
 }
 
 /** Authoritative per-model usage totals reported at the session level
@@ -26,7 +42,8 @@ export interface CompactionEvent {
  *  Used for billing math when present; preferred over per-request data
  *  for sessions where per-request input is not available. */
 export interface ModelUsage {
-  /** Uncached input tokens billed at the input rate */
+  /** Uncached input tokens billed at the input rate. Copilot CLI: `modelMetrics[m].tokenDetails.input`, or
+   *  `usage.inputTokens` minus the cached tokens it includes. */
   inputTokens: number;
   /** Output tokens billed at the output rate */
   outputTokens: number;
@@ -36,12 +53,76 @@ export interface ModelUsage {
   cacheWriteTokens: number;
   /** Reasoning tokens (subset of output for some models, kept for diagnostics) */
   reasoningTokens?: number;
+  /** `false` when the harness logged no cached-token counts, so the cache fields are a default 0 rather than a
+   *  measurement (Codex logs without `cached_input_tokens`). Absent means they were logged. */
+  cacheTokensReported?: boolean;
 }
 
 export interface TodoItem {
   id: number;
   title: string;
   status: 'not-started' | 'in-progress' | 'completed';
+}
+
+/** Prompt-composition categories shared by every harness. VS Code splits the
+ *  conversation into messages, tool results and files; Copilot CLI reports it
+ *  as one `conversation` bucket. `other` holds unrecognized or unattributed tokens. */
+export type ContextCategory =
+  | 'systemInstructions'
+  | 'toolDefinitions'
+  | 'messages'
+  | 'toolResults'
+  | 'files'
+  | 'conversation'
+  | 'other';
+
+/** Where a prompt composition was measured. */
+export type CompositionSource = 'vscode' | 'copilot-cli';
+
+/** What filled a request's prompt, as reported by the harness. Holds only
+ *  category names and numbers, never prompt content. */
+export interface PromptComposition {
+  source: CompositionSource;
+  /** Percent of the prompt per category. A missing category is not reported
+   *  by the source (not zero). VS Code rounds each value, so the sum can be off by a few points. */
+  shares: Partial<Record<ContextCategory, number>>;
+  /** Prompt tokens the shares describe: VS Code = the request's last model call;
+   *  Copilot CLI = the average main-agent call in the turn. `null` = unknown. */
+  promptTokens: number | null;
+  /** Copilot CLI: main-agent model calls aggregated into this turn. */
+  calls?: number;
+  /** Copilot CLI: average tool-definition tokens per model call. */
+  toolDefinitionTokens?: number;
+  /** Copilot CLI: most tools offered to the model during the turn. */
+  availableTools?: number;
+}
+
+/** A named part of the Copilot CLI system prompt and its size. */
+export interface SystemPromptSegment {
+  name: string;
+  tokens: number;
+}
+
+/** Context snapshot Copilot CLI records when compaction starts. */
+export interface CompactionContextSnapshot {
+  timestamp: number | null;
+  systemTokens: number;
+  toolDefinitionTokens: number;
+  conversationTokens: number;
+  /** Total context estimate. Can exceed the sum of the parts; the difference is unattributed. */
+  currentTokens: number;
+  tokenLimit: number | null;
+}
+
+/** Session-level context composition details (Copilot CLI). */
+export interface SessionContextComposition {
+  /** System-prompt segments from the latest usage checkpoint, largest first. */
+  systemSegments: SystemPromptSegment[];
+  /** Tools sent with the model call recorded in the latest checkpoint, and their tokens. */
+  toolCount: number | null;
+  toolTokens: number | null;
+  /** Context snapshots taken when compaction started. */
+  compactions: CompactionContextSnapshot[];
 }
 
 export type CuriositySignal =
@@ -52,6 +133,30 @@ export type CuriositySignal =
     features: { question: { count: number; excerpts: string[] } };
     repeatedQuestions: string[];
   };
+
+/**
+ * Why a turn the harness logged as a user message wasn't typed by the user. Parsers set it only
+ * from what the harness recorded about the sender; a turn without it is a turn the user typed.
+ *   agent      — sent by another agent (Copilot CLI/App `source: agent-*`)
+ *   relayed    — relayed from another session (the harness's relay wrapper or sender ID header; VS Code delegation)
+ *   subagent   — prompt a parent agent gave a sub-agent (Claude sidechain, Codex and OpenCode child sessions)
+ *   skill      — skill context delivered as a message (Copilot CLI/App)
+ *   system     — sent by the harness: notifications, scheduled tasks, synthetic messages
+ *   autopilot  — autopilot continuation (Copilot CLI/App)
+ *   meta       — a line the harness wrote, such as Claude's local-command caveat or a skill body
+ *   compaction — compaction summary, or an automatic compaction request
+ *   output     — command output the harness logged as a user line (Claude `!` and local commands)
+ */
+export type NonHumanKind =
+  | 'agent'
+  | 'relayed'
+  | 'subagent'
+  | 'skill'
+  | 'system'
+  | 'autopilot'
+  | 'meta'
+  | 'compaction'
+  | 'output';
 
 export interface SessionRequest {
   requestId: string;
@@ -76,18 +181,30 @@ export interface SessionRequest {
   userCode: CodeBlock[];
   aiCode: CodeBlock[];
   toolConfirmations: ToolConfirmation[];
-  /** Prompt token count — from result.metadata.promptTokens (LAST agentic round's input only,
-   *  not cumulative across all rounds). Cumulative input tokens are not persisted by VS Code. */
+  /** Prompt token count, cached tokens included. VS Code: result.metadata.promptTokens (the LAST agentic round's
+   *  input only; cumulative input isn't persisted). Claude Code, Codex and OpenCode: the input of every model call
+   *  in the turn, each API response counted once. The context size of a turn is in `contextUsage` when known. */
   promptTokens: number | null;
   /** Completion token count — from request.completionTokens (CUMULATIVE across all agentic rounds)
    *  or metadata.outputTokens (last round only) as fallback for older sessions. */
   completionTokens: number | null;
-  /** Cached tokens read (subset of `promptTokens` when present); billed at cached rate */
+  /** Cached tokens read (subset of `promptTokens` when present); billed at cached rate. `null` when the
+   *  harness doesn't report cache usage, `0` when it reported none. */
   cacheReadTokens: number | null;
-  /** Cached tokens written / cache creation (subset of `promptTokens` when present); billed at cache-write rate */
+  /** Cached tokens written / cache creation (subset of `promptTokens` when present); billed at cache-write
+   *  rate. `null` when the harness doesn't report cache usage, `0` when it reported none. */
   cacheWriteTokens: number | null;
   /** Compaction/summarization event attached to this request, if one occurred */
   compaction: CompactionEvent | null;
+  /** What filled the prompt, when the harness reports it (VS Code, Copilot CLI). */
+  promptComposition?: PromptComposition;
+  /** Prompt-cache usage of the request's model calls, when the harness logs it per call
+   *  (Copilot CLI and Copilot App, Claude Code, OpenCode). */
+  promptCache?: RequestPromptCache;
+  /** The request's model calls that didn't report their cache usage, one row per stream and model: a Copilot CLI or
+   *  Copilot App record without cache tokens or with `cacheDetailsReported: false`, a Claude Code response or an
+   *  OpenCode message without cache fields. `promptCache` leaves them out; their token types count here. */
+  callRowsWithoutCacheData?: CallRow[];
   /** Final TODO list state at the end of this request (from manage_todo_list tool calls) */
   todoSnapshot: TodoItem[] | null;
   /** Precomputed work-type classification (feature, bug fix, refactor, etc.) */
@@ -102,6 +219,8 @@ export interface SessionRequest {
   investigationDelegations?: ('research' | 'explore')[];
   /** Hostnames from explicit URL arguments of recorded web tools. No URL paths or credentials. */
   webDomains?: string[];
+  /** Set when the harness logged that something other than the user sent this turn. Absent: the user typed it. */
+  nonHumanKind?: NonHumanKind;
   /** Reasoning / thinking effort for reasoning-capable models, when known.
    *  Sources:
    *    - Copilot CLI: `session.start.data.reasoningEffort` and `session.model_change.data.reasoningEffort`
@@ -126,6 +245,17 @@ export interface SessionRequest {
    *              the harness (parser limitation that cannot be fixed
    *              from the source data) */
   endState?: 'pending' | 'errored' | 'no-data';
+  /** Context size of the turn: the last and largest prompt of its model calls, and the limit when the harness
+   *  logs one (Copilot CLI and Copilot App, Codex, Claude Code, OpenCode). */
+  contextUsage?: import('./token-usage-types').TurnContextUsage;
+  /** Prompt-token limit of the request's model when the harness logs one for the model rather than per call
+   *  (VS Code: the selected model's configured context size). `contextUsage.contextLimit` takes precedence. */
+  modelContextLimit?: number;
+  /** Every compaction during the turn, in order, when the harness can log several (Copilot CLI).
+   *  `compaction` holds the first of them. */
+  compactions?: CompactionEvent[];
+  /** Sub-agent runs launched during the turn (Copilot CLI and Copilot App). */
+  subagentRuns?: import('./token-usage-types').SubagentRun[];
 }
 
 export interface CodeBlock {
@@ -152,6 +282,12 @@ export interface Session {
   /** Authoritative per-model usage totals reported at session close (Copilot CLI).
    *  Preferred over per-request token data for billing math when present. */
   modelUsage?: Record<string, ModelUsage>;
+  /** System-prompt segments and compaction snapshots (Copilot CLI). */
+  contextComposition?: SessionContextComposition;
+  /** Main-agent model calls in order, bucketed (Copilot CLI and Copilot App). */
+  callTimeline?: CallTimeline;
+  /** Prompt-cache breaks and their causes (Copilot CLI and Copilot App). */
+  promptCache?: SessionPromptCache;
   /** How the session ended. Drives "pending" vs "missing" classification
    *  in the Token Coverage view: active/aborted sessions cannot have full
    *  token data and so are excluded from the missing% denominator. */

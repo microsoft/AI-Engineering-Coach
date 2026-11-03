@@ -3243,6 +3243,17 @@ h2 {
   display: block;
 }
 
+.turn-basis-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.turn-basis-kind {
+  display: block;
+}
+
 /* ---- Flame legend ---- */
 .heatmap-flame-legend {
   display: flex;

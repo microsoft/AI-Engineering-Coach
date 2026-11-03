@@ -4,6 +4,144 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AntiPattern } from './analytics-types';
+import type { CompositionSource, ContextCategory, SystemPromptSegment } from './session-types';
+import type { ContextWindowSource, SessionTokenTypes } from './token-usage-types';
+
+/* ---- Context Composition (what fills the prompt) ---- */
+
+export interface CompositionSlice {
+  category: ContextCategory;
+  /** Percent of the prompt (slices of a breakdown sum to 100). */
+  pct: number;
+  /** Estimated tokens per model call (pct × average prompt size); `null` without prompt sizes. */
+  tokens: number | null;
+}
+
+export interface CompositionBreakdown {
+  /** Slices in canonical category order, limited to categories the source reports. */
+  slices: CompositionSlice[];
+  /** `tokens` = weighted by the prompt tokens of every recorded model call (a Copilot CLI turn counts
+   *  each of its calls; VS Code records one call per request); `requests` = every request counts equally. */
+  weighting: 'tokens' | 'requests';
+  /** Requests (Copilot CLI: turns) that contributed to the breakdown. */
+  samples: number;
+  /** Average prompt size per recorded model call; `null` when unknown. */
+  avgPromptTokens: number | null;
+}
+
+/** Composition pooled over the harnesses that report it the same way. VS Code and Copilot CLI
+ *  are never pooled: VS Code records only the last model call of each request, Copilot CLI every call. */
+export interface SourceComposition {
+  source: CompositionSource;
+  /** Display name, e.g. "VS Code" or "Copilot App and Copilot CLI". */
+  label: string;
+  harnesses: string[];
+  breakdown: CompositionBreakdown;
+  /** Requests (Copilot CLI: turns) with composition data, including those without a prompt size. */
+  requestsWithData: number;
+  /** Percent of those requests whose prompt is at least half tool definitions. */
+  toolHeavyPct: number | null;
+  /** Copilot CLI: average tool-definition tokens per model call. */
+  avgToolDefinitionTokens: number | null;
+  /** Copilot CLI: most tools offered to the model in one turn. */
+  maxAvailableTools: number | null;
+}
+
+export interface HarnessComposition {
+  harness: string;
+  /** How this harness reports composition; `null` = not reported by this harness. */
+  source: CompositionSource | null;
+  /** `null` when no request in range carries composition data. */
+  breakdown: CompositionBreakdown | null;
+  totalRequests: number;
+  requestsWithData: number;
+  sessions: number;
+  sessionsWithData: number;
+  /** Percent of sampled requests whose prompt is at least half tool definitions. */
+  toolHeavyPct: number | null;
+  /** Copilot CLI: average tool-definition tokens per model call. */
+  avgToolDefinitionTokens: number | null;
+  /** Copilot CLI: most tools offered to the model in one turn. */
+  maxAvailableTools: number | null;
+}
+
+/** One workspace's composition for one source; a workspace used from both sources gets two rows. */
+export interface WorkspaceComposition {
+  workspaceId: string;
+  workspaceName: string;
+  source: CompositionSource;
+  /** Display name of the source's harnesses in this workspace, e.g. "VS Code" or "Copilot CLI". */
+  label: string;
+  harnesses: string[];
+  breakdown: CompositionBreakdown;
+}
+
+/** Weekly share of a category per harness, aligned to `CompositionTrend.labels`. */
+export interface CompositionTrendSeries {
+  harness: string;
+  toolDefinitions: (number | null)[];
+  systemInstructions: (number | null)[];
+  /** Requests (Copilot CLI: turns) behind each weekly share, like `CompositionBreakdown.samples`. */
+  samples: number[];
+  /** How each weekly share is weighted, like `CompositionBreakdown.weighting`; `null` for weeks without data. */
+  weighting: (CompositionBreakdown['weighting'] | null)[];
+}
+
+export interface CompositionTrend {
+  labels: string[];
+  series: CompositionTrendSeries[];
+}
+
+/** A Copilot CLI system-prompt segment averaged over sessions. */
+export interface SystemSegmentSummary {
+  name: string;
+  avgTokens: number;
+  sessions: number;
+}
+
+export interface ContextCompositionData {
+  /** One entry per reporting source, most sampled first; empty when no request carries composition data. */
+  sources: SourceComposition[];
+  harnesses: HarnessComposition[];
+  /** Top workspace and source pairs by sampled requests. */
+  workspaces: WorkspaceComposition[];
+  trend: CompositionTrend;
+  /** Copilot CLI system-prompt segments, largest first. */
+  systemSegments: SystemSegmentSummary[];
+  /** Sessions that contributed to `systemSegments`. */
+  systemSegmentSessions: number;
+  coverage: {
+    requestsWithData: number;
+    totalRequests: number;
+    sessionsWithData: number;
+    totalSessions: number;
+  };
+  /** Tool-definition share (%) at which a request counts as tool-heavy. */
+  toolHeavyThreshold: number;
+}
+
+/** Context snapshot at a Copilot CLI compaction. Slice `tokens` are absolute token counts. */
+export interface CompactionCompositionSnapshot {
+  timestamp: number | null;
+  currentTokens: number;
+  tokenLimit: number | null;
+  slices: CompositionSlice[];
+}
+
+/** Composition of one session's prompts, for the session drill-down. */
+export interface SessionCompositionDetail {
+  source: CompositionSource;
+  /** `null` when only session-level details (segments, compactions) were recorded. */
+  breakdown: CompositionBreakdown | null;
+  /** Normalized shares per request, aligned with `SessionContextDetail.tokenCurve` (`null` = no data);
+   *  empty when no request carries composition data. */
+  perRequest: (Partial<Record<ContextCategory, number>> | null)[];
+  /** Copilot CLI: largest system-prompt segments from the latest checkpoint. */
+  systemSegments: SystemPromptSegment[];
+  toolCount: number | null;
+  toolTokens: number | null;
+  compactions: CompactionCompositionSnapshot[];
+}
 
 /* ---- Context Management (token-level health) ---- */
 
@@ -34,6 +172,9 @@ export interface WorkspaceContextScore {
   /** Composite score 0-100 — higher is better context hygiene */
   score: number;
   verdict: 'optimal' | 'degraded' | 'limited';
+  /** Whether utilization uses context limits the harness reported (Copilot CLI and Copilot App, Codex),
+   *  the estimate from the largest prompt seen, or both across or within the workspace's sessions. */
+  windowSource: ContextWindowSource | 'mixed';
 }
 
 export interface ContextTrend {
@@ -56,6 +197,9 @@ export interface SessionTimelineEvent {
   requestIndex: number;
   type: 'compaction' | 'todo-add' | 'todo-progress' | 'todo-complete';
   label: string;
+  /** On a `todo-add` from a to-do list snapshot: the item's status when it first appeared, if it was already in
+   *  progress or completed. Only the to-do bands read it; the other views count the addition alone. */
+  status?: 'in-progress' | 'completed';
 }
 
 /** Per-session context detail returned when drilling into a workspace */
@@ -86,8 +230,25 @@ export interface SessionContextDetail {
   /** Truncated user query per request (aligned with tokenCurve) for tooltip display */
   requestQueries: string[];
   /** True when per-request token data is available (enables token curve chart).
-   *  False for harnesses that only report session-aggregated tokens (e.g. Copilot CLI). */
+   *  False for sessions that only report session-aggregated tokens (older Copilot CLI builds). */
   hasPerRequestTokens: boolean;
+  /** Where `contextWindow` comes from. `reported`: the turns' own limits (`turnLimits`). `mixed`: some turns
+   *  reported their limit; `contextWindow` is the estimate used for the others. */
+  windowSource: ContextWindowSource | 'mixed';
+  /** Context limit each turn reported, aligned with `tokenCurve`; absent when no turn reported one. */
+  turnLimits?: (number | null)[];
+  /** Largest prompt within each turn, aligned with `tokenCurve`; absent when not reported. */
+  turnPeaks?: (number | null)[];
+  /** Main-agent model calls in each turn, aligned with `tokenCurve`; absent when not reported. */
+  turnCalls?: (number | null)[];
+  /** Main-agent cache hit ratio of each turn (shared `cacheHitPct`), aligned with `tokenCurve`. */
+  turnCacheHitPct?: (number | null)[];
+  /** Token types beyond input and output in this session; absent when the harness logs none. */
+  tokenTypes?: SessionTokenTypes;
+  /** The session has a per-call timeline (Copilot CLI and Copilot App); load it with `getSessionTimeline`. */
+  hasCallTimeline?: boolean;
+  /** What filled this session's prompts; absent when the harness doesn't report it. */
+  composition?: SessionCompositionDetail;
 }
 
 export interface WorkspaceContextSessionsData {
@@ -96,6 +257,11 @@ export interface WorkspaceContextSessionsData {
   thresholds: ContextVerdictThresholds;
   sessions: SessionContextDetail[];
 }
+
+/** How the session drill-down picks sessions for a date range: `lastActivity` (default) keys on each
+ *  session's last activity, like the utilization table; `requests` keeps every session with a request
+ *  in the range, like Context Composition. */
+export type SessionRangeMatch = 'lastActivity' | 'requests';
 
 export interface ContextManagementData {
   /** Overall context health score 0-100 */
@@ -123,6 +289,9 @@ export interface ContextManagementData {
   antiPatterns: AntiPattern[];
   /** Actionable tips based on observed patterns */
   tips: string[];
+  /** What fills the prompt, by category, per harness and workspace. Counts requests sent in the
+   *  range, so it can have data when `totalSessions` (keyed on last activity) is 0. */
+  composition?: ContextCompositionData;
 }
 
 /* ---- Context Review (agent-based) ---- */

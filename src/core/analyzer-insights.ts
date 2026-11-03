@@ -380,7 +380,8 @@ export class InsightsAnalyzer extends AnalyzerBase {
   /* ── Sustainable Pace ───────────────────────────────────────────── */
 
   private getSustainablePace(f?: DateFilter): SustainablePaceData {
-    const reqs = this.filter(f);
+    // Late nights, weekends and streaks are about the user's own hours: count the turns they typed.
+    const reqs = this.humanFilter(f).reqs;
     const sessions = this.filteredSessions(f);
     const weekBuckets = this.buildSustainablePaceBuckets(reqs, sessions);
     const sortedWeeks = Array.from(weekBuckets.keys()).sort();

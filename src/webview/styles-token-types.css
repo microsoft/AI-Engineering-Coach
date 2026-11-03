@@ -1,0 +1,48 @@
+/* Token Types tab of Context Health (page-token-types.ts, token-types-view.ts). */
+
+.ctx-tt { display: flex; flex-direction: column; gap: 12px; }
+.ctx-tt h3 { margin: 4px 0 0; display: flex; align-items: center; gap: 8px; }
+.ctx-tt h4 { margin: 0 0 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.ctx-tt-tips { padding: 12px 16px; border-radius: 8px; background: rgba(88, 166, 255, 0.06); border: 1px solid rgba(88, 166, 255, 0.2); }
+.ctx-tt-tips-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--vscode-textLink-foreground, #58a6ff); }
+.ctx-tt-tip { font-size: 12px; color: var(--text-secondary, #8b949e); line-height: 1.5; margin-bottom: 4px; }
+.ctx-tt-picker { display: inline-flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--border-color, #30363d); border-radius: 6px; overflow: hidden; align-self: flex-start; }
+.ctx-tt-pick { font: inherit; font-size: 12px; padding: 4px 12px; border: 0; background: transparent; color: var(--text-muted, #8b949e); cursor: pointer; }
+.ctx-tt-pick[aria-pressed="true"] { background: var(--list-active, rgba(88, 166, 255, 0.15)); color: var(--text-primary, #c9d1d9); }
+.ctx-tt-pick:focus-visible, .ctx-tt-expand:focus-visible { outline: 1px solid var(--focus-border, #58a6ff); outline-offset: 2px; }
+.ctx-tt-source-label { font-size: 12px; font-weight: 600; color: var(--text-muted, #8b949e); }
+.ctx-tt-source { display: flex; flex-direction: column; gap: 12px; }
+.ctx-tt-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.ctx-tt-kpi { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-color, #30363d); background: rgba(22, 27, 34, 0.4); cursor: help; }
+.ctx-tt-kpi.muted { opacity: 0.6; }
+.ctx-tt-kpi-value { font-size: 20px; font-weight: 700; color: var(--text-primary, #c9d1d9); }
+.ctx-tt-kpi.muted .ctx-tt-kpi-value { font-size: 13px; font-weight: 600; color: var(--text-muted, #8b949e); padding: 5px 0; }
+.ctx-tt-kpi-label { font-size: 11px; font-weight: 600; color: var(--text-muted, #8b949e); text-transform: uppercase; letter-spacing: 0.4px; }
+.ctx-tt-kpi-sub { font-size: 11px; color: var(--text-muted, #8b949e); margin-top: 2px; }
+.ctx-tt-section { padding: 10px 0 0; border-top: 1px dashed var(--border-color, #30363d); }
+.ctx-tt-line, .ctx-tt-note { font-size: 12px; color: var(--text-secondary, #8b949e); line-height: 1.5; margin: 0 0 6px; }
+.ctx-tt-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ctx-tt-bar { display: grid; grid-template-columns: minmax(120px, 34%) 1fr auto; align-items: center; gap: 8px; font-size: 12px; }
+.ctx-tt-bar-label { color: var(--text-primary, #c9d1d9); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-tt-bar-track { height: 8px; border-radius: 4px; background: rgba(48, 54, 61, 0.6); overflow: hidden; }
+.ctx-tt-bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--vscode-charts-purple, #a371f7); }
+.ctx-tt-bar-value { color: var(--text-muted, #8b949e); white-space: nowrap; }
+.ctx-tt-expand { font: inherit; font-weight: 600; color: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
+.ctx-tt-expand::before { content: '\25B8'; display: inline-block; margin-right: 6px; transition: transform 0.15s; }
+.ctx-tt-expand[aria-expanded="true"]::before { transform: rotate(90deg); }
+.ctx-tt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ctx-tt-table th, .ctx-tt-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border-color, #30363d); }
+.ctx-tt-table thead th { color: var(--text-muted, #8b949e); font-weight: 600; }
+.ctx-tt-table tbody th { font-weight: 500; }
+.ctx-tt-avail.not-reported, .ctx-tt-avail.not-comparable { color: var(--text-muted, #8b949e); }
+.ctx-tt-muted { font-size: 11px; color: var(--text-muted, #8b949e); }
+
+/* Session strip and the Copilot CLI and Copilot App drill-down in Context Management
+   (token-types-view.ts renderSessionStrip, context-session-timeline.ts). */
+.ctx-tt-strip { font-size: 11px; color: var(--text-muted, #8b949e); margin: 8px 0 0; line-height: 1.5; }
+.ctx-tt-strip-title { font-weight: 600; color: var(--text-secondary, #c9d1d9); }
+.ctx-tl { display: flex; flex-direction: column; gap: 4px; }
+.ctx-tl-layers { flex-wrap: wrap; }
+.ctx-tl-chart { height: 240px; }
+.ctx-tl-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 11px; margin-top: 4px; }
+.ctx-tl-turns { margin-top: 6px; }

@@ -18,6 +18,8 @@ The page shows two columns of fields -- one for `SessionRequest` and one for `Se
 
 All distributions respect the active date and workspace filters, so you can compare datasets across different slices without leaving the page.
 
+Request fields show the rows rules evaluate, so they include the fields derived for rules. `humanTurn` shows how many turns you typed (`true`) and how many the harness logged as sent by another agent, autopilot, a parent agent or the harness itself (`false`).
+
 ## Use it when you are
 
 - **Designing a rule** -- Check that the field you want to key off is actually populated for your harness

@@ -9,8 +9,10 @@
 import { SessionRequest, ToolConfirmation } from './types';
 import { createRequest, extractSkillNameFromPath } from './parser-shared';
 import { debugCore } from './log';
+import { vscodeNonHumanKind } from './parser-turn-kinds';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { hasRecordedToolEvidence, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
+import { compositionFromPromptTokenDetails } from './context-composition';
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -24,13 +26,23 @@ export interface RawRequest {
   result?: { timings?: { firstProgress?: number; totalElapsed?: number }; metadata?: Record<string, unknown> };
   isCanceled?: boolean;
   agent?: { extensionDisplayName?: string; id?: string } | string;
+  /** Set on requests VS Code sent itself, e.g. when a background terminal command finished. */
+  isSystemInitiated?: boolean;
+  /** `kind: "delegation"` when another session or chat sent the request. */
+  origin?: { kind?: string };
   modelId?: string;
   slashCommand?: { name?: string } | string;
+  /** The chat mode the request was sent in (VS Code 1.105+). */
+  modeInfo?: RawModeInfo;
   variableData?: { variables?: RawVariable[] };
   contentReferences?: RawContentRef[];
   editedFileEvents?: { uri?: { path?: string } }[];
   /** Cumulative completion token count across all agentic rounds (streaming counter). */
   completionTokens?: number;
+  /** Prompt size of the latest model call, written together with `promptTokenDetails`. */
+  promptTokens?: number;
+  /** Share of the prompt per category (`[{ category, label, percentageOfPrompt }]`). */
+  promptTokenDetails?: unknown;
 }
 
 interface RawVariable {
@@ -108,6 +120,19 @@ function extractAgentInfo(agent: RawRequest['agent']): { agentName: string; agen
   };
 }
 
+/** The extensions VS Code drops from an agent file to name the agent; it used .vscode-agent.md for a day in October 2025. */
+const AGENT_FILE_EXTENSION = /\.(agent|vscode-agent|chatmode)\.md$/i;
+
+/**
+ * Whether a custom agent is Copilot's Plan agent. Copilot names it "Plan", in Plan.chatmode.md in October 2025 and
+ * Plan.agent.md after that; since January 2026 it generates that file in <globalStorage>/plan-agent/. Copilot's
+ * own telemetry recognizes Plan by that name, ignoring case, and so does this. Other custom agents keep their
+ * identity even when "plan" is part of their name.
+ */
+function isPlanAgent(name: string): boolean {
+  return name.toLowerCase() === 'plan';
+}
+
 /**
  * Normalize the session-level inputState.mode.id into a canonical agentMode value.
  * VS Code stores:
@@ -120,16 +145,61 @@ export function normalizeSessionMode(modeId: string | undefined): string {
   if (!modeId) return '';
   // Built-in modes
   if (modeId === 'agent' || modeId === 'ask' || modeId === 'edit') return modeId;
-  // URI-based modes: extract the meaningful name from the path
-  const lower = modeId.toLowerCase();
-  if (lower.includes('plan')) return 'plan';
-  // Other custom agents/chatmodes — use the filename stem
+  // URI-based modes: judge them by the file name, not by the folders it's in
   let decoded: string;
   try { decoded = decodeURIComponent(modeId); } catch { decoded = modeId; }
   const lastSlash = decoded.lastIndexOf('/');
   const filename = lastSlash >= 0 ? decoded.substring(lastSlash + 1) : decoded;
-  const stem = filename.replace(/\.(agent|chatmode)\.md$/i, '');
+  const stem = filename.replace(AGENT_FILE_EXTENSION, '');
+  if (isPlanAgent(stem)) return 'plan';
+  // Other custom agents/chatmodes — use the filename stem
   return stem || modeId;
+}
+
+/** VS Code's IChatRequestModeInfo; 1.105 to 1.124 call telemetryModeId `modeId`, and 1.111 to 1.124 call telemetryModeName `modeName`. */
+interface RawModeInfo {
+  kind?: string;
+  isBuiltin?: boolean;
+  telemetryModeId?: string;
+  modeId?: string;
+  /** The agent's name, hashed for user and workspace agents. */
+  telemetryModeName?: string;
+  modeName?: string;
+  /** The agent's name (1.106+) and file (1.111+). */
+  modeInstructions?: { name?: string; uri?: unknown };
+}
+
+const BUILTIN_MODES = new Set(['agent', 'ask', 'edit']);
+
+function textOf(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/** A serialized VS Code URI: a string, or UriComponents. */
+function uriText(uri: unknown): string {
+  if (typeof uri === 'string') return uri;
+  if (!isObj(uri)) return '';
+  return textOf(uri.external) || textOf(uri.path) || textOf(uri.fsPath);
+}
+
+/**
+ * The mode a VS Code request was sent in, from its own modeInfo, in the same
+ * values as normalizeSessionMode. Returns undefined when the request doesn't
+ * record a chat mode, so the caller can fall back to the session's mode.
+ */
+export function requestModeFromInfo(modeInfo: RawModeInfo | undefined): string | undefined {
+  if (!isObj(modeInfo)) return undefined;
+  const modeId = textOf(modeInfo.telemetryModeId) || textOf(modeInfo.modeId);
+  if (BUILTIN_MODES.has(modeId)) return modeId;
+  if (modeId !== 'custom') return undefined;
+  // Plan and other agents that aren't built in. The telemetry name is hashed for user and workspace agents, so check the
+  // instructions' name too; normalizeSessionMode applies the same check to the agent's file name.
+  const instructions = isObj(modeInfo.modeInstructions) ? modeInfo.modeInstructions : {};
+  const uri = uriText(instructions.uri);
+  const name = textOf(instructions.name);
+  if (isPlanAgent(name) || isPlanAgent(textOf(modeInfo.telemetryModeName) || textOf(modeInfo.modeName))) return 'plan';
+  if (uri) return normalizeSessionMode(uri);
+  return name || 'custom';
 }
 
 function extractSlashCommand(slashCmd: RawRequest['slashCommand']): string {
@@ -149,18 +219,34 @@ function extractVariableKinds(vdVars: RawVariable[]): Record<string, number> {
   return kinds;
 }
 
+/** Instruction files the VS Code Local harness attaches to a request: project instructions
+ *  (`copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`) and targeted instructions (`*.instructions.md`, Markdown
+ *  files in `.claude/rules`). Prompt files (`*.prompt.md`) are prompts you run, not instructions. */
+function isInstructionFile(lowerPath: string, lowerName: string): boolean {
+  return lowerName === 'copilot-instructions.md'
+    || lowerName === 'agents.md'
+    || lowerName === 'claude.md'
+    || lowerName.endsWith('.instructions.md')
+    || (lowerName.endsWith('.md') && lowerPath.includes('/.claude/rules/'));
+}
+
+/** A content reference's path with `/` separators. A URI loses its query and fragment; a file-system path keeps
+ *  `?` and `#`, which are valid in file and folder names. */
+function referencePath(ref: { external?: string; fsPath?: string }): string {
+  const raw = ref.external ? ref.external.split(/[?#]/)[0] : ref.fsPath ?? '';
+  return raw.replaceAll('\\', '/');
+}
+
 function extractCustomInstructions(contentRefs: RawContentRef[] | undefined): string[] {
   const instructions: string[] = [];
   for (const cr of (contentRefs || [])) {
     if (typeof cr !== 'object' || !cr) continue;
     const ref = cr.reference;
     if (typeof ref !== 'object' || !ref) continue;
-    const ext = (ref.external || ref.fsPath || '');
-    const lower = ext.toLowerCase();
-    if (lower.includes('.instructions.md') || lower.includes('copilot-instructions') || lower.includes('.prompt.md') || lower.includes('agents.md')) {
-      const parts = ext.split('/');
-      const fname = parts[parts.length - 1] || ext;
-      if (fname && !instructions.includes(fname)) instructions.push(fname);
+    const filePath = referencePath(ref);
+    const fname = filePath.split('/').pop() || '';
+    if (fname && isInstructionFile(filePath.toLowerCase(), fname.toLowerCase()) && !instructions.includes(fname)) {
+      instructions.push(fname);
     }
   }
   return instructions;
@@ -535,6 +621,12 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
   const { promptTokens, completionTokens } = extractTokenInfo(req, { resultObj, meta, resultIsFinalized });
   const endState = computeEndState(resultObj, resultIsFinalized, promptTokens, completionTokens, meta);
   const compaction = extractCompaction(meta);
+  // The request-level promptTokens is written by the same usage update as the details, so it is
+  // the matching basis; result.metadata.promptTokens covers builds that only finalize metadata.
+  const promptComposition = compositionFromPromptTokenDetails(
+    req.promptTokenDetails,
+    typeof req.promptTokens === 'number' && req.promptTokens > 0 ? req.promptTokens : promptTokens,
+  );
 
   return createRequest({
     requestId: req.requestId || '',
@@ -543,6 +635,7 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
       ? resultIsFinalized ? 'final' : 'legacy' : 'missing',
     timestamp: req.timestamp ?? null,
     messageText: msgText,
+    nonHumanKind: vscodeNonHumanKind(req),
     responseText: respText,
     isCanceled: req.isCanceled || false,
     agentName, agentMode,
@@ -557,6 +650,7 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
     promptTokens,
     completionTokens,
     compaction,
+    ...(promptComposition ? { promptComposition } : {}),
     todoSnapshot: extractTodoSnapshot(result),
     reasoningEffort: extractReasoningEffortFromModelId(req.modelId || ''),
     endState,

@@ -12,9 +12,10 @@ import { createSession, detectDevcontainerFromRequests, ParseContext, prefetchCa
 import { accumulateEditLoc, EditTimelineLike, InitialContentResolver } from './edit-loc-diff';
 import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort } from './helpers';
-import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
+import { parseRawRequest, normalizeSessionMode, requestModeFromInfo, type RawRequest } from './parser-vscode-request';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
 import { parseCLIWorkspaceName, parseWorkspaceName, parseWorkspaceFolderPath, parseCLIWorkspaceFolderPath, readFile, reconstructFromJsonl, stripImageData } from './parser-vscode-files';
+import { SelectedModelLimits } from './vscode-model-limits';
 
 export function harnessFromPath(logsDir: string): string {
   if (logsDir.includes('Code - Insiders')) return 'Local Agent (Insiders)';
@@ -485,21 +486,28 @@ interface SessionFileData {
   };
 }
 
-export function parseSessionFile(sessionFile: string, wsId: string, wsName: string, harness: string, customInstructionsBytes?: number): Session | null {
-
-  let data: SessionFileData;
+/** The session file's final state, collecting the context limit of each request's model on the way. `null` when
+ *  the file can't be read or parsed. */
+function readSessionFileData(sessionFile: string, modelLimits: SelectedModelLimits): SessionFileData | null {
   try {
     if (sessionFile.endsWith('.jsonl')) {
-      const result = reconstructFromJsonl(sessionFile);
-      if (!result) return null;
-      data = result as SessionFileData;
-    } else {
-      data = JSON.parse(stripImageData(readFile(sessionFile))) as SessionFileData;
+      const result = reconstructFromJsonl(sessionFile, true, modelLimits);
+      return result ? result as SessionFileData : null;
     }
+    const data = JSON.parse(stripImageData(readFile(sessionFile))) as SessionFileData;
+    modelLimits.select(data.inputState?.selectedModel);
+    modelLimits.stamp(data.requests);
+    return data;
   } catch (e) {
     debugCore('parser-vscode', `Cannot read/parse session file ${sessionFile}`, e);
     return null;
   }
+}
+
+export function parseSessionFile(sessionFile: string, wsId: string, wsName: string, harness: string, customInstructionsBytes?: number): Session | null {
+  const modelLimits = new SelectedModelLimits();
+  const data = readSessionFileData(sessionFile, modelLimits);
+  if (!data) return null;
 
   const creationTs = data.creationDate ?? null;
   let lastMsgTs = data.lastMessageDate ?? null;
@@ -527,11 +535,14 @@ export function parseSessionFile(sessionFile: string, wsId: string, wsName: stri
     if (!req.reasoningEffort && sessionEffortDefault) {
       req.reasoningEffort = sessionEffortDefault;
     }
-    // Apply session-level mode as agentMode — it's the definitive source
-    // for distinguishing agent/ask/plan/edit/custom modes.
-    // When absent, clear the per-request agent.id (a participant identifier
-    // like "copilot") so downstream analytics don't misclassify it as a mode.
-    req.agentMode = sessionMode;
+    // Each request's modeInfo records the mode it was sent in, so a switch to
+    // Plan mid-session isn't lost. Requests without it take the session-level
+    // mode. When both are absent, agentMode is '' rather than the per-request
+    // agent.id (a participant identifier like "copilot"), so downstream
+    // analytics don't misclassify it as a mode.
+    req.agentMode = requestModeFromInfo(r.modeInfo) ?? sessionMode;
+    const contextLimit = modelLimits.limitFor(r.requestId, r.modelId);
+    if (contextLimit != null) req.modelContextLimit = contextLimit;
     return req;
   });
   const hasDevcontainer = detectDevcontainerFromRequests(parsedRequests);

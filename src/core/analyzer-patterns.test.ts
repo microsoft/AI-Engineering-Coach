@@ -339,6 +339,40 @@ describe('PatternsAnalyzer', () => {
       const result = analyzer.getProjectOverview();
       expect(result.projects[0].timePattern).toContain('weekend');
     });
+
+    it('measures time and prompts from typed prompts, and code from every turn', () => {
+      const wednesday = new Date('2024-03-13T10:00:00').getTime();
+      const saturday = new Date('2024-03-16T10:00:00').getTime();
+      const sessions = [
+        makeSession({
+          workspaceName: 'project-x',
+          requests: [
+            makeRequest({ timestamp: wednesday }),
+            makeRequest({ timestamp: wednesday + 60_000, aiCode: [{ language: 'python', loc: 30 }], editedFiles: ['src/agent.py'], nonHumanKind: 'subagent' }),
+            makeRequest({ timestamp: saturday, nonHumanKind: 'autopilot' }),
+            makeRequest({ timestamp: saturday + 3_600_000, nonHumanKind: 'autopilot' }),
+          ],
+          lastMessageDate: saturday + 3_600_000,
+        }),
+        makeSession({
+          workspaceName: 'agents-only',
+          requests: [makeRequest({ timestamp: wednesday, nonHumanKind: 'agent' })],
+          lastMessageDate: wednesday,
+        }),
+      ];
+      const result = createAnalyzer(sessions).getProjectOverview();
+      expect(result.projects).toHaveLength(1);
+      expect(result.projects[0]).toMatchObject({
+        workspaceName: 'project-x',
+        totalRequests: 1,
+        estimatedHours: 0.1,
+        timePattern: 'mostly weekdays, mornings',
+        topFiles: ['src/agent.py'],
+        estimatedLoc: 60,
+      });
+      expect(result.projects[0].languages).toEqual(['python', 'typescript']);
+      expect(result.turnBasis).toEqual({ humanTurns: 1, automatedTurns: 4, automatedByKind: { subagent: 1, autopilot: 2, agent: 1 } });
+    });
   });
 
   describe('getFilteredRequests / getFilteredSessions', () => {

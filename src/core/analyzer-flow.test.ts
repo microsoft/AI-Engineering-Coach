@@ -235,5 +235,40 @@ describe('FlowAnalyzer', () => {
       expect(result.days).toHaveLength(1);
       expect(result.days[0].blockCount).toBeGreaterThanOrEqual(1);
     });
+
+    it('measures follow-ups to typed prompts from the end of the work automated turns continued', () => {
+      const start = new Date('2024-03-15T10:00:00').getTime();
+      const at = (sec: number, elapsedSec: number, nonHumanKind?: 'autopilot') =>
+        makeRequest({ timestamp: start + sec * 1000, totalElapsed: elapsedSec * 1000, nonHumanKind });
+      const session = makeSession({
+        requests: [at(0, 5), at(10, 290, 'autopilot'), at(320, 5), at(330, 270, 'autopilot'), at(610, 5), at(3600, 60, 'autopilot')],
+        lastMessageDate: start + 3_660_000,
+      });
+      const [flow] = createAnalyzer([session]).getFlowState().days[0].sessions;
+      expect(flow).toMatchObject({
+        requestCount: 3, startTs: start, endTs: start + 610_000, durationMin: 10.2, medianFollowUpSec: 15, rapidFollowUpRate: 1,
+      });
+    });
+
+    it('counts prompts typed while a sub-agent still works as follow-ups with no wait', () => {
+      const start = new Date('2024-03-15T10:00:00').getTime();
+      const at = (sec: number, elapsedSec: number, nonHumanKind?: 'subagent') =>
+        makeRequest({ timestamp: start + sec * 1000, totalElapsed: elapsedSec * 1000, nonHumanKind });
+      const session = makeSession({ requests: [at(0, 10), at(5, 595, 'subagent'), at(20, 10), at(40, 10)], lastMessageDate: start + 600_000 });
+      const [flow] = createAnalyzer([session]).getFlowState().days[0].sessions;
+      expect(flow).toMatchObject({ requestCount: 3, medianFollowUpSec: 0, rapidFollowUpRate: 1 });
+      expect(flow.flowScore).toBeGreaterThan(0);
+    });
+
+    it('leaves out a session with fewer than 3 typed prompts, however many automated turns it has', () => {
+      const start = new Date('2024-03-15T10:00:00').getTime();
+      const requests = [
+        makeRequest({ timestamp: start }),
+        ...Array.from({ length: 5 }, (_, i) => makeRequest({ timestamp: start + (i + 1) * 10_000, nonHumanKind: 'agent' })),
+        makeRequest({ timestamp: start + 60_000 }),
+      ];
+      const result = createAnalyzer([makeSession({ requests, lastMessageDate: start + 60_000 })]).getFlowState();
+      expect(result.days).toHaveLength(0);
+    });
   });
 });

@@ -203,19 +203,19 @@ const ACHIEVEMENTS: Achievement[] = [
   {
     id: 'night-owl', title: 'Night Owl', icon: SVG.owl,
     tier: 'bronze', xp: 15, category: 'humor',
-    description: '500+ requests between midnight and 5am',
+    description: '500+ prompts you typed between midnight and 5am',
     evaluate: thresholdEval('lateNightRequests', 500, (v) => `${v} / 500`),
   },
   {
     id: 'weekend-warrior', title: 'Weekend Warrior', icon: SVG.beach,
     tier: 'bronze', xp: 15, category: 'humor',
-    description: '1,000+ requests on weekends',
+    description: '1,000+ prompts you typed on weekends',
     evaluate: thresholdEval('weekendRequests', 1000, (v) => `${formatNum(v)} / 1,000`),
   },
   {
     id: 'speed-demon', title: 'Speed Demon', icon: SVG.bolt,
     tier: 'silver', xp: 20, category: 'humor',
-    description: 'Peak hour with 50+ requests',
+    description: 'Peak hour with 50+ prompts you typed',
     evaluate: thresholdEval('hourlyPeak', 50, (v) => `${v} / 50 peak/hr`),
   },
 ];

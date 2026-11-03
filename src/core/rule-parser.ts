@@ -43,6 +43,7 @@
  * ```
  */
 
+import { defaultRuleDescription } from './rule-summary';
 import { DetectionRule, RuleCondition, RuleSeverity, RuleScope, PracticeGroup, PRACTICE_GROUPS  } from './types';
 import { formatInlineList, quoteScalar, readQuotedScalar, splitInlineList } from './frontmatter-values';
 
@@ -375,7 +376,7 @@ export function parseRule(markdown: string): DetectionRule | null {
     severity: fm.severity as RuleSeverity,
     requiresIdeContext: fm.requiresIdeContext ?? false,
     scope,
-    description: description || `Detects ${fm.name.toLowerCase()} patterns.`,
+    description: description || defaultRuleDescription(fm.name),
     descriptionTemplate: descriptionTemplate || '{{count}} occurrences detected.',
     suggestionTemplate: suggestionTemplate || 'Review your practices.',
     exampleTemplate: exampleTemplate || '',
@@ -411,8 +412,9 @@ function parseTestFixtures(body: string): Array<{ input: Record<string, unknown>
     const expectPart = trimmed.substring(arrowIdx + 2).trim().toLowerCase();
     if (expectPart !== 'triggered' && expectPart !== 'clean') continue;
     try {
-      // Convert relaxed JSON to strict: add quotes to keys
-      const strict = jsonPart.replaceAll(/(\w+)\s*:/g, '"$1":').replaceAll('\'', '"');
+      // Quote bare keys and single-quoted strings; string contents such as "02:00" stay as written
+      const strict = jsonPart.replaceAll(/"(?:[^"\\]|\\.)*"|'((?:[^'\\]|\\.)*)'|(\w+)\s*:/g, (match, single?: string, key?: string) =>
+        key === undefined ? (single === undefined ? match : `"${single.replaceAll(/\\.|"/g, s => (s === '"' ? '\\"' : s === '\\\'' ? '\'' : s))}"`) : `"${key}":`);
       const input = JSON.parse(strict) as Record<string, unknown>;
       tests.push({ input, expect: expectPart });
     } catch { /* skip unparseable lines */ }
