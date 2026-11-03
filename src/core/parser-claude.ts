@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { Session, SessionRequest } from './types';
+import { CompactionEvent, Session, SessionRequest } from './types';
 import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
@@ -36,6 +36,8 @@ import { imageReferencesFromContent, type ImageReference, type ImageRequestMatch
 import { ClaudeResponseAccumulator, type ClaudeRequestUsage } from './parser-claude-responses';
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
+import { readClaudeCompaction, requestCompactionFields } from './agent-compaction';
+import { addTurnCompaction } from './cli-compaction';
 
 interface ClaudeContentBlock {
   type: string;
@@ -85,6 +87,10 @@ interface ClaudeLine {
   /** Subagent identifier on `subagents/` files. Present alongside
    *  `isSidechain: true`. Not used for billing math; surfaced for diagnostics. */
   agentId?: string;
+  /** `system` lines: `compact_boundary` marks a compaction. */
+  subtype?: unknown;
+  /** On a `compact_boundary` line: `trigger`, `preTokens`, `postTokens`, `durationMs`. */
+  compactMetadata?: unknown;
   message?: ClaudeMessage;
 }
 
@@ -120,6 +126,20 @@ interface ClaudeAssistantData {
   answerEvidence: 'final' | 'legacy' | 'missing';
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
+  /** Compactions logged during the request (`compact_boundary` lines), in order. */
+  compactions: CompactionEvent[];
+}
+
+/** A `compact_boundary` line's compaction, or `null` for any other line. */
+function claudeCompaction(line: ClaudeLine): CompactionEvent | null {
+  return line.type === 'system' && line.subtype === 'compact_boundary' ? readClaudeCompaction(line.compactMetadata) : null;
+}
+
+/** Put compactions logged before the request's prompt ahead of its own, within the cap. */
+function prependCompactions(data: ClaudeAssistantData, earlier: CompactionEvent[]): void {
+  if (earlier.length === 0) return;
+  const own = data.compactions.splice(0);
+  for (const compaction of [...earlier, ...own]) addTurnCompaction(data.compactions, compaction);
 }
 
 /** Session-wide prompt-cache state across Claude requests. */
@@ -415,6 +435,7 @@ function collectClaudeAssistantData(
     answerEvidence: 'missing',
     investigationDelegations: [],
     webDomains: [],
+    compactions: [],
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);
@@ -422,6 +443,8 @@ function collectClaudeAssistantData(
   while (i < lines.length) {
     const next = lines[i];
     if (next.type === 'user' && userHasText(next)) break;
+    const compaction = claudeCompaction(next);
+    if (compaction) addTurnCompaction(data.compactions, compaction);
     if (next.type === 'assistant') {
       const blocks = toContentArray(next.message?.content);
       const hasText = blocks.some(block => block.type === 'text' && block.text?.trim());
@@ -808,6 +831,7 @@ function buildClaudeRequest(
     ...(usage.promptCache ? { promptCache: usage.promptCache } : {}),
     ...(usage.callRowsWithoutCacheData ? { callRowsWithoutCacheData: usage.callRowsWithoutCacheData } : {}),
     ...(usage.contextUsage ? { contextUsage: usage.contextUsage } : {}),
+    ...requestCompactionFields(assistantData.compactions),
   });
   mergeRequestEditLoc(editLocIndex, requestId, assistantData.editLocs);
   return request;
@@ -841,11 +865,15 @@ export function parseClaudeSessionFile(
   let firstTs: number | null = null;
   let lastTs: number | null = null;
   let entrypoint: string | undefined;
+  // Compactions logged before the first prompt go to the first request.
+  const earlyCompactions: CompactionEvent[] = [];
   let i = 0;
 
   while (i < lines.length) {
     const line = lines[i];
     if (line.type !== 'user' || !userHasText(line)) {
+      const compaction = requests.length === 0 ? claudeCompaction(line) : null;
+      if (compaction) addTurnCompaction(earlyCompactions, compaction);
       i++;
       continue;
     }
@@ -858,6 +886,7 @@ export function parseClaudeSessionFile(
     ({ firstTs, lastTs } = updateClaudeTimestampRange(userTs, firstTs, lastTs));
 
     const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState);
+    if (requests.length === 0) prependCompactions(assistantData, earlyCompactions);
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);
