@@ -503,6 +503,33 @@ describe('parseClaudeSessions', () => {
     }
   });
 
+  it('resolves workspace names with dots and underscores, which Claude Code also encodes as hyphens', () => {
+    // Claude Code turns /work/.agents into -work--agents and /work/my_app into -work-my-app.
+    const tmpBase = fs.mkdtempSync(path.join(longTmpDir(), 'claude-dot-'));
+    const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-proj-'));
+    const projectsDir = path.join(root, 'projects');
+    try {
+      for (const name of ['.agents', 'my_app.v2']) {
+        const targetDir = path.join(tmpBase, name);
+        fs.mkdirSync(targetDir, { recursive: true });
+        const encodedDirName = targetDir
+          .replace(/^([a-zA-Z])(?=:)/, d => d.toLowerCase())
+          .replace(/[^A-Za-z0-9]/g, '-');
+        const projDir = path.join(projectsDir, encodedDirName);
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(projDir, `${name.replace(/\W/g, '')}.jsonl`),
+          [makeUser('hello'), makeAssistant('world')].map(l => JSON.stringify(l)).join('\n'),
+        );
+      }
+      const names = parseClaudeSessions(projectsDir).map(s => s.workspaceName).sort();
+      expect(names).toEqual(['.agents', 'my_app.v2']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(tmpBase, { recursive: true, force: true });
+    }
+  });
+
   it('resolves workspace name through symlinked directories (OneDrive reparse points)', () => {
     // On Windows, "OneDrive - Microsoft" is a reparse point that readdirSync
     // reports as a symlink rather than a directory.  The resolution algorithm

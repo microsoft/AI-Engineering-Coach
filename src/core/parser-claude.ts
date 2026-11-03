@@ -471,19 +471,18 @@ export function findClaudeDirs(): string[] {
   return dirs;
 }
 
-/** Encode a single filesystem component the way Claude Code does:
- *  replace whitespace with hyphens. Path separators never appear in a single
- *  component name, and colons are not handled here because Windows component
- *  names cannot contain them. */
+/** Encode a single filesystem component the way Claude Code does: every
+ *  character other than an ASCII letter or digit becomes a hyphen, so spaces,
+ *  dots and underscores (`.agents`, `my_app`) are encoded too. */
 function encodeComponentForMatch(name: string): string {
-  return name.replace(/\s/g, '-');
+  return name.replace(/[^A-Za-z0-9]/g, '-');
 }
 
 /**
  * Resolve an encoded Claude project directory name back to the real folder name.
  *
- * Claude encodes workspace paths by replacing `/`, `\`, `:`, and whitespace
- * with `-`.  For example `c--dev-AI-Engineering-Coach` represents
+ * Claude encodes workspace paths by replacing every character other than an
+ * ASCII letter or digit (`/`, `\`, `:`, whitespace, `.`, `_` and so on) with `-`.  For example `c--dev-AI-Engineering-Coach` represents
  * `C:\dev\AI-Engineering-Coach`.  Because the encoding is lossy (hyphens, spaces,
  * and path separators all become `-`) we resolve the name by listing each
  * directory level and matching entries against the remaining encoded string.
