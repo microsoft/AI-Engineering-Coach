@@ -500,6 +500,9 @@ export class ContextAnalyzer extends AnalyzerBase {
       const window = sessionContextWindow(s);
       for (let i = 0; i < s.requests.length; i++) {
         for (const compaction of requestCompactions(s.requests[i])) {
+          // Claude Code logs no window, and an estimate sized from the session's own peak
+          // puts every compaction near "full". Only a logged limit can show it.
+          if (compaction.tokenLimit == null && s.harness === 'Claude' && requestContextLimit(s.requests[i]) == null) continue;
           const limit = compaction.tokenLimit ?? window.perRequest[i];
           if (compaction.contextLengthBefore > 0 && (compaction.contextLengthBefore / limit) * 100 > 85) {
             events.push({ session: s, tokensBefore: compaction.contextLengthBefore });
@@ -606,10 +609,12 @@ export class ContextAnalyzer extends AnalyzerBase {
       });
     }
 
-    // 4. Runaway Context Growth — sessions where token count grows steadily without stabilizing
-    const runawayEntries: { session: Session; first: number; last: number }[] = [];
+    // 4. Runaway Context Growth — sessions where token count grows steadily without stabilizing. A compaction
+    // resets the context, so only the requests after the session's last compaction count.
+    const runawayEntries: { session: Session; first: number; last: number; requests: number }[] = [];
     for (const s of sessions) {
-      const sessionTokens = this.estimateSessionTokens(s);
+      const start = requestsAfterLastCompaction(s);
+      const sessionTokens = this.estimateSessionTokens(s).slice(start);
       if (sessionTokens.length < CONTEXT_GROWING_SESSION_MIN_REQS) continue;
       let increasing = 0;
       for (let i = 1; i < sessionTokens.length; i++) {
@@ -617,7 +622,12 @@ export class ContextAnalyzer extends AnalyzerBase {
       }
       const growthRate = increasing / (sessionTokens.length - 1);
       if (growthRate > CONTEXT_GROWING_SESSION_GROWTH_RATE) {
-        runawayEntries.push({ session: s, first: sessionTokens[0], last: sessionTokens[sessionTokens.length - 1] });
+        runawayEntries.push({
+          session: s,
+          first: sessionTokens[0],
+          last: sessionTokens[sessionTokens.length - 1],
+          requests: start === 0 ? s.requestCount : sessionTokens.length,
+        });
       }
     }
     if (runawayEntries.length > 0) {
@@ -628,7 +638,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         message: `${Math.round(r.first / 1000)}K \u2192 ${Math.round(r.last / 1000)}K tokens`,
         model: '',
         kind: 'session' as const,
-        stats: { startK: Math.round(r.first / 1000), endK: Math.round(r.last / 1000), requests: r.session.requestCount },
+        stats: { startK: Math.round(r.first / 1000), endK: Math.round(r.last / 1000), requests: r.requests },
       }));
       patterns.push({
         id: 'runaway-context',
@@ -967,6 +977,15 @@ export class ContextAnalyzer extends AnalyzerBase {
     }
     return { rangesWithTokens: result, matchingSessions, sessionsWithRequestTokens, harnessesWithoutRequestTokens };
   }
+}
+
+/** Index of the first request after the session's last successful compaction; 0 when it never compacted. The
+ *  request that logged the compaction is left out: its last prompt can be from either side of it. */
+function requestsAfterLastCompaction(session: Session): number {
+  for (let i = session.requests.length - 1; i >= 0; i--) {
+    if (requestCompactions(session.requests[i]).some(compaction => compaction.outcome !== 'failed')) return i + 1;
+  }
+  return 0;
 }
 
 /** Adds the timestamps of the session's requests that carry composition but no per-request tokens. They add a
