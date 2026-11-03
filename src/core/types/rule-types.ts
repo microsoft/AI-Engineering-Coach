@@ -110,6 +110,7 @@ export interface RuleTemplateVars {
   ratio: number;           // count / total (0-1)
   pct: string;             // ratio formatted as percentage string
   extra: Record<string, unknown>;  // additional rule-specific vars
+  thresholds?: Record<string, number>;  // the rule's thresholds, for {{thresholds.X}} in templates
 }
 
 /**
