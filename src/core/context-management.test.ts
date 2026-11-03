@@ -600,6 +600,19 @@ describe('anti-pattern: context-bloat', () => {
     expect(bloat!.occurrences).toBe(1);
   });
 
+  it('does not flag amnesia from an estimated Claude Code window', () => {
+    const compacted = (harness: string) => {
+      const requests = flatTokenRequests(CONTEXT_MIN_TOKEN_REQUESTS + 1, 400_000);
+      requests[3].compaction = {
+        mode: 'full', numRounds: 1, numRoundsSinceLastSummarization: 1, contextLengthBefore: 400_000,
+        durationMs: 1, model: 'm', outcome: 'success',
+      };
+      return getCtxMgmt([sess({ harness, requests })]).antiPatterns.find(p => p.id === 'context-amnesia');
+    };
+    expect(compacted('Claude')).toBeUndefined();
+    expect(compacted('Codex')).toBeDefined();
+  });
+
   it('does not trigger for optimal sessions', () => {
     const sessions = [
       sess({ requests: flatTokenRequests(CONTEXT_MIN_TOKEN_REQUESTS + 1, 30_000) }),
@@ -750,6 +763,35 @@ describe('anti-pattern: runaway-context', () => {
     const data = getCtxMgmt(sessions);
     const runaway = data.antiPatterns.find(p => p.id === 'runaway-context');
     expect(runaway).toBeUndefined();
+  });
+
+  it('treats a compaction as a reset: growth before it does not count', () => {
+    // Steady growth for 10 requests, a compaction, then 4 more growing requests: too few after the reset.
+    const reqs = [
+      ...linearTokenRequests(10, 10_000, 5_000),
+      ...linearTokenRequests(4, 8_000, 2_000, BASE_TS + 10 * 60_000).map((r, i) => ({ ...r, requestId: `after-${i}` })),
+    ];
+    reqs[9] = { ...reqs[9], compaction: compaction({ contextLengthBefore: 55_000, contextLengthAfter: 6_000, trigger: 'auto' }) };
+    const data = getCtxMgmt([sess({ requests: reqs })]);
+    expect(data.antiPatterns.find(p => p.id === 'runaway-context')).toBeUndefined();
+  });
+
+  it('still flags steady growth after the last compaction, measured from the reset', () => {
+    const before = linearTokenRequests(3, 50_000, 10_000);
+    before[2] = { ...before[2], compaction: compaction({ contextLengthBefore: 70_000, contextLengthAfter: 8_000 }) };
+    const after = linearTokenRequests(CONTEXT_GROWING_SESSION_MIN_REQS + 1, 10_000, 5_000, BASE_TS + 3 * 60_000)
+      .map((r, i) => ({ ...r, requestId: `after-${i}` }));
+    const data = getCtxMgmt([sess({ requests: [...before, ...after] })]);
+    const runaway = data.antiPatterns.find(p => p.id === 'runaway-context');
+    expect(runaway?.occurrences).toBe(1);
+    expect(runaway?.details?.[0].stats).toEqual({ startK: 10, endK: 50, requests: CONTEXT_GROWING_SESSION_MIN_REQS + 1 });
+  });
+
+  it('ignores a failed compaction', () => {
+    const reqs = linearTokenRequests(CONTEXT_GROWING_SESSION_MIN_REQS + 2, 10_000, 5_000);
+    reqs[5] = { ...reqs[5], compaction: compaction({ outcome: 'failed' }) };
+    const data = getCtxMgmt([sess({ requests: reqs })]);
+    expect(data.antiPatterns.find(p => p.id === 'runaway-context')?.occurrences).toBe(1);
   });
 });
 

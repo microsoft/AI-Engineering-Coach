@@ -15,11 +15,15 @@
  * type=event_msg:       payload.type = user_message|agent_reasoning|function_call|function_call_output|
  *                                      task_started|task_complete|token_count|turn_aborted|error|assistant_message
  * type=response_item:   payload.role, payload.content[]
+ * type=compacted:       a compaction (also a `compaction` response item, a `context_compacted` event or a
+ *                       `ContextCompaction` item; see `agent-compaction.ts`)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { ModelUsage, Session, SessionRequest } from './types';
+import { CompactionEvent, ModelUsage, Session, SessionRequest } from './types';
+import { codexCompaction, requestCompactionFields } from './agent-compaction';
+import { addTurnCompaction } from './cli-compaction';
 import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, extractSkillPathsFromText } from './parser-shared';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
@@ -113,6 +117,13 @@ interface CodexParseState {
   pendingToolEdits: Map<string, PendingCodexEdit>;
   /** The latest `total_token_usage` logged `cached_input_tokens`; without it the cached count is a default 0. */
   curTotalCachedReported: boolean;
+  /** Compactions logged during the current turn, in order. */
+  turnCompactions: CompactionEvent[];
+  /** Prompt tokens and `model_context_window` of the session's latest main-agent call; 0 and `null` before one. */
+  lastPromptTokens: number;
+  lastContextWindow: number | null;
+  /** A compaction was recorded since the latest model call: Codex logs one compaction in several records. */
+  compactionOpen: boolean;
 }
 
 interface PendingCodexEdit {
@@ -211,6 +222,10 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     editLocIndex,
     pendingToolEdits: new Map(),
     curTotalCachedReported: false,
+    turnCompactions: [],
+    lastPromptTokens: 0,
+    lastContextWindow: null,
+    compactionOpen: false,
   };
 }
 
@@ -320,6 +335,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
     ...(contextUsage ? { contextUsage } : {}),
+    ...requestCompactionFields(state.turnCompactions),
   }));
   mergeRequestEditLoc(state.editLocIndex, requestId, state.currentEditLocs);
 
@@ -344,6 +360,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
+  state.turnCompactions = [];
   state.currentEditLocs = new Map();
   state.answerEvidence = 'missing';
   if (state.imageScan) {
@@ -554,7 +571,14 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   const last = recordValue(info?.last_token_usage);
   const lastInput = tokenCount(last?.input_tokens);
   if (newCall && lastInput != null) {
-    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window), model: state.turnModel || undefined });
+    const window = tokenCount(info?.model_context_window);
+    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
+    // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
+    if (lastInput > 0) {
+      state.lastPromptTokens = lastInput;
+      state.lastContextWindow = window;
+      state.compactionOpen = false;
+    }
   }
 }
 
@@ -574,6 +598,18 @@ function trackCodexTaskEnd(eventType: string, state: CodexParseState, ts: number
   if (eventType !== 'task_complete' && eventType !== 'turn_aborted') return;
   if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
   state.turnEndTs = ts;
+}
+
+function isCompactionEvent(eventType: string, payload: Record<string, unknown>): boolean {
+  return eventType === 'context_compacted' || (eventType === 'item_completed' && recordValue(payload.item)?.type === 'ContextCompaction');
+}
+
+/** Record a compaction once, however many records Codex logs for it. One before any model call of the file is
+ *  history a forked thread inherited, not a compaction of this session. */
+function recordCodexCompaction(state: CodexParseState): void {
+  if (state.compactionOpen || state.lastPromptTokens <= 0) return;
+  state.compactionOpen = true;
+  addTurnCompaction(state.turnCompactions, codexCompaction(state.lastPromptTokens, state.lastContextWindow));
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
@@ -597,6 +633,10 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
   }
   if (eventType === 'token_count') {
     handleTokenCount(payload, state);
+    return;
+  }
+  if (isCompactionEvent(eventType, payload)) {
+    recordCodexCompaction(state);
     return;
   }
   if (eventType === 'function_call_output' || eventType === 'custom_tool_call_output') {
@@ -679,7 +719,8 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
     handleAssistantResponseItem(payload, state);
     return;
   }
-  if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
+  if (itemType === 'compaction' || itemType === 'compaction_summary') recordCodexCompaction(state);
+  else if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
   else if (itemType === 'custom_tool_call') handleCustomToolCallResponseItem(payload, state);
   else if (itemType === 'function_call_output' || itemType === 'custom_tool_call_output') {
     handleCodexToolOutput(payload, state);
@@ -715,6 +756,10 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
   }
   if (line.type === 'turn_context') {
     handleTurnContext(line.payload || {}, state);
+    return;
+  }
+  if (line.type === 'compacted') {
+    recordCodexCompaction(state);
     return;
   }
   if (line.type === 'response_item') handleResponseItem(line.payload || {}, state, ts, meta.model);
