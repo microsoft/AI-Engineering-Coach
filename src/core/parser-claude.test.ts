@@ -663,4 +663,21 @@ describe('parseClaudeSessions: large transcripts', () => {
       expect(requests.map(request => [request.messageText, request.responseText])).toEqual([['Why?', 'Because.']]);
     });
   });
+
+  it('leaves out API request records whatever the key order, and keeps a prompt that mentions one', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, (_, i) => (
+      { timestamp: '2025-06-15T10:00:01Z', uuid: `req-${i}`, type: 'api-request', body: blob }));
+    const mention = 'Why does {"type":"api-request"} show up?';
+    withProjectsDir('s.jsonl', [
+      makeUser(mention, '2025-06-15T10:00:00Z'),
+      ...apiRequests,
+      makeAssistant('Because.'),
+    ], projectsDir => {
+      const file = path.join(projectsDir, '-Users-me-proj', 's.jsonl');
+      expect(fs.statSync(file).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.responseText])).toEqual([[mention, 'Because.']]);
+    });
+  });
 });
