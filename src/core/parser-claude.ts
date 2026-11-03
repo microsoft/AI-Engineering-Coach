@@ -23,6 +23,8 @@ import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDe
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
+import { markNonHuman } from './human-turns';
+import { claudeNonHumanKind } from './parser-turn-kinds';
 import {
   FileEditLocMap,
   mergeRequestEditLoc,
@@ -859,6 +861,10 @@ export function parseClaudeSessionFile(
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);
+    // Every turn in a sub-agent's transcript came from the parent agent, whether or not Claude marked it
+    // `isSidechain`, which `claudeNonHumanKind` reads for other files.
+    const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
+    if (nonHumanKind) markNonHuman(request, nonHumanKind);
     requests.push(request);
     i = assistantData.nextIndex;
   }

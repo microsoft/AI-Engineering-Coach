@@ -134,6 +134,30 @@ export type CuriositySignal =
     repeatedQuestions: string[];
   };
 
+/**
+ * Why a turn the harness logged as a user message wasn't typed by the user. Parsers set it only
+ * from what the harness recorded about the sender; a turn without it is a turn the user typed.
+ *   agent      — sent by another agent (Copilot CLI/App `source: agent-*`)
+ *   relayed    — relayed from another session (the harness's relay wrapper or sender ID header; VS Code delegation)
+ *   subagent   — prompt a parent agent gave a sub-agent (Claude sidechain, Codex and OpenCode child sessions)
+ *   skill      — skill context delivered as a message (Copilot CLI/App)
+ *   system     — sent by the harness: notifications, scheduled tasks, synthetic messages
+ *   autopilot  — autopilot continuation (Copilot CLI/App)
+ *   meta       — a line the harness wrote, such as Claude's local-command caveat or a skill body
+ *   compaction — compaction summary, or an automatic compaction request
+ *   output     — command output the harness logged as a user line (Claude `!` and local commands)
+ */
+export type NonHumanKind =
+  | 'agent'
+  | 'relayed'
+  | 'subagent'
+  | 'skill'
+  | 'system'
+  | 'autopilot'
+  | 'meta'
+  | 'compaction'
+  | 'output';
+
 export interface SessionRequest {
   requestId: string;
   timestamp: number | null;
@@ -195,6 +219,8 @@ export interface SessionRequest {
   investigationDelegations?: ('research' | 'explore')[];
   /** Hostnames from explicit URL arguments of recorded web tools. No URL paths or credentials. */
   webDomains?: string[];
+  /** Set when the harness logged that something other than the user sent this turn. Absent: the user typed it. */
+  nonHumanKind?: NonHumanKind;
   /** Reasoning / thinking effort for reasoning-capable models, when known.
    *  Sources:
    *    - Copilot CLI: `session.start.data.reasoningEffort` and `session.model_change.data.reasoningEffort`

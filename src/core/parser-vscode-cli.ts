@@ -34,6 +34,8 @@ import {
 } from './edit-tool-diff';
 import { recordedTools, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromAttachments, imageReferencesFromVariables, imageRequestIndex, type ImageReference, type ImageRequestMatch } from './image-data';
+import type { NonHumanKind } from './types';
+import { cliNonHumanKind } from './parser-turn-kinds';
 
 interface CLIEvent {
   type: string;
@@ -54,7 +56,9 @@ interface TurnState {
   userMsg: string;
   userEventId?: string;
   answerEvidence: 'final' | 'legacy' | 'missing';
+  /** Same turns as `nonHumanKind`; the Curiosity exclusion reads it. */
   nonUser?: boolean;
+  nonHumanKind?: NonHumanKind;
   userTs: string | null;
   agentMode: string;
   responseChunks: string[];
@@ -239,6 +243,7 @@ function flushTurn(state: CLIParseState): void {
     reasoningEffort: turn.reasoningEffort
       ?? extractReasoningEffortFromModelId(turn.modelId || state.currentModelId),
     endState: getTurnEndState(turn),
+    nonHumanKind: turn.nonHumanKind,
     curiosity: turn.nonUser ? { kind: 'excluded', excerpts: [] } : undefined,
   });
   state.requests.push(request);
@@ -411,10 +416,8 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
     str(ev.data?.agentMode) || 'agent',
     state.currentReasoningEffort,
   );
-  // Relayed turns name their sender in harness-added text, for example `from_session_id:`.
-  const injected = str(ev.data?.transformedContent).replace(str(ev.data?.content), '');
-  state.turn.nonUser = /^(?:agent(?:-|$)|skill(?:-|$)|system$|autopilot$)/i.test(str(ev.data?.source))
-    || /^[ \t]*(?:from|sender)(?:_[a-z]+)+[ \t]*[:=]/im.test(injected);
+  state.turn.nonHumanKind = cliNonHumanKind(ev.data);
+  state.turn.nonUser = state.turn.nonHumanKind !== undefined;
   state.turn.userEventId = ev.id;
   addAttachmentReferences(state.turn, ev.data?.attachments);
   const images = [

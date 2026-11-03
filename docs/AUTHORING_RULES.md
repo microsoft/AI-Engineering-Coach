@@ -89,11 +89,26 @@ rule's block through the detector pipeline as part of `npm test`:
   `messageLength` from `messageText` unless the line sets them.
 - Fields the DSL reference lists with scope `session` or `both`, such as `harness`, `workspaceName`
   and `requestCount`, go on the request's session. `harness` defaults to `Local Agent` (VS Code).
+- `timestamp` defaults to noon on a Wednesday. A string `timestamp` such as `"2026-01-17T02:00:00"`
+  is a local date-time, so `hour()` and `dayOfWeek()` tests pass in every time zone.
+- A line is a typed prompt unless it sets `humanTurn: false`, or `nonHumanKind` to a reason the
+  parser records, such as `"autopilot"` or `"agent"`.
 - The request is repeated 100 times, each copy in its own session, so one line clears the rule's
   sample-size thresholds. A line can't mix different rows or stay under a threshold; cover those
   cases in a unit test.
-- Every line must parse. Don't put a word followed by `:` inside a string value, because the parser
-  quotes keys with a regex.
+- Every line must parse. Strings use double or single quotes and can contain `:`.
+
+### Rules about the user's own time
+
+Harnesses also log "user" turns that the user didn't type: messages from another agent or session,
+autopilot continuations, prompts a parent agent gave a sub-agent, and text the harness wrote. Each
+parser records why in `nonHumanKind`, and request rows expose the result as the read-only boolean
+`humanTurn`. A rule about when the user works, such as
+[`late-night-coding.md`](../src/core/rules/late-night-coding.md), matches `humanTurn == true`. A
+ratio counts only typed prompts in its total too:
+[`weekend-overwork.md`](../src/core/rules/weekend-overwork.md) sets
+`emitTotal: typedReqs` with `typedReqs: countWhere(all, "humanTurn", "==", true)`. Rules about
+session size or context, such as `mega-sessions`, keep every turn.
 
 ## Anatomy of a metric
 
@@ -184,6 +199,7 @@ Before opening a pull request:
 - Built-in metrics: [`src/core/metrics/`](../src/core/metrics/)
 - A minimal rule with tests: [`src/core/rules/lazy-prompting.md`](../src/core/rules/lazy-prompting.md)
 - A rule that counts only the harnesses that log a field: [`src/core/rules/no-custom-instructions.md`](../src/core/rules/no-custom-instructions.md)
+- A ratio over the prompts the user typed: [`src/core/rules/weekend-overwork.md`](../src/core/rules/weekend-overwork.md)
 - A rule using a custom aggregator and `extra.*` fields: [`src/core/rules/yolo-mode.md`](../src/core/rules/yolo-mode.md)
 - A minimal metric: [`src/core/metrics/weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md)
 - Anti-Patterns overview: [content/improve/anti-patterns.md](content/improve/anti-patterns.md)

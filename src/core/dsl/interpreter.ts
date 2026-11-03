@@ -60,8 +60,8 @@
  *   - avgField(arr, field)     average numeric field across rows
  *   - flatCount(arr, field)    sum of sub-array lengths
  *   - flatSomeWhere(arr, field, subField, value) any sub-element matches
- *   - adjacentPairCount(sessions, minLoc, maxGapMs) speed-accept pairs
- *   - flowScoreStats(sessions, minTimedReqs, rapidMs) flow-state analysis
+ *   - adjacentPairCount(sessions, minLoc, maxGapMs) speed-accept pairs (the next turn must be one the user typed)
+ *   - flowScoreStats(sessions, minTimedReqs, rapidMs) flow-state analysis over the turns the user typed
  *   - langExplorationWeeks(reqs) language exploration stats
  *   - mdRatioByWorkspace(sessions, minLoc, docLangs) markdown ratio per workspace
  *   - devcontainerStats(sessions, reqs) devcontainer usage stats
@@ -75,6 +75,7 @@
  */
 
 import { containsProfanity as _containsProfanity, extractProfaneWords } from '../profanity';
+import { humanFollowUpGaps, isHumanTurn } from '../human-turns';
 import { compileSafe, testSafe } from './safe-regex';
 import { ASTNode } from './types';
 
@@ -402,6 +403,8 @@ function computeSpeedAcceptPairs(sessions: Record<string, unknown>[], minLoc: nu
     for (let i = 0; i < reqs.length - 1; i++) {
       const prev = reqs[i] as Record<string, unknown>;
       const next = reqs[i + 1] as Record<string, unknown>;
+      // Only a message the user typed accepts the code; an automated turn sent right after it isn't a review decision.
+      if (!isHumanTurn(next)) continue;
       // Sum AI LOC from prev
       const aiCode = prev.aiCode;
       if (!Array.isArray(aiCode)) continue;
@@ -441,18 +444,15 @@ function computeFlowScoreStats(
     const timed = (reqs as Record<string, unknown>[]).filter(
       r => toNum(r.timestamp) > 0 && toNum(r.totalElapsed) > 0
     );
-    if (timed.length < minTimedReqs) continue;
+    // Flow counts the prompts the user typed; automated turns only extend the assistant's work before them.
+    if (timed.filter(isHumanTurn).length < minTimedReqs) continue;
 
     // Sort by timestamp
     timed.sort((a, b) => toNum(a.timestamp) - toNum(b.timestamp));
 
-    // Compute inter-request gaps
-    const gaps: number[] = [];
-    for (let i = 1; i < timed.length; i++) {
-      const prevEnd = toNum(timed[i - 1].timestamp) + toNum(timed[i - 1].totalElapsed);
-      const nextStart = toNum(timed[i].timestamp);
-      gaps.push(Math.max(0, nextStart - prevEnd));
-    }
+    // Gaps from the end of the assistant's work to each typed prompt
+    const gaps = humanFollowUpGaps(timed, r => toNum(r.timestamp), r => toNum(r.timestamp) + toNum(r.totalElapsed), isHumanTurn)
+      .map(gap => Math.max(0, gap));
     if (gaps.length === 0) continue;
 
     // Median gap
@@ -465,8 +465,9 @@ function computeFlowScoreStats(
     const latencyScore = Math.max(0, 100 - (median / 1000)); // penalty per second
     const score = Math.round(rapidRate * 60 + Math.min(latencyScore, 40));
 
-    // Group by day
-    const day = new Date(toNum(timed[0].timestamp)).toISOString().substring(0, 10);
+    // Group by the day of the first typed prompt
+    const firstTyped = timed.find(isHumanTurn) ?? timed[0];
+    const day = new Date(toNum(firstTyped.timestamp)).toISOString().substring(0, 10);
     if (!dayScores.has(day)) dayScores.set(day, []);
     dayScores.get(day)!.push(score);
   }

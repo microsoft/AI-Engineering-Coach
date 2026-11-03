@@ -5,9 +5,10 @@
 
 /* Base class for analyzer modules -- provides shared filtering logic */
 
-import { Session, SessionRequest, DateFilter } from './types';
+import { Session, SessionRequest, DateFilter, TurnBasis } from './types';
 import { EditLocIndex } from './edit-loc-diff';
 import { toDateStr } from './helpers';
+import { splitHumanTurns } from './human-turns';
 
 /** Total LoC for a request: exact edit lines when available, otherwise code-block lines. */
 export function getRequestLoc(request: SessionRequest, editLocIndex: EditLocIndex): number {
@@ -70,6 +71,12 @@ export class AnalyzerBase {
 
   protected requestLoc(r: SessionRequest): number {
     return getRequestLoc(r, this.editLocIndex);
+  }
+
+  /** Requests in range that the user typed, and how many other turns were left out. */
+  protected humanFilter(f?: DateFilter): { reqs: SessionRequest[]; basis: TurnBasis } {
+    const { human, basis } = splitHumanTurns(this.filter(f));
+    return { reqs: human, basis };
   }
 
   protected filteredSessions(f?: DateFilter): Session[] {

@@ -52,8 +52,8 @@ function failures(results: InlineTestResult[]): number[] {
 describe('built-in rule # Tests blocks', () => {
   it('finds every rule that ships a block', () => {
     expect(withTests.map(({ rule }) => rule.id)).toEqual(expect.arrayContaining([
-      'agent-mode-for-asks', 'context-engineering-gaps', 'frustration-signals', 'lazy-prompting',
-      'no-custom-instructions', 'no-plan-mode', 'verbose-output',
+      'agent-mode-for-asks', 'context-engineering-gaps', 'frustration-signals', 'late-night-coding', 'lazy-prompting',
+      'no-custom-instructions', 'no-plan-mode', 'verbose-output', 'weekend-overwork',
     ]));
   });
 
@@ -83,15 +83,15 @@ describe('built-in rule # Tests blocks', () => {
   });
 });
 
-describe('runInlineTests', () => {
-  function rule(scan: 'requests' | 'sessions', match: string, check: string, tests: string[]): DetectionRule {
-    return parseOrThrow([
-      '---', 'id: inline-test-probe', 'name: Inline Test Probe', 'group: prompt-quality', 'severity: low', `scope: ${scan}`, '---',
-      '', '# Detection Logic', '```detect', `scan: ${scan}`, `match: ${match}`, 'aggregate: count', `check: ${check}`, '```',
-      '', '# Tests', '```test', ...tests, '```', '',
-    ].join('\n'), 'probe rule');
-  }
+function rule(scan: 'requests' | 'sessions', match: string, check: string, tests: string[]): DetectionRule {
+  return parseOrThrow([
+    '---', 'id: inline-test-probe', 'name: Inline Test Probe', 'group: prompt-quality', 'severity: low', `scope: ${scan}`, '---',
+    '', '# Detection Logic', '```detect', `scan: ${scan}`, `match: ${match}`, 'aggregate: count', `check: ${check}`, '```',
+    '', '# Tests', '```test', ...tests, '```', '',
+  ].join('\n'), 'probe rule');
+}
 
+describe('runInlineTests', () => {
   it(`repeats each line ${RULE_TEST_ROWS} times, each copy in its own session`, () => {
     const probe = rule('sessions', 'requestCount == 1', `count == ${RULE_TEST_ROWS} AND total == ${RULE_TEST_ROWS}`, [
       '{messageText: "fix bug"} -> triggered',
@@ -118,5 +118,46 @@ describe('runInlineTests', () => {
       '{messageText: "fix bug"} -> clean',
     ]);
     expect(failures(runInlineTests(probe))).toEqual([]);
+  });
+});
+
+describe('runInlineTests: timestamps, humanTurn and string values', () => {
+  it('reads a string timestamp as a local date-time, whatever the time zone', () => {
+    const probe = rule('requests', 'hour(timestamp) == 2 AND dayOfWeek(timestamp) == 6', 'count > 0', [
+      '{timestamp: "2026-01-17T02:00:00"} -> triggered',
+      '{timestamp: "2026-01-17T12:00:00"} -> clean',
+      '{timestamp: "2026-01-14T02:00:00"} -> clean',
+      '{} -> clean',
+    ]);
+    expect(probe.tests[0].input).toEqual({ timestamp: '2026-01-17T02:00:00' });
+    expect(failures(runInlineTests(probe))).toEqual([]);
+  });
+
+  it('exposes humanTurn on request rows: false for a marked turn or a line that sets it, true otherwise', () => {
+    const probe = rule('requests', 'humanTurn == false', 'count > 0', [
+      '{nonHumanKind: "autopilot"} -> triggered',
+      '{nonHumanKind: "subagent", humanTurn: true} -> triggered',
+      '{humanTurn: false} -> triggered',
+      '{} -> clean',
+      '{humanTurn: true} -> clean',
+    ]);
+    expect(failures(runInlineTests(probe))).toEqual([]);
+  });
+
+  it('keeps escaped double quotes and backslashes in single-quoted strings', () => {
+    const probe = rule('requests', 'messageLength > 0', 'count > 0', [
+      String.raw`{messageText: 'say \"hi\"'} -> triggered`,
+      String.raw`{messageText: 'a \\ b'} -> triggered`,
+    ]);
+    expect(probe.tests.map(test => test.input)).toEqual([{ messageText: 'say "hi"' }, { messageText: 'a \\ b' }]);
+  });
+
+  it('keeps colons and quotes inside string values', () => {
+    const probe = rule('requests', 'messageLength > 0', 'count > 0', [
+      String.raw`{messageText: 'see http://x.test: it\'s "ok"', timestamp: "2026-01-17T02:00:00", "workType": "bug"} -> triggered`,
+    ]);
+    expect(probe.tests.map(test => test.input)).toEqual([
+      { messageText: 'see http://x.test: it\'s "ok"', timestamp: '2026-01-17T02:00:00', workType: 'bug' },
+    ]);
   });
 });

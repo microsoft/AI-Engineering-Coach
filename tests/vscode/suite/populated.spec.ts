@@ -80,7 +80,7 @@ describe('Packaged VSIX with synthetic sessions', () => {
     await dashboard.click('#patternTabs [data-tab="projects"]');
     await dashboard.expectCount('#tabProjects .project-card', 3);
     for (const project of PROJECT_NAMES) await dashboard.waitForText('#tabProjects .proj-name', project, true);
-    await dashboard.waitForText('#tabProjects .proj-requests', '21 reqs', true);
+    await dashboard.waitForText('#tabProjects .proj-requests', '21 prompts', true);
     await dashboard.waitForText('#tabProjects .proj-loc', '105 LoC', true);
     await dashboard.expectHealthy();
     await dashboard.snapshot('05-patterns-projects', 'Patterns: TypeScript, Python and Go project summaries');

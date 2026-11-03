@@ -73,8 +73,9 @@ export class TimelineAnalyzer extends AnalyzerBase {
     return this.sessions.find(s => s.sessionId === sessionId) || null;
   }
 
+  /** The user's working hours, days and streaks, from the turns they typed (automated turns are left out). */
   getWorkLifeBalance(f?: DateFilter): WorkLifeBalanceResult | null {
-    const reqs = this.filter(f);
+    const { reqs, basis } = this.humanFilter(f);
     if (reqs.length === 0) return null;
 
     const timeDist = computeTimeDistribution(reqs);
@@ -100,6 +101,7 @@ export class TimelineAnalyzer extends AnalyzerBase {
       maxBreak: streaks.maxBreak,
       activeDays: timeDist.sortedDays.length,
       weeklyTrend,
+      turnBasis: basis,
     };
   }
 

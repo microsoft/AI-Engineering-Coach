@@ -9,6 +9,7 @@
 import { SessionRequest, ToolConfirmation } from './types';
 import { createRequest, extractSkillNameFromPath } from './parser-shared';
 import { debugCore } from './log';
+import { vscodeNonHumanKind } from './parser-turn-kinds';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { hasRecordedToolEvidence, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { compositionFromPromptTokenDetails } from './context-composition';
@@ -25,6 +26,10 @@ export interface RawRequest {
   result?: { timings?: { firstProgress?: number; totalElapsed?: number }; metadata?: Record<string, unknown> };
   isCanceled?: boolean;
   agent?: { extensionDisplayName?: string; id?: string } | string;
+  /** Set on requests VS Code sent itself, e.g. when a background terminal command finished. */
+  isSystemInitiated?: boolean;
+  /** `kind: "delegation"` when another session or chat sent the request. */
+  origin?: { kind?: string };
   modelId?: string;
   slashCommand?: { name?: string } | string;
   /** The chat mode the request was sent in (VS Code 1.105+). */
@@ -630,6 +635,7 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
       ? resultIsFinalized ? 'final' : 'legacy' : 'missing',
     timestamp: req.timestamp ?? null,
     messageText: msgText,
+    nonHumanKind: vscodeNonHumanKind(req),
     responseText: respText,
     isCanceled: req.isCanceled || false,
     agentName, agentMode,

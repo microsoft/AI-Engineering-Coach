@@ -7,12 +7,16 @@
 
 import type { Session, SessionRequest } from './types';
 import { AnalyzerBase } from './analyzer-base';
-
-/** A request plus its session's `harness`, so a rule can count only the harnesses that log a field. */
-export type RuleRequestRow = SessionRequest & { harness: string };
+import { isHumanTurn } from './human-turns';
 
 /**
- * Copies `reqs` with each request's session `harness` attached. Request objects are
+ * A request plus its session's `harness`, so a rule can count only the harnesses that log a field, and
+ * `humanTurn`, so a rule can count only the turns the user typed.
+ */
+export type RuleRequestRow = SessionRequest & { harness: string; humanTurn: boolean };
+
+/**
+ * Copies `reqs` with each request's session `harness` and `humanTurn` attached. Request objects are
  * cached and sent over RPC, so they are copied, never mutated.
  *
  * Requests resolve to sessions by identity. Pass the sessions the requests came from, or
@@ -25,10 +29,17 @@ export function toRuleRequestRows(
   sessions: Session[] | ReadonlyMap<SessionRequest, Session>,
 ): RuleRequestRow[] {
   const sessionOf = 'get' in sessions ? sessions : AnalyzerBase.buildRequestSessionMap(sessions);
-  return reqs.map(req => ({ ...req, harness: sessionOf.get(req)?.harness ?? carriedHarness(req) }));
+  return reqs.map(req => ({ ...req, harness: sessionOf.get(req)?.harness ?? carriedHarness(req), humanTurn: humanTurn(req) }));
 }
 
 function carriedHarness(req: SessionRequest): string {
   const harness = (req as Partial<RuleRequestRow>).harness;
   return typeof harness === 'string' ? harness : '';
+}
+
+/** False when the parser recorded that something else sent the turn; otherwise a value the row carries, or true. */
+function humanTurn(req: SessionRequest): boolean {
+  if (!isHumanTurn(req)) return false;
+  const carried = (req as Partial<RuleRequestRow>).humanTurn;
+  return typeof carried === 'boolean' ? carried : true;
 }

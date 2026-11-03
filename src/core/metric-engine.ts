@@ -425,6 +425,7 @@ function defaultRow(): Record<string, unknown> {
     cacheReadTokens: null,
     cacheWriteTokens: null,
     workType: '',
+    humanTurn: true,
     // Session fields
     sessionId: 'test-session',
     workspaceId: 'test-ws',

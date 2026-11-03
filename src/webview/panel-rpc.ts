@@ -53,7 +53,7 @@ import type { EditLocIndex } from '../core/edit-loc-diff';
  * DSL-friendly row records. Centralizes the cast so every DSL call site
  * uses the same shape. Accepts both 'sessions' (rule scope) and 'session'
  * (field scope) as truthy session values. Request rows carry their
- * session's `harness`, as they do when rules run; `sessionOf` must index
+ * session's `harness` and their `humanTurn`, as they do when rules run; `sessionOf` must index
  * every request's session, because a date filter can drop the session.
  */
 type DslRow = Record<string, unknown>;
@@ -67,9 +67,10 @@ function pickRows(
   return (isSessionScope ? sessions : toRuleRequestRows(reqs, sessionOf)) as unknown as DslRow[];
 }
 
-/** The Data Explorer reads `both` fields such as `harness` from sessions, where they're logged. */
-function explorerRows(field: FieldInfo, reqs: SessionRequest[], sessions: Session[]): DslRow[] {
-  return (field.scope === 'request' ? reqs : sessions) as unknown as DslRow[];
+/** The Data Explorer reads request fields from request rows as rules see them (so `humanTurn` is there),
+ *  and `both` fields such as `harness` from sessions, where they're logged. */
+function explorerRows(field: FieldInfo, requestRows: () => DslRow[], sessions: Session[]): DslRow[] {
+  return field.scope === 'request' ? requestRows() : sessions as unknown as DslRow[];
 }
 
 function isPathUnder(pathMod: typeof import('path'), resolved: string, dir: string): boolean {
@@ -1286,10 +1287,11 @@ Explain why this session triggered the rule.`;
     const filter = validateDateFilter(params || {});
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
+    const requestRows = pickRows('requests', reqs, sessions, a.getRequestSessionMap());
 
     // Compute summary stats for each field
     const fieldSummaries = FIELD_SCHEMA.map(field => {
-      const rows = explorerRows(field, reqs, sessions);
+      const rows = explorerRows(field, () => requestRows, sessions);
 
       const values = rows.map(r => r[field.name]).filter(v => v != null && v !== '' && v !== 0);
       const nonEmpty = values.length;
@@ -1317,7 +1319,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = explorerRows(fieldInfo, reqs, sessions);
+    const rows = explorerRows(fieldInfo, () => pickRows('requests', reqs, sessions, a.getRequestSessionMap()), sessions);
 
     const values = rows.map(r => r[fieldName]).filter(v => v != null);
 

@@ -22,6 +22,8 @@ import { assertTrustedPath, createRequest, createSession, detectDevcontainerFrom
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
+import { markNonHuman } from './human-turns';
+import { openCodeMessageNonHumanKind } from './parser-turn-kinds';
 import {
   addFileEditLoc,
   FileEditLocMap,
@@ -46,6 +48,8 @@ interface OcSession {
   projectID?: string;
   directory?: string;
   title?: string;
+  /** Set on child sessions, which the parent session's task tool created and prompted. */
+  parentID?: string;
   time?: { created?: number; updated?: number };
 }
 
@@ -81,6 +85,10 @@ interface OcPart {
   messageID: string;
   type: string;
   text?: string;
+  /** OpenCode generated the text part, rather than the user typing it. */
+  synthetic?: boolean;
+  /** On a `compaction` part: OpenCode started the compaction itself (`false` when the user typed `/compact`). */
+  auto?: boolean;
   mime?: string;
   url?: string;
   tool?: string;
@@ -444,6 +452,17 @@ function buildOpenCodeRequest(
   });
 }
 
+/**
+ * Marks the prompts OpenCode generated itself and, in a child session (one the parent session's task tool
+ * created), the prompts its parent agent sent. A message keeps the more specific kind OpenCode recorded.
+ */
+function markOpenCodeTurns(requests: SessionRequest[], partsByMsg: Map<string, OcPart[]>, childSession: boolean): void {
+  for (const request of requests) {
+    const kind = openCodeMessageNonHumanKind(partsByMsg.get(request.requestId)) ?? (childSession ? 'subagent' : undefined);
+    if (kind) markNonHuman(request, kind);
+  }
+}
+
 function tokenCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -513,6 +532,7 @@ function buildOpenCodeSession(
   }
 
   if (requests.length === 0) return null;
+  markOpenCodeTurns(requests, partsByMsg, Boolean(rawSession.parentID));
 
   return createSession({
     sessionId: rawSession.id,
@@ -557,6 +577,7 @@ function queryOpenCodeDatabase<T>(database: SqliteDatabase, sql: string, ...para
 interface OcDbSessionRow {
   id: string;
   projectID?: string;
+  parentID?: string | null;
   directory?: string;
   title?: string;
   slug?: string;
@@ -624,8 +645,11 @@ function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sess
   const parameters = sessionId === undefined ? [] : [sessionId];
   const sessionFilter = sessionId === undefined ? '' : ' WHERE id = ?';
   const dataFilter = sessionId === undefined ? '' : ' WHERE session_id = ?';
+  // Older databases have no `session.parent_id`; selecting it there would fail the whole query.
+  const parentColumn = queryOpenCodeDatabase<{ name?: unknown }>(database, 'PRAGMA table_info(session)')
+    .some(column => column.name === 'parent_id') ? 'parent_id AS parentID, ' : '';
   const rawSessions = queryOpenCodeDatabase<OcDbSessionRow>(database,
-    'SELECT id, project_id AS projectID, directory, title, slug, '
+    `SELECT id, project_id AS projectID, ${parentColumn}directory, title, slug, `
       + `time_created AS created, time_updated AS updated FROM session${sessionFilter} ORDER BY time_created`, ...parameters);
   const messageRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, time_created AS created, '
@@ -661,6 +685,7 @@ function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sess
     const rawSession: OcSession = {
       id: row.id,
       projectID: row.projectID,
+      parentID: row.parentID ?? undefined,
       directory: row.directory,
       title: row.title,
       slug: row.slug,

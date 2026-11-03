@@ -54,7 +54,10 @@ messageText, messageLength, timestamp, totalElapsed, modelId, agentMode, agentNa
 slashCommand, referencedFiles (array), customInstructions (array), skillsUsed (array),
 toolsUsed (array), toolConfirmations (array), aiCode (array of {language, loc}),
 userCode (array), cancelled (boolean), sessionId, workspaceName,
-harness (the request's session harness, e.g. "Local Agent" for VS Code)
+harness (the request's session harness, e.g. "Local Agent" for VS Code),
+humanTurn (boolean: false when an agent, autopilot, the harness or a parent agent sent the turn;
+use humanTurn == true for time-of-day and weekday rules, and count the denominator with
+countWhere(all, "humanTurn", "==", true) as emitTotal)
 
 ## Available Row Fields (sessions)
 sessionId, workspaceName, requestCount, requests (array), harness, startTime, endTime,
@@ -89,8 +92,8 @@ creationDate, lastMessageDate
 - profanityMatches(reqs) -> {count, total, flaggedWords}
 - contextGapCount(reqs) -> {gapCount, gaps[], reqCount}
 - modelStats(reqs) -> {topModel, topCount, topShare, modelCount, total}
-- flowScoreStats(sessions, minReqs, rapidMs) -> {fragmentedDays, totalDays, avgScore, lowScoreRate}
-- adjacentPairCount(sessions, minLoc, maxGapMs) -> {count, avgLoc, avgGap}
+- flowScoreStats(sessions, minReqs, rapidMs) -> {fragmentedDays, totalDays, avgScore, lowScoreRate} (turns the user typed; a gap runs from the end of the assistant's work)
+- adjacentPairCount(sessions, minLoc, maxGapMs) -> {count, avgLoc, avgGap} (the next turn must be one the user typed)
 - mdRatioByWorkspace(sessions, minLoc, docLangs) -> {lowCount, totalWorkspaces, overallRatio, workspaces[]}
 - devcontainerStats(sessions, reqs) -> {terminalReqs, vscodeReqs, sandboxedTerminalReqs, totalTerminalReqs, terminalRate}
 - langExplorationWeeks(reqs) -> {weeksSinceNew, totalLangs, recentNew, totalWeeks}

@@ -10,6 +10,7 @@ import { warnCore } from './log';
 import { CACHE_MAX_BREAKS_PER_SESSION } from './constants';
 import { MAX_TIMELINE_BUCKETS } from './call-timeline';
 import { MAX_LATENCY_SAMPLES } from './call-outputs';
+import { NON_HUMAN_KINDS } from './human-turns';
 
 /* ---- Sub-schemas ---- */
 
@@ -230,6 +231,7 @@ export const SessionRequestSchema = z.object({
   answerEvidence: z.enum(['final', 'legacy', 'missing']).optional(),
   investigationDelegations: z.array(z.enum(['research', 'explore'])).max(2).optional(),
   webDomains: z.array(z.string()).optional(),
+  nonHumanKind: z.enum(NON_HUMAN_KINDS).optional(),
   curiosity: z.union([
     z.object({ kind: z.enum(['excluded', 'unscanned']), excerpts: z.array(z.string()).max(0) }),
     z.object({

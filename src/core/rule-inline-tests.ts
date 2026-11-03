@@ -8,7 +8,8 @@
  *
  * Each line describes one request. Its fields override the `createRequest`
  * defaults; fields the DSL schema lists as session fields, such as `harness`,
- * go on the request's session instead. The request is repeated
+ * go on the request's session instead. A string `timestamp` is a local
+ * date-time. The request is repeated
  * RULE_TEST_ROWS times, each copy in its own session, so a single line clears
  * the rule's sample-size thresholds. See docs/AUTHORING_RULES.md.
  */
@@ -55,6 +56,8 @@ function testSession(input: Record<string, unknown>, copy: number): Session {
     if (SESSION_FIELDS.has(key)) sessionFields[key] = value;
     else requestFields[key] = value;
   }
+  // A local date-time string ("2026-01-17T02:00:00"), so hour and weekday tests pass in every time zone.
+  if (typeof requestFields.timestamp === 'string') requestFields.timestamp = new Date(requestFields.timestamp).getTime();
   const fields = requestFields as Partial<SessionRequest>;
   const request: SessionRequest = {
     ...createRequest({

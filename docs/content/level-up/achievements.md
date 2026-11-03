@@ -20,8 +20,8 @@ Four headline metrics appear at the top:
 
 - **Linux Kernels** -- A fun normalization: how many Linux kernels worth of code the AI has generated for you
 - **AI Lines of Code** -- Total estimated LoC across all sessions
-- **Longest Streak** -- Your longest consecutive run of active coding days
-- **Peak Reqs/Hr** -- Your highest request-per-hour burst rate
+- **Longest Streak** -- Your longest consecutive run of days you typed a prompt
+- **Peak Reqs/Hr** -- Your highest per-hour count of the prompts you typed
 
 ## Achievement Tiers
 
@@ -52,6 +52,8 @@ Each tier awards different XP amounts. Progress bars show how close you are to u
 ### Breadth
 
 - **Polyglot** (Silver, 25 XP) -- Used AI with 10+ programming languages
+
+Streaks and the time-of-day badges (**Night Owl**, **Weekend Warrior** and **Speed Demon**) count only the prompts you typed, not turns that another agent, autopilot or the harness sent, as [Activity Patterns](/measure/patterns/) does. Volume badges count every turn.
 
 ## Latest Unlock
 

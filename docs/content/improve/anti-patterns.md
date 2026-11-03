@@ -39,8 +39,10 @@ Measures how well you provide context to the AI. Representative rules:
 Evaluates how you manage your coding sessions:
 
 - **Mega Sessions / Abandoned Sessions / Session Drift** -- Flag sessions that run too long, stop abruptly, or drift across unrelated topics
-- **Late-Night Coding / Weekend Overwork** -- Detect overwork patterns
+- **Late-Night Coding / Weekend Overwork** -- Detect overwork patterns in the prompts you typed
 - **Repeated Prompts** -- Surface near-duplicate prompts that suggest your context isn't landing
+
+The time-based rules count only the prompts you typed. Harnesses also log "user" turns that another agent, autopilot, a parent agent or the harness sent; those show when your agents ran, not when you worked. **Late-Night Coding** and **Weekend Overwork** leave them out, and Weekend Overwork divides by the prompts you typed, not by every turn. The weekly Session Hygiene score does the same for late-night and weekend hours, while canceled requests still count over every turn. **Broken Flow State** measures each pause from the end of the assistant's work, including automated turns that are still running, such as a sub-agent's, to your next prompt. **Speed Accept** (under Code Review) counts only a message you typed right after the code. Session-size rules such as **Mega Sessions** and **Session Drift** count every turn, because automated turns fill the context too. Your own rules can do the same with the `humanTurn` request field; see the [Rule Editor](/improve/rule-editor/).
 
 ### Code Review
 

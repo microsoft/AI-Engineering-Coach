@@ -23,6 +23,9 @@ import { ModelUsage, Session, SessionRequest } from './types';
 import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, extractSkillPathsFromText } from './parser-shared';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
+import { markNonHuman } from './human-turns';
+import { codexSessionNonHumanKind } from './parser-turn-kinds';
+import type { NonHumanKind } from './types';
 import {
   FileEditLocMap,
   mergeFileEditLoc,
@@ -48,6 +51,8 @@ interface CodexSessionMeta {
   cwd: string;
   source: string;
   model: string;
+  /** Set for sub-agent and internal sessions, whose prompts a parent agent sent. */
+  nonHumanKind?: NonHumanKind;
 }
 
 interface CodexContentItem {
@@ -657,6 +662,7 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
     meta.sessionId = stringValue(payload.id) || meta.sessionId;
     meta.cwd = stringValue(payload.cwd) || meta.cwd;
     meta.source = stringValue(payload.source) || meta.source;
+    meta.nonHumanKind ??= codexSessionNonHumanKind(payload.source);
   }
   if (line.type === 'turn_context' && !meta.model) {
     meta.model = stringValue(line.payload?.model);
@@ -818,6 +824,7 @@ export function parseCodexSessionFile(filePath: string, editLocIndex?: EditLocIn
 
   flushCodexTurn(state, meta.model);
   if (state.requests.length === 0) return null;
+  if (meta.nonHumanKind) for (const request of state.requests) markNonHuman(request, meta.nonHumanKind);
 
   const modelUsage = computeModelUsage(state, meta.model);
   const endReason = computeEndReason(modelUsage, state.requests);
