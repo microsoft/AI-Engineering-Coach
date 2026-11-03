@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Session, SessionRequest } from './types';
-import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
+import { assertTrustedPath, MAX_FILE_SIZE, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
@@ -195,13 +195,31 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
   }
 }
 
-function parseClaudeLines(raw: string): ClaudeLine[] {
+/**
+ * Raw API request records: most of a large transcript's bytes, and nothing the parser reads. Matched wherever `type`
+ * sits among the keys. Quotes inside JSON string values are escaped, so a prompt that mentions the text cannot match.
+ */
+const CLAUDE_API_REQUEST_LINE = /"type"\s*:\s*"api-request/;
+
+/**
+ * Streams a transcript's lines, leaving out raw API request records. Stops with a warning once the kept lines pass
+ * MAX_FILE_SIZE, so a huge transcript is parsed up to that point instead of skipped whole.
+ */
+function readClaudeLines(filePath: string): ClaudeLine[] {
   const lines: ClaudeLine[] = [];
-  for (const rawLine of raw.split('\n')) {
-    if (!rawLine.trim()) continue;
+  let keptBytes = 0;
+  let truncated = false;
+  forEachJsonlLine(filePath, rawLine => {
+    if (!rawLine.trim() || CLAUDE_API_REQUEST_LINE.test(rawLine)) return;
+    keptBytes += rawLine.length;
+    if (keptBytes > MAX_FILE_SIZE) {
+      truncated = true;
+      return;
+    }
     const parsed = parseClaudeLine(rawLine);
-    if (parsed) lines.push(parsed);
-  }
+    if (parsed && !parsed.type.startsWith('api-request')) lines.push(parsed);
+  }, () => truncated);
+  if (truncated) warnCore('parser-claude', `Transcript over ${MAX_FILE_SIZE / 1024 / 1024} MB without API requests; parsed up to there: ${filePath}`);
   return lines;
 }
 
@@ -821,16 +839,12 @@ export function parseClaudeSessionFile(
   { editLocIndex, subagentFile = false }: { editLocIndex?: EditLocIndex; subagentFile?: boolean } = {},
 ): Session | null {
   assertTrustedPath(filePath);
-  let raw: string;
+  let lines: ClaudeLine[];
   try {
-    const content = readFileSafe(filePath);
-    if (content === null) return null;
-    raw = content;
+    lines = readClaudeLines(filePath);
   } catch {
     return null;
   }
-
-  const lines = parseClaudeLines(raw);
   if (lines.length === 0) return null;
 
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
