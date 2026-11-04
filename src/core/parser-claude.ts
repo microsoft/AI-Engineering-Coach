@@ -761,12 +761,11 @@ export async function parseClaudeSessionsAsync(
 
   for (let i = 0; i < projectDirs.length; i++) {
     const dirName = projectDirs[i];
-    const workspaceName = projectNameFromEncoded(dirName, projectsDir);
-
-    if (onProject) onProject(i + 1, projectDirs.length, workspaceName);
-
     const result = parseClaudeProjectSessions(projectsDir, dirName, editLocIndex, sessionSourceIndex);
     if (result) results.push(result);
+
+    // Report after parsing, so the progress detail shows the name taken from the recorded cwd.
+    if (onProject) onProject(i + 1, projectDirs.length, result?.workspaceName ?? projectNameFromEncoded(dirName, projectsDir));
 
     // Yield every 5 projects so the event loop stays responsive
     if (i % 5 === 0) await new Promise<void>(r => setTimeout(r, 0));

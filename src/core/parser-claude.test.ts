@@ -449,6 +449,7 @@ describe('parseClaudeSessions', () => {
     { label: 'a Windows path read on another OS', cwd: String.raw`C:\Users\me\My App`, expected: 'My App' },
     { label: 'a path Claude truncated to 200 characters', cwd: longCwd, expected: 'proj.v1' },
     { label: 'a session with only sub-agent files', cwd: '/home/my_name/gone_project', expected: 'gone_project', subagentOnly: true },
+    { label: 'a drive letter in another case', cwd: String.raw`C:\Users\me\proj`, dir: 'c--Users-me-proj', expected: 'proj' },
     { label: 'a cwd outside the project folder', cwd: '/elsewhere/other', dir: '-home-me-proj', expected: 'me-proj' },
   ])('names the workspace from the session cwd for $label', ({ cwd, dir, expected, subagentOnly }) => {
     const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-cwd-name-'));
