@@ -9,13 +9,15 @@ import { createRequest, createSession } from './parser-shared';
 import type { CacheBreak, CacheBreakCause, CallTimeline, ModelCallRow, RequestPromptCache, Session, SessionRequest } from './types';
 
 const DAY = '2026-10-20';
+// Read each time as a local clock time: date ranges are local days, so a UTC time falls on another date in some time zones.
+const localTime = (time: string) => Date.parse(time.replace(/Z$/, ''));
 
 function row(stream: ModelCallRow['stream'], [calls, input, cacheRead, cacheWrite]: [number, number, number, number], extra: Partial<ModelCallRow> = {}): ModelCallRow {
   return { stream, model: 'claude-opus-5.5', calls, input, cacheRead, cacheWrite, ...extra };
 }
 
 function request(time: string, promptCache?: RequestPromptCache): SessionRequest {
-  return createRequest({ messageText: 'secret prompt', responseText: '', timestamp: Date.parse(time), ...(promptCache ? { promptCache } : {}) });
+  return createRequest({ messageText: 'secret prompt', responseText: '', timestamp: localTime(time), ...(promptCache ? { promptCache } : {}) });
 }
 
 function brk(requestIndex: number, causes: CacheBreakCause[], extra: Partial<CacheBreak> = {}): CacheBreak {
@@ -313,7 +315,7 @@ describe('PromptCacheAnalyzer sessions and timelines', () => {
   it('lists a workspace\u2019s sessions with cache data, newest first, with a sparkline', () => {
     const older = appSession();
     older.sessionId = 'app-0';
-    older.lastMessageDate = Date.parse('2026-10-18T10:00:00Z');
+    older.lastMessageDate = localTime('2026-10-18T10:00:00Z');
     const data = analyzer([older, appSession()]).getPromptCacheSessions('alpha', 'GitHub Copilot App');
     expect(data.total).toBe(2);
     expect(data.sessions.map(s => s.sessionId)).toEqual(['app-1', 'app-0']);
