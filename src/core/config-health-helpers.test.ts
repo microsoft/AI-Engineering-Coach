@@ -48,6 +48,33 @@ describe('resolveWorkspaceRoot', () => {
     const root = makeTempDir();
     expect(resolveWorkspaceRoot('codex-proj-1234', { id: 'codex-proj-1234', name: 'proj', path: root })).toBe(root);
   });
+
+  it('uses a Claude workspace path that is already the project root', () => {
+    const root = makeTempDir();
+    expect(resolveWorkspaceRoot('claude--home-me-proj', { id: 'claude--home-me-proj', name: 'proj', path: root })).toBe(root);
+  });
+
+  it('still reads cwd from a session file when the path is a .claude/projects store', () => {
+    const base = makeTempDir();
+    const projectRoot = path.join(base, 'real-project');
+    const store = path.join(base, '.claude', 'projects', '-tmp-real-project');
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 's.jsonl'), JSON.stringify({ cwd: projectRoot }) + '\n');
+    expect(resolveWorkspaceRoot('claude-x', { id: 'claude-x', name: 'x', path: store })).toBe(projectRoot);
+  });
+
+  it('returns null for a Claude workspace whose path no longer exists', () => {
+    const gone = path.join(makeTempDir(), 'missing');
+    expect(resolveWorkspaceRoot('claude-gone', { id: 'claude-gone', name: 'gone', path: gone })).toBeNull();
+  });
+
+  it('returns null when the project folder is gone and ws.path fell back to ~/.claude/projects', () => {
+    const base = makeTempDir();
+    const store = path.join(base, '.claude', 'projects');
+    fs.mkdirSync(path.join(store, '-tmp-deleted-project'), { recursive: true });
+    expect(resolveWorkspaceRoot('claude--tmp-deleted-project', { id: 'claude--tmp-deleted-project', name: 'deleted-project', path: store })).toBeNull();
+  });
 });
 
 describe('scanConfigFiles', () => {
