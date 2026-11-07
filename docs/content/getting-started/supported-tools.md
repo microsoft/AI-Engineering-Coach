@@ -34,6 +34,10 @@ Reads session history from OpenAI's Codex terminal agent. Captures prompts, comp
 
 Parses session logs from the open-source OpenCode terminal tool that supports multiple LLM backends.
 
+Both OpenCode 1 and OpenCode 2 are supported. The reader detects V1 SQLite tables or V2's inline message format automatically, capturing prompts, assistant responses, model and reasoning-effort selections, token counts, tool calls, and file edits. Migrated sessions that remain in both formats are counted once, using the V2 copy.
+
+Databases are discovered in the standard OpenCode data directories, including `~/.local/share/opencode/`, `$XDG_DATA_HOME/opencode/`, and platform-specific application data directories. Channel-specific databases such as `opencode-nightly.db` are also included. Legacy V1 JSON storage remains supported when a database or SQLite runtime support is unavailable. All database connections are read-only.
+
 ## GitHub Copilot for Xcode
 
 Reads Copilot Chat conversation logs from Apple's Xcode IDE. Sessions are parsed from SQLite databases stored in the GitHub Copilot configuration directory.
@@ -54,7 +58,7 @@ Coding Moments counts image attachments on user turns and loads the original ima
 | GitHub Copilot CLI and App | User-event attachments and image variables, matched to the corresponding conversation turn |
 | Claude | Inline image content, including image-only turns and merged subagent transcripts |
 | Codex | User image content and local image attachments; mirrored event records count only once |
-| OpenCode | Image file parts in legacy JSON storage or current SQLite databases |
+| OpenCode | V1 image file parts in JSON storage or SQLite, and V2 user file attachments |
 | Xcode | Stored image references on user turns |
 
 Image extraction runs in the existing parse worker, not on the extension-host thread. Raw image payloads are not stored in the analytics cache. Extraction returns at most four images per turn, with a 10 MB limit per image. Local PNG, JPEG, GIF, WebP, BMP, and AVIF images are supported. Reconstructing raw VS Code JSON or JSONL state is limited to 50 MB per session file.
