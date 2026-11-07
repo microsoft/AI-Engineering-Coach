@@ -436,6 +436,41 @@ describe('parseClaudeSessions', () => {
     }
   });
 
+  // ---- workspace name from the recorded cwd ----
+
+  const encodeClaudeDir = (p: string) => {
+    const encoded = p.replaceAll(/[^a-zA-Z0-9]/g, '-');
+    return encoded.length > 200 ? `${encoded.slice(0, 200)}-kjgj8i` : encoded;
+  };
+  const longCwd = `/tmp/${Array.from({ length: 22 }, (_, i) => `segment_${i}`).join('/')}/proj.v1`;
+
+  it.each([
+    { label: 'a deleted folder', cwd: '/home/my_name/gone_project', expected: 'gone_project' },
+    { label: 'a Windows path read on another OS', cwd: String.raw`C:\Users\me\My App`, expected: 'My App' },
+    { label: 'a path Claude truncated to 200 characters', cwd: longCwd, expected: 'proj.v1' },
+    { label: 'a session with only sub-agent files', cwd: '/home/my_name/gone_project', expected: 'gone_project', subagentOnly: true },
+    { label: 'a drive letter in another case', cwd: String.raw`C:\Users\me\proj`, dir: 'c--Users-me-proj', expected: 'proj' },
+    { label: 'a cwd outside the project folder', cwd: '/elsewhere/other', dir: '-home-me-proj', expected: 'me-proj' },
+  ])('names the workspace from the session cwd for $label', ({ cwd, dir, expected, subagentOnly }) => {
+    const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-cwd-name-'));
+    const projDir = path.join(root, 'projects', dir ?? encodeClaudeDir(cwd));
+    const sessionDir = subagentOnly ? path.join(projDir, 'sess-1', 'subagents') : projDir;
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionDir, subagentOnly ? 'agent-a1.jsonl' : 's.jsonl'),
+      [makeUser('hello', '2025-06-15T10:00:00Z', { cwd }), makeAssistant('hi')].map(l => JSON.stringify(l)).join('\n'),
+    );
+
+    try {
+      const result = parseClaudeSessions(path.join(root, 'projects'));
+      expect(result).toHaveLength(1);
+      expect(result[0].workspaceName).toBe(expected);
+      expect(result[0].sessions[0].workspaceName).toBe(expected);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // ---- workspace name resolution with spaces ----
 
   it('resolves workspace name when path contains a folder with spaces', { timeout: 30_000 }, () => {
