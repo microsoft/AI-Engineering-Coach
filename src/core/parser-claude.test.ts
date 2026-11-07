@@ -471,6 +471,40 @@ describe('parseClaudeSessions', () => {
     }
   });
 
+  // ---- workspace name resolution with characters outside [A-Za-z0-9] ----
+
+  it.each(['my_home_dir', 'my.app', '.config', 'café'])(
+    'resolves workspace name when a parent folder is %s', { timeout: 30_000 }, (parentName) => {
+      // Claude Code replaces every character outside [A-Za-z0-9] with a hyphen,
+      // so the encoded name only matches readdirSync output if we apply the same rule.
+      const tmpBase = fs.mkdtempSync(path.join(longTmpDir(), 'claude-enc-'));
+      const targetDir = path.join(tmpBase, parentName, 'proj');
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const encodedDirName = targetDir
+        .replace(/^([a-zA-Z])(?=:)/, d => d.toLowerCase())
+        .replaceAll(/[^a-zA-Z0-9]/g, '-');
+
+      const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-proj-'));
+      const projectsDir = path.join(root, 'projects');
+      const projDir = path.join(projectsDir, encodedDirName);
+      fs.mkdirSync(projDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projDir, 's.jsonl'),
+        [makeUser('hello'), makeAssistant('hi')].map(l => JSON.stringify(l)).join('\n'),
+      );
+
+      try {
+        const result = parseClaudeSessions(projectsDir);
+        expect(result).toHaveLength(1);
+        expect(result[0].workspaceName).toBe('proj');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(tmpBase, { recursive: true, force: true });
+      }
+    },
+  );
+
   // ---- workspace name resolution with spaces ----
 
   it('resolves workspace name when path contains a folder with spaces', { timeout: 30_000 }, () => {
