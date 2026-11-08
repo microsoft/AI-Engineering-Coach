@@ -15,7 +15,7 @@ import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli
 import { getParseWarningCounts, resetParseWarnings, setCuriosityDetector } from './parser-shared';
 import { detectCuriosity } from './curiosity';
 import { CuriosityAnalyzer } from './analyzer-curiosity';
-import { runDetectors } from './detector-registry';
+import { runDetectors, runEmitters } from './detector-registry';
 
 const tempDirs: string[] = [];
 
@@ -52,6 +52,32 @@ afterEach(() => {
 });
 
 describe('parseCLIEventsFileAsync', () => {
+  it.each([false, true])('recognizes MCP server metadata (Copilot App: %s)', async (remoteSteerable) => {
+    const file = writeEvents([
+      { type: 'session.start', data: { sessionId: 'mcp-session', ...(remoteSteerable ? { remoteSteerable: true } : {}) } },
+      ...Array.from({ length: 30 }, (_, index) => [
+        { type: 'user.message', timestamp: new Date(Date.UTC(2026, 9, 1, 12, index)).toISOString(), data: { content: 'Find the issue' } },
+        { type: 'tool.execution_start', data: { toolName: 'search', mcpServerName: 'github' } },
+        { type: 'tool.execution_start', data: { toolName: 'view' } },
+        { type: 'tool.execution_start', data: { toolName: 'grep', mcpServerName: '' } },
+      ]).flat(),
+    ]);
+    for (const parsed of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {
+      expect(parsed?.requests).toHaveLength(30);
+      expect(parsed?.harness).toBe(remoteSteerable ? 'GitHub Copilot App' : 'GitHub Copilot CLI');
+      expect(parsed?.requests[0].toolsUsed).toEqual(['mcp__github__search', 'view', 'grep']);
+      const sessions = parsed ? [parsed] : [];
+      const emission = runEmitters(parsed?.requests ?? [], sessions, false).get('context-engineering-gaps');
+      const withoutMcp = sessions.map(session => ({
+        ...session, requests: session.requests.map(request => ({ ...request, toolsUsed: ['search', 'view', 'grep'] })),
+      }));
+      const missing = runEmitters(withoutMcp.flatMap(session => session.requests), withoutMcp, false).get('context-engineering-gaps');
+      expect(emission).toBeDefined();
+      expect(missing).toBeDefined();
+      expect(emission?.count).toBe((missing?.count ?? 0) - 1);
+    }
+  });
+
   it('classifies PowerShell-only commands and parallel calls through both parser paths', async () => {
     setCuriosityDetector(detectCuriosity);
     const file = writeEvents([
