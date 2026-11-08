@@ -442,8 +442,10 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   // Use the MCP naming convention consumed by rules and feature analysis.
   const mcpServerName = str(data.mcpServerName);
   const recordedName = mcpServerName && toolName && !toolName.startsWith('mcp_')
-    ? `mcp__${mcpServerName}__${toolName}`
+    ? `mcp_${mcpServerName}_${toolName}`
     : toolName;
+  // The assistant request may have recorded the raw name before server metadata arrived.
+  if (recordedName !== toolName) turn.toolNames.delete(toolName);
   addRecordedTools(turn, recordedName, data.arguments);
   const pending: PendingToolEdit = {
     editLocs: new Map(),

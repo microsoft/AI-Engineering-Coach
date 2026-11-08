@@ -57,7 +57,8 @@ describe('parseCLIEventsFileAsync', () => {
       { type: 'session.start', data: { sessionId: 'mcp-session', ...(remoteSteerable ? { remoteSteerable: true } : {}) } },
       ...Array.from({ length: 30 }, (_, index) => [
         { type: 'user.message', timestamp: new Date(Date.UTC(2026, 9, 1, 12, index)).toISOString(), data: { content: 'Find the issue' } },
-        { type: 'tool.execution_start', data: { toolName: 'search', mcpServerName: 'github' } },
+        { type: 'assistant.message', data: { toolRequests: [{ toolName: 'github-search_code', arguments: {} }] } },
+        { type: 'tool.execution_start', data: { toolName: 'github-search_code', mcpServerName: 'github' } },
         { type: 'tool.execution_start', data: { toolName: 'view' } },
         { type: 'tool.execution_start', data: { toolName: 'grep', mcpServerName: '' } },
       ]).flat(),
@@ -65,7 +66,9 @@ describe('parseCLIEventsFileAsync', () => {
     for (const parsed of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {
       expect(parsed?.requests).toHaveLength(30);
       expect(parsed?.harness).toBe(remoteSteerable ? 'GitHub Copilot App' : 'GitHub Copilot CLI');
-      expect(parsed?.requests[0].toolsUsed).toEqual(['mcp__github__search', 'view', 'grep']);
+      expect(parsed?.requests[0].toolsUsed).toEqual(['mcp_github_github-search_code', 'view', 'grep']);
+      const mcpName = parsed?.requests[0].toolsUsed[0] ?? '';
+      expect(mcpName.slice(4).split('_')[0]).toBe('github');
       const sessions = parsed ? [parsed] : [];
       const emission = runEmitters(parsed?.requests ?? [], sessions, false).get('context-engineering-gaps');
       const withoutMcp = sessions.map(session => ({
