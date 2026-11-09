@@ -24,6 +24,7 @@ jobs:
       matrix:
         language:
           - javascript-typescript
+          - actions
 
     steps:
       - name: Checkout
@@ -33,8 +34,10 @@ jobs:
         uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           languages: ${{ matrix.language }}
+          queries: ${{ matrix.language == 'actions' && 'security-extended' || '' }}
 
       - name: Autobuild
+        if: matrix.language != 'actions'
         uses: github/codeql-action/autobuild@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
 
       - name: Perform CodeQL Analysis
