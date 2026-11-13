@@ -266,7 +266,9 @@ export function evaluateRule(
     total: emission.total,
     ratio: emission.ratio,
     pct,
-    extra: emission.extra,
+    // Same as the detector registry: thresholds are readable as {{extra.X}} and {{thresholds.X}}.
+    extra: { ...rule.thresholds, ...emission.extra },
+    thresholds: rule.thresholds,
   };
 
   const severity = emission.dynamicSeverity ?? rule.severity;
