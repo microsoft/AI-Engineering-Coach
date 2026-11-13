@@ -289,7 +289,7 @@ describe('Codex', () => {
   it.each<[string, unknown, NonHumanKind | undefined]>([
     ['cli', 'cli', undefined],
     ['vscode', 'vscode', undefined],
-    ['exec', 'exec', undefined],
+    ['exec', 'exec', 'scripted'],
     ['mcp', 'mcp', undefined],
     ['a review sub-agent', { subagent: 'review' }, 'subagent'],
     ['a spawned thread', { subagent: { thread_spawn: { parent_thread_id: 'thread-1', depth: 1 } } }, 'subagent'],
