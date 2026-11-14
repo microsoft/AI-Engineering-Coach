@@ -481,7 +481,6 @@ describe('What the page shows after a save', () => {
   });
 });
 
-/** Edits and saves the shown rule; the page then lists `rules`, when given, as it renders again. */
 async function saveShownRule(page: HTMLElement, id: string, rules?: Record<string, unknown>[]): Promise<void> {
   await editShownRule(page, id);
   const listing = mocks.rpc.getMockImplementation()!;
