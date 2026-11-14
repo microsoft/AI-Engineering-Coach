@@ -454,3 +454,39 @@ describe('Anti-Patterns page rendered again by a save', () => {
     expect(calls('saveRule')).toHaveLength(2);
   });
 });
+
+describe('What the page shows after a save', () => {
+  it.each([1, 3])('one section per practice group after %i saves', async saves => {
+    const page = await renderPage();
+    showDetail(page, A);
+    for (let save = 0; save < saves; save++) await saveShownRule(page, A);
+    expect([...page.querySelectorAll('#apDetails .ap-group-name')].map(name => name.textContent))
+      .toEqual(['Prompt Quality', 'Session Hygiene', 'Code Review', 'Tool Mastery']);
+  });
+
+  it('the saved rule, in the detail that was open', async () => {
+    const page = await renderPage();
+    showDetail(page, A);
+    await saveShownRule(page, A, [{ ...listed(A), description: 'The saved description.' }, listed(B)]);
+    expect(el(page, '#rule-detail-panel').style.display).toBe('');
+    expect(el(page, '.rule-detail-desc').textContent).toBe('The saved description.');
+  });
+
+  it('the rule list, when the rule whose detail was open is gone', async () => {
+    const page = await renderPage();
+    showDetail(page, A);
+    await saveShownRule(page, A, [listed(B)]);
+    expect(el(page, '#rule-detail-panel').style.display).toBe('none');
+    expect(el(page, '#rule-list').style.display).toBe('');
+  });
+});
+
+async function saveShownRule(page: HTMLElement, id: string, rules?: Record<string, unknown>[]): Promise<void> {
+  await editShownRule(page, id);
+  const listing = mocks.rpc.getMockImplementation()!;
+  if (rules) mocks.rpc.mockImplementation((method: string, params?: Record<string, unknown>) => method === 'getRuleEditor'
+    ? Promise.resolve({ ...PAGE_DATA.getRuleEditor as object, rules })
+    : listing(method, params) as Promise<unknown>);
+  click(page, '#rule-editor-save');
+  await answer('saveRule', { ok: true });
+}

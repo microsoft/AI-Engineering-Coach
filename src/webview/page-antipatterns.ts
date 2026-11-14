@@ -579,6 +579,9 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
 
   // Wire up rules section
   wireRulesSection(container, rules, previewMap, currentFilter);
+
+  const openRuleId = container.querySelector<HTMLElement>('#rule-detail-panel')!.dataset.ruleId;
+  if (openRuleId) showRuleDetail(container, openRuleId, rules, previewMap, currentFilter);
 }
 
 /* ── Tab switching ── */
@@ -610,6 +613,7 @@ function renderFindings(
 ): void {
   const detailsContainer = container.querySelector('#apDetails')!;
   const allGroupKeys: PracticeGroup[] = ['prompt-quality', 'session-hygiene', 'code-review', 'tool-mastery'];
+  const sections: HTMLElement[] = [];
 
   for (const groupKey of allGroupKeys) {
     const gs = scores.find(s => s.group === groupKey);
@@ -674,8 +678,9 @@ function renderFindings(
         section.appendChild(card);
       }
     }
-    detailsContainer.appendChild(section);
+    sections.push(section);
   }
+  detailsContainer.replaceChildren(...sections);
 
   const hint = consumeNavHint();
   if (hint) {
@@ -1037,12 +1042,7 @@ function wireRulesSection(
   }, { signal });
 
   // Back button
-  container.querySelector('#rule-back-btn')?.addEventListener('click', () => {
-    container.querySelector<HTMLElement>('#rule-list')!.style.display = '';
-    container.querySelector<HTMLElement>('#rule-detail-panel')!.style.display = 'none';
-    container.querySelector<HTMLElement>('#rule-search-bar')!.style.display = '';
-    container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = '';
-  }, { signal });
+  container.querySelector('#rule-back-btn')?.addEventListener('click', () => hideRuleDetail(container), { signal });
 
   // Unified Rule Editor
   wireRuleEditorModal(container, currentFilter, () => renderAntiPatterns(container, currentFilter), signal);
@@ -1213,7 +1213,10 @@ function showRuleDetail(
   currentFilter: DateFilter,
 ): void {
   const rule = rules.find(r => r.id === ruleId);
-  if (!rule) return;
+  if (!rule) {
+    hideRuleDetail(container);
+    return;
+  }
 
   const preview = previewMap.get(ruleId);
   container.querySelector<HTMLElement>('#rule-list')!.style.display = 'none';
@@ -1222,6 +1225,7 @@ function showRuleDetail(
 
   const panel = container.querySelector<HTMLElement>('#rule-detail-panel')!;
   panel.style.display = '';
+  panel.dataset.ruleId = ruleId;
 
   const content = container.querySelector<HTMLElement>('#rule-detail-content')!;
   render(renderRuleDetailContent(rule, preview, ruleId), content);
@@ -1235,6 +1239,15 @@ function showRuleDetail(
   }, { signal });
 
   wireRuleDetailExplainButtons(content, currentFilter);
+}
+
+function hideRuleDetail(container: HTMLElement): void {
+  const panel = container.querySelector<HTMLElement>('#rule-detail-panel')!;
+  panel.style.display = 'none';
+  delete panel.dataset.ruleId;
+  container.querySelector<HTMLElement>('#rule-list')!.style.display = '';
+  container.querySelector<HTMLElement>('#rule-search-bar')!.style.display = '';
+  container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = '';
 }
 
 function renderLayerStatus(layers: RuleLayerInfo[], layerName: string): ComponentChildren {
