@@ -479,6 +479,19 @@ describe('What the page shows after a save', () => {
     expect(el(page, '#rule-detail-panel').style.display).toBe('none');
     expect(el(page, '#rule-list').style.display).toBe('');
   });
+
+  it('the rule list, when the detail was closed with Back before a save', async () => {
+    const page = await renderPage();
+    showDetail(page, A);
+    click(page, '#rule-back-btn');
+    click(page, '#rule-new-btn');
+    click(page, '.rule-editor-tab[data-editor-tab="source"]');
+    el<HTMLTextAreaElement>(page, '#rule-editor-raw').value = SOURCES[C];
+    click(page, '#rule-editor-save');
+    await answer('saveRule', { ok: true });
+    expect(el(page, '#rule-detail-panel').style.display).toBe('none');
+    expect(el(page, '#rule-list').style.display).toBe('');
+  });
 });
 
 async function saveShownRule(page: HTMLElement, id: string, rules?: Record<string, unknown>[]): Promise<void> {
