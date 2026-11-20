@@ -91,6 +91,8 @@ interface CodexParseState {
   turnModel: string;
   turnEffort: 'max' | 'high' | 'medium' | 'low' | null;
   turnStartTs: number | null;
+  /** Latest line of the turn that the agent or harness logged (not the next prompt): where the turn's work ended. */
+  turnEndTs: number | null;
   turnCanceled: boolean;
   answerEvidence: 'final' | 'legacy' | 'missing';
   prevTotalInput: number;
@@ -191,6 +193,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     turnModel: initialModel,
     turnEffort: null,
     turnStartTs: null,
+    turnEndTs: null,
     turnCanceled: false,
     answerEvidence: 'missing',
     prevTotalInput: 0,
@@ -310,7 +313,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     referencedFiles: [...new Set(state.currentReferencedFiles)],
     skillsUsed: [...new Set(state.currentSkillsUsed)],
     variableKinds: state.currentImageCount > 0 ? { image: state.currentImageCount } : {},
-    totalElapsed: state.turnStartTs && state.lastTs ? state.lastTs - state.turnStartTs : null,
+    totalElapsed: state.turnStartTs && state.turnEndTs && state.turnEndTs >= state.turnStartTs ? state.turnEndTs - state.turnStartTs : null,
     promptTokens: reqPromptTokens,
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
@@ -335,6 +338,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentReferencedFiles = [];
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
+  state.turnEndTs = null;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
   state.currentEditLocs = new Map();
@@ -684,13 +688,19 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
 
   if (line.type === 'event_msg') {
     handleEventMsg(line.payload || {}, state, ts, meta.model);
-    return;
-  }
-  if (line.type === 'turn_context') {
+  } else if (line.type === 'turn_context') {
     handleTurnContext(line.payload || {}, state);
-    return;
+  } else if (line.type === 'response_item') {
+    handleResponseItem(line.payload || {}, state, ts, meta.model);
   }
-  if (line.type === 'response_item') handleResponseItem(line.payload || {}, state, ts, meta.model);
+  if (ts && isTurnWork(line) && (!state.turnEndTs || ts > state.turnEndTs)) state.turnEndTs = ts;
+}
+
+/** A line the agent or harness logged while working on the turn: not a prompt, and not the next turn's settings. */
+function isTurnWork(line: CodexLine): boolean {
+  const payload = line.payload ?? {};
+  if (line.type === 'event_msg') return stringValue(payload.type) !== 'user_message';
+  return line.type === 'response_item' && payload.role !== 'user';
 }
 
 function handleCodexImageLine(line: CodexLine, state: CodexParseState, meta: CodexSessionMeta, scan: CodexImageScan): void {

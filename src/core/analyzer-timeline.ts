@@ -33,6 +33,7 @@ function timelineTurn(r: SessionRequest): TimelineTurn {
     comp: Boolean(r.compaction || r.compactions?.length),
     cr: r.aiCredits ?? 0,
     tok: r.loggedTokens ?? Math.max(0, (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
+    ...(r.totalElapsed == null ? { noDuration: true } : {}),
   };
 }
 

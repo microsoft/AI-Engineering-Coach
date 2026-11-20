@@ -157,7 +157,8 @@ export interface TimelineLane {
   visibleParent: number;
 }
 
-/** Gaps where the agent had finished and waited for your next typed prompt (2–120 min), in time order. */
+/** Gaps where the agent had finished and waited for your next typed prompt (2–120 min), in time order. After a turn
+ *  without a logged duration, when the work ended is unknown, so no wait is counted until the next timed turn. */
 export function waitsOf(turns: readonly TimelineTurn[]): Interval[] {
   const waits: Interval[] = [];
   let busyUntil = -1;
@@ -166,7 +167,7 @@ export function waitsOf(turns: readonly TimelineTurn[]): Interval[] {
       const gap = t.t - busyUntil;
       if (gap >= WAIT_MIN_MS && gap <= WAIT_MAX_MS) waits.push([busyUntil, t.t]);
     }
-    busyUntil = Math.max(busyUntil, t.t + t.d);
+    busyUntil = t.noDuration ? -1 : Math.max(busyUntil, t.t + t.d);
   }
   return waits;
 }

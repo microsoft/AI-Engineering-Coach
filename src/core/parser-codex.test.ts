@@ -26,6 +26,18 @@ function withCodexFile(lines: object[], run: (sessionsDir: string, filePath: str
 }
 
 describe('parseCodexSessions', () => {
+  it('ends a turn’s agent time at its last logged work, not at the next prompt', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-codex-elapsed', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Fix the build.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:05:00Z', payload: { type: 'agent_message', message: 'Fixed.' } },
+      { type: 'turn_context', timestamp: '2025-06-15T09:59:59Z', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'Now add a test.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:02:00Z', payload: { type: 'agent_message', message: 'Added.' } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests.map(r => r.totalElapsed)).toEqual([300_000, 120_000]);
+    });
+  });
   it('captures current custom_tool_call apply_patch deltas', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'sess-codex-patch', cwd: '/Users/me/proj' } },

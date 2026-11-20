@@ -83,7 +83,7 @@ describe('TimelineAnalyzer', () => {
       expect(data.sessions[0]).toMatchObject({ id: 's1', repo: 'shop', harness: 'Copilot App', parent: -1, via: null });
       expect(data.sessions[0].turns).toEqual([
         { t: at(10), d: 600_000, k: 'you', sub: 0, comp: false, cr: 2.5, tok: 1000 },
-        { t: at(10, 20), d: 0, k: 'autopilot', sub: 1, comp: false, cr: 0, tok: 0 },
+        { t: at(10, 20), d: 0, k: 'autopilot', sub: 1, comp: false, cr: 0, tok: 0, noDuration: true },
       ]);
       expect(JSON.stringify(data)).not.toContain('secret prompt');
     });

@@ -46,6 +46,8 @@ describe('timeline model', () => {
     expect(waitsOf([turn(at(9), 10), turn(at(12), 5)])).toEqual([]);
     // An automated turn keeps the agent busy; only your typed prompt ends the wait.
     expect(waitsOf([turn(at(9), 10), turn(at(9, 20), 30, 'agent'), turn(at(10, 30), 1)])).toEqual([[at(9, 50), at(10, 30)]]);
+    // Without a logged duration, when the work ended is unknown: no wait until a timed turn says so.
+    expect(waitsOf([turn(at(9), 0, 'you', { noDuration: true }), turn(at(10), 5), turn(at(10, 30), 5)])).toEqual([[at(10, 5), at(10, 30)]]);
   });
 
   it('measures the longest unattended stretch after one prompt, across the family', () => {

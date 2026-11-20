@@ -358,7 +358,9 @@ function collectAssistantData(
   const assistantMsg = assistantMessages[0];
   if (!assistantMsg) return data;
 
-  const assistantTs = assistantMsg.time?.completed || assistantMsg.time?.created || null;
+  // The turn's work ends with its last assistant message, not its first (tool loops log several).
+  const ends = assistantMessages.map(message => message.time?.completed || message.time?.created || 0).filter(ts => ts > 0);
+  const assistantTs = ends.length > 0 ? Math.max(...ends) : null;
   if (assistantTs && (!data.lastTs || assistantTs > data.lastTs)) data.lastTs = assistantTs;
   if (userTs && assistantTs) data.totalElapsed = assistantTs - userTs;
 

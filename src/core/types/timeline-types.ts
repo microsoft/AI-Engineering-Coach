@@ -25,6 +25,8 @@ export interface TimelineTurn {
   cr: number;
   /** Tokens logged for the turn: Copilot usage records, else the turn's prompt and completion tokens. */
   tok: number;
+  /** The harness logged no duration for the turn, so when its work ended is unknown (`d` is 0). */
+  noDuration?: boolean;
 }
 
 /** How a child session's parent was found: a `create_session`-style tool result (`create`), the relayed first message
