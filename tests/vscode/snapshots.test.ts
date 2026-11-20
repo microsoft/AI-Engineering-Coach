@@ -10,7 +10,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { saveSnapshot, writeSnapshotReport } from './snapshots';
-import { exportFixtureDataset, prepareFixtures } from './fixtures';
+import { exportFamilyDataset, exportFixtureDataset, prepareFamilyFixtures, prepareFixtures } from './fixtures';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGz8AAAAASUVORK5CYII=';
 const snapshot = { name: '01-dashboard', title: 'Dashboard: 2 sessions and 6 requests' };
@@ -92,6 +92,20 @@ describe('desktop screenshot report', () => {
       expect(report).toContain('populated/fixtures/initial');
       expect(report).toContain('no personal logs were read');
     }
+  });
+
+  it('describes the synthetic session family in the gallery', async () => {
+    const scenarioRoot = path.join(root, 'scenario');
+    const timestamp = Date.UTC(2026, 0, 15, 12);
+    await prepareFamilyFixtures(scenarioRoot, timestamp);
+    await exportFamilyDataset(scenarioRoot, timestamp, path.join(root, 'families'));
+    await writeSnapshotReport(root, {
+      version: '1.125.0', platform: 'linux', vsixHash: 'abc123',
+      results: [{ scenario: 'families', exitCode: 0 }],
+    });
+    const report = await fs.readFile(path.join(root, 'gallery.html'), 'utf8');
+    expect(report).toContain('6 GitHub Copilot App and GitHub Copilot CLI sessions, 9 requests: 1 coordinator, 3 children (1 started by a relayed message) and 1 grandchild.');
+    expect(report).toContain('families/fixtures/initial');
   });
 
   it('surfaces a missing captured PNG rather than generating a broken image', async () => {

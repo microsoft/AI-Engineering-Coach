@@ -13,6 +13,7 @@ import { renderContextManagement } from './page-context-mgmt';
 import { renderPromptCache } from './page-prompt-cache';
 import { renderTokenTypes } from './page-token-types';
 import { llmAvailable, llmUnavailableNote } from './capabilities';
+import { consumeNavHint } from './nav-hint';
 
 /* Harness colors */
 const HC: Record<string, string> = { 'Local Agent': '#007acc', 'Local Agent (Insiders)': '#24bfa5', 'Xcode': '#147efb', 'Claude Code': '#d97706', 'GitHub Copilot CLI': '#8b5cf6', 'GitHub Copilot App': '#a371f7', 'Codex CLI': '#ec4899', 'OpenCode': '#10b981' };
@@ -64,6 +65,9 @@ const ALL_RANGES: { days: number; label: string }[] = [
 
 export async function renderConfigHealth(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   const generation = ++renderGeneration;
+  // A link from another page (the Timeline's drill-downs) can open a sub-tab.
+  const hint = consumeNavHint();
+  if (hint === 'config-quality' || hint === 'context-mgmt' || hint === 'prompt-cache' || hint === 'token-types') activeSubTab = hint;
   // Helpers for the TOKEN_DATA_AVAILABLE_FROM cutoff. Context Quality and
   // Context Management analyze token-driven signals, so any range whose
   // nominal start lies before the cutoff is greyed out with an explanatory

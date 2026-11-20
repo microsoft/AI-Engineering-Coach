@@ -11,7 +11,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFixtures, scenarioContext } from './fixtures';
+import {
+  exportFamilyDataset, exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFamilyFixtures, prepareFixtures, scenarioContext,
+} from './fixtures';
 import { writeSnapshotReport } from './snapshots';
 
 const PROJECT = path.resolve(__dirname, '..', '..');
@@ -86,9 +88,15 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
   const storage = process.env.AIC_E2E_STORAGE;
   const artifacts = process.env.AIC_E2E_ARTIFACTS;
   if (!storage || !artifacts) throw new Error('Missing test storage/artifact directories');
-  await prepareFixtures(root, timestamp, scenario !== 'empty');
-  await fs.mkdir(artifacts, { recursive: true });
-  await exportFixtureDataset(root, timestamp, artifacts, scenario !== 'empty');
+  if (scenario === 'families') {
+    await prepareFamilyFixtures(root, timestamp);
+    await fs.mkdir(artifacts, { recursive: true });
+    await exportFamilyDataset(root, timestamp, artifacts);
+  } else {
+    await prepareFixtures(root, timestamp, scenario !== 'empty');
+    await fs.mkdir(artifacts, { recursive: true });
+    await exportFixtureDataset(root, timestamp, artifacts, scenario !== 'empty');
+  }
   const config = path.join(root, 'mocha.json');
   const settings = path.join(root, 'settings.json');
   await fs.writeFile(config, JSON.stringify({

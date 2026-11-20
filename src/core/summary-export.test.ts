@@ -204,3 +204,26 @@ describe('summary export with a rule that could not be evaluated', () => {
     expect(markdown).toContain('- Broken Rule (broken-rule): Parse error at position 0\n');
   });
 });
+
+describe('summary export autonomy', () => {
+  it('adds typed and automated turns, waits and family verdicts from the Timeline, without session names', () => {
+    const at = (h: number) => new Date(2026, 4, 20, h).getTime();
+    const turn = (t: number, minutes: number, k: 'you' | 'agent', cr = 0) => ({ t, d: minutes * 60_000, k, sub: 0, comp: false, cr, tok: 0 });
+    const timeline = {
+      forkedSessions: 0,
+      sessions: [
+        { id: 'a', name: 'Secret coordinator', branch: '', repo: 'shop', harness: 'Copilot App', model: '', parent: -1, via: null, turns: [turn(at(9), 30, 'you', 4), turn(at(10), 30, 'you')] },
+        { id: 'b', name: 'Secret child', branch: '', repo: 'shop', harness: 'Copilot App', model: '', parent: 0, via: 'create' as const, turns: [turn(at(9), 60, 'agent', 4)] },
+      ],
+    };
+    const report = buildSummaryExport({ generatedAt: '2026-05-25T10:00:00.000Z', stats, codeProduction, dailyActivity, workLifeBalance: null, flowState, antiPatterns, timeline });
+    expect(report.autonomy).toEqual({
+      typedTurns: 2, automatedTurns: 1, agentHours: 2, waitsOnYou: 1, waitHours: 0.5, families: 1, childSessions: 1,
+      childSessionsThatNeededYou: 0, familyCreditSharePct: 100, workedAlone: 1, neededYou: 0, wideFanOut: 0,
+    });
+    const markdown = renderSummaryMarkdown(report);
+    expect(markdown).toContain('## Autonomy and Delegation (Timeline)\n- Turns you typed: 2 of 3 (33% automated)');
+    expect(markdown).not.toContain('Secret');
+    expect(buildSummaryExport({ generatedAt: '2026-05-25T10:00:00.000Z', stats, codeProduction, dailyActivity, workLifeBalance: null, flowState, antiPatterns }).autonomy).toBeNull();
+  });
+});

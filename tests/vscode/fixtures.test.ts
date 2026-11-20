@@ -8,8 +8,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  addReloadFixture, assertFixturesUnchanged, exportFixtureDataset, fixtureDatasetSchema,
-  fixtureFiles, fixturePaths, isolatedEnvironment, prepareFixtures,
+  addReloadFixture, assertFamilyFixturesUnchanged, assertFixturesUnchanged, exportFixtureDataset, FAMILY, fixtureDatasetSchema,
+  fixtureFiles, fixturePaths, isolatedEnvironment, prepareFamilyFixtures, prepareFixtures,
 } from './fixtures';
 import { discoverSuites, vscodeVersion } from './run';
 
@@ -70,7 +70,13 @@ describe('desktop test fixtures', () => {
       const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
       expect(analyzer.getHeatmap().heatmap.flat().filter(value => value > 0)).toEqual([9, 9, 9, 9, 9, 9, 9]);
       expect(analyzer.getWorkLifeBalance()).toMatchObject({ totalRequests: 63, weekdayReqs: 45, weekendReqs: 18, activeDays: 7 });
-      expect(analyzer.getDayTimeline()).toMatchObject({ sessionCount: 3, maxConcurrent: 3 });
+      const timeline = analyzer.getTimelineData();
+      expect(timeline.sessions).toHaveLength(21);
+      const { buildLanes, peakParallel, prepareTimeline, timelineWindow } = await import('../../src/core/timeline-model');
+      const prepared = prepareTimeline(timeline);
+      const lanes = buildLanes(prepared, ...timelineWindow('day', prepared.days[prepared.days.length - 1]));
+      expect(lanes).toHaveLength(3);
+      expect(peakParallel(lanes).count).toBe(1);
       const projects = analyzer.getProjectOverview().projects;
       expect(projects.map(project => project.workspaceName).sort()).toEqual(['inventory-api', 'release-worker', 'sensor-pipeline']);
       expect(projects.map(project => project.totalRequests)).toEqual([21, 21, 21]);
@@ -78,8 +84,32 @@ describe('desktop test fixtures', () => {
     });
   });
 
-  describe('published synthetic dataset', () => {
-    it('exports the actual initial inputs separately from the planned reload addition', async () => {
+  describe('session family fixture', () => {
+    it('parses a Copilot App family with its links, names and scrubbed branches, without changing the logs', async () => {
+      await prepareFamilyFixtures(root, timestamp);
+      const { findLogsDirs, parseAllLogs } = await import('../../src/core/parser');
+      const { Analyzer } = await import('../../src/core/analyzer');
+      const { buildFamilies, prepareTimeline } = await import('../../src/core/timeline-model');
+      const parsed = parseAllLogs(findLogsDirs());
+      expect(parsed.sessions).toHaveLength(FAMILY.sessions);
+      expect(parsed.sessions.reduce((sum, session) => sum + session.requests.length, 0)).toBe(FAMILY.requests);
+      const data = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces).getTimelineData();
+      const byId = new Map(data.sessions.map(s => [s.id, s]));
+      const parentOf = (id: string) => { const s = byId.get(id)!; return [s.parent >= 0 ? data.sessions[s.parent].id : null, s.via]; };
+      expect(parentOf(FAMILY.payment)).toEqual([FAMILY.coordinator, 'create']);
+      expect(parentOf(FAMILY.lint)).toEqual([FAMILY.payment, 'create']);
+      expect(parentOf(FAMILY.perf)).toEqual([FAMILY.coordinator, 'relay']);
+      expect(parentOf(FAMILY.coordinator)).toEqual([null, null]);
+      expect(byId.get(FAMILY.coordinator)).toMatchObject({ name: 'Checkout revamp', branch: 'checkout-revamp', repo: 'shop', harness: 'Copilot App' });
+      expect(byId.get(FAMILY.lone)).toMatchObject({ name: '', harness: 'Copilot CLI' });
+      expect(byId.get(FAMILY.coordinator)?.turns.reduce((sum, t) => sum + t.cr, 0)).toBe(5);
+      const { families } = buildFamilies(prepareTimeline(data));
+      expect(families.map(f => [f.s.id, f.sessions, f.verdict, f.depth])).toEqual([[FAMILY.coordinator, 5, 'needed', 2]]);
+      await assertFamilyFixturesUnchanged(root, timestamp);
+    });
+  });
+
+  describe('published synthetic dataset', () => {    it('exports the actual initial inputs separately from the planned reload addition', async () => {
       await prepareFixtures(root, timestamp, true);
       const artifacts = path.join(root, 'artifacts');
       await exportFixtureDataset(root, timestamp, artifacts, true);
@@ -129,7 +159,7 @@ describe('desktop test fixtures', () => {
       NODE_OPTIONS: '--inspect', CODE_VERSION: 'latest', PATH: '/tools',
       MOCHA_GREP: 'activates|no-data', MOCHA_INVERT: 'true' };
     const env = isolatedEnvironment(root, parent);
-    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'COPILOT_HOME', 'TMP', 'TEMP', 'TMPDIR']) {
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'COPILOT_HOME', 'GH_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR']) {
       expect(env[key]?.startsWith(root + path.sep)).toBe(true);
     }
     expect(env).not.toHaveProperty('VSCODE_PORTABLE');

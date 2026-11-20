@@ -16,7 +16,7 @@ import { createRequest, createSession } from '../core/parser-shared';
 import { clearLayerRules, registerPersonalRuleSource } from '../core/rule-engine';
 import type { ModelUsage, NonHumanKind, Session } from '../core/types';
 import { TODAY, returnedAfterExpiryWithoutCacheData, returnedToday } from '../test/copilot-cache-sessions';
-import { formatActivity, formatFlow, formatInsights, formatPatterns, formatPromptCache, formatSummary, formatTokenTypes, formatWellbeing } from './formatters';
+import { formatActivity, formatFlow, formatInsights, formatPatterns, formatPromptCache, formatSummary, formatTimeline, formatTokenTypes, formatWellbeing } from './formatters';
 
 // Keeps the broken rule out of the developer's runtime.log.
 vi.mock('../core/runtime-debug', async importOriginal => ({ ...await importOriginal<typeof import('../core/runtime-debug')>(), runtimeDebug: vi.fn() }));
@@ -261,5 +261,27 @@ describe('MCP anti-pattern summaries', () => {
   it('list none when every rule ran', () => {
     expect(formatPatterns(analyzer, filter).antiPatterns.notEvaluated).toEqual([]);
     expect(formatSummary(analyzer, filter).antiPatterns.notEvaluated).toEqual([]);
+  });
+});
+
+describe('formatTimeline', () => {
+  it('reports the day’s autonomy and the families’ verdicts without prompt text or session ids', () => {
+    const at = (h: number, m = 0) => new Date(2026, 9, 20, h, m).getTime();
+    const request = (timestamp: number, minutes: number, nonHumanKind?: NonHumanKind, aiCredits = 0) =>
+      createRequest({ messageText: 'secret prompt', responseText: '', timestamp, totalElapsed: minutes * 60_000, nonHumanKind, ...(aiCredits ? { aiCredits } : {}) });
+    const sessions = [
+      createSession({ sessionId: 'secret-coord', workspaceId: 'w', workspaceName: 'shop', harness: 'GitHub Copilot App', displayName: 'Checkout', childSessionIds: ['secret-kid'],
+        requests: [request(at(9), 30, undefined, 10), request(at(11), 10)] }),
+      createSession({ sessionId: 'secret-kid', workspaceId: 'w', workspaceName: 'shop', harness: 'GitHub Copilot App', displayName: 'Tests',
+        requests: [request(at(9, 10), 60, 'relayed', 30), request(at(10, 30), 5)] }),
+    ];
+    const summary = formatTimeline(new Analyzer(sessions, new Map()), undefined);
+    expect(summary).toMatchObject({
+      range: { sessions: 2, activeDays: 1 },
+      day: { date: '2026-10-20', turns: 4, typedTurns: 3, peakParallelAgents: 2, childSessions: 1, childCreditSharePct: 75, waitsOnUser: { count: 2, minutes: 110, over30Min: 1 } },
+      families: { count: 1, childSessions: 1, childSessionsThatNeededAPrompt: 1, verdicts: { neededYou: { families: 1, creditSharePct: 100 } }, top: [{ name: 'Checkout', verdict: 'Needed you' }] },
+    });
+    const json = JSON.stringify(summary);
+    expect(json).not.toContain('secret');
   });
 });

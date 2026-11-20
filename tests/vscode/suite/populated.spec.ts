@@ -10,7 +10,7 @@ import { after, before, describe, it } from 'mocha';
 import { VSBrowser } from 'vscode-extension-tester';
 import { Dashboard } from '../dashboard';
 import {
-  addReloadFixture, assertFixturesUnchanged, FIRST_PROMPT, fixturePaths,
+  addReloadFixture, assertFixturesUnchanged, fixturePaths,
   INITIAL_COUNTS, INITIAL_NET_LOC, PROJECT_NAMES, RELOADED_COUNTS, scenarioContext,
 } from '../fixtures';
 
@@ -50,13 +50,14 @@ describe('Packaged VSIX with synthetic sessions', () => {
 
   it('navigates to the timeline and displays a synthetic session', async () => {
     await dashboard.navigate('timeline', 'Timeline');
-    await dashboard.waitForText('#timelineStats', '3 sessions');
-    await dashboard.waitForText('#timelineStats', '9 requests');
-    await dashboard.waitForText('#timelineStats', 'Max concurrent: 3');
-    await dashboard.click('.timeline-lane');
-    await dashboard.waitForText('#timelineDetail', FIRST_PROMPT);
+    await dashboard.waitForText('#tlxCount', '3 of 3 sessions shown');
+    await dashboard.waitForText('#tlxKpis', '9 of 9');
+    await dashboard.waitForText('#tlxKpis', 'Peak parallel agents');
+    await dashboard.expectCount('.tlx-lane', 3);
+    await dashboard.click('.tlx-lane');
+    await dashboard.waitForText('#tlxDetail', 'no prompt text is shown');
     await dashboard.expectHealthy();
-    await dashboard.snapshot('02-timeline', 'Timeline: 3 overlapping projects and the selected session details');
+    await dashboard.snapshot('02-timeline', 'Timeline: 3 projects on the latest day, their KPIs and the selected session’s turns');
   });
 
   it('loads the Output page through the real webview message bridge', async () => {

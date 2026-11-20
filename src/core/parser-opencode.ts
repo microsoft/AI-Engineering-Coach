@@ -545,6 +545,7 @@ function buildOpenCodeSession(
     requests,
     hasDevcontainer: detectDevcontainerFromRequests(requests, rawSession.directory),
     workspaceRootPath: rawSession.directory || undefined,
+    ...(rawSession.parentID && rawSession.parentID !== rawSession.id ? { parentSessionId: rawSession.parentID } : {}),
   });
 }
 

@@ -65,112 +65,56 @@ function createAnalyzer(sessions: Session[]): TimelineAnalyzer {
 }
 
 describe('TimelineAnalyzer', () => {
-  describe('getDayTimeline', () => {
-    it('returns empty timeline when no sessions', () => {
-      const analyzer = createAnalyzer([]);
-      const result = analyzer.getDayTimeline();
-      expect(result.sessions).toEqual([]);
-      expect(result.sessionCount).toBe(0);
-    });
+  describe('getTimelineData', () => {
+    const at = (h: number, m = 0) => new Date(2024, 2, 15, h, m).getTime();
+    const ctx = { home: '/home/dev', names: ['dev'] };
 
-    it('returns timeline for today by default', () => {
-      const now = Date.now();
+    it('sends only counts and timings of the turns in range, oldest session first', () => {
       const session = makeSession({
+        sessionId: 's1', harness: 'GitHub Copilot App', workspaceName: 'C:\\Users\\dev\\repos\\shop', repository: undefined,
         requests: [
-          makeRequest({ timestamp: now - 1000 }),
-          makeRequest({ timestamp: now }),
+          makeRequest({ timestamp: at(10), totalElapsed: 600_000, aiCredits: 2.5, loggedTokens: 1000, messageText: 'secret prompt' }),
+          makeRequest({ timestamp: at(10, 20), totalElapsed: null, nonHumanKind: 'autopilot', subagentRuns: [{} as never] }),
+          makeRequest({ timestamp: new Date(2024, 2, 16, 9).getTime(), nonHumanKind: 'relayed' }),
         ],
-        lastMessageDate: now,
       });
-      const analyzer = createAnalyzer([session]);
-      const result = analyzer.getDayTimeline();
-      expect(result.sessionCount).toBe(1);
-      expect(result.sessions[0].requestCount).toBe(2);
+      const data = createAnalyzer([session]).getTimelineData({ fromDate: '2024-03-15', toDate: '2024-03-15' }, ctx);
+      expect(data.sessions).toHaveLength(1);
+      expect(data.sessions[0]).toMatchObject({ id: 's1', repo: 'shop', harness: 'Copilot App', parent: -1, via: null });
+      expect(data.sessions[0].turns).toEqual([
+        { t: at(10), d: 600_000, k: 'you', sub: 0, comp: false, cr: 2.5, tok: 1000 },
+        { t: at(10, 20), d: 0, k: 'autopilot', sub: 1, comp: false, cr: 0, tok: 0 },
+      ]);
+      expect(JSON.stringify(data)).not.toContain('secret prompt');
     });
 
-    it('filters to specified date', () => {
-      const targetDate = '2024-03-15';
-      const ts = new Date('2024-03-15T10:00:00').getTime();
-      const session = makeSession({
-        requests: [
-          makeRequest({ timestamp: ts }),
-          makeRequest({ timestamp: ts + 60000 }),
-        ],
-        lastMessageDate: ts + 60000,
-      });
-      const analyzer = createAnalyzer([session]);
-      const result = analyzer.getDayTimeline(targetDate);
-      expect(result.date).toBe(targetDate);
-      expect(result.sessionCount).toBe(1);
+    it('links children to the session that created them, and drops parents outside the range', () => {
+      const coordinator = makeSession({ sessionId: 'c', childSessionIds: ['k1', 'k2'], requests: [makeRequest({ timestamp: at(9) })] });
+      const child = makeSession({ sessionId: 'k1', requests: [makeRequest({ timestamp: at(10), nonHumanKind: 'relayed' })] });
+      const relayed = makeSession({ sessionId: 'k3', relaySenderId: 'k1', requests: [makeRequest({ timestamp: at(11) })] });
+      const old = makeSession({ sessionId: 'p', childSessionIds: ['late'], requests: [makeRequest({ timestamp: new Date(2024, 2, 1).getTime() })] });
+      const late = makeSession({ sessionId: 'late', requests: [makeRequest({ timestamp: at(12) })] });
+      const data = createAnalyzer([late, relayed, child, coordinator, old]).getTimelineData({ fromDate: '2024-03-15' }, ctx);
+      expect(data.sessions.map(s => [s.id, s.parent, s.via])).toEqual([
+        ['c', -1, null], ['k1', 0, 'create'], ['k3', 1, 'relay'], ['late', -1, null],
+      ]);
     });
 
-    it('excludes sessions from other days', () => {
-      const targetDate = '2024-03-15';
-      const otherTs = new Date('2024-03-14T10:00:00').getTime();
-      const session = makeSession({
-        requests: [makeRequest({ timestamp: otherTs })],
-        lastMessageDate: otherTs,
-      });
-      const analyzer = createAnalyzer([session]);
-      const result = analyzer.getDayTimeline(targetDate);
-      expect(result.sessionCount).toBe(0);
+    it('scrubs names and branches, including the personal prefix most branches share', () => {
+      const sessions = ['dev2-a', 'dev2-b', 'dev2/c', 'feat/d'].map((branch, i) => makeSession({
+        sessionId: `s${i}`, branch, displayName: i === 0 ? 'Review dev2/shop at https://example.com' : undefined,
+        requests: [makeRequest({ timestamp: at(9 + i) })],
+      }));
+      const data = createAnalyzer(sessions).getTimelineData(undefined, ctx);
+      expect(data.sessions.map(s => s.branch)).toEqual(['a', 'b', 'c', 'feat/d']);
+      expect(data.sessions[0].name).toBe('Review shop at [link]');
     });
 
-    it('computes maxConcurrent correctly', () => {
-      const ts = new Date('2024-03-15T10:00:00').getTime();
-      const session1 = makeSession({
-        sessionId: 's1',
-        requests: [
-          makeRequest({ timestamp: ts }),
-          makeRequest({ timestamp: ts + 60000 }),
-        ],
-        lastMessageDate: ts + 60000,
-      });
-      const session2 = makeSession({
-        sessionId: 's2',
-        requests: [
-          makeRequest({ timestamp: ts + 30000 }),
-          makeRequest({ timestamp: ts + 90000 }),
-        ],
-        lastMessageDate: ts + 90000,
-      });
-      const analyzer = createAnalyzer([session1, session2]);
-      const result = analyzer.getDayTimeline('2024-03-15');
-      expect(result.maxConcurrent).toBe(2);
-    });
-
-    it('provides date navigation', () => {
-      const ts1 = new Date('2024-03-14T10:00:00').getTime();
-      const ts2 = new Date('2024-03-15T10:00:00').getTime();
-      const ts3 = new Date('2024-03-16T10:00:00').getTime();
-      const sessions = [
-        makeSession({ requests: [makeRequest({ timestamp: ts1 })], lastMessageDate: ts1 }),
-        makeSession({ requests: [makeRequest({ timestamp: ts2 })], lastMessageDate: ts2 }),
-        makeSession({ requests: [makeRequest({ timestamp: ts3 })], lastMessageDate: ts3 }),
-      ];
-      const analyzer = createAnalyzer(sessions);
-      const result = analyzer.getDayTimeline('2024-03-15');
-      expect(result.prevDay).toBe('2024-03-14');
-      expect(result.nextDay).toBe('2024-03-16');
-      expect(result.firstDay).toBe('2024-03-14');
-    });
-
-    it('returns activeDates with counts', () => {
-      const ts = new Date('2024-03-15T10:00:00').getTime();
-      const session = makeSession({
-        requests: [
-          makeRequest({ timestamp: ts }),
-          makeRequest({ timestamp: ts + 1000 }),
-        ],
-        lastMessageDate: ts + 1000,
-      });
-      const analyzer = createAnalyzer([session]);
-      const result = analyzer.getDayTimeline('2024-03-15');
-      expect(result.activeDates.length).toBeGreaterThan(0);
-      expect(result.activeDates[0].count).toBe(2);
+    it('counts sessions whose harness logged forks', () => {
+      const data = createAnalyzer([makeSession({ forkCount: 2 }), makeSession()]).getTimelineData(undefined, ctx);
+      expect(data.forkedSessions).toBe(1);
     });
   });
-
   describe('getSessions', () => {
     it('returns empty list for no sessions', () => {
       const analyzer = createAnalyzer([]);

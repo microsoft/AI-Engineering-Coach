@@ -39,7 +39,7 @@ Use a slash command with no additional text to get the default analysis, or add 
 
 ## Available Tools
 
-The participant has access to 12 backend tools that it selects automatically based on your question:
+The participant has access to 13 backend tools that it selects automatically based on your question:
 
 | Tool | Domain | What it returns |
 |---|---|---|
@@ -55,6 +55,7 @@ The participant has access to 12 backend tools that it selects automatically bas
 | `aiEngineerCoach_harnessComparison` | Observe | Side-by-side tool comparison: sessions, LOC, cancel rates |
 | `aiEngineerCoach_sessions` | Observe | Browse or search individual sessions by ID or keyword |
 | `aiEngineerCoach_contextHealth` | Improve | Context utilization, compaction, config health, and instruction quality |
+| `aiEngineerCoach_timeline` | Observe | Agent time, typed vs automated turns, unattended stretches, waits on you, and session families with verdicts (`date` picks the day) |
 
 All tools accept optional `fromDate`, `toDate`, `workspaceId`, and `harness` filters. The participant resolves relative time references ("last week", "past month") automatically.
 

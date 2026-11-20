@@ -11,6 +11,9 @@
 
 import { exportedOriginName } from '../core/prompt-cache-causes';
 import type { Analyzer } from '../core/analyzer';
+import {
+  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, prepareTimeline, timelineKpis, timelineWindow, VERDICTS, viewInsights,
+} from '../core/timeline-model';
 import type { AntiPatternData, ContextCompositionData, DateFilter, PromptCacheData, TokenTypesData, TurnBasis } from '../core/types';
 
 /** What a time-based measure counts: the prompts the user typed, not the turns agents or the harness sent. */
@@ -475,6 +478,74 @@ export function formatSessions(
       firstMessage: s.firstMessage?.slice(0, 120) ?? '',
     })),
   };
+}
+
+/** Autonomy and delegation: how much agents worked on their own, where they waited on the user, and the session
+ *  families (a coordinator and the sessions it started) with their verdicts. Session names as logged, already
+ *  scrubbed of paths and the user's names; no prompt text. `date` picks the day (default: the latest active day). */
+export function formatTimeline(analyzer: Analyzer, f?: DateFilter, date?: string) {
+  const p = prepareTimeline(analyzer.getTimelineData(f));
+  if (p.sessions.length === 0) return { sessions: 0, note: 'No sessions in this range.' };
+  const day = date && p.days.includes(date) ? date : p.days[p.days.length - 1];
+  const lanes = buildLanes(p, ...timelineWindow('day', day));
+  const families = buildViewFamilies(lanes, p);
+  const kpis = timelineKpis(lanes, families);
+  const namer = createNamer(p, false);
+  const overview = buildFamilies(p);
+  const totals = overview.totals;
+  const minutes = (ms: number) => Math.round(ms / 60_000);
+  return {
+    range: { from: p.days[0], to: p.days[p.days.length - 1], sessions: p.sessions.length, activeDays: p.days.length },
+    automatedTurnPct: pct(sum(p.days, d => p.dayTotals.get(d)?.automated ?? 0), sum(p.days, d => { const x = p.dayTotals.get(d); return x ? x.typed + x.automated : 0; })),
+    day: {
+      date: day,
+      sessions: kpis.sessions,
+      turns: kpis.turns,
+      typedTurns: kpis.typed,
+      agentHours: Math.round(kpis.agentMs / 360_000) / 10,
+      agentMinutesPerTypedPrompt: kpis.agentMsPerPrompt == null ? null : minutes(kpis.agentMsPerPrompt),
+      longestUnattendedMinutes: minutes(kpis.unattendedMs),
+      waitsOnUser: { count: kpis.waits, minutes: minutes(kpis.waitMs), over30Min: kpis.longWaits },
+      peakParallelAgents: kpis.peak.count,
+      childSessions: kpis.childLanes,
+      childCreditSharePct: Math.round(kpis.childCreditShare * 10) / 10,
+      insights: viewInsights(lanes, families, namer, 'day'),
+    },
+    families: {
+      count: totals.families,
+      sessionsInFamilies: totals.sessionsInFamilies,
+      childSessions: totals.children,
+      childSessionsThatNeededAPrompt: totals.childrenNeedingYou,
+      creditSharePct: Math.round(totals.creditShare),
+      childCreditSharePct: Math.round(totals.childCreditShare),
+      verdicts: {
+        workedAlone: { families: totals.alone.families, creditSharePct: Math.round(totals.alone.creditShare) },
+        neededYou: { families: totals.needed.families, creditSharePct: Math.round(totals.needed.creditShare) },
+        wideFanOut: { families: totals.wide.families, creditSharePct: Math.round(totals.wide.creditShare) },
+      },
+      insights: familiesInsights(totals),
+      top: overview.families.slice(0, 5).map(fam => ({
+        name: namer.name(fam.s),
+        repository: fam.s.repo,
+        sessions: fam.sessions,
+        children: fam.children,
+        verdict: VERDICTS[fam.verdict].label,
+        wideFanOut: fam.wide,
+        promptsTypedIntoChildren: fam.childTyped,
+        agentHours: Math.round(fam.agentMs / 360_000) / 10,
+        creditSharePct: Math.round(fam.creditShare * 10) / 10,
+        habit: VERDICTS[fam.verdict].habit,
+      })),
+    },
+    notes: [
+      'Agent time runs from a prompt to the last assistant message of the turn, so it includes time waiting on a question.',
+      'Credits are logged only by Copilot CLI and Copilot App.',
+    ],
+  };
+}
+
+function sum<T>(items: readonly T[], value: (item: T) => number): number {
+  return items.reduce((total, item) => total + value(item), 0);
 }
 
 /** What fills the prompt, per harness — shares in percent of the prompt. */

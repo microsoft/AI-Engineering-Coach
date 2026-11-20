@@ -761,11 +761,7 @@ const rpcHandlers: TypedRpcHandlers = {
     isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined,
   ) : errorResult('Token reporting is temporarily disabled'),
   getTokenCoverage: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getTokenCoverage(validateDateFilter(params)) : errorResult('Token reporting is temporarily disabled'),
-  getDayTimeline: (a, _p, params) => a.getDayTimeline(
-    isOptionalString(params?.date) ? params.date : undefined,
-    isOptionalString(params?.mode) ? params.mode : undefined,
-    isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined,
-  ),
+  getTimelineData: (a, _p, params) => a.getTimelineData(isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined),
   getSessions: (a, _p, params) => a.getSessions(
     isNumber(params?.page) ? params.page : 1,
     isNumber(params?.pageSize) ? Math.min(params.pageSize, 100) : 20,

@@ -287,6 +287,22 @@
             "harness": { "type": "string", "description": "Filter to an AI tool name" }
           }
         }
+      },
+      {
+        "name": "aiEngineerCoach_timeline",
+        "tags": ["ai-engineer-coach"],
+        "displayName": "Coach: Timeline",
+        "modelDescription": "Get autonomy and delegation analysis: agent time, typed vs automated turns, unattended stretches, waits on the user, peak parallel agents, and session families with credits and verdicts.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "date": { "type": "string", "description": "Day to analyze (YYYY-MM-DD); defaults to the latest active day" },
+            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
+            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
+            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
+            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+          }
+        }
       }
     ]
   },

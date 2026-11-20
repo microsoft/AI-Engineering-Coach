@@ -24,6 +24,7 @@ import {
   formatHarnessComparison,
   formatSessions,
   formatContextHealth,
+  formatTimeline,
 } from './formatters';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { redactSecrets } from '../core/redact-secrets';
@@ -185,6 +186,13 @@ const TOOL_DEFS: ToolDef[] = [
     inputSchema: { type: 'object', properties: { ...FILTER_SCHEMA } },
     invoke: (a, input) => textResult(formatContextHealth(a, parseFilter(input))),
     prepareMessage: 'Checking context health…',
+  },
+  {
+    name: 'aiEngineerCoach_timeline',
+    description: 'Get autonomy and delegation analysis from the Timeline: agent time, turns the user typed versus automated, how long agents worked unattended, how often and how long they waited on the user, peak parallel agents, and session families (a coordinator and the child sessions it started) with credits and verdicts (worked alone, needed you, wide fan-out). Use to coach on delegation and briefs.',
+    inputSchema: { type: 'object', properties: { date: { type: 'string', description: 'Day to analyze (YYYY-MM-DD); defaults to the latest active day' }, ...FILTER_SCHEMA } },
+    invoke: (a, input) => textResult(formatTimeline(a, parseFilter(input), typeof input.date === 'string' ? input.date : undefined)),
+    prepareMessage: 'Reading the timeline…',
   },
 ];
 

@@ -293,7 +293,7 @@ describe('Codex', () => {
     ['mcp', 'mcp', undefined],
     ['a review sub-agent', { subagent: 'review' }, 'subagent'],
     ['a spawned thread', { subagent: { thread_spawn: { parent_thread_id: 'thread-1', depth: 1 } } }, 'subagent'],
-  ])('marks every prompt of a %s session accordingly', (_label, source, expected) => {
+  ])('marks every prompt of a %s session accordingly', (label, source, expected) => {
     const sessionsDir = path.join(tempRoot('codex'), 'sessions');
     writeLines(path.join(sessionsDir, '2026', '09', '30', 'rollout-2026-09-30-test.jsonl'), [
       { type: 'session_meta', payload: { id: 'codex-1', cwd: '/Users/me/proj', source } },
@@ -307,7 +307,9 @@ describe('Codex', () => {
         { type: 'event_msg', timestamp: `2026-09-30T12:00:${21 + index * 5}Z`, payload: { type: 'agent_message', message: 'Done.' } },
       ]),
     ]);
-    const requests = parseCodexSessions(sessionsDir)[0]?.requests ?? [];
+    const codex = parseCodexSessions(sessionsDir)[0];
+    expect(codex?.parentSessionId).toBe(label === 'a spawned thread' ? 'thread-1' : undefined);
+    const requests = codex?.requests ?? [];
     expect(kinds(requests)).toEqual(Array(7).fill(expected));
     expect(curiosity(requests)).toEqual(expected ? Array(7).fill('excluded') : ['analyzed', 'excluded', 'excluded', 'excluded', 'excluded', 'analyzed', 'analyzed']);
   });
@@ -395,6 +397,7 @@ describe('OpenCode', () => {
     expect(kinds(child?.requests ?? [])).toEqual(expectedKinds.map(kind => kind ?? 'subagent'));
     expect(curiosity(child?.requests ?? []).every(kind => kind === 'excluded')).toBe(true);
     expect(kinds(sessions.find(session => session.sessionId === 'ses_root')?.requests ?? [])).toEqual(expectedKinds);
+    expect(child?.parentSessionId).toBe('ses_root');
   });
 
   it.each([true, false])('reads child sessions and parts from opencode.db (parent_id column: %s)', withParentColumn => {

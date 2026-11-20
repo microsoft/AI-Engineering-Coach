@@ -20,6 +20,7 @@ import { renderWorkspaceGrid, updateWorkspaceCell } from './loading-grid-view';
 import { buildSkippedBanner } from './skipped-banner';
 import { loadCapabilities, llmAvailable } from './capabilities';
 import { html, render, unmount, ComponentChildren } from './render';
+import { setNavHint } from './nav-hint';
 import { renderDashboard } from './page-dashboard';
 import { renderPatterns } from './page-patterns';
 import { renderCuriosity } from './page-curiosity';
@@ -66,10 +67,7 @@ let matchedWorkspaceId: string | undefined;
 let lastSkippedFiles = 0;
 let lastSkippedLines = 0;
 
-/** Navigation hint: which sub-section to auto-open after navigating */
-export let navHint: string | undefined;
-export function setNavHint(hint: string | undefined): void { navHint = hint; }
-export function consumeNavHint(): string | undefined { const h = navHint; navHint = undefined; return h; }
+export { consumeNavHint } from './nav-hint';
 
 /* ---- Nav Badge Helpers ---- */
 function setBadge(id: string, value: string | number): void {

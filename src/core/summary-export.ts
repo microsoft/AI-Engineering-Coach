@@ -14,6 +14,8 @@ import type {
 } from './types/analytics-types';
 import type { FlowStateData } from './types/context-types';
 import type { DateFilter } from './types/session-types';
+import type { TimelineDataset } from './types/timeline-types';
+import { buildFamilies, buildLanes, prepareTimeline } from './timeline-model';
 
 export interface SummaryExportInput {
   generatedAt?: string | Date;
@@ -24,6 +26,8 @@ export interface SummaryExportInput {
   workLifeBalance: WorkLifeBalanceResult | null;
   flowState: FlowStateData;
   antiPatterns: AntiPatternData;
+  /** The Timeline's range dataset; adds the autonomy section when given. */
+  timeline?: TimelineDataset;
 }
 
 export interface SummaryExportAnalyzer {
@@ -33,6 +37,7 @@ export interface SummaryExportAnalyzer {
   getWorkLifeBalance(filter?: DateFilter): WorkLifeBalanceResult | null;
   getFlowState(filter?: DateFilter): FlowStateData;
   getAntiPatterns(filter?: DateFilter): AntiPatternData;
+  getTimelineData?(filter?: DateFilter): TimelineDataset;
 }
 
 export interface SummaryExportReport {
@@ -78,6 +83,23 @@ export interface SummaryExportReport {
     /** Rules that couldn't be evaluated, so the anti-patterns leave them out. */
     notEvaluated: Array<{ id: string; name: string; group: string; error: string }>;
   };
+  /** How much agents worked on their own and how delegation went (Timeline). Counts only, no session names. */
+  autonomy: SummaryAutonomy | null;
+}
+
+export interface SummaryAutonomy {
+  typedTurns: number;
+  automatedTurns: number;
+  agentHours: number;
+  waitsOnYou: number;
+  waitHours: number;
+  families: number;
+  childSessions: number;
+  childSessionsThatNeededYou: number;
+  familyCreditSharePct: number;
+  workedAlone: number;
+  neededYou: number;
+  wideFanOut: number;
 }
 
 const TOP_LANGUAGE_LIMIT = 10;
@@ -184,6 +206,30 @@ export function buildSummaryExport(input: SummaryExportInput): SummaryExportRepo
       topPatterns: buildTopAntiPatterns(input.antiPatterns),
       notEvaluated: input.antiPatterns.failedRules.map(rule => ({ id: rule.ruleId, name: rule.ruleName, group: rule.group, error: rule.error })),
     },
+    autonomy: input.timeline ? buildAutonomy(input.timeline) : null,
+  };
+}
+
+function buildAutonomy(data: TimelineDataset): SummaryAutonomy | null {
+  if (data.sessions.length === 0) return null;
+  const p = prepareTimeline(data);
+  const lanes = buildLanes(p, -Infinity, Infinity);
+  const { totals } = buildFamilies(p);
+  const waits = lanes.flatMap(l => l.waits);
+  const hours = (ms: number) => Math.round(ms / 360_000) / 10;
+  return {
+    typedTurns: lanes.reduce((n, l) => n + l.typed, 0),
+    automatedTurns: lanes.reduce((n, l) => n + l.automated, 0),
+    agentHours: hours(lanes.reduce((n, l) => n + l.agentMs, 0)),
+    waitsOnYou: waits.length,
+    waitHours: hours(waits.reduce((n, [a, b]) => n + b - a, 0)),
+    families: totals.families,
+    childSessions: totals.children,
+    childSessionsThatNeededYou: totals.childrenNeedingYou,
+    familyCreditSharePct: Math.round(totals.creditShare),
+    workedAlone: totals.alone.families,
+    neededYou: totals.needed.families,
+    wideFanOut: totals.wide.families,
   };
 }
 
@@ -201,6 +247,7 @@ export function buildSummaryExportFromAnalyzer(
     workLifeBalance: analyzer.getWorkLifeBalance(filter),
     flowState: analyzer.getFlowState(filter),
     antiPatterns: analyzer.getAntiPatterns(filter),
+    timeline: analyzer.getTimelineData?.(filter),
   });
 }
 
@@ -238,6 +285,19 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
   if (report.flow.suggestions.length > 0) {
     lines.push('', '### Flow Suggestions');
     for (const suggestion of report.flow.suggestions) lines.push(`- ${suggestion}`);
+  }
+
+  if (report.autonomy) {
+    const a = report.autonomy;
+    const turns = a.typedTurns + a.automatedTurns;
+    lines.push(
+      '', '## Autonomy and Delegation (Timeline)',
+      `- Turns you typed: ${formatNumber(a.typedTurns)} of ${formatNumber(turns)} (${formatPercent(turns ? a.automatedTurns / turns : 0)} automated)`,
+      `- Agent time: ${a.agentHours} h`,
+      `- Agents waited on you: ${formatNumber(a.waitsOnYou)} times, ${a.waitHours} h in total`,
+      `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsThatNeededYou)} needed a prompt from you; ${a.familyCreditSharePct}% of credits)`,
+      `- Verdicts: ${formatNumber(a.workedAlone)} worked alone, ${formatNumber(a.neededYou)} needed you, ${formatNumber(a.wideFanOut)} wide fan-outs`,
+    );
   }
 
   lines.push('', '## Top Languages');

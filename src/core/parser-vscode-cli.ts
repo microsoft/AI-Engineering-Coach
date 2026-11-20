@@ -11,6 +11,7 @@
  * We aggregate all events between consecutive user.message events into one SessionRequest.
  */
 
+import * as path from 'path';
 import { Session, SessionRequest, CompactionEvent, ModelUsage, CompactionContextSnapshot, SessionContextComposition, SystemPromptSegment } from './types';
 import { createRequest, createSession, detectDevcontainerFromRequests, recordFailedFile } from './parser-shared';
 import { forEachJsonlLine, forEachJsonlLineAsync } from './parser-vscode-files';
@@ -35,7 +36,9 @@ import {
 import { recordedTools, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromAttachments, imageReferencesFromVariables, imageRequestIndex, type ImageReference, type ImageRequestMatch } from './image-data';
 import type { NonHumanKind } from './types';
-import { cliNonHumanKind } from './parser-turn-kinds';
+import { cliNonHumanKind, cliRelaySenderId } from './parser-turn-kinds';
+import { NANO_AIU_PER_AI_CREDIT } from './github-app-issue-credit-model';
+import { readCliWorkspaceMeta } from './session-workspace-meta';
 
 interface CLIEvent {
   type: string;
@@ -83,6 +86,8 @@ interface TurnState {
   pendingToolEdits: Map<string, PendingToolEdit>;
   /** Main-agent model calls of this turn (from session.usage_record). */
   usage: CliTurnUsage;
+  /** AI credits and tokens of every model call of the turn, sub-agents included (from session.usage_record). */
+  logged: TurnUsageTotals;
 }
 
 interface PendingToolEdit {
@@ -121,6 +126,19 @@ interface CLIParseState {
   context: TurnContextAccumulator;
   /** Main-agent calls logged so far: the index of the next call in the call timeline. */
   mainCalls: number;
+  /** Session-starting tool calls (`create_session`, `open_pr_session`, `open_issue_session`) awaiting their result. */
+  sessionToolCalls: Set<string>;
+  /** Session IDs in the results of those calls: the sessions this one started. */
+  childSessionIds: Set<string>;
+  /** Sender of the session's first message, when that message was relayed from another session. */
+  relaySenderId?: string;
+  /** Credits and tokens of usage records logged before the first prompt; the first turn takes them. */
+  pendingUsage: TurnUsageTotals;
+}
+
+interface TurnUsageTotals {
+  credits: number;
+  tokens: number;
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -149,8 +167,13 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     editLocs: new Map(),
     pendingToolEdits: new Map(),
     usage: { calls: 0, inputTokens: 0, toolTokens: 0, availableTools: 0 },
+    logged: { credits: 0, tokens: 0 },
   };
 }
+
+/** Tools that start another session and return its ID. */
+const SESSION_TOOLS = new Set(['create_session', 'open_pr_session', 'open_issue_session']);
+const SESSION_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 const FILE_REF_TOOLS = new Set(['view', 'grep', 'glob', 'rg', 'show_file']);
 const FILE_EDIT_TOOLS = new Set(['edit', 'create', 'apply_patch']);
@@ -248,6 +271,8 @@ function flushTurn(state: CLIParseState): void {
   });
   state.requests.push(request);
   if (turn.compactions.length > 1) request.compactions = turn.compactions;
+  if (turn.logged.credits > 0) request.aiCredits = turn.logged.credits;
+  if (turn.logged.tokens > 0) request.loggedTokens = turn.logged.tokens;
   attachTurnUsage(state, turn, request);
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
@@ -292,6 +317,7 @@ function eventTime(ev: CLIEvent): number | null {
 /** One model call: read it once, then feed the call timeline, the prompt-cache tracker, the turn's context
  *  and the turn's composition. Records logged before the first prompt are taken by the first turn. */
 function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
+  addLoggedUsage(ev.data, state);
   const call = readCliModelCall(ev.data || {}, eventTime(ev), state.currentModelId);
   if (!call) return;
   // The limit the turn's context rule gives the call, so the timeline's limit agrees with the turn's.
@@ -314,6 +340,18 @@ function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
   if (callIndex != null) state.mainCalls = callIndex + 1;
   state.cache.onCall(call, callIndex, state.requests.length);
   addCompositionUsage(state.turn, call);
+}
+
+/** AI credits (`copilotUsage.totalNanoAiu`) and tokens of any model call, sub-agents included, for the turn. */
+function addLoggedUsage(data: Record<string, unknown> | undefined, state: CLIParseState): void {
+  const usage = recordValue(data?.usage);
+  if (!usage) return;
+  const target = state.turn ? state.turn.logged : state.pendingUsage;
+  const nano = finiteNumber(recordValue(usage.copilotUsage)?.totalNanoAiu);
+  if (nano != null && nano > 0) target.credits += nano / NANO_AIU_PER_AI_CREDIT;
+  const input = finiteNumber(usage.inputTokens);
+  const output = finiteNumber(usage.outputTokens);
+  target.tokens += Math.max(0, input ?? 0) + Math.max(0, output ?? 0);
 }
 
 /** Main-thread calls build the main context; sub-agent calls have their own. */
@@ -409,6 +447,7 @@ function handleModelChange(data: Record<string, unknown>, state: CLIParseState):
 }
 
 function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
+  const isFirst = state.turn === null && state.requests.length === 0;
   flushTurn(state);
   state.turn = freshTurn(
     str(ev.data?.content),
@@ -419,6 +458,10 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
   state.turn.nonHumanKind = cliNonHumanKind(ev.data);
   state.turn.nonUser = state.turn.nonHumanKind !== undefined;
   state.turn.userEventId = ev.id;
+  // Only the first message says who started the session: coordinators also receive relayed reports.
+  if (isFirst && state.turn.nonHumanKind === 'relayed') state.relaySenderId = cliRelaySenderId(ev.data);
+  state.turn.logged = state.pendingUsage;
+  state.pendingUsage = { credits: 0, tokens: 0 };
   addAttachmentReferences(state.turn, ev.data?.attachments);
   const images = [
     ...imageReferencesFromAttachments(ev.data?.attachments),
@@ -428,11 +471,12 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
 }
 
 function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
+  const data = ev.data || {};
+  const toolName = str(data.toolName);
+  if (SESSION_TOOLS.has(toolName) && str(data.toolCallId)) state.sessionToolCalls.add(str(data.toolCallId));
   const turn = state.turn;
   if (!turn) return;
 
-  const data = ev.data || {};
-  const toolName = str(data.toolName);
   const rawArgs = data.arguments;
   const args = recordValue(rawArgs) || {};
   const ts = ev.timestamp ? new Date(ev.timestamp).getTime() : null;
@@ -491,7 +535,24 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   if (toolName === 'skill' && typeof args.skill === 'string') turn.skillsUsed.add(args.skill);
 }
 
+/** A session-starting tool call finished: the session IDs in its result are sessions this one started. */
+function recordStartedSessions(data: Record<string, unknown>, state: CLIParseState): void {
+  const toolCallId = str(data.toolCallId);
+  if (!toolCallId || !state.sessionToolCalls.delete(toolCallId) || data.success === false) return;
+  let result: string;
+  try {
+    result = JSON.stringify(data.result ?? '');
+  } catch {
+    return;
+  }
+  for (const match of result.matchAll(SESSION_ID)) {
+    const id = match[0].toLowerCase();
+    if (id !== state.sessionId.toLowerCase()) state.childSessionIds.add(id);
+  }
+}
+
 function handleToolExecutionComplete(data: Record<string, unknown>, state: CLIParseState): void {
+  recordStartedSessions(data, state);
   const turn = state.turn;
   if (!turn) return;
   const toolCallId = str(data.toolCallId);
@@ -712,6 +773,9 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     subagents: new SubagentRunTracker(),
     context: new TurnContextAccumulator(),
     mainCalls: 0,
+    sessionToolCalls: new Set(),
+    childSessionIds: new Set(),
+    pendingUsage: { credits: 0, tokens: 0 },
   };
 }
 
@@ -720,6 +784,7 @@ function finalizeCliSession(
   wsId: string,
   wsName: string,
   customInstructionsBytes?: number,
+  sessionDir?: string,
 ): Session | null {
   flushTurn(state);
   // No system-prompt size was ever recorded: keep the non-tool remainder unattributed.
@@ -749,6 +814,9 @@ function finalizeCliSession(
     customInstructionsBytes,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests),
     workspaceRootPath: state.workspaceRootPath,
+    ...(sessionDir ? readCliWorkspaceMeta(sessionDir) : {}),
+    ...(state.childSessionIds.size > 0 ? { childSessionIds: [...state.childSessionIds] } : {}),
+    ...(state.relaySenderId && state.relaySenderId !== state.sessionId.toLowerCase() ? { relaySenderId: state.relaySenderId } : {}),
   });
 }
 
@@ -781,7 +849,7 @@ export function parseCLIEventsFile(
 
   if (!sawAnyEvent) return null;
 
-  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes);
+  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes, path.dirname(eventsPath));
 }
 
 export function extractCLIImageReferences(
@@ -855,5 +923,5 @@ export async function parseCLIEventsFileAsync(
 
   if (!sawAnyEvent) return null;
 
-  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes);
+  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes, path.dirname(eventsPath));
 }

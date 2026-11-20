@@ -256,6 +256,11 @@ export interface SessionRequest {
   compactions?: CompactionEvent[];
   /** Sub-agent runs launched during the turn (Copilot CLI and Copilot App). */
   subagentRuns?: import('./token-usage-types').SubagentRun[];
+  /** AI credits Copilot logged for the turn's model calls, sub-agents included: `session.usage_record`
+   *  `copilotUsage.totalNanoAiu` ÷ 1e9 (Copilot CLI and Copilot App). Absent when none were logged. */
+  aiCredits?: number;
+  /** Input plus output tokens of the same usage records (Copilot CLI and Copilot App). */
+  loggedTokens?: number;
 }
 
 export interface CodeBlock {
@@ -321,6 +326,24 @@ export interface Session {
    *  changes. `undefined` for non-Claude sessions and very old Claude versions
    *  that did not record this field. */
   entrypoint?: string;
+  /** Display name the harness logged for the session (Copilot CLI and Copilot App `workspace.yaml` `name`),
+   *  scrubbed of links, paths and the user's names in the parse worker. */
+  displayName?: string;
+  /** Branch the session worked on (`workspace.yaml`), scrubbed, without the user's handle prefix. */
+  branch?: string;
+  /** Repository name without owner or path (`workspace.yaml` `repository`, else `git_root`). */
+  repository?: string;
+  /** Forks the harness counted for the session (`workspace.yaml` `fork_count`); no harness logs which session a
+   *  fork came from. */
+  forkCount?: number;
+  /** Sessions this session started: the session IDs in the results of its `create_session`, `open_pr_session` and
+   *  `open_issue_session` calls (Copilot CLI and Copilot App). */
+  childSessionIds?: string[];
+  /** The session that relayed this session's FIRST message (`from_session_id`), which started it. Relayed messages
+   *  later in a session are reports, not parentage (Copilot CLI and Copilot App). */
+  relaySenderId?: string;
+  /** Parent session as the harness logged it: Codex `parent_thread_id`, OpenCode `parentID`. */
+  parentSessionId?: string;
 }
 
 export interface Workspace {

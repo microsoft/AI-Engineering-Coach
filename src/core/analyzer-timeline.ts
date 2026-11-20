@@ -6,40 +6,79 @@
 /* Timeline + session detail analytics */
 
 import {
-  Session, SessionRequest, DateFilter, DayTimeline, TimelineSession, TimelineRequest,
-  SessionList, SessionListItem, WorkLifeBalanceResult,
+  Session, SessionRequest, DateFilter, SessionList, SessionListItem, WorkLifeBalanceResult,
+  NonHumanKind, TimelineDataset, TimelineSessionRecord, TimelineTurn, TurnSender,
 } from './types';
-import { toDateStr, startOfDay, endOfDay, classifyWorkType, isoWeek } from './helpers';
+import { toDateStr, isoWeek } from './helpers';
 import { AnalyzerBase } from './analyzer-base';
+import { harnessLabel, inferBranchOwner, lastSegment, scrubBranch, scrubLabel, type ScrubContext } from './session-labels';
+import { localScrubContext } from './session-workspace-meta';
+import { resolveParentLinks, type ParentLink } from './timeline-links';
+
+/** The sender marker a turn gets on the Timeline. */
+export function turnSender(kind: NonHumanKind | undefined): TurnSender {
+  if (!kind) return 'you';
+  if (kind === 'agent' || kind === 'relayed' || kind === 'subagent') return 'agent';
+  if (kind === 'autopilot') return 'autopilot';
+  if (kind === 'compaction') return 'compaction';
+  return 'other';
+}
+
+function timelineTurn(r: SessionRequest): TimelineTurn {
+  return {
+    t: r.timestamp ?? 0,
+    d: Math.max(0, r.totalElapsed ?? 0),
+    k: turnSender(r.nonHumanKind),
+    sub: r.subagentRuns?.length ?? 0,
+    comp: Boolean(r.compaction || r.compactions?.length),
+    cr: r.aiCredits ?? 0,
+    tok: r.loggedTokens ?? Math.max(0, (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
+  };
+}
+
+/** The model most of the turns used, ignoring placeholders such as `<synthetic>`. */
+function mainModel(requests: readonly SessionRequest[]): string {
+  const counts = new Map<string, number>();
+  for (const r of requests) if (r.modelId && !r.modelId.startsWith('<')) counts.set(r.modelId, (counts.get(r.modelId) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
+}
+
+/** The scrub context plus the personal prefix most of the user's branches share, which tools add from the handle. */
+function withBranchOwner(ctx: ScrubContext, sessions: readonly Session[]): ScrubContext {
+  const owner = inferBranchOwner(sessions.map(s => s.branch ?? '').filter(Boolean));
+  return owner ? { ...ctx, names: [...ctx.names, owner] } : ctx;
+}
 
 export class TimelineAnalyzer extends AnalyzerBase {
+  private links?: Map<string, ParentLink>;
+  private labelContext?: ScrubContext;
 
-  getDayTimeline(dateStr?: string, mode?: string, f?: DateFilter): DayTimeline {
-    const allSessions = this.filteredSessions(f);
-    const sortedDates = this.getSortedActiveDates(allSessions);
-    const targetDate = this.resolveTimelineDate(dateStr, sortedDates);
-    const dayStartTs = startOfDay(new Date(targetDate + 'T00:00:00').getTime());
-    const dayEndTs = endOfDay(dayStartTs);
-    const tlSessions = allSessions
-      .map(session => this.buildTimelineSession(session, dayStartTs, dayEndTs))
-      .filter((session): session is TimelineSession => session !== null)
-      .sort((a, b) => a.firstActivity - b.firstActivity);
-    const { prevDay, nextDay, firstDay } = this.getDateNavigation(targetDate, sortedDates);
-
-    return {
-      date: targetDate,
-      mode: mode || 'day',
-      rangeLabel: targetDate,
-      dayStart: dayStartTs,
-      dayEnd: dayEndTs,
-      sessions: tlSessions,
-      sessionCount: tlSessions.length,
-      maxConcurrent: this.getMaxConcurrent(tlSessions),
-      prevDay,
-      nextDay,
-      firstDay,
-      activeDates: this.getActiveDateCounts(allSessions, sortedDates),
-    };
+  /** Every session with a turn in range, with its turns as counts and timings, its family link, and its logged
+   *  name, branch and repository (never a path). No prompt or response text. */
+  getTimelineData(f?: DateFilter, ctx: ScrubContext = localScrubContext()): TimelineDataset {
+    this.links ??= resolveParentLinks(this.sessions);
+    this.labelContext ??= withBranchOwner(ctx, this.sessions);
+    const labels = this.labelContext;
+    const inRange = this.sessionsWithRequestsInRange(f)
+      .map(s => ({ s, requests: s.requests.filter(r => this.requestInRange(r, f)).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0)) }))
+      .sort((a, b) => (a.requests[0].timestamp ?? 0) - (b.requests[0].timestamp ?? 0) || a.s.sessionId.localeCompare(b.s.sessionId));
+    const index = new Map(inRange.map(({ s }, i) => [s.sessionId, i]));
+    const sessions: TimelineSessionRecord[] = inRange.map(({ s, requests }) => {
+      const link = this.links?.get(s.sessionId);
+      const parent = link ? index.get(link.parent) ?? -1 : -1;
+      return {
+        id: s.sessionId,
+        name: s.displayName ? scrubLabel(s.displayName, labels) : '',
+        branch: s.branch ? scrubBranch(s.branch, labels) : '',
+        repo: scrubLabel(s.repository || lastSegment(s.workspaceName) || 'unknown', labels) || 'unknown',
+        harness: harnessLabel(s.harness),
+        model: mainModel(requests),
+        parent,
+        via: parent >= 0 && link ? link.via : null,
+        turns: requests.map(timelineTurn),
+      };
+    });
+    return { sessions, forkedSessions: inRange.filter(({ s }) => (s.forkCount ?? 0) > 0).length };
   }
 
   getSessions(page: number, pageSize: number, f?: DateFilter, search?: string): SessionList {
@@ -103,95 +142,6 @@ export class TimelineAnalyzer extends AnalyzerBase {
       weeklyTrend,
       turnBasis: basis,
     };
-  }
-
-  private getSortedActiveDates(sessions: Session[]): string[] {
-    const activeDates = new Set<string>();
-    for (const session of sessions) {
-      for (const request of session.requests) {
-        if (request.timestamp != null && request.timestamp > 0) activeDates.add(toDateStr(request.timestamp));
-      }
-    }
-    return Array.from(activeDates).sort();
-  }
-
-  private resolveTimelineDate(dateStr: string | undefined, sortedDates: string[]): string {
-    if (dateStr) return dateStr;
-    if (sortedDates.length > 0) return sortedDates[sortedDates.length - 1];
-    return toDateStr(Date.now());
-  }
-
-  private buildTimelineSession(session: Session, dayStartTs: number, dayEndTs: number): TimelineSession | null {
-    const dayReqs = session.requests.filter(r => r.timestamp != null && r.timestamp >= dayStartTs && r.timestamp <= dayEndTs);
-    if (dayReqs.length === 0) return null;
-
-    const firstMsg = dayReqs[0].messageText || '';
-    const sessionName = firstMsg.length > 60 ? firstMsg.substring(0, 60) + '...' : firstMsg || 'Untitled';
-    const requests: TimelineRequest[] = dayReqs.map(r => ({
-      timestamp: r.timestamp!,
-      messageText: r.messageText,
-      responseText: r.responseText,
-      messageLength: r.messageLength,
-      responseLength: r.responseLength,
-      agentName: r.agentName,
-      modelId: r.modelId,
-      toolsUsed: r.toolsUsed,
-      editedFiles: r.editedFiles,
-      referencedFiles: r.referencedFiles,
-      preview: r.messageText.substring(0, 100),
-      loc: this.requestLoc(r),
-      workType: r.workType || classifyWorkType(r.messageText),
-    }));
-    const timestamps = dayReqs.map(r => r.timestamp!);
-
-    return {
-      sessionId: session.sessionId,
-      workspaceName: session.workspaceName,
-      sessionName,
-      firstActivity: Math.min(...timestamps),
-      lastActivity: Math.max(...timestamps),
-      requestCount: dayReqs.length,
-      totalRequestCount: session.requests.length,
-      requests,
-    };
-  }
-
-  private getMaxConcurrent(sessions: TimelineSession[]): number {
-    const events: Array<{ time: number; type: 'start' | 'end' }> = [];
-    for (const session of sessions) {
-      events.push({ time: session.firstActivity, type: 'start' });
-      events.push({ time: session.lastActivity, type: 'end' });
-    }
-    events.sort((a, b) => a.time - b.time || (a.type === 'start' ? -1 : 1));
-
-    let maxConcurrent = 0;
-    let current = 0;
-    for (const event of events) {
-      current += event.type === 'start' ? 1 : -1;
-      if (current > maxConcurrent) maxConcurrent = current;
-    }
-    return maxConcurrent;
-  }
-
-  private getDateNavigation(dateStr: string, sortedDates: string[]): Pick<DayTimeline, 'prevDay' | 'nextDay' | 'firstDay'> {
-    const idx = sortedDates.indexOf(dateStr);
-    return {
-      prevDay: idx > 0 ? sortedDates[idx - 1] : (sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : null),
-      nextDay: idx >= 0 && idx < sortedDates.length - 1 ? sortedDates[idx + 1] : (sortedDates.length > 0 ? sortedDates[0] : null),
-      firstDay: sortedDates.length > 0 ? sortedDates[0] : null,
-    };
-  }
-
-  private getActiveDateCounts(sessions: Session[], sortedDates: string[]): DayTimeline['activeDates'] {
-    const dateCountMap = new Map<string, number>();
-    for (const session of sessions) {
-      for (const request of session.requests) {
-        if (request.timestamp == null) continue;
-        const date = toDateStr(request.timestamp);
-        dateCountMap.set(date, (dateCountMap.get(date) || 0) + 1);
-      }
-    }
-    return sortedDates.map(date => ({ date, count: dateCountMap.get(date) || 0 }));
   }
 }
 

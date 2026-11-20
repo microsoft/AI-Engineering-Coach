@@ -8,7 +8,7 @@
 import {
   Session, SessionRequest, DateFilter, DailyActivity, HourlyDistribution, HeatmapData,
   CodeProductionData, ConsumptionData, BurndownConfig, BurndownData, AiCreditData, AiCreditBurndownData, TokenCoverageData,
-  DayTimeline, SessionList, WorkspaceBreakdown, RecommendationResult,
+  TimelineDataset, SessionList, WorkspaceBreakdown, RecommendationResult,
   AntiPatternData, WorkLifeBalanceResult, StatsResult, HarnessComparisonData,
   WorkflowOptimizationData, ConfigHealthData, FlowStateData, Workspace,
   CalendarActivityData, ProjectOverviewData, ContextManagementData, InsightsData,
@@ -171,7 +171,7 @@ export class Analyzer {
   getAiCreditBurndown(config: BurndownConfig, f?: DateFilter): AiCreditBurndownData { return this.consumption.getAiCreditBurndown(config, f); }
   getTokenCoverage(f?: DateFilter): TokenCoverageData { return this.consumption.getTokenCoverage(f); }
 
-  getDayTimeline(dateStr?: string, mode?: string, f?: DateFilter): DayTimeline { return this.timeline.getDayTimeline(dateStr, mode, f); }
+  getTimelineData(f?: DateFilter): TimelineDataset { return this.timeline.getTimelineData(f); }
   getSessions(page: number, pageSize: number, f?: DateFilter, search?: string): SessionList { return this.timeline.getSessions(page, pageSize, f, search); }
   getSessionDetail(sessionId: string): Session | null { return this.timeline.getSessionDetail(sessionId); }
   getWorkLifeBalance(f?: DateFilter): WorkLifeBalanceResult | null { return this.timeline.getWorkLifeBalance(f); }

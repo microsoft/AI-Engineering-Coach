@@ -383,3 +383,54 @@ describe('plan mode from native CLI events', () => {
     ])).toBeUndefined();
   });
 });
+
+describe('session families and credits (Copilot CLI and Copilot App)', () => {
+  const COORD = '11111111-1111-4111-8111-111111111111';
+  const KID = '22222222-2222-4222-8222-222222222222';
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+  const relay = (from: string, text: string) => ({ content: text, transformedContent: `<cross_session_message>\nfrom_session_id: ${from}\n</cross_session_message>\n${text}` });
+  const usage = (ts: string, nano: number) => ({ type: 'session.usage_record', timestamp: ts, data: { usage: { model: 'm', inputTokens: 100, outputTokens: 20, copilotUsage: { totalNanoAiu: nano } } } });
+
+  it('records the sessions a create_session call started, and only the first relayed message as the parent', () => {
+    const coordinator = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD, remoteSteerable: true } },
+      { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'Split the work' } },
+      { type: 'tool.execution_start', data: { toolName: 'create_session', toolCallId: 'c1' } },
+      { type: 'tool.execution_complete', data: { toolCallId: 'c1', success: true, result: { content: `Created session ${KID.toUpperCase()} for ${COORD}` } } },
+      { type: 'tool.execution_start', data: { toolName: 'view', toolCallId: 'v1' } },
+      { type: 'tool.execution_complete', data: { toolCallId: 'v1', result: { content: OTHER } } },
+      { type: 'user.message', timestamp: '2026-10-01T10:30:00Z', data: relay(KID, 'Done: tests pass') },
+    ]), 'ws', 'ws');
+    expect(coordinator).toMatchObject({ childSessionIds: [KID] });
+    expect(coordinator?.relaySenderId).toBeUndefined();
+    const child = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: KID } },
+      { type: 'user.message', timestamp: '2026-10-01T10:01:00Z', data: relay(COORD, 'Run the tests') },
+      { type: 'user.message', timestamp: '2026-10-01T10:05:00Z', data: relay(OTHER, 'Also lint') },
+    ]), 'ws', 'ws');
+    expect(child?.relaySenderId).toBe(COORD);
+    expect(child?.childSessionIds).toBeUndefined();
+  });
+
+  it('adds each usage record’s AI credits and tokens to its turn, the first turn taking earlier records', () => {
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: 'credits' } },
+      usage('2026-10-01T09:59:00Z', 500_000_000),
+      { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'one' } },
+      usage('2026-10-01T10:00:10Z', 1_000_000_000),
+      { type: 'user.message', timestamp: '2026-10-01T10:10:00Z', data: { content: 'two' } },
+      { type: 'user.message', timestamp: '2026-10-01T10:20:00Z', data: { content: 'three' } },
+      usage('2026-10-01T10:20:10Z', 2_000_000_000),
+    ]), 'ws', 'ws');
+    expect(session?.requests.map(r => [r.aiCredits, r.loggedTokens])).toEqual([[1.5, 240], [undefined, undefined], [2, 120]]);
+  });
+
+  it('reads the session’s name, branch and repository from workspace.yaml beside events.jsonl', () => {
+    const file = writeEvents([
+      { type: 'session.start', data: { sessionId: 'named' } },
+      { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'hi' } },
+    ]);
+    fs.writeFileSync(path.join(path.dirname(file), 'workspace.yaml'), 'name: Timeline revamp\nbranch: main\nrepository: octo/shop\n');
+    expect(parseCLIEventsFile(file, 'ws', 'ws')).toMatchObject({ displayName: 'Timeline revamp', branch: 'main', repository: 'shop' });
+  });
+});

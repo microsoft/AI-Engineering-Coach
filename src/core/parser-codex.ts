@@ -24,7 +24,7 @@ import { assertTrustedPath, createRequest, createSession, detectDevcontainerFrom
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
 import { markNonHuman } from './human-turns';
-import { codexSessionNonHumanKind } from './parser-turn-kinds';
+import { codexParentThreadId, codexSessionNonHumanKind } from './parser-turn-kinds';
 import type { NonHumanKind } from './types';
 import {
   FileEditLocMap,
@@ -53,6 +53,8 @@ interface CodexSessionMeta {
   model: string;
   /** Set for sub-agent and internal sessions, whose prompts a parent agent sent. */
   nonHumanKind?: NonHumanKind;
+  /** The thread that spawned this one (`source.subagent.thread_spawn.parent_thread_id`). */
+  parentSessionId?: string;
 }
 
 interface CodexContentItem {
@@ -663,6 +665,7 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
     meta.cwd = stringValue(payload.cwd) || meta.cwd;
     meta.source = stringValue(payload.source) || meta.source;
     meta.nonHumanKind ??= codexSessionNonHumanKind(payload.source);
+    meta.parentSessionId ??= codexParentThreadId(payload.source);
   }
   if (line.type === 'turn_context' && !meta.model) {
     meta.model = stringValue(line.payload?.model);
@@ -842,5 +845,6 @@ export function parseCodexSessionFile(filePath: string, editLocIndex?: EditLocIn
     endReason,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests, meta.cwd),
     workspaceRootPath: meta.cwd || undefined,
+    ...(meta.parentSessionId && meta.parentSessionId !== meta.sessionId ? { parentSessionId: meta.parentSessionId } : {}),
   });
 }
