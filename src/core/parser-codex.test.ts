@@ -323,3 +323,43 @@ describe('findCodexDirs', () => {
     }
   });
 });
+
+describe('parseCodexSessions: turn timing', () => {
+  const userItem = (ts: string, text: string) => ({
+    type: 'response_item', timestamp: ts,
+    payload: { role: 'user', type: 'message', content: [{ type: 'input_text', text }] },
+  });
+  const assistantItem = (ts: string, text: string) => ({
+    type: 'response_item', timestamp: ts,
+    payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text }] },
+  });
+
+  it('ends a turn when its task completes or is aborted, not at the next prompt', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-time', cwd: '/Users/me/proj', source: 'vscode' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'task_started' } },
+      userItem('2025-06-15T10:00:00Z', 'Why?'),
+      assistantItem('2025-06-15T10:00:30Z', 'Because.'),
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:31Z', payload: { type: 'task_complete', last_agent_message: 'Because.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T20:00:00Z', payload: { type: 'task_started' } },
+      userItem('2025-06-15T20:00:00Z', 'And then?'),
+      assistantItem('2025-06-15T20:00:10Z', 'Done.'),
+      { type: 'event_msg', timestamp: '2025-06-15T20:00:12Z', payload: { type: 'turn_aborted' } },
+    ], sessionsDir => {
+      expect(parseCodexSessions(sessionsDir)[0].requests.map(request => request.totalElapsed)).toEqual([31_000, 12_000]);
+    });
+  });
+
+  it('keeps work logged after task_complete in the turn', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-late', cwd: '/Users/me/proj', source: 'vscode' } },
+      userItem('2025-06-15T10:00:00Z', 'Why?'),
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:10Z', payload: { type: 'task_complete' } },
+      assistantItem('2025-06-15T10:00:20Z', 'One more thing.'),
+      userItem('2025-06-15T11:00:00Z', 'Thanks.'),
+      assistantItem('2025-06-15T11:00:05Z', 'Welcome.'),
+    ], sessionsDir => {
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(20_000);
+    });
+  });
+});
