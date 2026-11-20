@@ -89,7 +89,7 @@
 .tlx-trk .wait { position: absolute; top: 9px; height: 8px; border-radius: 2px; box-sizing: border-box; }
 .tlx .mk { position: absolute; top: 8px; width: 10px; height: 10px; margin-left: -5px; box-sizing: border-box; }
 .tlx .mk.static { position: static; display: inline-block; margin: 0; }
-.tlx .mk.you { border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px var(--canvas); }
+.tlx .mk.you { border-radius: 50%; background: var(--text); box-shadow: 0 0 0 2px var(--canvas); }
 .tlx .mk.agent { transform: rotate(45deg) scale(0.8); background: var(--tl-auto); box-shadow: 0 0 0 1.5px var(--canvas); }
 .tlx .mk.autopilot { border-radius: 50%; border: 2px solid var(--accent-orange); background: var(--canvas); }
 .tlx .mk.other { border-radius: 2px; background: #6e7681; width: 7px; height: 7px; top: 9.5px; margin-left: -3.5px; }

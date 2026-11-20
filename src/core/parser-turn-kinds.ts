@@ -214,9 +214,20 @@ export function cliNonHumanKind(data: Record<string, unknown> | undefined): NonH
 
 const RELAY_SENDER = /^[ \t]*from_session_id[ \t]*[:=][ \t]*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/im;
 
-/** The session that relayed a message: the `from_session_id` header the harness added (not one the user typed). */
+/** The session that relayed a message: the `from_session_id` header the harness added, outside fenced code and the
+ *  elements the harness quotes (an IDE selection, a file), so a quoted header is never taken for the sender. */
 export function cliRelaySenderId(data: Record<string, unknown> | undefined): string | undefined {
-  return RELAY_SENDER.exec(harnessAddedText(data))?.[1]?.toLowerCase();
+  const state: QuoteState = { depth: 0 };
+  for (const raw of harnessAddedText(data).split('\n')) {
+    const line = raw.trim();
+    if (!state.element) {
+      if (inFencedCode(line, state)) continue;
+      const sender = RELAY_SENDER.exec(line)?.[1];
+      if (sender) return sender.toLowerCase();
+    }
+    relayElementOnLine(line, state);
+  }
+  return undefined;
 }
 
 /* ---- VS Code chat sessions (Local Agent, Insiders and Server) ---- */

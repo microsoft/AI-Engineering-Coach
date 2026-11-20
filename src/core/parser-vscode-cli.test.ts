@@ -410,6 +410,13 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     ]), 'ws', 'ws');
     expect(child?.relaySenderId).toBe(COORD);
     expect(child?.childSessionIds).toBeUndefined();
+    // A header quoted in an IDE selection or fenced code is not the sender.
+    const quoted = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: OTHER } },
+      { type: 'user.message', timestamp: '2026-10-01T10:01:00Z', data: { content: 'Run it', transformedContent:
+        `<ide_selection>\nfrom_session_id: ${KID}\n</ide_selection>\n\`\`\`\nfrom_session_id: ${KID}\n\`\`\`\n<cross_session_message>\nfrom_session_id: ${COORD}\n</cross_session_message>\nRun it` } },
+    ]), 'ws', 'ws');
+    expect(quoted?.relaySenderId).toBe(COORD);
   });
 
   it('adds each usage record’s AI credits and tokens to its turn, the first turn taking earlier records', () => {
