@@ -7,9 +7,10 @@ canvas (see the repo root [`apm.yml`](../../../apm.yml)). This repo loads it dir
 one-line forwarding stub at [`.github/extensions/ai-engineer-coach/extension.mjs`](../../../.github/extensions/ai-engineer-coach/extension.mjs)
 (the GitHub Copilot app only discovers canvases under `.github/extensions/`), so cloning and
 building this repo works with no extra steps. Other projects can install the same canvas with
-`apm install <repo> --target copilot --trust-canvas-extensions`, which deploys a copy of this
-folder into their own `.github/extensions/ai-engineer-coach/`. Edit the canvas logic here, not
-in the forwarding stub.
+`apm install <repo> --target copilot`, which deploys a copy of this folder into their own
+`.github/extensions/ai-engineer-coach/`. That copy resolves the built dashboard (`dist/`) from
+the consumer project's root, which apm doesn't provide, so it opens on the setup card there.
+Edit the canvas logic here, not in the forwarding stub.
 
 ## What it does
 
