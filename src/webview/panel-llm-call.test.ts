@@ -261,4 +261,12 @@ describe('callLlmJson', () => {
     expect(options.justification).toContain('AI Engineer Coach');
     expect(options.modelOptions).toHaveProperty('response_format');
   });
+
+  it('reports empty replies as empty instead of invalid JSON', async () => {
+    mocks.sendRequest.mockImplementation(() => Promise.resolve(reply('  ', '\n')));
+
+    await expect(callLlmJson(prompt(), { name: 'test_schema', schema: { type: 'object' } }))
+      .rejects.toThrow('GitHub Copilot returned an empty response');
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(3);
+  });
 });
