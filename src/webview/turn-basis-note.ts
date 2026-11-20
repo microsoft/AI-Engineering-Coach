@@ -20,6 +20,7 @@ const KIND_LABELS: Record<NonHumanKind, string> = {
   meta: 'Context the harness added',
   compaction: 'Compaction summaries',
   output: 'Command output',
+  scripted: 'Scripted runs',
 };
 
 function counted(n: number, one: string, many: string): string {

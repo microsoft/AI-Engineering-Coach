@@ -8,7 +8,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  claudeNonHumanKind, cliNonHumanKind, codexSessionNonHumanKind, openCodeMessageNonHumanKind, vscodeNonHumanKind,
+  claudeNonHumanKind, claudeOriginSince, cliNonHumanKind, codexSessionNonHumanKind, openCodeMessageNonHumanKind,
+  vscodeNonHumanKind,
 } from './parser-turn-kinds';
 import type { NonHumanKind } from './types';
 
@@ -279,7 +280,7 @@ describe('codexSessionNonHumanKind', () => {
   it.each<[unknown, NonHumanKind | undefined]>([
     ['cli', undefined],
     ['vscode', undefined],
-    ['exec', undefined],
+    ['exec', 'scripted'],
     ['mcp', undefined],
     ['unknown', undefined],
     [undefined, undefined],
@@ -292,6 +293,42 @@ describe('codexSessionNonHumanKind', () => {
     ['internal', 'subagent'],
   ])('%j', (source, expected) => {
     expect(codexSessionNonHumanKind(source)).toBe(expected);
+  });
+});
+
+describe('codexSessionNonHumanKind by originator', () => {
+  it('marks a codex exec run by its originator too', () => {
+    expect(codexSessionNonHumanKind(undefined, 'codex_exec')).toBe('scripted');
+    expect(codexSessionNonHumanKind('vscode', 'codex_vscode')).toBeUndefined();
+  });
+});
+
+describe('claudeNonHumanKind with origin fields', () => {
+  const line = (textValue: string, extra: Record<string, unknown> = {}) =>
+    ({ type: 'user', version: '2.1.300', message: { content: [{ type: 'text', text: textValue }] }, ...extra });
+  const human = { origin: { kind: 'human' } };
+
+  it.each<[string, Array<ReturnType<typeof line>>, string | undefined, NonHumanKind | undefined]>([
+    ['a typed prompt', [line('Why?', human)], '2.1.300', undefined],
+    ['a task notification by origin alone', [line('Task done.', { origin: { kind: 'task-notification' } })], '2.1.300', 'system'],
+    ['a message from another session', [line('Status?', { origin: { kind: 'peer', from: 'a1' } })], '2.1.300', 'relayed'],
+    ['another sender', [line('Run it.', { origin: { kind: 'cron' } })], '2.1.300', 'system'],
+    ['an SDK prompt without origin', [line('Reply with exactly: ok', { promptSource: 'sdk', turnOrigin: 'sdk' })], '2.1.300', 'scripted'],
+    ['a scheduled prompt without origin', [line('Check the hosts.', { turnOrigin: 'scheduled' })], '2.1.300', 'system'],
+    ['a line without origin before the build wrote it', [line('Why?', { version: '2.1.10' })], '2.1.300', undefined],
+    ['a line without origin in an older log', [line('Why?')], undefined, undefined],
+    ['a one-turn SDK probe, with no origin anywhere in its transcript', [line('Reply with exactly: ok', { promptSource: 'sdk', turnOrigin: 'sdk' })], undefined, 'scripted'],
+    ['a typed shell command without origin', [line('<bash-input>ls</bash-input>')], '2.1.300', undefined],
+    ['a command expansion without origin', [line('<command-name>/review</command-name>', human), line('Review it.', { isMeta: true })], '2.1.300', undefined],
+    ['only system reminders', [line('<system-reminder>\nA note.\n</system-reminder>\n<system-reminder>More.</system-reminder>', human)], '2.1.300', 'meta'],
+    ['a typed prompt with a reminder', [line('Why?\n<system-reminder>A note.</system-reminder>', human)], '2.1.300', undefined],
+  ])('%s', (_label, lines, originSince, expected) => {
+    expect(claudeNonHumanKind(lines, lines.length - 1, originSince)).toBe(expected);
+  });
+
+  it('finds the earliest build that wrote origin', () => {
+    expect(claudeOriginSince([line('a'), line('b', { ...human, version: '2.1.310' }), line('c', { ...human, version: '2.1.9' })])).toBe('2.1.9');
+    expect(claudeOriginSince([line('a')])).toBeUndefined();
   });
 });
 

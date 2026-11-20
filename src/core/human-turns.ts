@@ -9,7 +9,7 @@ import type { NonHumanKind, SessionRequest, TurnBasis } from './types';
 
 /** Every NonHumanKind, in the order the dashboard lists them. */
 export const NON_HUMAN_KINDS = [
-  'agent', 'relayed', 'subagent', 'skill', 'system', 'autopilot', 'meta', 'compaction', 'output',
+  'agent', 'relayed', 'subagent', 'skill', 'system', 'autopilot', 'meta', 'compaction', 'output', 'scripted',
 ] as const satisfies readonly NonHumanKind[];
 
 /** True when the user typed the turn: its parser found no record that anything else sent it. */

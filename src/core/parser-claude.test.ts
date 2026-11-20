@@ -715,3 +715,53 @@ describe('parseClaudeSessions', () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 });
+
+describe('parseClaudeSessions: who sent a turn', () => {
+  const human = { origin: { kind: 'human' }, version: '2.1.300' };
+
+  it('counts a prompt typed while the agent was busy, and leaves out queued notifications', () => {
+    const queued = (uuid: string, origin: object, prompt: unknown, ts: string) => ({
+      type: 'attachment', uuid, timestamp: ts, sessionId: 'sess-1', cwd: '/Users/me/proj', ...human,
+      attachment: { type: 'queued_command', prompt, commandMode: 'prompt', origin },
+    });
+    withProjectsDir('s.jsonl', [
+      makeUser('Fix the parser.', '2025-06-15T10:00:00Z', { uuid: 'u1', ...human }),
+      makeToolAssistant('Read', { file_path: '/Users/me/proj/a.ts' }, '2025-06-15T10:00:01Z', 'tu-1'),
+      makeToolResultUser('2025-06-15T10:00:02Z'),
+      queued('q1', { kind: 'human' }, [{ type: 'text', text: 'Also check the tests.' }], '2025-06-15T10:00:03Z'),
+      queued('q2', { kind: 'task-notification' }, '<task-notification>done</task-notification>', '2025-06-15T10:00:04Z'),
+      makeAssistant('Both done.', '2025-06-15T10:00:05Z'),
+    ], projectsDir => {
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.userEventId, request.messageText, request.nonHumanKind])).toEqual([
+        ['u1', 'Fix the parser.', undefined],
+        ['q1', 'Also check the tests.', undefined],
+      ]);
+      expect(requests[0].referencedFiles).toEqual(['/Users/me/proj/a.ts']);
+      expect(requests[1].responseText).toBe('Both done.');
+    });
+  });
+
+  it('takes IDE context out of the typed text and keeps the turn', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('<ide_opened_file>The user opened the file /Users/me/proj/a.md in the IDE.</ide_opened_file>\nTidy this.', '2025-06-15T10:00:00Z', human),
+      makeAssistant('Tidied.'),
+      makeUser('<ide_selection>The user selected lines 1 to 2.</ide_selection>', '2025-06-15T10:01:00Z', human),
+      makeAssistant('Seen.', '2025-06-15T10:01:02Z'),
+    ], projectsDir => {
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.nonHumanKind])).toEqual([['Tidy this.', undefined], ['', undefined]]);
+    });
+  });
+
+  it('marks SDK prompts without origin as scripted once the transcript writes origin', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('Reply with exactly: ok', '2025-06-15T10:00:00Z', { version: '2.1.300', promptSource: 'sdk', turnOrigin: 'sdk' }),
+      makeAssistant('ok'),
+      makeUser('Why?', '2025-06-15T10:01:00Z', human),
+      makeAssistant('Because.', '2025-06-15T10:01:02Z'),
+    ], projectsDir => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(request => request.nonHumanKind)).toEqual(['scripted', undefined]);
+    });
+  });
+});

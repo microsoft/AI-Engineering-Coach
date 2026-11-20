@@ -146,6 +146,7 @@ export type CuriositySignal =
  *   meta       — a line the harness wrote, such as Claude's local-command caveat or a skill body
  *   compaction — compaction summary, or an automatic compaction request
  *   output     — command output the harness logged as a user line (Claude `!` and local commands)
+ *   scripted   — a non-interactive run a script or agent started (Claude Code SDK prompts, `codex exec`)
  */
 export type NonHumanKind =
   | 'agent'
@@ -156,7 +157,8 @@ export type NonHumanKind =
   | 'autopilot'
   | 'meta'
   | 'compaction'
-  | 'output';
+  | 'output'
+  | 'scripted';
 
 export interface SessionRequest {
   requestId: string;
