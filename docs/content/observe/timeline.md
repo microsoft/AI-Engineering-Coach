@@ -16,7 +16,7 @@ Pick **Day**, **Week** or **Families** at the top. Step between active days or w
 
 Each day or week starts with three findings, each with one thing to try:
 
-- **Unattended work**: the family whose agents worked longest after a single prompt from you, with no further input. Reuse the brief that made it work.
+- **Unattended work**: the family whose agents kept working longest after a single prompt from you, with no further prompt into the sessions doing that work. Reuse the brief that made it work.
 - **Where credits went**: the share of credits used by child sessions, and the child that used most. When you typed into that child yourself, open it to see why it needed you.
 - **Waiting on you**: how often agents finished and waited for your next prompt, for how long, and how many waits were longer than 30 minutes.
 
@@ -27,7 +27,7 @@ Each day or week starts with three findings, each with one thing to try:
 | Agent time | Sum of each turn's agent time: from the prompt to the turn's last assistant message |
 | Turns you typed | Prompts you typed, out of every turn. The rest were sent by agents, other sessions, autopilot, compaction or the harness |
 | Agent time per prompt | Agent time divided by the prompts you typed |
-| Longest unattended | The longest stretch one family's agents kept working after one of your prompts, before your next one |
+| Longest unattended | The longest stretch from one of your prompts to the end of the agent work a family started before your next prompt. Work that runs past your next prompt counts to its end: a turn ends when you prompt its own session, so that work was in a session you didn't prompt |
 | Waiting on you | Gaps from the end of a session's agent work to your next typed prompt in it, from 2 to 120 minutes |
 | Peak parallel agents | The most turns whose agent time overlapped, and when |
 

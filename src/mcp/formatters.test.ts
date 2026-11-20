@@ -283,5 +283,7 @@ describe('formatTimeline', () => {
     });
     const json = JSON.stringify(summary);
     expect(json).not.toContain('secret');
+    expect(formatTimeline(new Analyzer(sessions, new Map()), undefined, '2026-10-21').day)
+      .toEqual({ date: '2026-10-21', sessions: 0, note: 'No activity on this day in the selected range.' });
   });
 });

@@ -31,7 +31,7 @@ test.describe('Timeline', () => {
     await expect(kpi(page, 'Waiting on you')).toHaveText('1 h 30 m');
     await expect(page.locator('#tlxKpis')).toContainText('3 waits · 2 over 30 min');
     await expect(kpi(page, 'Peak parallel agents')).toHaveText('3');
-    await expect(page.locator('#tlxInsights')).toContainText('Your coordinator “Checkout revamp” and 4 sessions it started worked 1 h 13 m');
+    await expect(page.locator('#tlxInsights')).toContainText('Your coordinator “Checkout revamp” and 4 sessions it started kept working 1 h 13 m');
     await expect(page.locator('#tlxCount')).toHaveText('6 of 6 sessions shown');
     // Tree order: coordinator, child, its grandchild, then the other children; one connector per shown child.
     await expect(page.locator('.tlx-lane .nm')).toHaveText(['Checkout revamp', 'Payment API tests', 'Lint fixes', 'Docs update', 'Perf probe', 'Investigate flaky test']);

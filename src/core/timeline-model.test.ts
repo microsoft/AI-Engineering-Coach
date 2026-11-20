@@ -74,7 +74,7 @@ describe('timeline model', () => {
       [4, [['lone', 0]]],
     ]);
     const tips = viewInsights(lanes, families, createNamer(p, false), 'day');
-    expect(tips[0]).toContain('Your coordinator “coord” and 3 sessions it started worked 2 h 00 m');
+    expect(tips[0]).toContain('Your coordinator “coord” and 3 sessions it started kept working 2 h 00 m');
     expect(tips[1]).toBe('Child sessions used 65.0% of the credits. The child “child-b” alone used 30%, with no prompts from you.');
     expect(tips[2]).toContain('waited for you 2 times');
   });
@@ -101,6 +101,13 @@ describe('timeline model', () => {
     ]);
     expect(totals).toMatchObject({ families: 2, children: 11, childrenNeedingYou: 1, maxDepth: 2, maxFanOut: 8 });
     expect(familiesInsights(totals)[1]).toBe('1 of 11 child sessions needed a prompt from you (1 prompt). Filter by Needed you and open the ✋ children to see what their brief was missing.');
+  });
+
+  it('dates a family from its first to its last activity', () => {
+    const data = fixture();
+    data.sessions[1].turns.push(turn(at(9, 0, 18), 5, 'agent'));
+    const coord = buildFamilies(prepareTimeline(data)).families[0];
+    expect([coord.from, coord.to, coord.busiest]).toEqual(['2024-03-15', '2024-03-18', '2024-03-15']);
   });
 
   it('masks names, branches and repositories, ranking repositories by credits', () => {

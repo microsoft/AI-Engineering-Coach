@@ -9,8 +9,9 @@
  *   Agent time         sum of the turns' `totalElapsed` (prompt → last assistant message; includes time a turn
  *                      waited on a question).
  *   Waiting on you     per session: from the end of the agent's work to your next typed prompt, 2–120 min.
- *   Unattended         per family: the longest the family's agents kept working after one of your prompts, before
- *                      your next one.
+ *   Unattended         per family: from one of your prompts to the end of the agent work the family started before your
+ *                      next prompt. A turn can't outlast your next prompt in its own session, so work that runs past it
+ *                      is in another session of the family, one you didn't prompt.
  *   Peak parallel      most turns whose agent time overlapped.
  *   Family             a coordinator session and every session it started, directly or through its children. */
 
@@ -251,7 +252,8 @@ export interface ViewFamily {
   color: number;
 }
 
-/** The longest stretch the lanes' agents kept working after one of your prompts, before your next one (ms). */
+/** The longest stretch from one of your prompts to the end of the agent work started before your next prompt (ms).
+ *  Work started in that window counts to its end: it can only outlast your next prompt in a session you didn't prompt. */
 export function unattendedMs(lanes: readonly TimelineLane[]): number {
   const turns = lanes.flatMap(l => l.turns).sort((a, b) => a.t - b.t);
   const prompts = turns.filter(t => t.k === 'you').map(t => t.t);
@@ -469,8 +471,8 @@ export function viewInsights(
     const name = namer.name(top.lanes.find(l => l.s.index === top.root)?.s ?? top.lanes[0].s);
     const others = top.lanes.length - 1;
     tips.push((others > 0
-      ? `Your coordinator “${name}” and ${others} ${others === 1 ? 'session' : 'sessions'} it started worked ${formatDuration(top.unattendedMs)} after one of your prompts, with no further input from you (${top.typed} typed, ${top.automated} automated turns).`
-      : `Your session “${name}” worked ${formatDuration(top.unattendedMs)} after one of your prompts, with no further input from you.`)
+      ? `Your coordinator “${name}” and ${others} ${others === 1 ? 'session' : 'sessions'} it started kept working ${formatDuration(top.unattendedMs)} after one of your prompts, with no further prompt into the sessions doing that work (${top.typed} typed, ${top.automated} automated turns).`
+      : `Your session “${name}” kept working ${formatDuration(top.unattendedMs)} after one of your prompts, with no further input from you.`)
       + ' Reuse the brief that made this work.');
   } else {
     tips.push(`No agent worked more than 5 min on its own after one of your prompts ${when}.`);
@@ -653,6 +655,7 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
   const childCredits = sum(kids, n => n.credits);
   const childTyped = sum(kids, n => n.typed);
   const firsts = nodes.map(n => n.first).filter(t => t > 0);
+  const lasts = nodes.map(n => n.s.turns[n.s.turns.length - 1]?.t ?? 0).filter(t => t > 0);
   return {
     root: root.index,
     s: root,
@@ -678,7 +681,7 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     verdict: childTyped > 0 ? 'needed' : 'alone',
     wide: kids.length >= WIDE_FAN_OUT,
     from: firsts.length > 0 ? toDateStr(Math.min(...firsts)) : '',
-    to: firsts.length > 0 ? toDateStr(Math.max(...firsts)) : '',
+    to: lasts.length > 0 ? toDateStr(Math.max(...lasts)) : '',
     busiest: busiestDayOf(nodes),
     rank: 0,
   };

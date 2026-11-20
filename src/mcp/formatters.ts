@@ -486,7 +486,7 @@ export function formatSessions(
 export function formatTimeline(analyzer: Analyzer, f?: DateFilter, date?: string) {
   const p = prepareTimeline(analyzer.getTimelineData(f));
   if (p.sessions.length === 0) return { sessions: 0, note: 'No sessions in this range.' };
-  const day = date && p.days.includes(date) ? date : p.days[p.days.length - 1];
+  const day = date ?? p.days[p.days.length - 1];
   const lanes = buildLanes(p, ...timelineWindow('day', day));
   const families = buildViewFamilies(lanes, p);
   const kpis = timelineKpis(lanes, families);
@@ -497,7 +497,7 @@ export function formatTimeline(analyzer: Analyzer, f?: DateFilter, date?: string
   return {
     range: { from: p.days[0], to: p.days[p.days.length - 1], sessions: p.sessions.length, activeDays: p.days.length },
     automatedTurnPct: pct(sum(p.days, d => p.dayTotals.get(d)?.automated ?? 0), sum(p.days, d => { const x = p.dayTotals.get(d); return x ? x.typed + x.automated : 0; })),
-    day: {
+    day: lanes.length === 0 ? { date: day, sessions: 0, note: 'No activity on this day in the selected range.' } : {
       date: day,
       sessions: kpis.sessions,
       turns: kpis.turns,
