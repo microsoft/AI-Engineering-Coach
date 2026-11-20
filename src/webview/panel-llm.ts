@@ -335,6 +335,10 @@ const LLM_MAX_RETRIES = 2;
 const LLM_REQUEST_TIMEOUT_MS = 90_000;
 const EMPTY_RESPONSE_MESSAGE = 'GitHub Copilot returned an empty response. Try again.';
 
+class EmptyLlmResponseError extends Error {
+  constructor() { super(EMPTY_RESPONSE_MESSAGE); }
+}
+
 /** Deadline (epoch ms) for a Copilot-backed webview request that starts now. */
 export function llmDeadline(): number {
   return Date.now() + COPILOT_REQUEST_BUDGET_MS;
@@ -416,6 +420,33 @@ export async function callLlm(messages: vscode.LanguageModelChatMessage[], optio
   throw new Error(lastError === undefined ? LLM_OUT_OF_TIME_MESSAGE : 'GitHub Copilot request failed. Try again.');
 }
 
+/**
+ * Adjust the next {@link callLlmJson} attempt after a failed one. Returns whether
+ * `err` was a JSON parse failure; an empty reply is retried the same way but is
+ * not one, so it is reported as empty rather than as invalid JSON.
+ */
+function prepareJsonRetry(
+  err: unknown,
+  options: vscode.LanguageModelChatRequestOptions,
+  retryMessages: vscode.LanguageModelChatMessage[],
+  originalCount: number,
+): boolean {
+  if (!(err instanceof Error)) return false;
+  const emptyReply = err instanceof EmptyLlmResponseError;
+  // Drop structured output so later attempts can recover in plain mode.
+  if (options.modelOptions && (emptyReply || /response_format|modelOptions|not supported|JSON|parse/i.test(err.message))) {
+    options.modelOptions = undefined;
+  }
+  if (!emptyReply && !/JSON|parse/i.test(err.message)) return false;
+  // Nudge the model to return valid JSON on the next attempt
+  if (retryMessages.length === originalCount) {
+    retryMessages.push(vscode.LanguageModelChatMessage.User(
+      'Your previous response was not valid JSON. Please respond ONLY with a valid JSON object or array, no markdown fences, no commentary.'
+    ));
+  }
+  return !emptyReply;
+}
+
 export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[], jsonSchema?: JsonSchemaSpec): Promise<T> {
   const model = await selectModel();
 
@@ -433,6 +464,9 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     try {
       const response = await model.sendRequest(retryMessages, options, cts.token);
       for await (const chunk of response.text) text += chunk;
+      // Checked before parsing: an empty reply would otherwise fail as a JSON
+      // error and be reported as "invalid JSON" (#91).
+      if (!text.trim()) throw new EmptyLlmResponseError();
       try {
         return JSON.parse(text.trim()) as T;
       } catch {
@@ -445,20 +479,7 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
         `schema=${schemaName} attempt=${attempt + 1} structured=${options.modelOptions !== undefined} ` +
         `model=${model.id} textLen=${text.length} error=${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof vscode.CancellationError) { cts.dispose(); throw err; }
-      // Drop structured output so later attempts can recover in plain mode.
-      if (jsonSchema && options.modelOptions && lastError instanceof Error &&
-          /response_format|modelOptions|not supported|JSON|parse/i.test(lastError.message)) {
-        options.modelOptions = undefined;
-      }
-      // On parse failures, nudge the model to return valid JSON on the next attempt
-      if (lastError instanceof Error && /JSON|parse/i.test(lastError.message)) {
-        parseFailures++;
-        if (retryMessages.length === messages.length) {
-          retryMessages.push(vscode.LanguageModelChatMessage.User(
-            'Your previous response was not valid JSON. Please respond ONLY with a valid JSON object or array, no markdown fences, no commentary.'
-          ));
-        }
-      }
+      if (prepareJsonRetry(err, options, retryMessages, messages.length)) parseFailures++;
     } finally {
       cts.dispose();
     }
