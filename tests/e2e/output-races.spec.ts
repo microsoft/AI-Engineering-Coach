@@ -25,6 +25,14 @@ test.beforeEach(async ({ page }) => {
   pageErrors.set(page, errors);
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(HARNESS_URL);
+  await waitForDashboard(page);
+});
+
+test.afterEach(async ({ page }) => {
+  expect(pageErrors.get(page)).toEqual([]);
+});
+
+async function waitForDashboard(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const content = document.getElementById('content');
     return content?.textContent && content.textContent.length > 200
@@ -32,11 +40,7 @@ test.beforeEach(async ({ page }) => {
       && !content.querySelector('.error-boundary')
       && document.getElementById('badge-output')?.textContent;
   });
-});
-
-test.afterEach(async ({ page }) => {
-  expect(pageErrors.get(page)).toEqual([]);
-});
+}
 
 async function holdProduction(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -150,13 +154,11 @@ test('returning to Output does not duplicate range handlers', async ({ page }) =
   await expectOneRangeRequest(page);
 });
 
-test('reloading data during Output loading does not duplicate range handlers', async ({ page }) => {
+test('changing the harness during Output loading does not duplicate range handlers', async ({ page }) => {
   await holdProduction(page);
   await navigate(page, 'output');
   const [older] = await pendingRequests(page, 1);
-  await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
-    data: { type: 'dataReady' },
-  })));
+  await page.locator('#harness-filter').selectOption('GitHub Copilot CLI');
   await page.waitForFunction(id => Array.from(window.outputRace.pending.keys()).some(key => key !== id), older);
   const newer = await page.evaluate(id => Array.from(window.outputRace.pending.keys()).filter(key => key !== id), older);
   for (const id of newer) await finishRequest(page, id, { totalAiLoc: 222 });
@@ -164,6 +166,37 @@ test('reloading data during Output loading does not duplicate range handlers', a
 
   await finishRequest(page, older, { totalAiLoc: 111 });
   await expect(page.locator('#content .stat-value').first()).toHaveText('222');
+  await expectOneRangeRequest(page);
+});
+
+test('a duplicate data-ready message does not restart a pending Output load', async ({ page }) => {
+  await holdProduction(page);
+  await navigate(page, 'output');
+  const [current] = await pendingRequests(page, 1);
+  await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
+    data: { type: 'dataReady' },
+  })));
+
+  await finishRequest(page, current, { totalAiLoc: 222 });
+  expect(await page.evaluate(() => window.outputRace.requests)).toBe(1);
+  await expect(page.locator('#content .stat-value').first()).toHaveText('222');
+  await expect(page.locator('#content .error-boundary')).toHaveCount(0);
+  await expectOneRangeRequest(page);
+});
+
+test('reloading the webview discards a pending Output load', async ({ page }) => {
+  await holdProduction(page);
+  await navigate(page, 'output');
+  await pendingRequests(page, 1);
+
+  await page.reload();
+  await waitForDashboard(page);
+  await holdProduction(page);
+  await navigate(page, 'output');
+  const [current] = await pendingRequests(page, 1);
+  await finishRequest(page, current, { totalAiLoc: 222 });
+  await expect(page.locator('#content .stat-value').first()).toHaveText('222');
+  await expect(page.locator('#content .error-boundary')).toHaveCount(0);
   await expectOneRangeRequest(page);
 });
 
