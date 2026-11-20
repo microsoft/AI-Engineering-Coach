@@ -137,7 +137,14 @@ apm experimental enable canvas
 apm install microsoft/AI-Engineering-Coach --target copilot
 ```
 
-apm deploys the canvas to `.github/extensions/ai-engineer-coach/`. If your project's `apm.yml` turns on apm's executables gate (`executables:`), approve the package first with `apm approve microsoft/AI-Engineering-Coach`, because the canvas is executable Node.js code. Relaunch the GitHub Copilot app, then open the **AI Engineer Coach** canvas.
+apm deploys the canvas to `.github/extensions/ai-engineer-coach/`. If your project's `apm.yml` turns on apm's executables gate (`executables:`), the install skips the canvas until you approve it, because the canvas is executable Node.js code. Approving only records the permission, so run the install again afterwards to deploy it:
+
+```bash
+apm approve microsoft/AI-Engineering-Coach
+apm install --target copilot
+```
+
+Relaunch the GitHub Copilot app, then open the **AI Engineer Coach** canvas.
 
 > **Known limitation:** apm deploys only the canvas entry file, not the built dashboard (`dist/`). In another project the canvas therefore opens on its "Build required" setup card. Until the package ships a prebuilt dashboard, use [Run it from this repo directly](#run-it-from-this-repo-directly).
 
