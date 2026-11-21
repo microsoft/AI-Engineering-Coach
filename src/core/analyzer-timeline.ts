@@ -79,14 +79,20 @@ function repositoryOf(s: Session): string {
 }
 
 const turnEnd = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
-/** When the turn last held anything: its work, or a question or permission still open after it. */
-const turnReach = (r: SessionRequest) => Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end));
 /** When you answered: the harness's record of your answer, else the result. */
 const answerPoint = (w: UserWait) => w.answeredAt ?? w.end;
-/** An answer of yours at or after `from` (and before `to`), or an answered wait still running at `from`: activity in the
- *  range even when no turn is. An unanswered stop alone is not activity. */
+/** When the turn last held anything: its work, a question or permission still open after it, or your answer to one. */
+const turnReach = (r: SessionRequest) =>
+  Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end), ...(r.userWaits ?? []).filter(w => w.answered).map(answerPoint));
+/** Your answer at a moment in [`from`, `to`). */
+const answeredIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
+  (waits ?? []).some(w => w.answered && answerPoint(w) >= from && (to === undefined || answerPoint(w) < to));
+/** Activity in [`from`, `to`) even when no turn is: your answer at a moment in it, or a measured wait on you overlapping it
+ *  (answered, longer than zero, and not answered before it was asked). Neither an unanswered stop, nor the span between
+ *  an answer and a result logged on either side of the range, is activity. */
 const answerIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
-  (waits ?? []).some(w => w.answered && Math.max(w.end, answerPoint(w)) >= from && (to === undefined || Math.min(w.start, answerPoint(w)) < to));
+  answeredIn(waits, from, to) || (waits ?? []).some(w => w.answered && w.end > w.start && (w.answeredAt === undefined || w.answeredAt >= w.start)
+    && w.end > from && (to === undefined || w.start < to));
 /** The turn did measured work after `from` (and before `to`): its span less every stop for you in it, the way agent
  *  time is measured. A turn that only lies open across the range, stopped on a question, isn't activity in it. */
 function worksIn(r: SessionRequest, from: number, to: number | undefined): boolean {
@@ -114,9 +120,12 @@ function splitByRange(s: Session, from: number | undefined, to: number | undefin
   const context = before.filter((r, i) => i >= lastInput || turnReach(r) >= (from ?? 0));
   const after = to === undefined ? undefined : own.find(r => (r.timestamp ?? 0) >= to);
   if (after) context.push(after);
+  // A turn outside the range that holds your answer inside it (logged before its own prompt, or after a later one).
+  const holders = own.filter(r => !inside.includes(r) && answeredIn(r.userWaits, from ?? -Infinity, to));
+  context.push(...holders.filter(r => !context.includes(r)));
   const reachesIn = from !== undefined && before.some(r => worksIn(r, from, to) || answerIn(r.userWaits, from, to));
   const loose = answerIn(s.userWaits, from ?? -Infinity, to);
-  return { all: own, inside, context, active: inside.length > 0 || reachesIn || loose };
+  return { all: own, inside, context, active: inside.length > 0 || reachesIn || holders.length > 0 || loose };
 }
 
 export class TimelineAnalyzer extends AnalyzerBase {

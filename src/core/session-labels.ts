@@ -63,32 +63,34 @@ const DRIVE_PATH = /(?:\b[A-Za-z]:[\\/]|\\\\)[^,;)"'`\n]*/g;
 /** A word that starts a drive or network path. */
 const DRIVE_START = /^[("'`]?(?:[A-Za-z]:[\\/]|\\\\)/;
 
-/** An unquoted drive or network path, spaces and all, like `posixPaths`: it runs to its first word with a file
- *  extension; else, when another path follows in the clause, to its last word with a separator before that one; else to
- *  the end of the clause. What follows is scrubbed again, so a second path in the clause goes too. */
+/** Words that join two paths in one clause (`a and b`, `a to b`): kept between them. */
+const PATH_JOINERS = new Set(['and', 'or', 'to', 'from', 'into', 'onto', 'with', 'then', 'vs', 'vs.', 'versus', '&', '+', '->', '→']);
+
+/** The index of the last word of the path starting at `words[0]`: its first word with a file extension; else, when
+ *  another path starts at `words[next]`, the word before it (before a joining word such as `and`), since a path's
+ *  last part can hold spaces and no extension, so nothing between the two is taken for ordinary text; else the last. */
+function pathEnd(words: readonly string[], next: number): number {
+  const ext = words.findIndex((w, i) => /\.[A-Za-z0-9]{1,5}$/.test(w) && (next < 0 || i < next));
+  if (ext >= 0) return ext;
+  if (next < 0) return words.length - 1;
+  return next > 1 && PATH_JOINERS.has(words[next - 1].toLowerCase()) ? next - 2 : next - 1;
+}
+
+/** An unquoted drive or network path, spaces and all (see `pathEnd`). What follows is scrubbed again, so a second path
+ *  in the clause goes too. */
 function unquotedPath(match: string): string {
   const words = match.split(' ');
-  const next = words.findIndex((w, i) => i > 0 && DRIVE_START.test(w));
-  const ext = words.findIndex((w, i) => /\.[A-Za-z0-9]{1,5}$/.test(w) && (next < 0 || i < next));
-  const last = ext >= 0 ? ext
-    : next > 0 ? Math.max(0, ...words.slice(0, next).map((w, i) => (/[\\/]/.test(w) ? i : 0)))
-      : words.length - 1;
+  const last = pathEnd(words, words.findIndex((w, i) => i > 0 && DRIVE_START.test(w)));
   const rest = words.slice(last + 1).join(' ');
   return '[path]' + (rest ? ' ' + rest.replaceAll(DRIVE_PATH, unquotedPath) : '');
 }
 
-/** Unquoted absolute POSIX paths of two or more segments, spaces and all, like `unquotedPath`: a path runs to its first
- *  word with a file extension; else, when another path follows in the clause, to its last word with a separator before
- *  that one; else to the end of the clause. */
+/** Unquoted absolute POSIX paths of two or more segments, spaces and all (see `pathEnd`). */
 function posixPaths(value: string): string {
   const start = /(^|[\s("'`:=])(\/[^\s/,;)"'`]+\/[^,;)"'`\n]*)/.exec(value);
   if (!start) return value;
   const words = start[2].split(' ');
-  const next = words.findIndex((w, i) => i > 0 && w.startsWith('/'));
-  const ext = words.findIndex((w, i) => /\.[A-Za-z0-9]{1,5}$/.test(w) && (next < 0 || i < next));
-  const last = ext >= 0 ? ext
-    : next > 0 ? Math.max(0, ...words.slice(0, next).map((w, i) => (w.includes('/') ? i : 0)))
-      : words.length - 1;
+  const last = pathEnd(words, words.findIndex((w, i) => i > 0 && w.startsWith('/')));
   const rest = words.slice(last + 1).join(' ');
   const at = start.index + start[1].length;
   return value.slice(0, at) + '[path]' + (rest ? ' ' + posixPaths(rest) : '') + posixPaths(value.slice(at + start[2].length));

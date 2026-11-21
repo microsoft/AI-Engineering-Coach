@@ -19,7 +19,11 @@ import {
   clearCache,
   DirMetas,
   ParseResult,
+  flushCacheWrites,
+  loadCacheData,
+  saveCacheData,
 } from './cache';
+import { getCacheDir } from './cache-paths';
 import { Session } from './types';
 import { createRequest, createSession, stripSingleSession } from './parser-shared';
 
@@ -141,6 +145,24 @@ describe('stripSingleSession', () => {
       requests: [],
     });
     expect(() => stripSingleSession(session)).not.toThrow();
+  });
+});
+
+describe('cache written by an earlier parser', () => {
+  it('re-parses a version 31 cache, whose Copilot waits lack the answer’s own time and request ID (E4)', async () => {
+    clearCache();
+    const session = makeSession();
+    session.requests[0].userWaits = [{ start: 1, end: 5, kind: 'question', answered: true }];
+    const result: ParseResult = { workspaces: new Map(), sessions: [session], editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    const dirMetas: DirMetas = { '/logs/ws1': { chatCount: 1, chatMaxMtime: 1, editCount: 0, editMaxMtime: 0 } };
+    await saveCacheData(result, dirMetas);
+    await flushCacheWrites();
+    expect((await loadCacheData())?.result.sessions.length).toBe(1);
+    // The same files as the previous build wrote them: its version number, unchanged fingerprints.
+    const metaFile = path.join(getCacheDir(), 'meta.json');
+    fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf-8')) as object, version: 31 }));
+    expect(await loadCacheData()).toBeNull();
+    clearCache();
   });
 });
 

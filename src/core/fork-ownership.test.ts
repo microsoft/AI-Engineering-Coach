@@ -93,6 +93,18 @@ describe('withInheritedTurnsRemoved with sub-agent turns', () => {
     expect([f2.requests.map(r => r.userEventId), f2.inheritedTurns]).toEqual([['m4', 'sub2'], 3]);
   });
 
+  it('links no source when two sessions hold the copied history equally, whatever the order they are read in (E8)', () => {
+    const shared = () => [live(request(0, 'm1')), live(request(5, 'm2')), live(request(9, 'm3'))];
+    const a = session('a', [...shared(), live(request(30, 'ma'))]);
+    const b = session('b', [...shared(), live(request(31, 'mb'))]);
+    const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), live(request(20, 'm4'))]);
+    for (const order of [[a, b, fork], [b, a, fork], [fork, b, a]]) {
+      const out = withInheritedTurnsRemoved(order);
+      const f = out.find(x => x.sessionId === 'fork');
+      expect([f?.requests.map(r => r.userEventId), f?.inheritedTurns, f?.forkedFromId]).toEqual([['m4'], 3, undefined]);
+    }
+  });
+
   it('counts a copied sub-agent turn logged after the last shared prompt once, in the source', () => {
     // The shared prompt at 10:05 launched a sub-agent that ran at 10:07; the fork's own first prompt came at 10:20.
     const late = { ...request(7, 'sub-late'), nonHumanKind: 'subagent' as const };

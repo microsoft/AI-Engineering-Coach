@@ -75,6 +75,17 @@ describe('session labels with several paths', () => {
     expect(scrubLabel('/opt/a/b.bin and /home/Jane Doe/c.bin', { names: [] })).toBe('[path] and [path]');
     expect(scrubLabel('C:\\a\\b.bin and /srv/jane/c.bin', { names: [] })).toBe('[path] and [path]');
   });
+
+  it('leaves no word of a path with no extension with spaces before the next path (E6)', () => {
+    expect(scrubLabel('C:\\Users\\Jane Doe\\Secret Project and D:\\x\\y.txt', { names: [] })).toBe('[path] and [path]');
+    expect(scrubLabel('Move C:\\Data\\Private Plans to D:\\Archive\\Old Notes', { names: [] })).toBe('Move [path] to [path]');
+    expect(scrubLabel('\\\\server\\share\\Board Minutes and \\\\server\\other\\x', { names: [] })).toBe('[path] and [path]');
+    expect(scrubLabel('/home/jane/Secret Project and /srv/x/y', { names: [] })).toBe('[path] and [path]');
+    expect(scrubLabel('/data/Private Plans /srv/x/y', { names: [] })).toBe('[path] [path]');
+    // Ordinary text after a path with an extension stays.
+    expect(scrubLabel('C:\\a\\b.txt and the notes', { names: [] })).toBe('[path] and the notes');
+    expect(scrubLabel('/srv/a/b.log has the answer', { names: [] })).toBe('[path] has the answer');
+  });
 });
 
 describe('Copilot workspace.yaml', () => {

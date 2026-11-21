@@ -31,7 +31,8 @@ function sharedPrefix(a: readonly SessionRequest[], b: readonly SessionRequest[]
   return k;
 }
 
-type PrefixFork = { copies: Set<SessionRequest>; source: Session };
+/** `source` is absent when two sessions hold the copied history equally: nothing says which one it came from. */
+type PrefixFork = { copies: Set<SessionRequest>; source?: Session };
 
 /** Whether `mine` copied the first `k` prompts it shares with `theirs`. A copy carries only the conversation lines:
  *  when one side logged those turns live and the other didn't, the other copied them. Without that witness nothing
@@ -43,15 +44,18 @@ function copiedFrom(mine: readonly SessionRequest[], theirs: readonly SessionReq
   return !liveMine && liveTheirs;
 }
 
-/** The session `s` copied its opening prompts from: the one it shares most with, among those it copied from. */
-function prefixSource(s: Session, group: readonly Session[]): { source: Session; k: number } | undefined {
+/** The session `s` copied its opening prompts from: the one it shares most with, among those it copied from. When two
+ *  share as much, either could be the source, whatever order the logs were read in: `tie` is set. */
+function prefixSource(s: Session, group: readonly Session[]): { source: Session; k: number; tie: boolean } | undefined {
   const mine = mainTurns(s);
-  let best: { source: Session; k: number } | undefined;
+  let best: { source: Session; k: number; tie: boolean } | undefined;
   for (const other of group) {
     if (other === s) continue;
     const theirs = mainTurns(other);
     const k = sharedPrefix(mine, theirs);
-    if (k > 0 && copiedFrom(mine, theirs, k) && (!best || k > best.k)) best = { source: other, k };
+    if (k === 0 || !copiedFrom(mine, theirs, k)) continue;
+    if (!best || k > best.k) best = { source: other, k, tie: false };
+    else if (k === best.k) best.tie = true;
   }
   return best;
 }
@@ -89,7 +93,7 @@ function prefixCopies(sessions: readonly Session[]): Map<Session, PrefixFork> {
     for (const s of group) {
       if (s.requests.some(isCandidate)) continue;
       const best = prefixSource(s, group);
-      if (best) out.set(s, { copies: prefixCopySet(s, best.source, best.k), source: best.source });
+      if (best) out.set(s, { copies: prefixCopySet(s, best.source, best.k), ...(best.tie ? {} : { source: best.source }) });
     }
   }
   return out;
@@ -119,8 +123,8 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
     if (inherited.length === 0) return s;
     const removed = new Set(inherited);
     const requests = s.requests.filter(r => !removed.has(r));
-    const source = prefix?.source
-      ?? [...inherited].reverse().map(r => (r.userEventId ? owner.get(r.userEventId) : undefined)).find(x => x && x !== s);
+    const source = prefix ? prefix.source
+      : [...inherited].reverse().map(r => (r.userEventId ? owner.get(r.userEventId) : undefined)).find(x => x && x !== s);
     const starts = requests.map(r => r.timestamp ?? 0).filter(t => t > 0);
     return {
       ...s,

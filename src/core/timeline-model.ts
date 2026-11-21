@@ -51,6 +51,11 @@ export interface TimelineAnswer {
   at: number;
   /** When it was asked: equal to `at` for an answer that took no measurable time. */
   start: number;
+  /** The wait on you it ended, when one was measured (request to result); absent for an instant answer, and for one
+   *  recorded before its request was logged or after its result. */
+  waited?: Interval;
+  /** Request, result and record all at the same moment: an answer that took no measurable time. */
+  instant: boolean;
   kind: TimelineTurnWait['k'];
   /** Counted as an answer: false for a relayed answer the child also logged as its own (one answer, counted there). */
   counted: boolean;
@@ -197,9 +202,10 @@ export function sessionWaits(turns: readonly TimelineTurn[], stops: readonly Tim
   return { waits: waits.sort((a, b) => a.start - b.start), away };
 }
 
-/** Your inputs into a session: its typed prompts, and your answers (relayed ones too: they reached the family). */
+/** Your inputs into a session: its typed prompts, and your answers, each once: a relayed answer paired with the child's
+ *  own record of it is the same decision, so only the child's counts (an unpaired relay is the only record, and counts). */
 function inputsOf(s: PreparedSession): number[] {
-  return [...s.all.filter(t => t.k === 'you').map(t => t.t), ...s.answers.map(a => a.at)];
+  return [...s.all.filter(t => t.k === 'you').map(t => t.t), ...s.answers.filter(a => a.counted).map(a => a.at)];
 }
 
 /** The family's unattended stretches: from each of your inputs, through the agent work running at it or starting
@@ -260,7 +266,8 @@ function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
  *  the request, or at the answer when the answer was recorded first. */
 function answerOf(w: TimelineTurnWait): TimelineAnswer {
   const at = w.at ?? w.e;
-  return { at, start: Math.min(w.s, at), kind: w.k, counted: true, ...(w.rid ? { rid: w.rid } : {}) };
+  const waited = waitedOnYou(w) && at <= w.e ? { waited: [w.s, w.e] as Interval } : {};
+  return { at, start: Math.min(w.s, at), ...waited, instant: w.s === w.e && at === w.s, kind: w.k, counted: true, ...(w.rid ? { rid: w.rid } : {}) };
 }
 
 /** Links each session to its family, derives its work, waits and inputs, and counts turns, agent time and waiting
@@ -828,17 +835,19 @@ function waitsInsight(lanes: readonly TimelineLane[], when: string): string {
   const answered = sum(lanes, l => l.answered);
   const answers = plural(answered, 'question or permission prompt', 'questions or permission prompts');
   if (total <= 0) {
-    // Answers here whose wait took no time, and those whose wait ran before this period (measured there, not here).
+    // Answers here whose wait took no time; those that ended a wait measured before this period; and those recorded
+    // with no wait measured at all (before their request was logged, or after its result).
     const here = lanes.flatMap(l => l.s.answers.filter(a => a.counted && a.at >= l.win[0] && a.at < l.win[1]).map(a => ({ a, from: l.win[0] })));
-    const instant = here.filter(({ a }) => a.at <= a.start).length;
-    const earlier = here.filter(({ a, from }) => a.at > a.start && a.start < from).length;
-    const how = [
-      instant > 0 ? `took no measurable time` : '',
-      earlier > 0 ? `ended a wait that began earlier` : '',
+    const instant = here.filter(({ a }) => a.instant).length;
+    const earlier = here.filter(({ a, from }) => a.waited && a.waited[0] < from).length;
+    const unmeasured = here.length - instant - earlier;
+    const how: [number, string][] = [
+      [instant, 'took no measurable time'], [earlier, 'ended a wait that began earlier'], [unmeasured, 'had no waiting time measured in this period'],
     ];
-    const detail = instant > 0 && earlier > 0
-      ? `: ${instant} ${how[0]}, and ${earlier} ${how[1]}`
-      : ` that ${how.find(Boolean) ?? 'took no measurable time'}`;
+    const present = how.filter(([n]) => n > 0);
+    const detail = present.length > 1
+      ? `: ${present.map(([n, text]) => `${n} ${text}`).join(', and ')}`
+      : ` that ${present[0]?.[1] ?? 'took no measurable time'}`;
     const none = `No time waiting on you was measured ${when}: no gap of 2–120 min before your next prompt`
       + (answered > 0 ? `, and you answered ${answers}${detail}.` : ', and no question or permission prompt you answered.');
     return away > 0 ? `${none} ${plural(away, 'longer gap', 'longer gaps')} before your next prompt ${away === 1 ? 'counts' : 'count'} as time away, not waiting.` : none;
@@ -1158,7 +1167,7 @@ export function familiesInsights(t: FamiliesTotals): string[] {
   } else if (t.totalCredits <= 0) {
     tips.push(`You stepped into a child session in ${families(t.needed.families)}; ${formatCount(t.alone.families)} had no input from you in their children. ${noCredits}`);
   } else {
-    const needed = `Families where you stepped into a child used ${t.needed.creditShare.toFixed(0)}% of all credits (${families(t.needed.families)}, ${formatCredits(t.needed.avgCredits)} credits on average)`;
+    const needed = `Families where you stepped into a child used ${t.needed.creditShare.toFixed(0)}% of all credits (${families(t.needed.families)}, ${formatCredits(t.needed.avgCredits)} ${formatCredits(t.needed.avgCredits) === '1' ? 'credit' : 'credits'} on average)`;
     tips.push(t.alone.families === 0
       ? `${needed}; every family had input from you in at least one child.`
       : `${needed}; the ${formatCount(t.alone.families)} with no input in ${t.alone.families === 1 ? 'its' : 'their'} children used ${t.alone.creditShare.toFixed(0)}% (${formatCredits(t.alone.avgCredits)} on average).`);

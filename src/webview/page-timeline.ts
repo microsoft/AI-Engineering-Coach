@@ -198,7 +198,7 @@ function page(data: Loaded): VNode {
     <p class="tlx-foot">Agent time is, for each turn, the time from its prompt to its last logged agent activity, less the time that
           turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
           gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
-          answered (from the request to its result), once per session where they overlap; an answer is dated by Copilot’s record of it when
+          answered (from the request to its result; none when your answer was recorded before the request), once per session where they overlap; an answer is dated by Copilot’s record of it when
           logged; permissions a policy decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
       Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
       create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
@@ -837,7 +837,7 @@ function familiesView(data: Loaded, namer: Namer): VNode {
       ${kpiCard(formatCount(t.children), 'Child sessions', `${formatCount(t.children - t.childrenNeedingYou)} with no prompt or answer from you`, '#b180d7')}
       ${kpiCard(shareText(t.creditShare, credits), 'Of all AI credits', credits > 0 ? `${Math.round(t.childCreditShare)}% in the child sessions alone` : 'no credits logged: only Copilot logs them', '#cf222e')}
       ${kpiCard(formatHours(t.agentMs), 'Agent time', t.totalAgentMs > 0 ? `${Math.round(t.agentShare)}% of all agent time` : 'no agent time measured', '#f0883e')}
-      ${kpiCard(formatCount(t.childTyped), 'Prompts you typed into children', `out of ${formatCount(t.typed)} you typed in families${t.childAnswered ? `, plus ${formatCount(t.childAnswered)} answers in children` : ''}`, '#d29922')}
+      ${kpiCard(formatCount(t.childTyped), 'Prompts you typed into children', `out of ${formatCount(t.typed)} you typed in families${t.childAnswered ? `, plus ${formatCount(t.childAnswered)} ${t.childAnswered === 1 ? 'answer' : 'answers'} in children` : ''}`, '#d29922')}
       ${kpiCard(shareText(t.top3Share, credits), `Credits in the top ${top}`, `of ${formatCount(t.families)} ${t.families === 1 ? 'family' : 'families'}, by credits`, '#8b949e')}
     </div>
     <div class="vfs" role="group" aria-label="Filter by verdict">

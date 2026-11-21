@@ -68,7 +68,10 @@ export interface CacheData {
 const cacheFilePath = (): string => path.join(getCacheDir(), 'parsed.json');
 const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');
 
-const CACHE_VERSION = 31;
+/** Bump when a parser change alters what a cached session holds. 32: Copilot waits keep the time of your answer's own
+ *  record and the request it answered (`answeredAt`, `requestId`); sessions from Copilot logs beside editor chats are
+ *  cached with their workspace, and an older entry would date their answers by the result. */
+const CACHE_VERSION = 32;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */

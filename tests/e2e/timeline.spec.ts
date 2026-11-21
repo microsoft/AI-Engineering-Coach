@@ -176,6 +176,9 @@ test.describe('Timeline navigation from Families', () => {
     // Coming from the parent's day, where an unrelated session has more credits.
     await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
     await page.locator('#tlxView [data-value="families"]').click();
+    // One answer, in the singular (E9).
+    await expect(page.locator('.tlx')).toContainText('plus 1 answer in children');
+    await expect(page.locator('.tlx')).toContainText('(1 family, 1 credit on average)');
     await page.locator('.frow[data-family="p"]').click();
     await expect(page.locator('.frow.sel')).toHaveAttribute('data-family', 'p');
     await page.locator('#tlxFamilyDetail tr[data-session="c"]').click();

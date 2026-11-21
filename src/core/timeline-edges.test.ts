@@ -347,3 +347,71 @@ describe('fifth review: one repository basis (C8)', () => {
     expect(namer.repo(family.repoSession)).not.toBe(namer.repo(family.s));
   });
 });
+// Sixth review: one input per decision, half-open ranges, answers kept by their own time.
+const mid6 = at(18);
+const t6 = mid6 + 60 * M;
+const human6 = (time: number, id: string, requestId: string) => ev('human_response.recorded', time, { toolCallId: id, requestId, response: { answer: 'Yes' } });
+const relayStart6 = (time: number, id: string, requestId: string) => ev('tool.execution_start', time, { toolName: 'relay_session_input', toolCallId: id, arguments: { request_id: requestId } });
+const perm6 = (time: number, id: string) => ev('permission.requested', time, { requestId: id });
+const decided6 = (time: number, id: string) => ev('permission.completed', time, { requestId: id, decisionSource: 'human_response', result: { kind: 'approved' } });
+const record6 = (time: number, id: string) => ev('human_response.recorded', time, { requestId: id, response: { answer: 'Yes' } });
+function surfaces6(an: Analyzer, day: string) {
+  const v = view(an, day, only(day));
+  const chat = formatTimeline(an, only(day), day) as { sessions?: number; day?: { questionsAndPermissionsAnswered?: number } };
+  return [v.p.sessions.filter(s => !s.ctx).length, v.lanes.length, v.kpis.answered, chat.sessions ?? 0, buildSummaryExportFromAnalyzer(an, only(day)).autonomy ?? null];
+}
+
+describe('sixth review: one input per decision, half-open ranges', () => {
+
+  it('ends an unattended stretch once for a relayed answer and the child’s own record of it (E1)', () => {
+    for (const [i, relayAt] of [[90, t6 + 14 * M], [92, t6 + M]] as const) {
+      const an = analyzer(
+        session(i, [prompt(t6), relayStart6(relayAt, 'relay', `same-${i}`), end(t6 + 15 * M, 'relay', '{"outcome":"answered_in_session"}'), reply(t6 + 30 * M)]),
+        session(i + 1, [prompt(t6 + 100, i), start(t6 + 5 * M - 1, 'own'), human6(t6 + 5 * M, 'own', `same-${i}`), end(t6 + 5 * M, 'own'), reply(t6 + 30 * M)]),
+      );
+      expect([view(an, D18).kpis.answered, view(an, D18).kpis.unattendedMs]).toEqual([1, 25 * M]);
+    }
+  });
+
+  it('does not make a day active with a stop that only ends at its midnight after an answer the day before (E2)', () => {
+    const an = analyzer(session(94, [perm6(mid6 - M, 'p'), record6(mid6 - 1000, 'p'), decided6(mid6, 'p')]));
+    expect(surfaces6(an, D18)).toEqual([0, 0, 0, 0, null]);
+  });
+
+  it('does not make the days between an answer and a later replayed request active (E2)', () => {
+    const an = analyzer(session(95, [ev('session.info', mid6 - 2 * 86_400_000, {}), record6(mid6 - 86_400_001, 'p2'), perm6(mid6 + 86_400_000 + 1000, 'p2'), decided6(mid6 + 86_400_000 + 1001, 'p2')]));
+    expect(surfaces6(an, D18).slice(0, 4)).toEqual([0, 0, 0, 0]);
+  });
+
+});
+
+describe('sixth review: answers kept by their own time', () => {
+  it('counts an answer recorded before its own turn’s prompt in a one-day query as in the whole range (E3)', () => {
+    const an = analyzer(session(96, [prompt(mid6 + 1000), human6(mid6 - 1000, 'late', 'r2'), start(mid6 + 1200, 'late'), end(mid6 + 1200, 'late'), reply(mid6 + 2000)]));
+    expect([view(an, D17).kpis.answered, view(an, D17, only(D17)).kpis.answered]).toEqual([1, 1]);
+  });
+
+  it('keeps an answer recorded after its result and a later prompt, on every surface (E3)', () => {
+    const coordinator = session(97, [prompt(mid6 - 8 * M), reply(mid6 - 7 * M), prompt(mid6 + 3 * M), reply(mid6 + 4 * M)]);
+    const child = session(98, [prompt(mid6 - 4 * M, 97), start(mid6 - 3 * M, 'first'), end(mid6 - 2 * M, 'first'), reply(mid6 - 90_000), prompt(mid6 - M), reply(mid6 - 1000),
+      human6(mid6 + 1000, 'first', 'r4'), prompt(mid6 + M, 97), reply(mid6 + 2 * M)]);
+    const an = analyzer(coordinator, child);
+    const totals = buildFamilies(prepareTimeline(an.getTimelineData(only(D18)))).totals;
+    const chat = formatTimeline(an, only(D18), D18) as { day?: { questionsAndPermissionsAnswered?: number } };
+    expect([view(an, D18).kpis.answered, view(an, D18, only(D18)).kpis.answered, totals.childrenNeedingYou, totals.needed.families,
+      chat.day?.questionsAndPermissionsAnswered, buildSummaryExportFromAnalyzer(an, only(D18)).autonomy?.questionsAndPermissionsAnswered]).toEqual([1, 1, 1, 1, 1, 1]);
+  });
+
+  it('says an answer had no waiting time measured, not that it took none, when it was recorded before its question (E7)', () => {
+    const an = analyzer(session(99, [prompt(at(18, 9)), human6(at(18, 9, 1), 'q', 'r'), start(at(18, 9, 3)), end(at(18, 9, 3)), reply(at(18, 9, 4))]));
+    expect(view(an, D18).waits).toContain('had no waiting time measured in this period');
+    expect(view(an, D18).waits).not.toContain('no measurable time');
+  });
+
+  it('does not say an answer recorded after midnight ended a wait that had already ended the day before (E7)', () => {
+    const an = analyzer(session(100, [prompt(mid6 - 10 * M), start(mid6 - 5 * M), end(mid6 - 2 * M), reply(mid6 - M), human6(mid6 + 1000, 'q', 'r')]));
+    const waits = view(an, D18, only(D18)).waits;
+    expect(waits).toContain('had no waiting time measured in this period');
+    expect(waits).not.toContain('ended a wait');
+  });
+});

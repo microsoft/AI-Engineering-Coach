@@ -39,6 +39,7 @@ import { imageReferencesFromCodex, imageRequestIndex, mergeImageReferences, type
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
 import { TurnContextAccumulator } from './cli-turn-context';
+import { CodexForkUsage, usageOf } from './codex-fork-usage';
 
 interface CodexLine {
   type: string;
@@ -121,34 +122,18 @@ interface CodexParseState {
   forked: boolean;
   /** Tokens the fork's first total inherited from its source; subtracted from every later total. */
   inherited: { input: number; output: number; cached: number; reasoning: number; total: number };
-  /** The usage Codex logged for its latest response (`token_usage_record`, codex-cli 0.167+): owned by this thread. */
+  /** The usage Codex logged for its latest response (`token_usage_record`, codex-cli 0.167+): owned by this thread; and
+   *  the turn it was logged in. */
   lastResponseUsage?: Record<string, unknown>;
+  lastResponseTurn?: string;
   /** The native ID of the turn being read (`task_started`, `turn_context`, `task_complete`), and of the next one when
    *  its setup is logged before this turn's last line. */
   turnId: string;
   nextTurnId: string;
-  /** A fork's accounts, one per request in order: its turn's key and its own usage by the cumulative snapshots. */
-  forkTurns: { key: string; snapshot: CodexUsage }[];
-  /** The fork's own cumulative usage at the previous request. */
-  forkPrev: CodexUsage;
-  /** A fork's own responses' usage (`token_usage_record`), summed by native turn, each response once by its ID; with the
-   *  turn it arrived in, for a record whose turn has no request. A turn with any decides by them: the snapshots hold
-   *  the source's usage, and can be copied from it. */
-  forkRecords: Map<string, { usage: CodexUsage; arrival: string }>;
-  ownResponses: Set<string>;
+  /** A fork's own usage, turn by turn (`codex-fork-usage.ts`). */
+  fork: CodexForkUsage;
   /** The latest snapshot's `total_tokens`, to tell a new model call from a repeated snapshot. */
   lastSnapshotTotal: number | null;
-}
-
-interface CodexUsage { input: number; output: number; cached: number; reasoning: number | null; total: number }
-
-const noUsage = (): CodexUsage => ({ input: 0, output: 0, cached: 0, reasoning: 0, total: 0 });
-
-function addUsage(a: CodexUsage, b: CodexUsage): CodexUsage {
-  return {
-    input: a.input + b.input, output: a.output + b.output, cached: a.cached + b.cached,
-    reasoning: a.reasoning == null || b.reasoning == null ? null : a.reasoning + b.reasoning, total: a.total + b.total,
-  };
 }
 
 interface PendingCodexEdit {
@@ -251,10 +236,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
     turnId: '',
     nextTurnId: '',
-    forkTurns: [],
-    forkPrev: noUsage(),
-    forkRecords: new Map(),
-    ownResponses: new Set(),
+    fork: new CodexForkUsage(),
     lastSnapshotTotal: null,
   };
 }
@@ -374,23 +356,13 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
 /** The key of the turn being read: its native ID, else its place. */
 const turnKey = (state: CodexParseState) => state.turnId || `#${state.requests.length}`;
 
-/** A fork's request was added: its own usage by the snapshots is the growth of its own cumulative totals since the last. */
+/** A fork's request was added, with its own cumulative usage by the snapshots so far. */
 function noteForkTurn(state: CodexParseState): void {
   if (!state.forked) return;
-  const now: CodexUsage = {
+  state.fork.noteTurn(state.turnId || `#${state.requests.length - 1}`, {
     input: state.curTotalInput, output: state.curTotalOutput, cached: state.curTotalCachedInput,
     reasoning: state.curTotalReasoning, total: state.curTotalTokens,
-  };
-  const prev = state.forkPrev;
-  const grown = (a: number, b: number) => Math.max(0, a - b);
-  state.forkTurns.push({
-    key: state.turnId || `#${state.requests.length - 1}`,
-    snapshot: {
-      input: grown(now.input, prev.input), output: grown(now.output, prev.output), cached: grown(now.cached, prev.cached),
-      reasoning: now.reasoning == null || prev.reasoning == null ? null : grown(now.reasoning, prev.reasoning), total: grown(now.total, prev.total),
-    },
   });
-  state.forkPrev = now;
 }
 
 /** A native turn ID: the turn being read takes it until it has content; after that it is the next turn's, logged
@@ -402,27 +374,19 @@ function noteTurnId(state: CodexParseState, id: string, ends = false): void {
   else if (!ends) state.nextTurnId = id;
 }
 
-/** A fork's usage, turn by turn: each turn's own response records when it has any, else its snapshot growth. Requests,
- *  session totals and so Token Coverage all come from the same allocation. */
+/** A fork's usage, turn by turn (`CodexForkUsage`): requests, session totals and so Token Coverage all come from the
+ *  same allocation. */
 function reconcileForkUsage(state: CodexParseState): void {
-  if (!state.forked || state.forkRecords.size === 0) return;
-  const keys = new Set(state.forkTurns.map(t => t.key));
-  const records = new Map<string, CodexUsage>();
-  for (const [key, r] of state.forkRecords) {
-    const at = keys.has(key) ? key : keys.has(r.arrival) ? r.arrival : state.forkTurns[state.forkTurns.length - 1]?.key;
-    if (at !== undefined) records.set(at, addUsage(records.get(at) ?? noUsage(), r.usage));
-  }
-  let sum = noUsage();
-  for (const [i, t] of state.forkTurns.entries()) {
-    const own = records.get(t.key);
-    records.delete(t.key);
+  const allocation = state.forked ? state.fork.allocate() : undefined;
+  if (!allocation) return;
+  for (const [i, own] of allocation.turns.entries()) {
     const request = state.requests[i];
     if (own && request) {
       request.promptTokens = own.input;
       request.completionTokens = own.output;
     }
-    sum = addUsage(sum, own ?? t.snapshot);
   }
+  const sum = allocation.total;
   state.curTotalInput = sum.input;
   state.curTotalOutput = sum.output;
   state.curTotalCachedInput = sum.cached;
@@ -648,8 +612,13 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   // A fork (`codex fork`) continues its source's thread, so its first cumulative total already holds everything the
   // source used. That baseline (the first total less its own call) belongs to the source; the fork counts from it. Its
   // own call is the usage logged for its response, else the snapshot's last call; with neither, its usage is unknown.
+  if (state.forked) {
+    const total = usageOf(totalUsage);
+    if (total) state.fork.noteSnapshot(total, turnKey(state));
+  }
   if (state.forked && !state.hasTokenData) {
-    const ownCall = state.lastResponseUsage ?? last;
+    // A response record of another turn says nothing about this snapshot's last call.
+    const ownCall = (state.lastResponseTurn === turnKey(state) ? state.lastResponseUsage : undefined) ?? last;
     const less = (key: string) => Math.max(0, (tokenCount(totalUsage[key]) ?? 0) - (tokenCount(ownCall?.[key]) ?? 0));
     state.inherited = {
       input: less('input_tokens'), output: less('output_tokens'), cached: less('cached_input_tokens'),
@@ -688,21 +657,10 @@ function handleTokenUsageRecord(payload: Record<string, unknown>, state: CodexPa
   const thread = stringValue(payload.thread_id);
   if (!usage || (thread && threadId && thread !== threadId)) return;
   state.lastResponseUsage = usage;
+  state.lastResponseTurn = stringValue(payload.turn_id) || turnKey(state);
   if (!state.forked) return;
-  const id = stringValue(payload.response_id);
-  if (id && state.ownResponses.has(id)) return;
-  if (id) state.ownResponses.add(id);
-  const input = tokenCount(usage.input_tokens) ?? 0;
-  const output = tokenCount(usage.output_tokens) ?? 0;
-  const own: CodexUsage = {
-    input, output, cached: tokenCount(usage.cached_input_tokens) ?? 0,
-    reasoning: tokenCount(usage.reasoning_output_tokens), total: tokenCount(usage.total_tokens) ?? input + output,
-  };
   if (typeof usage.cached_input_tokens === 'number') state.curTotalCachedReported = true;
-  const arrival = turnKey(state);
-  const key = stringValue(payload.turn_id) || arrival;
-  const known = state.forkRecords.get(key);
-  state.forkRecords.set(key, { usage: known ? addUsage(known.usage, own) : own, arrival: known?.arrival ?? arrival });
+  state.fork.noteRecord(payload, turnKey(state));
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
