@@ -61,7 +61,9 @@ a Description that has one shows "Detects <name> patterns." instead.
 
 # When Triggered
 One-line finding text. Supports template variables: {{count}}, {{total}}, {{pct}},
-and anything you emit via extra.<key> in the detection logic.
+anything you emit via extra.<key> in the detection logic, and the rule's thresholds
+as {{thresholds.<key>}}. Non-integer numbers print with one decimal, so a threshold
+like 0.005 shows as 0.0.
 
 # How to Improve
 Concrete, actionable recommendation shown alongside the finding.

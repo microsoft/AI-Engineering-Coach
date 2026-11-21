@@ -140,7 +140,8 @@ export interface DetectionRule {
   description: string;
 
   /** Template for the problem description shown when triggered.
-   *  Supports {{count}}, {{total}}, {{pct}}, {{extra.xxx}} placeholders. */
+   *  Supports {{count}}, {{total}}, {{pct}}, {{extra.xxx}} and {{thresholds.xxx}} placeholders.
+   *  Non-integer numbers render with one decimal. */
   descriptionTemplate: string;
 
   /** Template for the suggestion shown when triggered */
