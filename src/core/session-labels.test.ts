@@ -114,6 +114,8 @@ describe('scrubText', () => {
     expect(scrubText('DB_PASSWORD=hunter2hunter SERVICE_API_KEY=0123456789abcdef0123456789abcdef npm start', text))
       .toBe('DB_PASSWORD=[secret] SERVICE_API_KEY=[secret] npm start');
     expect(scrubText('$env:STORAGE_ACCOUNT_KEY = "abc123def456"', text)).toBe('$env:STORAGE_ACCOUNT_KEY = "[secret]"');
+    expect(scrubText('{ accessToken=abc123def456, refreshToken: "abc123def456", clientSecret: abc123def456 }', text))
+      .toBe('{ accessToken=[secret], refreshToken: "[secret]", clientSecret: [secret] }');
     expect(scrubText('login --password hunter2hunter --client-secret abc123def456 --token=abc123def456', text))
       .toBe('login --password [secret] --client-secret [secret] --token=[secret]');
     // Words that only contain a key's name, and flags that name a file or a count, stay.

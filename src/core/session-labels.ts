@@ -132,14 +132,15 @@ export function scrubBranch(value: string, ctx: ScrubContext): string {
 
 // cspell:ignore abposr apikey
 /** Credentials that look like one: key blocks, well-known token formats, `Bearer …`, `password=…` style pairs (also
- *  as part of a longer name, such as `DB_PASSWORD=…`) and `--password …` style flags. */
+ *  as the end of a longer name, such as `DB_PASSWORD=…` or `accessToken: …`) and `--password …` style flags. A match
+ *  starts only where a name starts, so the scan stays linear. */
 const SECRET_PATTERNS: [RegExp, string][] = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[secret]'],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[abposr]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})/g, '[secret]'],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[secret]'],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 [secret]'],
-  [/(?<![A-Za-z0-9_-])([-_]*(?:[A-Za-z0-9]+[_-]+)*(?:api[_-]?key|apikey|secret|token|password|passwd|pwd|account[_-]?key|shared[_-]?access[_-]?key|sig)["']?\s*[:=]\s*["']?)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
-  [/(?<![A-Za-z0-9_-])(--?(?:[A-Za-z0-9]+-)*(?:api-?key|secret|token|password|passwd|account-key)\s+["']?)(?!-)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
+  [/(?<![A-Za-z0-9_-])([A-Za-z0-9_-]*?(?:api[_-]?key|secret|token|password|passwd|pwd|account[_-]?key|shared[_-]?access[_-]?key|sig)["']?\s*[:=]\s*["']?)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
+  [/(?<![A-Za-z0-9_-])(--?[A-Za-z0-9-]*?(?:api-?key|secret|token|password|passwd|account-?key)\s+["']?)(?!-)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
 ];
 
 /** A long run of letters and digits in both cases, as random keys are: hashes in lower-case hex and IDs with dashes
