@@ -314,6 +314,8 @@ describe('claudeNonHumanKind with sender fields', () => {
     ['an SDK prompt straight after a local command', [...localCommand, line('Add a line.', sdk)], undefined],
     ['a line without origin', [line('Why?')], undefined],
     ['a command expansion', [line('<command-name>/review</command-name>'), line('Review it.', { isMeta: true })], undefined],
+    ['only system reminders', [line('<system-reminder>\nA note.\n</system-reminder>\n<system-reminder>More.</system-reminder>', human)], 'meta'],
+    ['a typed prompt with a reminder', [line('Why?\n<system-reminder>A note.</system-reminder>', human)], undefined],
   ])('%s', (_label, lines, expected) => {
     expect(claudeNonHumanKind(lines, lines.length - 1)).toBe(expected);
   });

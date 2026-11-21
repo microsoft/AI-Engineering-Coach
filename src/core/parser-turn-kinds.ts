@@ -261,6 +261,14 @@ function expandsTypedCommand(lines: readonly ClaudeTurnLine[], index: number): b
   return false;
 }
 
+/** The `<system-reminder>` blocks Claude adds to a turn. */
+const CLAUDE_REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+
+/** True when the text is only `<system-reminder>` blocks. */
+function onlyReminders(start: string): boolean {
+  return start.startsWith('<system-reminder>') && start.replaceAll(CLAUDE_REMINDER, '').trim() === '';
+}
+
 function claudeOriginKind(line: ClaudeTurnLine): string {
   return isRecord(line.origin) ? text(line.origin.kind) : '';
 }
@@ -270,7 +278,8 @@ function claudeOriginKind(line: ClaudeTurnLine): string {
  * `subagents/`, with or without that field), the turn that replays a compacted conversation
  * `isCompactSummary`, and lines it wrote itself `isMeta` (the local-command caveat, skill bodies). A typed prompt
  * command is the exception: Claude logs the `<command-name>` line, then the expanded prompt as an `isMeta` line,
- * which is the user's turn. Background task results arrive as `<task-notification>` lines.
+ * which is the user's turn. Background task results arrive as `<task-notification>` lines, and a line made only of
+ * `<system-reminder>` blocks is context Claude added.
  *
  * Newer builds also record the sender. `origin` is `human` on a typed prompt, `task-notification` or `peer` for
  * other senders, and `promptSource` is `system` on a line the harness sent without `origin`, such as a scheduled
@@ -287,6 +296,7 @@ export function claudeNonHumanKind(lines: readonly ClaudeTurnLine[], index: numb
   if (origin === 'peer') return 'relayed';
   if (origin ? origin !== 'human' : line.promptSource === 'system') return 'system';
   if (line.isMeta && !expandsTypedCommand(lines, index)) return 'meta';
+  if (onlyReminders(start)) return 'meta';
   return undefined;
 }
 
