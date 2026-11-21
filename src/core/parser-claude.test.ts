@@ -899,4 +899,20 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
       expect(requests.map(request => request.userEventId).sort()).toEqual(['u1', 'u2']);
     });
   });
+
+  it('keeps a turn in the transcript it was typed in, even when the fork sorts first by name', () => {
+    withProjects({
+      '-Users-me-proj/f-original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'f-original' }), makeAssistant('Done.')],
+      '-Users-me-proj/a-fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'a-fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-fork', ['u2']], ['f-original', ['u1']],
+      ]);
+    });
+  });
 });

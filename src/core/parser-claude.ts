@@ -811,6 +811,17 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
   return discovery;
 }
 
+/** When a transcript was started: its first line's timestamp. A fork or resume replays older turns, but its own
+ *  first line is written when it starts. */
+function transcriptStart(filePath: string): number {
+  let start = Number.POSITIVE_INFINITY;
+  forEachJsonlLine(filePath, raw => {
+    const ts = parseClaudeLine(raw)?.timestamp;
+    if (ts) start = Date.parse(ts);
+  }, () => Number.isFinite(start));
+  return Number.isFinite(start) ? start : Number.POSITIVE_INFINITY;
+}
+
 /** Leaves out the requests whose user line was already counted, and records the rest. */
 function dropSeenTurns(session: Session, seenTurns: Set<string>): void {
   session.requests = session.requests.filter(request => {
@@ -847,8 +858,13 @@ function parseClaudeProjectSessions(
   const sessionFiles = new Map<string, string[]>();
   const cwds: (string | undefined)[] = [];
   const skippedSessions = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+  // Oldest first, so a turn replayed into a fork or resume stays with the transcript it was typed in.
+  const transcripts = entries
+    .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map(entry => ({ entry, start: transcriptStart(path.join(projPath, entry.name)) }))
+    .sort((a, b) => a.start - b.start || a.entry.name.localeCompare(b.entry.name))
+    .map(item => item.entry);
+  for (const entry of transcripts) {
     const filePath = path.join(projPath, entry.name);
     if (discovery.skipFiles.has(filePath)) {
       skippedSessions.add(path.basename(entry.name, '.jsonl'));
