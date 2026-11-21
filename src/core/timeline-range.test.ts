@@ -9,7 +9,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { analyzer, end, prompt, removeTimelineSessions, reply, session, start } from '../test/timeline-cli';
 import { buildSummaryExportFromAnalyzer } from './summary-export';
-import { buildLanes, buildViewFamilies, prepareTimeline, timelineKpis, timelineWindow, type TimelineKpis } from './timeline-model';
+import { buildLanes, buildViewFamilies, hourTicks, prepareTimeline, timelineKpis, timelineWindow, type TimelineKpis } from './timeline-model';
 import {
   clampRange, isDate, MAX_RANGE_DAYS, monthCells, quickRange, rangeDays, rangeTicks, rangeWindow, shiftDate, shiftDateByMonths, shiftMonth,
   stepRange, type DateRange,
@@ -74,7 +74,24 @@ describe('date ranges', () => {
     expect([quarter.length <= 14, quarter.every(([t]) => new Date(t).getDay() === 1)]).toEqual([true, true]);
   });
 
+});
+
+describe('date ranges over daylight-saving changes', () => {
   // Each zone with its own transitions, whatever the machine's zone.
+  it('keeps ticks on the clock’s whole hours over a half-hour daylight-saving change (Lord Howe Island)', () => inZone('Australia/Lord_Howe', () => {
+    const offHour = (ticks: [number, string][]) => ticks.filter(([t, label]) => {
+      const d = new Date(t);
+      return d.getMinutes() !== 0 || (label.endsWith(':00') && label !== `${d.getHours()}:00`) || (!label.endsWith(':00') && d.getHours() !== 0);
+    });
+    // 4 October: 2:00 becomes 2:30. 5 April: 2:00 becomes 1:30 again.
+    for (const from of ['2026-10-03', '2026-04-04']) {
+      const ticks = rangeTicks(...rangeWindow({ from, to: shiftDate(from, 2) }));
+      expect([from, ticks.length, offHour(ticks)]).toEqual([from, 12, []]);
+    }
+    const day = timelineWindow('day', '2026-10-04');
+    expect(hourTicks(day[0], day[1], 1).map(t => new Date(t).getHours())).toEqual([0, 1, ...Array.from({ length: 21 }, (_, i) => i + 3)]);
+  }));
+
   for (const [zone, spring, autumn] of [['Europe/Berlin', '2026-03-29', '2026-10-25'], ['America/New_York', '2026-03-08', '2026-11-01']] as const) {
     it(`steps whole calendar days over daylight-saving changes in ${zone}`, () => inZone(zone, () => {
       for (const [day, hours] of [[spring, 3 * 24 - 1], [autumn, 3 * 24 + 1]] as const) {

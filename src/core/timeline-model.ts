@@ -436,13 +436,18 @@ export function dayTicks(start: number, end: number): number[] {
   return ticks;
 }
 
-/** Each local full hour from `start` up to `end`, in steps of `step` hours of the clock. */
+/** Each local full hour from `start` up to `end`, in steps of `step` hours of the clock. An hour the clock repeats gets
+ *  its tick twice; after a half-hour change, ticks go back onto the clock's whole hours. */
 export function hourTicks(start: number, end: number, step: number): number[] {
   const ticks: number[] = [];
   const d = new Date(start);
   d.setMinutes(0, 0, 0);
   if (d.getTime() < start) d.setHours(d.getHours() + 1);
   for (; d.getTime() < end && ticks.length < 400; d.setTime(d.getTime() + 3_600_000)) {
+    if (d.getMinutes() !== 0) {
+      d.setMinutes(60, 0, 0);
+      if (d.getTime() >= end) break;
+    }
     if (d.getHours() % step === 0) ticks.push(d.getTime());
   }
   return ticks;
