@@ -231,17 +231,22 @@ function getOpenCodeUserText(msg: OcMessage, partsByMsg: Map<string, OcPart[]>):
   return userTextFromParts || msg.summary?.title || '';
 }
 
-/** The assistant messages answering the user message at `userIndex`: those naming it as their parent (`parentID`),
- *  and those naming no user message, from it up to the next user message. A late answer to an earlier prompt can
- *  arrive after a later one, so arrival order alone can give it to the wrong turn. */
-function findAssistantMessages(messages: OcMessage[], userIndex: number, userIds: ReadonlySet<string>): OcMessage[] {
-  const user = messages[userIndex];
-  let next = messages.length;
-  for (let i = userIndex + 1; i < messages.length; i++) {
-    if (messages[i].role === 'user') { next = i; break; }
+/** The assistant messages answering each user message, by its ID: those naming it as their parent (`parentID`), and
+ *  those naming no user message, from it up to the next user message. A late answer to an earlier prompt can arrive
+ *  after a later one, so arrival order alone can give it to the wrong turn. One pass over the time-sorted messages. */
+function assistantMessagesByUser(messages: readonly OcMessage[]): Map<string, OcMessage[]> {
+  const userIds = new Set(messages.filter(m => m.role === 'user').map(m => m.id));
+  const byUser = new Map<string, OcMessage[]>();
+  let current: string | undefined;
+  for (const m of messages) {
+    if (m.role === 'user') { current = m.id; continue; }
+    if (m.role !== 'assistant') continue;
+    const owner = m.parentID && userIds.has(m.parentID) ? m.parentID : current;
+    if (!owner) continue;
+    if (!byUser.has(owner)) byUser.set(owner, []);
+    byUser.get(owner)?.push(m);
   }
-  return messages.filter((m, i) => m.role === 'assistant'
-    && (m.parentID && userIds.has(m.parentID) ? m.parentID === user.id : i > userIndex && i < next));
+  return byUser;
 }
 
 function applyOpenCodePart(
@@ -520,7 +525,7 @@ function buildOpenCodeSession(
   const cacheState = { sawMain: false };
   let firstTs: number | null = null;
   let lastTs: number | null = null;
-  const userIds = new Set(rawMessages.filter(m => m.role === 'user').map(m => m.id));
+  const answers = assistantMessagesByUser(rawMessages);
 
   for (let i = 0; i < rawMessages.length; i++) {
     const msg = rawMessages[i];
@@ -529,7 +534,7 @@ function buildOpenCodeSession(
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
 
-    const assistantMessages = findAssistantMessages(rawMessages, i, userIds);
+    const assistantMessages = answers.get(msg.id) ?? [];
     const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
     const request = buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex);

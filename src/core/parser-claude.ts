@@ -369,25 +369,20 @@ function applyClaudeToolBlock(
 function collectClaudeToolResults(
   lines: ClaudeLine[],
   startIndex: number,
-): { completed: Set<string>; failed: Set<string>; resultTs: Map<string, number>; withContent: Set<string> } {
+): { completed: Set<string>; failed: Set<string> } {
   const completed = new Set<string>();
   const failed = new Set<string>();
-  const resultTs = new Map<string, number>();
-  const withContent = new Set<string>();
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
     if (line.type === 'user' && userHasText(line)) break;
     if (line.type !== 'user') continue;
-    const ts = getTimestamp(line.timestamp);
     for (const block of toContentArray(line.message?.content)) {
       if (block.type !== 'tool_result' || !block.tool_use_id) continue;
       completed.add(block.tool_use_id);
-      if (ts) resultTs.set(block.tool_use_id, ts);
       if (block.is_error === true) failed.add(block.tool_use_id);
-      if (toolResultHasContent(block)) withContent.add(block.tool_use_id);
     }
   }
-  return { completed, failed, resultTs, withContent };
+  return { completed, failed };
 }
 
 /** A tool result that says something: text, or a non-empty content block. An empty result is no answer. */
@@ -405,12 +400,45 @@ function claudeStream(line: ClaudeLine, cacheState: ClaudeCacheState): 'main' | 
   return cacheState.subagentFile || line.isSidechain ? 'subagent' : 'main';
 }
 
+/** Every `AskUserQuestion` result in the transcript, by its call ID, with when it came and whether it holds an answer.
+ *  A result can come after your next prompt, so the whole transcript is read once, not only the asking turn. */
+interface ClaudeQuestionResults {
+  results: Map<string, { ts: number | null; answered: boolean }>;
+  /** Each line's own timestamp or the next one logged after it: where an unanswered question's stop ends. */
+  nextTs: (number | null)[];
+}
+
+function indexClaudeQuestionResults(lines: ClaudeLine[]): ClaudeQuestionResults {
+  const asked = new Set<string>();
+  for (const line of lines) {
+    if (line.type !== 'assistant') continue;
+    for (const block of toContentArray(line.message?.content)) if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id) asked.add(block.id);
+  }
+  const results = new Map<string, { ts: number | null; answered: boolean }>();
+  const nextTs = new Array<number | null>(lines.length).fill(null);
+  if (asked.size === 0) return { results, nextTs };
+  let next: number | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    next = getTimestamp(lines[i].timestamp) ?? next;
+    nextTs[i] = next;
+  }
+  for (const line of lines) {
+    if (line.type !== 'user') continue;
+    for (const block of toContentArray(line.message?.content)) {
+      if (block.type !== 'tool_result' || !block.tool_use_id || !asked.has(block.tool_use_id) || results.has(block.tool_use_id)) continue;
+      results.set(block.tool_use_id, { ts: getTimestamp(line.timestamp), answered: block.is_error !== true && toolResultHasContent(block) });
+    }
+  }
+  return { results, nextTs };
+}
+
 /** Assistant data of the request whose prompt is the user line at `userIndex`. */
 function collectClaudeAssistantData(
   lines: ClaudeLine[],
   userIndex: number,
   lastTs: number | null,
   cacheState: ClaudeCacheState,
+  questions: ClaudeQuestionResults = { results: new Map(), nextTs: [] },
 ): ClaudeAssistantData {
   const startIndex = userIndex + 1;
   const responses = new ClaudeResponseAccumulator(claudeStream(lines[userIndex], cacheState) === 'subagent');
@@ -453,9 +481,10 @@ function collectClaudeAssistantData(
           continue;
         }
         if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs) {
-          const resolvedAt = toolResults.resultTs.get(block.id);
-          const answered = !toolResults.failed.has(block.id) && toolResults.withContent.has(block.id);
-          if (resolvedAt && resolvedAt >= assistantTs) data.userWaits.push({ start: assistantTs, end: resolvedAt, kind: 'question', answered });
+          // Answered or not, the question stopped the agent: until its result, or, with none logged, the next line.
+          const result = questions.results.get(block.id);
+          const end = result?.ts ?? questions.nextTs[i + 1] ?? assistantTs;
+          if (end >= assistantTs) data.userWaits.push({ start: assistantTs, end, kind: 'question', answered: result?.answered ?? false });
         }
         const incomplete = !!block.id && !toolResults.completed.has(block.id);
         const failed = incomplete || (!!block.id && toolResults.failed.has(block.id));
@@ -893,6 +922,7 @@ export function parseClaudeSessionFile(
   let firstTs: number | null = null;
   let lastTs: number | null = null;
   let entrypoint: string | undefined;
+  const questions = indexClaudeQuestionResults(lines);
   let i = 0;
 
   while (i < lines.length) {
@@ -909,7 +939,7 @@ export function parseClaudeSessionFile(
     const userTs = getTimestamp(line.timestamp);
     ({ firstTs, lastTs } = updateClaudeTimestampRange(userTs, firstTs, lastTs));
 
-    const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState);
+    const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState, questions);
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);

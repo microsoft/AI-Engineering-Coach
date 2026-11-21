@@ -62,6 +62,13 @@ function mainModel(requests: readonly SessionRequest[]): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
 }
 
+/** The session's repository or folder name. Xcode's workspace name is the conversation's title, often your first
+ *  prompt, so an Xcode session has none. */
+function repositoryOf(s: Session): string {
+  if (s.repository) return s.repository;
+  return s.harness === 'Xcode' ? '' : s.workspaceName || '';
+}
+
 const turnEnd = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
 /** When the turn last held anything: its work, or a question or permission still open after it. */
 const turnReach = (r: SessionRequest) => Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end));
@@ -150,7 +157,7 @@ export class TimelineAnalyzer extends AnalyzerBase {
         id: s.sessionId,
         name: s.displayName ? scrubLabel(s.displayName, labels) : '',
         branch: s.branch ? scrubBranch(s.branch, labels) : '',
-        repo: scrubRepository(s.repository || s.workspaceName || '', labels),
+        repo: scrubRepository(repositoryOf(s), labels),
         harness: harnessLabel(s.harness),
         model: scrubLabel(mainModel(turns.length ? turns : context), labels),
         parent,

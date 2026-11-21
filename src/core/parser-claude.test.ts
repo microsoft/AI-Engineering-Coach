@@ -140,6 +140,28 @@ describe('parseClaudeSessions', () => {
     });
   });
 
+  it('keeps an unanswered AskUserQuestion until the next line, and pairs an answer that comes after your next prompt', () => {
+    const ms = Date.parse;
+    withProjectsDir('s.jsonl', [
+      makeUser('plan it', '2025-06-15T10:00:00Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:00:05Z', 'q1'),
+      // You typed instead of answering: the question stopped the agent until then, and got no answer.
+      makeUser('never mind, do X', '2025-06-15T10:03:00Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:03:05Z', 'q2'),
+      makeUser('also Y', '2025-06-15T10:04:00Z'),
+      // q2's answer is logged after that prompt.
+      { type: 'user', timestamp: '2025-06-15T10:06:00Z', sessionId: 'sess-1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'q2', content: 'User answered: B' }] } },
+      makeAssistant('done', '2025-06-15T10:07:00Z'),
+    ], (projectsDir) => {
+      const waits = parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.userWaits);
+      expect(waits).toEqual([
+        [{ start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:03:00Z'), kind: 'question', answered: false }],
+        [{ start: ms('2025-06-15T10:03:05Z'), end: ms('2025-06-15T10:06:00Z'), kind: 'question', answered: true }],
+        undefined,
+      ]);
+    });
+  });
+
   it('extracts current Edit new_string and MultiEdit deltas', () => {
     withProjectsDir('s.jsonl', [
       makeUser('edit files', '2025-06-15T10:00:00Z', { uuid: 'request_claude_edit' }),

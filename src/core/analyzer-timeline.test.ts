@@ -132,6 +132,11 @@ describe('TimelineAnalyzer', () => {
       expect(byId.get('src')?.fork).toBeUndefined();
     });
 
+    it('never uses an Xcode conversation title as the repository', () => {
+      const s = makeSession({ harness: 'Xcode', workspaceName: 'Fix the login bug in my app', repository: undefined, requests: [makeRequest({ timestamp: at(9) })] });
+      expect(createAnalyzer([s]).getTimelineData(undefined, ctx).sessions[0].repo).toBe('');
+    });
+
     it('counts the sub-agent launches each harness records', () => {
       const claude = makeSession({ harness: 'Claude', requests: [makeRequest({ timestamp: at(9), agentName: 'Claude', toolsUsed: ['Agent', 'Read', 'Task'] })] });
       const codex = makeSession({ harness: 'Codex', requests: [makeRequest({ timestamp: at(10), agentName: 'Codex', toolsUsed: ['spawn_agent', 'wait_agent', 'shell'] })] });
