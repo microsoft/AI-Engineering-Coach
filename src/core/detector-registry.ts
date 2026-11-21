@@ -154,6 +154,7 @@ function emissionToAntiPattern(
     ratio: emission.ratio,
     pct,
     extra: { ...rule.thresholds, ...emission.extra },
+    thresholds: rule.thresholds, // rules use {{thresholds.X}} in their text
   };
 
   const severity = emission.dynamicSeverity ?? rule.severity;
