@@ -27,6 +27,8 @@ describe('session labels', () => {
     // Unquoted, a path runs on to a word with a file extension, or to the end: no tail of it is left.
     expect(scrubLabel('See C:\\Users\\Jane Doe\\notes final draft.txt now', ctx)).toBe('See [path] now');
     expect(scrubLabel('Fix C:\\Users\\Jane Doe\\Secret Project', ctx)).toBe('Fix [path]');
+    expect(scrubLabel('Fix /Users/Jane Doe/Secret Project/notes.txt now', ctx)).toBe('Fix [path] now');
+    expect(scrubLabel('Fix /home/Jane Doe/Secret Project', ctx)).toBe('Fix [path]');
     expect(scrubLabel('See C:\\Users\\jane\\My Docs\\file name.txt now', ctx)).toBe('See [path] now');
     expect(scrubLabel('model "/Users/jane doe/models/x" here', { names: [] })).toBe('model [path] here');
     expect(scrubLabel('weights=/opt/jane/w.bin', { names: [] })).toBe('weights=[path]');

@@ -75,7 +75,9 @@ function prefixCopySet(s: Session, source: Session, k: number): Set<SessionReque
  *  turns are compared; a sub-agent turn is a copy only when the source holds the same message. */
 function prefixCopies(sessions: readonly Session[]): Map<Session, PrefixFork> {
   const out = new Map<Session, PrefixFork>();
-  const claude = sessions.filter(s => s.harness === 'Claude' && mainTurns(s).length > 0 && !s.requests.some(isCandidate));
+  // A fork with a clock lead is found by that lead, so it is never inferred here; it can still be the source of a fork
+  // that lost its own opening lines (a fork of a fork).
+  const claude = sessions.filter(s => s.harness === 'Claude' && mainTurns(s).length > 0);
   const holdersOf = new Map<string, Session[]>();
   for (const s of claude) {
     const first = mainTurns(s)[0].userEventId;
@@ -84,6 +86,7 @@ function prefixCopies(sessions: readonly Session[]): Map<Session, PrefixFork> {
   for (const group of holdersOf.values()) {
     if (group.length < 2) continue;
     for (const s of group) {
+      if (s.requests.some(isCandidate)) continue;
       const best = prefixSource(s, group);
       if (best) out.set(s, { copies: prefixCopySet(s, best.source, best.k), source: best.source });
     }

@@ -91,6 +91,15 @@ describe('withInheritedTurnsRemoved with sub-agent turns', () => {
 });
 
 describe('withInheritedTurnsRemoved for forks of forks', () => {
+  it('links a fork without a lead to the fork it copied, even when that one has a lead', () => {
+    const a = session('a', [live(request(0, 'm1')), live(request(5, 'm2'))]);
+    const b = session('b', [request(0, 'm1', 30_000), request(5, 'm2', 30_000), live(request(10, 'm3'))]);
+    const c = session('c', [request(0, 'm1'), request(5, 'm2'), request(10, 'm3'), live(request(20, 'm4'))]);
+    const out = withInheritedTurnsRemoved([a, b, c]);
+    expect(out.map(s => [s.sessionId, s.requests.map(r => r.userEventId), s.inheritedTurns, s.forkedFromId]))
+      .toEqual([['a', ['m1', 'm2'], undefined, undefined], ['b', ['m3'], 2, 'a'], ['c', ['m4'], 3, 'b']]);
+  });
+
   it('links a fork of a fork to its direct source', () => {
     const a = session('a', [request(0, 'm1')]);
     const b = session('b', [request(0, 'm1', 30_000), request(10, 'm2')]);

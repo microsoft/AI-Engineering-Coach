@@ -66,6 +66,23 @@ function unquotedPath(match: string): string {
   return last < 0 ? '[path]' : ['[path]', ...words.slice(last + 1)].join(' ');
 }
 
+/** Unquoted absolute POSIX paths of two or more segments, spaces and all, like `unquotedPath`: a path runs to its first
+ *  word with a file extension; else, when another path follows in the clause, to its last word with a separator before
+ *  that one; else to the end of the clause. */
+function posixPaths(value: string): string {
+  const start = /(^|[\s("'`:=])(\/[^\s/,;)"'`]+\/[^,;)"'`\n]*)/.exec(value);
+  if (!start) return value;
+  const words = start[2].split(' ');
+  const next = words.findIndex((w, i) => i > 0 && w.startsWith('/'));
+  const ext = words.findIndex((w, i) => /\.[A-Za-z0-9]{1,5}$/.test(w) && (next < 0 || i < next));
+  const last = ext >= 0 ? ext
+    : next > 0 ? Math.max(0, ...words.slice(0, next).map((w, i) => (w.includes('/') ? i : 0)))
+      : words.length - 1;
+  const rest = words.slice(last + 1).join(' ');
+  const at = start.index + start[1].length;
+  return value.slice(0, at) + '[path]' + (rest ? ' ' + posixPaths(rest) : '') + posixPaths(value.slice(at + start[2].length));
+}
+
 /** A label without links, email addresses, drive or UNC paths, the home directory or the user's names. */
 export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME, nameMark = ''): string {
   let out = value
@@ -82,7 +99,7 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME, nam
   }
   // Any absolute path of two or more segments (`/mnt/c/Users/…`, `/workspaces/…`); a single `/word`, such as a slash
   // command, stays.
-  out = out.replaceAll(/(^|[\s("'`:=])\/[^\s/,;)"'`]+\/[^\s,;)"'`]*/g, '$1[path]');
+  out = posixPaths(out);
   out = tidy(removeNames(out, usableNames(ctx.names), nameMark));
   return out.length > max ? out.slice(0, max - 1).trimEnd() + '…' : out;
 }
