@@ -90,6 +90,11 @@ test.describe('Timeline', () => {
     await page.keyboard.press('Enter');
     await expect(page.locator('#tlxDetailName')).toHaveText('Investigate flaky test');
     await expect(text.locator('.tx-item.focus')).toContainText('Waited 35 min');
+    // The highlight belongs to that click: opening the lane again some other way shows none.
+    await page.locator('.tlx-lane[data-session="tl-coord"] .tlx-lbl').click();
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(text.locator('[data-text-at^="i:"]')).toBeVisible();
+    await expect(text.locator('.tx-item.focus')).toHaveCount(0);
     // A question: what the agent said before it, the question, its choices and your answer.
     await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
     await page.locator('.tlx-lane[data-session="tl-notes"] .tlx-lbl').click();

@@ -71,8 +71,8 @@ export function timelineSessionText(session: Session, labels: ScrubContext): Tim
       turn.prompt = v;
       cut ||= c;
     }
-    // The agent's own messages: the code it wrote to files is no reply.
-    const reply = (r.replyText ?? r.responseText).trim();
+    // The agent's own messages: the code it wrote to files is no reply. A compaction's reply is its summary.
+    const reply = k === 'compaction' ? '' : (r.replyText ?? r.responseText).trim();
     if (reply) {
       const [v, c] = cutTail(scrubText(reply, labels), MAX_REPLY);
       turn.reply = v;

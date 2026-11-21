@@ -139,8 +139,11 @@ const SECRET_PATTERNS: [RegExp, string][] = [
   [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[abposr]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})/g, '[secret]'],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[secret]'],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 [secret]'],
-  [/(?<![A-Za-z0-9_-])([A-Za-z0-9_-]*?(?:api[_-]?key|secret|token|password|passwd|pwd|account[_-]?key|shared[_-]?access[_-]?key|sig)["']?\s*[:=]\s*["']?)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
+  [/(?<![A-Za-z0-9_-])([A-Za-z0-9_-]*?(?:api[_-]?key|secret|token|password|passwd|pwd|account[_-]?key|access[_-]?key|private[_-]?key|shared[_-]?access[_-]?key|sig)["']?\s*[:=]\s*["']?)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
   [/(?<![A-Za-z0-9_-])(--?[A-Za-z0-9-]*?(?:api-?key|secret|token|password|passwd|account-?key)\s+["']?)(?!-)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
+  // curl -u user:password, docker login -u user -p password.
+  [/((?:^|\s)(?:-u|--user)\s+[^\s:"'`]+:)[^\s"'`]+/g, '$1[secret]'],
+  [/((?:^|\s)-u\s+[^\s"'`]+\s+-p\s+)(?!-)[^\s"'`]+/g, '$1[secret]'],
 ];
 
 /** A long run of letters and digits in both cases, as random keys are: hashes in lower-case hex and IDs with dashes

@@ -163,7 +163,8 @@ describe('timelineSessionText turns', () => {
   it('shows no text for compaction or system turns', () => {
     const s = fixture();
     s.requests[0].nonHumanKind = 'compaction';
-    expect(timelineSessionText(s, labels).turns[0].prompt).toBeUndefined();
+    // Nor the reply to a compaction, which is the summary itself (OpenCode logs it as the agent's message).
+    expect([timelineSessionText(s, labels).turns[0].prompt, timelineSessionText(s, labels).turns[0].reply]).toEqual([undefined, undefined]);
   });
 
   it('never reaches the Timeline dataset, the chat tool or the summary export', () => {

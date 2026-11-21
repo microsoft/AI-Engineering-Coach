@@ -122,6 +122,15 @@ describe('scrubText', () => {
     const plain = 'design=wide max_tokens=4096 --token-file cfg.json --max-tokens 4096 --password-stdin';
     expect(scrubText(plain, text)).toBe(plain);
   });
+
+  it('replaces credentials given to a command line as user:password, -u … -p …, or a secret access key', () => {
+    expect(scrubText('curl -u admin:hunter2 x && curl --user ci:abc123 y', text)).toBe('curl -u admin:[secret] x && curl --user ci:[secret] y');
+    expect(scrubText('docker login -u ci -p hunter2hunter registry', text)).toBe('docker login -u ci -p [secret] registry');
+    expect(scrubText('AWS_SECRET_ACCESS_KEY=abcdefghijklmnop AWS_PRIVATE_KEY: abcdefghijklmnop', text))
+      .toBe('AWS_SECRET_ACCESS_KEY=[secret] AWS_PRIVATE_KEY: [secret]');
+    const plain = 'mkdir -p out && sort -u names.txt && npm run -s build';
+    expect(scrubText(plain, text)).toBe(plain);
+  });
 });
 
 describe('Copilot workspace.yaml', () => {

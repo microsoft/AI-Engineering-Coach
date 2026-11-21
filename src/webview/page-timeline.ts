@@ -174,6 +174,11 @@ function draw(): void {
 }
 
 function update(change: Partial<TimelineState>): void {
+  // A highlighted prompt or wait belongs to the click that chose it: another lane, or this one opened again, has none.
+  if (change.selected !== undefined && !('textFocus' in change)) {
+    change = { ...change, textFocus: null };
+    scrollToText = false;
+  }
   Object.assign(state, change);
   draw();
 }
@@ -579,7 +584,7 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
           const key = w.kind === 'idle' ? `i:${w.start}` : `w:${w.kind}:${w.start}`;
           const open = (e?: Event) => {
             e?.stopPropagation();
-            scrollToText = true;
+            scrollToText = !!state.showText && !state.masked;
             update({ selected: s.id, textFocus: key });
           };
           const tip = waitTip(ctx, w, l.win);
