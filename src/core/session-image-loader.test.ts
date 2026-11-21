@@ -196,6 +196,10 @@ describe('image worker lifecycle', () => {
       expect(text?.turns.map(t => t.prompt)).toEqual(['Deploy with [secret]']);
       expect(text?.waits.map(w => w.ask)).toEqual(['Today’s question?']);
       expect(JSON.stringify(text)).not.toContain('Yesterday');
+      // The session detail view gets none of the Timeline's text: no reply text, no question or answer, raw.
+      const detail = await loader.loadSession({ ...source, filePath: events }, 'session');
+      expect(detail?.requests.length).toBe(3);
+      expect(detail?.requests.some(r => r.replyText !== undefined || (r.userWaits ?? []).some(w => w.text))).toBe(false);
       // A malformed scope is refused, not read.
       const invalid = new Promise<unknown>(resolve => worker.once('message', resolve));
       worker.postMessage({ type: 'timeline-text', source: { ...source, filePath: events }, sessionId: 'session', scope: { from: 'x' }, labels: { names: [] } });

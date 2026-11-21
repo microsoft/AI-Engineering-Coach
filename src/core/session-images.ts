@@ -49,6 +49,20 @@ export function loadTimelineText(request: TimelineTextRequest): TimelineSessionT
   return session ? timelineSessionText(session, request.labels, request.scope, request.kept ? new Set(request.kept) : undefined) : null;
 }
 
+/** Runs in the parse worker: a session for its detail view, without the text only the Timeline shows (the agent's
+ *  own messages apart from its code, and what each question and permission prompt asked and you answered). That
+ *  reaches the extension only through `loadTimelineText`, scoped and scrubbed. */
+export function loadSourceSessionDetail(source: SessionSource, sessionId: string): Session | null {
+  const session = loadSourceSession(source, sessionId);
+  if (!session) return null;
+  for (const r of session.requests) {
+    delete r.replyText;
+    for (const w of r.userWaits ?? []) delete w.text;
+  }
+  for (const w of session.userWaits ?? []) delete w.text;
+  return session;
+}
+
 export function loadSourceSession(source: SessionSource, sessionId: string): Session | null {
   switch (source.kind) {
     case 'vscode-session-file':

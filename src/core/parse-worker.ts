@@ -17,7 +17,7 @@ import { getParseWarningCounts, getParseWarnings, setCuriosityDetector } from '.
 import { detectCuriosity } from './curiosity';
 import { installRuntimeDebugHooks, runtimeDebug } from './runtime-debug';
 import { createTelemetrySampler } from './worker-telemetry';
-import { extractSourceImages, loadSourceSession, loadTimelineText, type SessionSourceRequest, type TimelineTextRequest } from './session-images';
+import { extractSourceImages, loadSourceSessionDetail, loadTimelineText, type SessionSourceRequest, type TimelineTextRequest } from './session-images';
 
 interface ParseWorkerRequest {
   logsDirs?: string[];
@@ -122,7 +122,7 @@ function onMessage(handler: (msg: ParseWorkerRequest) => void | Promise<void>): 
         } else if (raw.type === 'timeline-text') {
           send({ type: 'timeline-text', text: loadTimelineText(raw) });
         } else {
-          send({ type: 'session-detail', session: loadSourceSession(raw.source, raw.sessionId) });
+          send({ type: 'session-detail', session: loadSourceSessionDetail(raw.source, raw.sessionId) });
         }
       } catch (error) {
         send({ type: 'error', message: error instanceof Error ? error.message : String(error) });
