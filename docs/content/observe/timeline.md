@@ -33,7 +33,7 @@ Each day or week starts with three findings, each with one thing to try:
 
 Questions are Copilot `ask_user` calls, questions a child session relayed to you, and Claude Code `AskUserQuestion` calls, counted when the log shows you answered. Permission prompts count only when you decided them: a decision a policy made in milliseconds isn't a wait on you, and older Copilot builds that don't log who decided aren't counted either.
 
-A day or week counts the part of each wait, each stretch and each turn's agent time inside it, so the days of a week add up to the week. Turns, typed prompts and waits are counted on the day they started. A turn that started the day before and ran past midnight is drawn on both days and counted on the first. Days are local calendar days, so a daylight-saving day has 23 or 25 hours.
+A day or week counts the part of each wait, each stretch and each turn's agent time inside it, so the days of a week add up to the week. Turns, typed prompts and waits are counted on the day they started. A turn that started the day before and ran past midnight is drawn on both days and counted on the first. The same holds at the edges of the date range: work and waits that began before it count only for their part inside it. Days are local calendar days, so a daylight-saving day has 23 or 25 hours.
 
 ## Day strip
 

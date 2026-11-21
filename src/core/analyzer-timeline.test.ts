@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { TimelineAnalyzer } from './analyzer-timeline';
+import { buildFamilies, buildLanes, buildViewFamilies, prepareTimeline, timelineKpis, timelineWindow } from './timeline-model';
 import { Session, SessionRequest } from './types/session-types';
 
 function makeRequest(overrides: Partial<SessionRequest> = {}): SessionRequest {
@@ -122,8 +123,8 @@ describe('TimelineAnalyzer', () => {
     it('links a fork to its source and leaves the turns it copied to the source', () => {
       const src = makeSession({ sessionId: 'src', harness: 'Claude', requests: [makeRequest({ timestamp: at(9), userEventId: 'm1' }), makeRequest({ timestamp: at(10), userEventId: 'm2' })] });
       const fork = makeSession({
-        sessionId: 'fork', harness: 'Claude', copiesHistory: true,
-        requests: [makeRequest({ timestamp: at(9), userEventId: 'm1' }), makeRequest({ timestamp: at(11), userEventId: 'm3' })],
+        sessionId: 'fork', harness: 'Claude',
+        requests: [makeRequest({ timestamp: at(9), userEventId: 'm1', copiedHistory: true }), makeRequest({ timestamp: at(11), userEventId: 'm3' })],
       });
       const data = createAnalyzer([src, fork]).getTimelineData(undefined, ctx);
       const byId = new Map(data.sessions.map(s => [s.id, s]));
@@ -132,9 +133,28 @@ describe('TimelineAnalyzer', () => {
       expect(byId.get('src')?.fork).toBeUndefined();
     });
 
-    it('counts Claude Code sub-agent calls as sub-agent runs', () => {
+    it('counts sub-agent calls as sub-agent runs for Claude Code', () => {
       const session = makeSession({ harness: 'Claude', requests: [makeRequest({ timestamp: at(9), agentName: 'Claude', toolsUsed: ['Agent', 'Read', 'Task'] })] });
       expect(createAnalyzer([session]).getTimelineData(undefined, ctx).sessions[0].turns[0].sub).toBe(2);
+    });
+
+    it('keeps the work and waits that cross into the range start, counted only inside it', () => {
+      const ts = (d: number, h: number, m = 0) => new Date(2026, 2, d, h, m).getTime();
+      const sessions = [
+        // 23:00–23:30 on the 15th, then your next prompt at 0:30 on the 16th: half the wait is in range.
+        makeSession({ sessionId: 'a', requests: [makeRequest({ timestamp: ts(15, 23), totalElapsed: 30 * 60_000 }), makeRequest({ timestamp: ts(16, 0, 30), totalElapsed: 60_000 })] }),
+        // One turn from 23:50 to 0:30: only its 30 minutes on the 16th count.
+        makeSession({ sessionId: 'b', requests: [makeRequest({ timestamp: ts(15, 23, 50), totalElapsed: 40 * 60_000, nonHumanKind: 'agent' })] }),
+      ];
+      const data = createAnalyzer(sessions).getTimelineData({ fromDate: '2026-03-16', toDate: '2026-03-16' }, ctx);
+      expect([data.from, data.to]).toEqual([ts(16, 0), ts(17, 0)]);
+      expect(data.sessions.map(s => [s.id, s.turns.length, s.context?.length])).toEqual([['b', 0, 1], ['a', 1, 1]]);
+      const p = prepareTimeline(data);
+      const lanes = buildLanes(p, ...timelineWindow('week', '2026-03-16'));
+      const kpis = timelineKpis(lanes, buildViewFamilies(lanes, p));
+      expect(kpis).toMatchObject({ turns: 1, typed: 1, waits: 0, waitMs: 30 * 60_000, agentMs: 31 * 60_000 });
+      expect([...p.dayTotals.keys()]).toEqual(['2026-03-16']);
+      expect(buildFamilies(p).totals.sessions).toBe(2);
     });
   });
   describe('getSessions', () => {

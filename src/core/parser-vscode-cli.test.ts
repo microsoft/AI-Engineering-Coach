@@ -475,6 +475,28 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     ]);
   });
 
+  it('gives a wait to the turn that asked, even when the answer comes during a later turn', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 10, m)).toISOString();
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: at(0), data: { content: 'one' } },
+      { type: 'permission.requested', timestamp: at(1), data: { requestId: 'p1' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1' } },
+      { type: 'assistant.message', timestamp: at(3), data: { content: 'waiting' } },
+      { type: 'user.message', timestamp: at(10), data: { content: 'two' } },
+      { type: 'permission.completed', timestamp: at(11), data: { requestId: 'p1', result: { kind: 'approved' } } },
+      { type: 'tool.execution_complete', timestamp: at(12), data: { toolCallId: 'q1', success: true, result: { content: 'User responded: ok' } } },
+      // The evidence that you decided p1 comes later still.
+      { type: 'human_response.recorded', timestamp: at(13), data: { requestId: 'p1' } },
+      { type: 'assistant.message', timestamp: at(14), data: { content: 'done' } },
+    ]), 'ws', 'ws');
+    const ms = (iso: string) => Date.parse(iso);
+    expect(session?.requests.map(r => r.userWaits)).toEqual([
+      [{ start: ms(at(1)), end: ms(at(12)), kind: 'permission' }],
+      undefined,
+    ]);
+  });
+
   it('adds each usage record’s AI credits and tokens to its turn, the first turn taking earlier records', () => {
     const session = parseCLIEventsFile(writeEvents([
       { type: 'session.start', data: { sessionId: 'credits' } },

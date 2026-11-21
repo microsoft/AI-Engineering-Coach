@@ -76,37 +76,36 @@ function dropCycles(links: Map<string, ParentLink>, byKey: Map<string, LinkableS
 
 /* ---- forks ---- */
 
-export type ForkableSession = Pick<Session, 'sessionId' | 'forkedFromId' | 'copiesHistory'> & {
-  requests: readonly Pick<SessionRequest, 'userEventId'>[];
+export type ForkableSession = Pick<Session, 'sessionId' | 'forkedFromId'> & {
+  requests: readonly Pick<SessionRequest, 'userEventId' | 'copiedHistory'>[];
 };
 
 export interface ForkLink {
   /** The session it was forked from. */
   source: string;
-  /** Prompts it copied from its source (their message IDs): counted once, in the source. */
+  /** Prompts it copied (their message IDs): each counts once, in the session that first had it. */
   copied: Set<string>;
 }
 
 /** The source of each forked session, keyed by the fork's ID. A fork is linked only where the log says so:
  *  - Codex writes `forked_from_id` in the fork's `session_meta` (`forkedFromId`).
  *  - A Claude Code fork starts with the source's messages, copied with their message IDs and older times
- *    (`copiesHistory`): its source is the session that holds its first prompt without having copied it.
+ *    (`copiedHistory`). Its source is the session where its first copied prompt is not a copy; every copied prompt,
+ *    including one a fork of a fork took over from the fork in between, is left to the session where it isn't one.
  *  Copilot CLI and Copilot App log no fork source, so their forks aren't linked. Forks are not family links: a fork is
  *  your own branch of a conversation, not a session an agent started. */
 export function resolveForkLinks(sessions: readonly ForkableSession[]): Map<string, ForkLink> {
   const byKey = new Map(sessions.map(s => [key(s.sessionId), s]));
   const owner = new Map<string, ForkableSession>();
   for (const s of sessions) {
-    if (s.copiesHistory) continue;
-    for (const r of s.requests) if (r.userEventId && !owner.has(r.userEventId)) owner.set(r.userEventId, s);
+    for (const r of s.requests) if (r.userEventId && !r.copiedHistory && !owner.has(r.userEventId)) owner.set(r.userEventId, s);
   }
   const links = new Map<string, ForkLink>();
   for (const s of sessions) {
-    const first = s.requests.find(r => r.userEventId)?.userEventId;
-    const source = s.forkedFromId ? byKey.get(key(s.forkedFromId)) : s.copiesHistory && first ? owner.get(first) : undefined;
+    const copied = s.requests.filter(r => r.copiedHistory && r.userEventId).map(r => r.userEventId as string);
+    const source = s.forkedFromId ? byKey.get(key(s.forkedFromId)) : copied.length ? owner.get(copied[0]) : undefined;
     if (!source || source === s) continue;
-    const ids = new Set(source.requests.map(r => r.userEventId).filter((id): id is string => !!id));
-    links.set(s.sessionId, { source: source.sessionId, copied: new Set(s.requests.map(r => r.userEventId).filter((id): id is string => !!id && ids.has(id))) });
+    links.set(s.sessionId, { source: source.sessionId, copied: new Set(copied.filter(id => owner.has(id) && owner.get(id) !== s)) });
   }
   return links;
 }

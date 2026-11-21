@@ -260,6 +260,9 @@ export interface SessionRequest {
    *  a question relayed from another session, Claude Code `AskUserQuestion`) or a permission you decided (Copilot
    *  `permission.requested` → `permission.completed`, unless a policy decided it). Absolute ms, in order. */
   userWaits?: UserWait[];
+  /** The prompt was copied, with its turn, from the session this one was forked from (Claude Code `--fork-session`):
+   *  the source counts it. */
+  copiedHistory?: boolean;
   /** AI credits Copilot logged for the turn's model calls, sub-agents included: `session.usage_record`
    *  `copilotUsage.totalNanoAiu` ÷ 1e9 (Copilot CLI and Copilot App). Absent when none were logged. */
   aiCredits?: number;
@@ -348,9 +351,6 @@ export interface Session {
   forkCount?: number;
   /** The session this one was forked from, as the harness logged it (Codex `session_meta.forked_from_id`). */
   forkedFromId?: string;
-  /** The transcript starts with messages copied, with their older times, from another session: a Claude Code fork
-   *  (`--fork-session`). Its source is the session those messages came from (`resolveForkLinks`). */
-  copiesHistory?: boolean;
   /** Sessions this session started: the session IDs in the results of its `create_session`, `open_pr_session` and
    *  `open_issue_session` calls (Copilot CLI and Copilot App). */
   childSessionIds?: string[];

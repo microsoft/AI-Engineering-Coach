@@ -139,7 +139,7 @@ interface CLIParseState {
   /** Questions and permission prompts awaiting a decision, by tool call ID or `permission:<request ID>`. */
   openWaits: Map<string, OpenUserWait>;
   /** Resolved ones without evidence yet that you answered, awaiting a `human_response.recorded` event. */
-  unconfirmedWaits: Map<string, UserWait>;
+  unconfirmedWaits: Map<string, { wait: UserWait; owner: number }>;
   /** Keys with a `human_response.recorded` event. */
   humanResponses: Set<string>;
   /** Waits answered before the first turn; the first turn takes them. */
@@ -344,10 +344,12 @@ function eventTime(ev: CLIEvent): number | null {
 interface OpenUserWait {
   start: number;
   kind: UserWait['kind'];
+  /** The turn that asked: its index in `requests` (the turn in progress gets the next one), -1 before the first. */
+  owner: number;
 }
 
 function openUserWait(state: CLIParseState, key: string, start: number | null, kind: UserWait['kind']): void {
-  if (start !== null && key && !key.endsWith(':')) state.openWaits.set(key, { start, kind });
+  if (start !== null && key && !key.endsWith(':')) state.openWaits.set(key, { start, kind, owner: state.turn ? state.requests.length : -1 });
 }
 
 /** The question or permission prompt `key` was resolved at `end`. It counts as a wait on you only with evidence that
@@ -358,32 +360,33 @@ function closeUserWait(state: CLIParseState, key: string, end: number | null, an
   state.openWaits.delete(key);
   if (end === null || end <= open.start) return;
   const wait: UserWait = { start: open.start, end, kind: open.kind };
-  if (answered || state.humanResponses.has(key)) attachUserWait(state, wait);
-  else state.unconfirmedWaits.set(key, wait);
+  if (answered || state.humanResponses.has(key)) attachUserWait(state, wait, open.owner);
+  else state.unconfirmedWaits.set(key, { wait, owner: open.owner });
 }
 
 function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState): void {
   for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
     if (!key) continue;
     state.humanResponses.add(key);
-    const wait = state.unconfirmedWaits.get(key);
-    if (wait) {
+    const pending = state.unconfirmedWaits.get(key);
+    if (pending) {
       state.unconfirmedWaits.delete(key);
-      attachUserWait(state, wait);
+      attachUserWait(state, pending.wait, pending.owner);
     }
   }
 }
 
-/** Waits keep their own timestamps: one can outlast the turn that asked (the turn logged its last message first).
- *  It goes to the turn in progress, else the last finished turn; before the first turn, to the first turn. */
-function attachUserWait(state: CLIParseState, wait: UserWait): void {
-  if (state.turn) {
+/** A wait goes to the turn that asked, with its own timestamps: it can end after that turn's last message, or during a
+ *  later turn. One asked before the first turn goes to the first turn. */
+function attachUserWait(state: CLIParseState, wait: UserWait, owner: number): void {
+  if (owner >= 0 && owner === state.requests.length && state.turn) {
     state.turn.userWaits.push(wait);
-    return;
+  } else if (owner >= 0 && owner < state.requests.length) {
+    const request = state.requests[owner];
+    request.userWaits = mergedUserWaits([...(request.userWaits ?? []), wait]);
+  } else {
+    state.earlyWaits.push(wait);
   }
-  const last = state.requests.at(-1);
-  if (last) last.userWaits = mergedUserWaits([...(last.userWaits ?? []), wait]);
-  else state.earlyWaits.push(wait);
 }
 
 /** A question tool's result says you answered it: Copilot's `User selected:`/`User responded:`, or a relayed question

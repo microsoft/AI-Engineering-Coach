@@ -46,14 +46,16 @@ describe('resolveParentLinks', () => {
 });
 
 describe('resolveForkLinks', () => {
+  /** `ids` are the session's prompts; a `*` marks one it copied from its source. */
   const fork = (sessionId: string, ids: string[], extra: Partial<ForkableSession> = {}): ForkableSession =>
-    ({ sessionId, requests: ids.map(userEventId => ({ userEventId })), ...extra });
+    ({ sessionId, requests: ids.map(id => ({ userEventId: id.replace('*', ''), ...(id.startsWith('*') ? { copiedHistory: true } : {}) })), ...extra });
 
   it('links a Codex fork by its logged source, and a Claude Code fork by the prompts it copied', () => {
     const links = resolveForkLinks([
       fork('src', ['m1', 'm2', 'm3']),
-      fork('claude-fork', ['m1', 'm2', 'm4'], { copiesHistory: true }),
-      fork('fork-of-fork', ['m1', 'm2', 'm4', 'm5'], { copiesHistory: true }),
+      fork('claude-fork', ['*m1', '*m2', 'm4']),
+      // A fork of the fork copies m4 from the fork in between: it counts there, not twice.
+      fork('fork-of-fork', ['*m1', '*m2', '*m4', 'm5']),
       fork('codex-fork', ['c9'], { forkedFromId: 'SRC' }),
       // Shares a prompt ID but copied nothing: not a fork.
       fork('lookalike', ['m1']),
@@ -61,12 +63,12 @@ describe('resolveForkLinks', () => {
     expect(Object.fromEntries([...links].map(([id, l]) => [id, [l.source, [...l.copied]]]))).toEqual({
       'claude-fork': ['src', ['m1', 'm2']],
       // A fork of a fork goes to the session the copied history started in.
-      'fork-of-fork': ['src', ['m1', 'm2']],
+      'fork-of-fork': ['src', ['m1', 'm2', 'm4']],
       'codex-fork': ['src', []],
     });
   });
 
   it('links nothing for a session that copies history from no known session', () => {
-    expect(resolveForkLinks([fork('a', ['x'], { copiesHistory: true }), fork('b', ['y'], { forkedFromId: 'gone' })]).size).toBe(0);
+    expect(resolveForkLinks([fork('a', ['*x']), fork('b', ['y'], { forkedFromId: 'gone' })]).size).toBe(0);
   });
 });

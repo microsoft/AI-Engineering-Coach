@@ -875,6 +875,9 @@ export function parseClaudeSessionFile(
   const transcriptKey = claudeTranscriptKey(filePath);
   const requests: SessionRequest[] = [];
   const cacheState: ClaudeCacheState = { sawMain: false, subagentFile };
+  // A fork (`--fork-session`) starts its transcript with the source's messages, copied with their own, older times:
+  // a prompt older than the transcript's first line was copied.
+  const fileStart = lines.map(l => getTimestamp(l.timestamp)).find((ts): ts is number => !!ts) ?? null;
   let cwd = '';
   let firstTs: number | null = null;
   let lastTs: number | null = null;
@@ -903,18 +906,15 @@ export function parseClaudeSessionFile(
     // `isSidechain`, which `claudeNonHumanKind` reads for other files.
     const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
+    if (!subagentFile && userTs && fileStart !== null && userTs < fileStart - 1000) request.copiedHistory = true;
     requests.push(request);
     i = assistantData.nextIndex;
   }
 
   if (requests.length === 0) return null;
 
-  // A fork (`--fork-session`) starts its transcript with the source's messages, copied with their own, older times.
-  const fileStart = lines.map(l => getTimestamp(l.timestamp)).find((ts): ts is number => !!ts) ?? null;
-  const copiesHistory = !subagentFile && firstTs !== null && fileStart !== null && firstTs < fileStart - 1000;
-
   const launcherKind = classifyLauncher(entrypoint);
-  const session = createSession({
+  return createSession({
     sessionId,
     workspaceId: wsId,
     workspaceName: wsName,
@@ -928,6 +928,4 @@ export function parseClaudeSessionFile(
     launcherKind,
     entrypoint,
   });
-  if (copiesHistory) session.copiesHistory = true;
-  return session;
 }

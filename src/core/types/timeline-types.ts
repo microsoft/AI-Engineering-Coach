@@ -64,10 +64,16 @@ export interface TimelineSessionRecord {
   copiedTurns?: number;
   /** Turns in range, in time order. */
   turns: TimelineTurn[];
+  /** Turns that started before the range: the last one, and any still running at its start. They give the waits and
+   *  agent work that cross into the range; only their part inside the range counts, and they aren't counted as turns. */
+  context?: TimelineTurn[];
 }
 
 export interface TimelineDataset {
   sessions: TimelineSessionRecord[];
   /** Sessions in range whose harness counted a fork without logging its source (Copilot `fork_count`). */
   forkedSessions: number;
+  /** The range (epoch ms, local midnights): its start, and the end of its last day. Absent for an open bound. */
+  from?: number;
+  to?: number;
 }

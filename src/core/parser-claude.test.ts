@@ -95,7 +95,7 @@ function withProjectsDir(filename: string, lines: object[], run: (projectsDir: s
 }
 
 describe('parseClaudeSessions', () => {
-  it('flags a fork, whose transcript starts with messages copied with their older times', () => {
+  it('flags the prompts a fork copied: older than the transcript’s first line', () => {
     withProjectsDir('fork.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:10:00Z', sessionId: 'fork-1' },
       makeUser('copied prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'fork-1' }),
@@ -103,14 +103,14 @@ describe('parseClaudeSessions', () => {
       makeUser('new prompt', '2025-06-15T10:10:01Z', { uuid: 'u2', sessionId: 'fork-1' }),
       makeAssistant('new answer', '2025-06-15T10:10:05Z'),
     ], (projectsDir) => {
-      expect(parseClaudeSessions(projectsDir)[0].sessions[0].copiesHistory).toBe(true);
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.copiedHistory)).toEqual([true, undefined]);
     });
     withProjectsDir('plain.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'plain-1' },
       makeUser('prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'plain-1' }),
       makeAssistant('answer', '2025-06-15T10:00:05Z'),
     ], (projectsDir) => {
-      expect(parseClaudeSessions(projectsDir)[0].sessions[0].copiesHistory).toBeUndefined();
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.copiedHistory)).toEqual([undefined]);
     });
   });
 

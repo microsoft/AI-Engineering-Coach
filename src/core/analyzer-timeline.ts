@@ -14,6 +14,7 @@ import { AnalyzerBase } from './analyzer-base';
 import { harnessLabel, scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
 import { localScrubContext } from './session-workspace-meta';
 import { resolveForkLinks, resolveParentLinks, type ForkLink, type ParentLink } from './timeline-links';
+import { addDays, dayStart } from './timeline-model';
 
 /** The sender marker a turn gets on the Timeline. */
 export function turnSender(kind: NonHumanKind | undefined): TurnSender {
@@ -62,20 +63,34 @@ export class TimelineAnalyzer extends AnalyzerBase {
   private forks?: Map<string, ForkLink>;
 
   /** Every session with a turn in range, with its turns as counts and timings, its family link, and its logged
-   *  name, branch and repository (never a path). No prompt or response text. */
+   *  name, branch and repository (never a path). No prompt or response text. Turns before the range that it needs for
+   *  the waits and work crossing into it come as `context`, with the range bounds, so every total can be clipped. */
   getTimelineData(f?: DateFilter, labels: ScrubContext = localScrubContext()): TimelineDataset {
     this.links ??= resolveParentLinks(this.sessions);
     this.forks ??= resolveForkLinks(this.sessions);
     const forks = this.forks;
-    const inRange = this.sessionsWithRequestsInRange(f)
+    const from = f?.fromDate ? dayStart(f.fromDate) : undefined;
+    const to = f?.toDate ? addDays(dayStart(f.toDate), 1) : undefined;
+    const end = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
+    const inRange = this.sessions
+      .filter(s => this.matchesWorkspaceFilter(s, f?.workspaceId) && (!f?.harness || s.harness === f.harness))
       .map(s => {
         const copied = forks.get(s.sessionId)?.copied;
-        return { s, requests: s.requests.filter(r => this.requestInRange(r, f) && !(r.userEventId && copied?.has(r.userEventId))).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0)) };
+        const own = s.requests
+          .filter(r => r.timestamp != null && r.timestamp > 0 && !(r.userEventId && copied?.has(r.userEventId)))
+          .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+        const before = from === undefined ? [] : own.filter(r => (r.timestamp ?? 0) < from);
+        return {
+          s,
+          copied: s.requests.filter(r => r.userEventId && copied?.has(r.userEventId)).length,
+          requests: own.filter(r => this.requestInRange(r, f)),
+          context: before.filter((r, i) => i === before.length - 1 || end(r) > (from ?? 0)),
+        };
       })
-      .filter(({ requests }) => requests.length > 0)
-      .sort((a, b) => (a.requests[0].timestamp ?? 0) - (b.requests[0].timestamp ?? 0) || a.s.sessionId.localeCompare(b.s.sessionId));
+      .filter(({ requests, context }) => requests.length > 0 || context.some(r => end(r) > (from ?? 0)))
+      .sort((a, b) => (a.requests[0]?.timestamp ?? from ?? 0) - (b.requests[0]?.timestamp ?? from ?? 0) || a.s.sessionId.localeCompare(b.s.sessionId));
     const index = new Map(inRange.map(({ s }, i) => [s.sessionId, i]));
-    const sessions: TimelineSessionRecord[] = inRange.map(({ s, requests }) => {
+    const sessions: TimelineSessionRecord[] = inRange.map(({ s, requests, context, copied }) => {
       const link = this.links?.get(s.sessionId);
       const parent = link ? index.get(link.parent) ?? -1 : -1;
       return {
@@ -84,14 +99,20 @@ export class TimelineAnalyzer extends AnalyzerBase {
         branch: s.branch ? scrubBranch(s.branch, labels) : '',
         repo: scrubRepository(s.repository || s.workspaceName || '', labels),
         harness: harnessLabel(s.harness),
-        model: mainModel(requests),
+        model: mainModel(requests.length ? requests : context),
         parent,
         via: parent >= 0 && link ? link.via : null,
-        ...forkFields(forks.get(s.sessionId), index, s.requests.length - s.requests.filter(r => !(r.userEventId && forks.get(s.sessionId)?.copied.has(r.userEventId))).length),
+        ...forkFields(forks.get(s.sessionId), index, copied),
         turns: requests.map(timelineTurn),
+        ...(context.length ? { context: context.map(timelineTurn) } : {}),
       };
     });
-    return { sessions, forkedSessions: inRange.filter(({ s }) => (s.forkCount ?? 0) > 0).length };
+    return {
+      sessions,
+      forkedSessions: inRange.filter(({ s }) => (s.forkCount ?? 0) > 0).length,
+      ...(from !== undefined ? { from } : {}),
+      ...(to !== undefined ? { to } : {}),
+    };
   }
 
   getSessions(page: number, pageSize: number, f?: DateFilter, search?: string): SessionList {

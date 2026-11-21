@@ -50,7 +50,9 @@ export interface PreparedSession extends TimelineSessionRecord {
   depth: number;
   /** Sessions it started directly. */
   children: number;
-  /** Every time it waited on you in the range, in order. */
+  /** Turns before the range it needs for waits and work crossing into it (never counted as turns). */
+  context: TimelineTurn[];
+  /** Every time it waited on you, in order (ones that started before the range included; windows clip them). */
   waits: TimelineWait[];
   /** Gaps of more than 2 h between the end of a turn and your next prompt: time away, not waiting. */
   away: Interval[];
@@ -72,6 +74,8 @@ export interface PreparedTimeline {
   totalCredits: number;
   harnesses: string[];
   forkedSessions: number;
+  /** The range: agent work and waits outside it never count. */
+  bounds: Interval;
 }
 
 /* ---- turns ---- */
@@ -127,8 +131,9 @@ export function sessionWaits(turns: readonly TimelineTurn[]): { waits: TimelineW
 /** Links each session to its family, finds its waits and counts turns and agent time per day. */
 export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
   const records = data.sessions;
+  const bounds: Interval = [data.from ?? -Infinity, data.to ?? Infinity];
   const sessions: PreparedSession[] = records.map((s, index) => ({
-    ...s, index, root: index, depth: 0, children: 0, ...sessionWaits(s.turns),
+    ...s, index, root: index, depth: 0, children: 0, context: s.context ?? [], ...sessionWaits([...(s.context ?? []), ...s.turns]),
   }));
   for (const s of sessions) {
     let at = s.index;
@@ -155,8 +160,10 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
       const totals = totalsOf(toDateStr(t.t));
       if (t.k === 'you') totals.typed++;
       else totals.automated++;
-      for (const [a, b] of workSegments(t)) forEachDay(a, b, (day, ms) => { totalsOf(day).agentMs += ms; });
       totalCredits += t.cr;
+    }
+    for (const t of [...s.context, ...s.turns]) {
+      for (const [a, b] of workSegments(t)) forEachDay(Math.max(a, bounds[0]), Math.min(b, bounds[1]), (day, ms) => { totalsOf(day).agentMs += ms; });
     }
   }
   return {
@@ -167,6 +174,7 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
     totalCredits,
     harnesses: [...new Set(sessions.map(s => s.harness))].sort(),
     forkedSessions: data.forkedSessions,
+    bounds,
   };
 }
 
@@ -275,12 +283,15 @@ export function clippedMs(w: TimelineWait, win: Interval): number {
   return overlap(w.start, w.end, win[0], win[1]);
 }
 
-/** One lane per session with a turn that started in [start, end) or ran into it. */
-export function buildLanes(p: PreparedTimeline, start: number, end: number): TimelineLane[] {
+/** One lane per session with a turn that started in [start, end) or ran into it. The window is clipped to the range. */
+export function buildLanes(p: PreparedTimeline, from: number, to: number): TimelineLane[] {
+  const start = Math.max(from, p.bounds[0]);
+  const end = Math.min(to, p.bounds[1]);
   const lanes: TimelineLane[] = [];
+  if (start >= end) return lanes;
   for (const s of p.sessions) {
     const turns = s.turns.filter(t => t.t >= start && t.t < end);
-    const carried = s.turns.filter(t => t.t < start && t.t + t.d > start);
+    const carried = [...s.context, ...s.turns].filter(t => t.t < start && t.t + t.d > start);
     if (turns.length === 0 && carried.length === 0) continue;
     const typed = turns.filter(t => t.k === 'you').length;
     const drawn = [...carried, ...turns];
@@ -367,7 +378,7 @@ export interface ViewFamily {
  *  input, through the agent work the lanes' sessions started before your next input, for as long as some of that work
  *  is running (pauses under 2 min don't end it). Over all their turns in the range, clipped to `win`. */
 export function unattendedMs(lanes: readonly TimelineLane[], win: Interval = [-Infinity, Infinity]): number {
-  const turns = lanes.flatMap(l => l.s.turns);
+  const turns = lanes.flatMap(l => [...l.s.context, ...l.s.turns]);
   const inputs = [...new Set([
     ...turns.filter(t => t.k === 'you').map(t => t.t),
     ...turns.flatMap(t => (t.w ?? []).map(w => w.e)),
@@ -553,7 +564,7 @@ export function createNamer(p: PreparedTimeline, masked: boolean): Namer {
     name: s => {
       if (masked) return `${s.parent < 0 ? 'Session' : 'Child session'} ${s.index + 1}`;
       if (s.name) return s.name;
-      const first = s.turns[0]?.t;
+      const first = s.turns[0]?.t ?? s.context[0]?.t;
       const when = first ? new Date(first).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
       return `Untitled ${s.harness} session${when ? ' · ' + when : ''}`;
     },
@@ -783,7 +794,12 @@ export interface FamiliesOverview {
   totals: FamiliesTotals;
 }
 
-function familyNode(s: PreparedSession, depth: number): FamilyNode {
+/** Agent time of a session inside the range: its turns, and the part of earlier turns that ran into the range. */
+function sessionAgentMs(s: PreparedSession, bounds: Interval): number {
+  return sum([...s.context, ...s.turns], t => workMs(t, bounds[0], bounds[1]));
+}
+
+function familyNode(s: PreparedSession, depth: number, bounds: Interval): FamilyNode {
   const typed = s.turns.filter(t => t.k === 'you').length;
   return {
     s,
@@ -791,7 +807,7 @@ function familyNode(s: PreparedSession, depth: number): FamilyNode {
     typed,
     automated: s.turns.length - typed,
     answered: sum(s.turns, answersOf),
-    agentMs: sum(s.turns, t => workMs(t)),
+    agentMs: sessionAgentMs(s, bounds),
     credits: sum(s.turns, t => t.cr),
     tokens: sum(s.turns, t => t.tok),
     first: s.turns[0]?.t ?? 0,
@@ -818,10 +834,10 @@ function groupBy<K>(sessions: readonly PreparedSession[], key: (s: PreparedSessi
 }
 
 /** The family's sessions in tree order: each session followed by its children, oldest first. */
-function familyNodes(root: PreparedSession, kidsOf: Map<number, PreparedSession[]>): FamilyNode[] {
+function familyNodes(root: PreparedSession, kidsOf: Map<number, PreparedSession[]>, bounds: Interval): FamilyNode[] {
   const nodes: FamilyNode[] = [];
   const walk = (s: PreparedSession, depth: number): void => {
-    nodes.push(familyNode(s, depth));
+    nodes.push(familyNode(s, depth, bounds));
     const kids = [...(kidsOf.get(s.index) ?? [])].sort((a, b) => (a.turns[0]?.t ?? 0) - (b.turns[0]?.t ?? 0));
     for (const kid of kids) walk(kid, depth + 1);
   };
@@ -835,8 +851,9 @@ function busiestDayOf(nodes: readonly FamilyNode[]): string {
   return [...days.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
 }
 
-function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSession[]>, totalCredits: number): FamilySummary {
-  const nodes = familyNodes(root, kidsOf);
+function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSession[]>, p: PreparedTimeline): FamilySummary {
+  const totalCredits = p.totalCredits;
+  const nodes = familyNodes(root, kidsOf, p.bounds);
   const kids = nodes.filter(n => n.depth > 0);
   const credits = sum(nodes, n => n.credits);
   const childCredits = sum(kids, n => n.credits);
@@ -878,7 +895,7 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
 function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): FamiliesTotals {
   const totalCredits = p.totalCredits;
   const totalTokens = sum(p.sessions, s => sum(s.turns, t => t.tok));
-  const totalAgent = sum(p.sessions, s => sum(s.turns, t => workMs(t)));
+  const totalAgent = sum(p.sessions, s => sessionAgentMs(s, p.bounds));
   const share = (part: number, whole: number) => (whole > 0 ? 100 * part / whole : 0);
   const group = (list: FamilySummary[]) => ({
     families: list.length,
@@ -917,7 +934,7 @@ export function buildFamilies(p: PreparedTimeline): FamiliesOverview {
   const kidsOf = groupBy(p.sessions, s => (s.parent >= 0 ? s.parent : null));
   const families = [...members.entries()]
     .filter(([, list]) => list.length > 1)
-    .map(([root]) => summarizeFamily(p.sessions[root], kidsOf, p.totalCredits))
+    .map(([root]) => summarizeFamily(p.sessions[root], kidsOf, p))
     .sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs || b.sessions - a.sessions);
   for (const [i, f] of families.entries()) f.rank = i + 1;
   return { families, totals: familiesTotals(p, families) };
