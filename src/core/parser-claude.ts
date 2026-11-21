@@ -201,9 +201,57 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
  */
 const CLAUDE_API_REQUEST_LINE = /"type"\s*:\s*"api-request/;
 
+const INLINE_DATA_KEY = '"data"';
+const MIN_INLINE_DATA_CHARS = 1024;
+
+function isJsonSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+}
+
+function isBase64Char(code: number): boolean {
+  return (code >= 0x41 && code <= 0x5a) // A-Z
+    || (code >= 0x61 && code <= 0x7a) // a-z
+    || (code >= 0x30 && code <= 0x39) // 0-9
+    || code === 0x2b || code === 0x2f || code === 0x3d; // + / =
+}
+
 /**
- * Streams a transcript's lines, leaving out raw API request records. Stops with a warning once the kept lines pass
- * MAX_FILE_SIZE, so a huge transcript is parsed up to that point instead of skipped whole.
+ * Blanks long base64 `data` values (inline images and documents): most of an image-heavy transcript, and nothing the
+ * analytics read (image counts come from the block type; image bytes are read from the file on demand). Only a value
+ * made entirely of base64 characters is blanked, so a value with escapes or other text is left as it is and the JSON
+ * stays valid. A scan, not a regex: on multi-MB values V8's regex engine overflows its stack.
+ */
+function stripInlineData(line: string): string {
+  if (!line.includes('"base64"')) return line;
+  let out = '';
+  let copied = 0;
+  let at = line.indexOf(INLINE_DATA_KEY);
+  while (at >= 0) {
+    // Outside strings only: inside a JSON string every quote is escaped, so `"data"` cannot occur there.
+    let i = at + INLINE_DATA_KEY.length;
+    while (isJsonSpace(line.charCodeAt(i))) i++;
+    if (line.charCodeAt(i) === 0x3a /* : */) {
+      i++;
+      while (isJsonSpace(line.charCodeAt(i))) i++;
+      if (line.charCodeAt(i) === 0x22 /* " */) {
+        const start = i + 1;
+        let end = start;
+        while (isBase64Char(line.charCodeAt(end))) end++;
+        if (end - start >= MIN_INLINE_DATA_CHARS && line.charCodeAt(end) === 0x22) {
+          out += line.slice(copied, start);
+          copied = end;
+        }
+        i = end;
+      }
+    }
+    at = line.indexOf(INLINE_DATA_KEY, i);
+  }
+  return copied === 0 ? line : out + line.slice(copied);
+}
+
+/**
+ * Streams a transcript's lines, leaving out raw API request records and inline base64 data. Stops with a warning once
+ * the kept lines pass MAX_FILE_SIZE, so a huge transcript is parsed up to that point instead of skipped whole.
  */
 function readClaudeLines(filePath: string): ClaudeLine[] {
   const lines: ClaudeLine[] = [];
@@ -211,12 +259,13 @@ function readClaudeLines(filePath: string): ClaudeLine[] {
   let truncated = false;
   forEachJsonlLine(filePath, rawLine => {
     if (!rawLine.trim() || CLAUDE_API_REQUEST_LINE.test(rawLine)) return;
-    keptBytes += rawLine.length;
+    const line = stripInlineData(rawLine);
+    keptBytes += line.length;
     if (keptBytes > MAX_FILE_SIZE) {
       truncated = true;
       return;
     }
-    const parsed = parseClaudeLine(rawLine);
+    const parsed = parseClaudeLine(line);
     if (parsed && !parsed.type.startsWith('api-request')) lines.push(parsed);
   }, () => truncated);
   if (truncated) warnCore('parser-claude', `Transcript over ${MAX_FILE_SIZE / 1024 / 1024} MB without API requests; parsed up to there: ${filePath}`);
