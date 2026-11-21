@@ -928,10 +928,15 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
       ],
     }, projectsDir => {
       const sources = new Map<string, SessionSource>();
-      parseClaudeSessions(projectsDir, undefined, sources);
-      const reloaded = (sessionId: string) => loadSourceSession(sources.get(sessionId)!, sessionId)?.requests.map(request => request.userEventId);
-      expect(reloaded('fork')).toEqual(['u2']);
-      expect(reloaded('original')).toEqual(['u1']);
+      const parsed = parseClaudeSessions(projectsDir, undefined, sources).flatMap(result => result.sessions);
+      const reloaded = (sessionId: string) => loadSourceSession(sources.get(sessionId)!, sessionId);
+      expect(reloaded('fork')?.requests.map(request => request.userEventId)).toEqual(['u2']);
+      expect(reloaded('original')?.requests.map(request => request.userEventId)).toEqual(['u1']);
+      // Each is dated from its own first turn, not from the turn the fork replays.
+      for (const [sessionId, start] of [['fork', '2025-06-15T11:00:01Z'], ['original', '2025-06-15T10:00:00Z']]) {
+        expect(parsed.find(session => session.sessionId === sessionId)?.creationDate).toBe(Date.parse(start));
+        expect(reloaded(sessionId)?.creationDate).toBe(Date.parse(start));
+      }
     });
   });
 });

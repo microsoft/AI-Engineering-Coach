@@ -7,7 +7,7 @@ import * as path from 'path';
 import type { SessionSource } from './cache';
 import type { Session } from './types';
 import { extractCLIImageReferences, parseCLIEventsFile } from './parser-vscode-cli';
-import { extractClaudeImageReferences, isClaudeSubagentFile, parseClaudeSessionFile } from './parser-claude';
+import { earliestRequestTime, extractClaudeImageReferences, isClaudeSubagentFile, parseClaudeSessionFile } from './parser-claude';
 import { extractCodexImageReferences, parseCodexSessionFile } from './parser-codex';
 import { loadOpenCodeSession, readOpenCodeImageReferences } from './parser-opencode';
 import { loadXcodeSession, readXcodeImageReferences } from './parser-xcode';
@@ -47,7 +47,9 @@ export function loadSourceSession(source: SessionSource, sessionId: string): Ses
       const requests = sessions.flatMap(session => session.requests)
         .filter(request => !request.userEventId || !dropped.has(request.userEventId))
         .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
-      const creationDates = sessions.map(session => session.creationDate).filter((date): date is number => date !== null);
+      // A session that lost replayed turns is dated from the turns it kept, as the parser dates it.
+      const creationDates = (dropped.size > 0 ? [earliestRequestTime(requests)] : sessions.map(session => session.creationDate))
+        .filter((date): date is number => date !== null);
       return {
         ...sessions[0],
         sessionId,

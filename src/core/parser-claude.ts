@@ -819,7 +819,17 @@ function transcriptStart(filePath: string): number {
   return Number.isFinite(start) ? start : Number.POSITIVE_INFINITY;
 }
 
-/** Leaves out the requests whose user line was already counted, records the rest, and returns the ids left out. */
+/** The earliest timestamp among the requests. */
+export function earliestRequestTime(requests: readonly SessionRequest[]): number | null {
+  let earliest: number | null = null;
+  for (const { timestamp } of requests) {
+    if (timestamp && (earliest === null || timestamp < earliest)) earliest = timestamp;
+  }
+  return earliest;
+}
+
+/** Leaves out the requests whose user line was already counted, records the rest, and returns the ids left out. A
+ *  session that loses turns is dated from its earliest kept turn, as `parseClaudeSessionFile` dates every session. */
 function dropSeenTurns(session: Session, seenTurns: Set<string>): string[] {
   const dropped: string[] = [];
   session.requests = session.requests.filter(request => {
@@ -831,6 +841,7 @@ function dropSeenTurns(session: Session, seenTurns: Set<string>): string[] {
     seenTurns.add(request.userEventId);
     return true;
   });
+  if (dropped.length > 0) session.creationDate = earliestRequestTime(session.requests) ?? session.creationDate;
   return dropped;
 }
 
