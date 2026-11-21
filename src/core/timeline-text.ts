@@ -48,7 +48,7 @@ function waitText(w: UserWait, labels: ScrubContext): TimelineTextWait {
     out.before = v;
     cut ||= c;
   }
-  if (text.tool) out.tool = text.tool;
+  if (text.tool) out.tool = cutHead(scrubText(text.tool, labels), 40)[0];
   if (text.choices?.length) out.choices = text.choices.slice(0, 20).map(c => cutHead(scrubText(c, labels), 300)[0]);
   if (cut) out.cut = true;
   return out;

@@ -448,7 +448,10 @@ function closeUserWait(state: CLIParseState, key: string, end: number | null, an
   state.openWaits.delete(key);
   if (end === null || end < open.start || automatic) return;
   const answeredAt = state.humanResponses.get(key);
-  const text = { ...open.text, ...result, ...(state.humanAnswers.has(key) && !result.answer ? { answer: state.humanAnswers.get(key) } : {}) };
+  // A recorded answer belongs to this question alone: a later one that reuses its ID doesn't get it.
+  const recorded = state.humanAnswers.get(key);
+  state.humanAnswers.delete(key);
+  const text = { ...open.text, ...result, ...(recorded !== undefined && !result.answer ? { answer: recorded } : {}) };
   const wait: UserWait = {
     start: open.start, end, kind: open.kind, answered: answered || state.humanResponses.has(key), ...(answeredAt != null ? { answeredAt } : {}),
     ...waitRequestId(state, key, open), ...(Object.keys(text).length ? { text } : {}),
@@ -464,13 +467,15 @@ function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState
     if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
     const requestId = key === str(data.toolCallId) ? str(data.requestId) : '';
     if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
-    if (answer) state.humanAnswers.set(key, answer);
+    // The answer text goes to the question still open, else to the one it closed; it is kept only until that closes.
+    const open = state.openWaits.has(key);
+    if (answer && (open || !state.closedWaits.has(key))) state.humanAnswers.set(key, answer);
     const wait = state.closedWaits.get(key);
     if (wait) {
       wait.answered = true;
       if (wait.answeredAt === undefined && at !== null) wait.answeredAt = at;
       if (requestId && wait.kind === 'question') wait.requestId ??= requestId;
-      if (answer && !wait.text?.answer) wait.text = { ...wait.text, answer };
+      if (answer && !open && !wait.text?.answer) wait.text = { ...wait.text, answer };
     }
   }
 }

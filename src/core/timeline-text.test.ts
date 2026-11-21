@@ -72,6 +72,17 @@ describe('timelineSessionText', () => {
     expect(text.waits.map(w => [w.s, w.e, w.at, w.answer, 'rid' in w])).toEqual([[Date.parse(at(2)), Date.parse(at(9)), Date.parse(at(4)), 'yes', false]]);
   });
 
+  it('scrubs and cuts the kind of a permission request, as the log can hold any text there', () => {
+    const text = timelineSessionText(parse([
+      { type: 'user.message', timestamp: at(0), data: { content: 'Go' } },
+      { type: 'permission.requested', timestamp: at(1), data: { requestId: 'p1', permissionRequest: { kind: `custom jdoe ${'x'.repeat(100)}`, path: 'a.ts' } } },
+      { type: 'permission.completed', timestamp: at(2), data: { requestId: 'p1', decisionSource: 'human_response', result: { kind: 'approved' } } },
+      { type: 'assistant.message', timestamp: at(3), data: { content: 'ok' } },
+    ]), labels);
+    expect(text.waits[0].tool).toMatch(/^custom \[name\] x+ …$/);
+    expect(text.waits[0].tool!.length).toBeLessThanOrEqual(42);
+  });
+
 });
 
 describe('timelineSessionText replies and turns', () => {
