@@ -14,6 +14,7 @@ import { execSync } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import { parseClaudeSessions } from './parser-claude';
+import { withInheritedTurnsRemoved } from './fork-ownership';
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -152,6 +153,30 @@ describe('parseClaudeSessions', () => {
     ], (projectsDir) => {
       expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.loggedLive)).toEqual([true, undefined]);
     });
+  });
+
+  it('keeps a fork’s queue record with its own new prompt, so the copied turn before it stays a copy', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fork-boundary-'));
+    try {
+      const projDir = path.join(root, 'projects', '-Users-me-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const line = (o: object, sessionId: string) => JSON.stringify({ ...o, sessionId });
+      const queue = (ts: string) => ({ type: 'queue-operation', timestamp: ts, operation: 'enqueue' });
+      const shared = [makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }), makeAssistant('one', '2025-06-15T10:00:05Z')];
+      // The source logged its turns live, and went on later.
+      fs.writeFileSync(path.join(projDir, 'src.jsonl'), [queue('2025-06-15T10:00:00Z'), shared[0], { type: 'api-request', timestamp: '2025-06-15T10:00:01Z' }, shared[1],
+        queue('2025-06-15T10:30:00Z'), makeUser('later', '2025-06-15T10:30:00Z', { uuid: 'u3' }), { type: 'api-request', timestamp: '2025-06-15T10:30:01Z' }, makeAssistant('three', '2025-06-15T10:30:05Z')]
+        .map(o => line(o, 'src')).join('\n'));
+      // The fork lost its opening records: its copies, then its own queued prompt.
+      fs.writeFileSync(path.join(projDir, 'fork.jsonl'), [...shared, queue('2025-06-15T10:20:00Z'), makeUser('mine', '2025-06-15T10:20:00Z', { uuid: 'u2' }),
+        { type: 'api-request', timestamp: '2025-06-15T10:20:01Z' }, makeAssistant('two', '2025-06-15T10:20:05Z')].map(o => line(o, 'fork')).join('\n'));
+      const sessions = parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions);
+      expect(sessions.find(s => s.sessionId === 'fork')?.requests.map(r => r.loggedLive)).toEqual([undefined, true]);
+      const fork = withInheritedTurnsRemoved(sessions).find(s => s.sessionId === 'fork');
+      expect([fork?.requests.map(r => r.messageText), fork?.forkedFromId]).toEqual([['mine'], 'src']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps an unanswered AskUserQuestion until the next line, and pairs an answer that comes after your next prompt', () => {

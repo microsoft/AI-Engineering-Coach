@@ -892,9 +892,16 @@ function buildClaudeRequest(
 }
 
 /** Parse one transcript file. `subagentFile`: the file is a sub-agent's transcript (see `isClaudeSubagentFile`). */
-/** Records Claude Code writes beside a turn as it runs. A fork (`--fork-session`) copies the conversation lines of
- *  its source, not these, so a turn with them was logged live, where it happened. */
-const LIVE_RECORDS = new Set(['queue-operation', 'api-request', 'last-prompt', 'cost-state']);
+/** Records Claude Code writes beside a turn as it runs; a fork (`--fork-session`) copies the conversation lines of its
+ *  source, not these. A prompt's queue record comes just before it; its API request, last-prompt and cost records after. */
+const TURN_RECORDS = new Set(['api-request', 'last-prompt', 'cost-state']);
+const CONVERSATION = new Set(['user', 'assistant', 'attachment']);
+
+/** The prompt at `i` (its turn ending at `next`) was logged live: queued just before it, or with its own turn records. */
+function claudeLoggedLive(lines: ClaudeLine[], i: number, next: number): boolean {
+  for (let j = i - 1; j >= 0 && !CONVERSATION.has(lines[j].type); j--) if (lines[j].type === 'queue-operation') return true;
+  return lines.slice(i + 1, next).some(l => TURN_RECORDS.has(l.type));
+}
 
 export function parseClaudeSessionFile(
   filePath: string,
@@ -952,7 +959,7 @@ export function parseClaudeSessionFile(
     const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
     if (!subagentFile && userTs && fileStart !== null && userTs < fileStart) request.historyLeadMs = fileStart - userTs;
-    if (lines.slice(i + 1, assistantData.nextIndex).some(l => LIVE_RECORDS.has(l.type))) request.loggedLive = true;
+    if (claudeLoggedLive(lines, i, assistantData.nextIndex)) request.loggedLive = true;
     requests.push(request);
     i = assistantData.nextIndex;
   }
