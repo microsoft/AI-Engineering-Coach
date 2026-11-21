@@ -427,10 +427,10 @@ export async function callLlmJson<T>(messages: vscode.LanguageModelChatMessage[]
     } catch (err) {
       lastError = err;
       const schemaName = jsonSchema?.name ?? 'none';
-      const rawSnippet = text ? text.slice(0, 300) : '(empty)';
+      const shape = !text ? 'empty' : /^\s*```/.test(text) ? 'fenced' : /^\s*[[{]/.test(text) ? 'json-like' : 'text';
       runtimeDebug('panel-llm', 'call-failed',
         `schema=${schemaName} attempt=${attempt + 1} structured=${options.modelOptions !== undefined} ` +
-        `model=${model.id} textLen=${text.length} error=${err instanceof Error ? err.message : String(err)} raw=${rawSnippet}`);
+        `model=${model.id} textLen=${text.length} shape=${shape} error=${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof vscode.CancellationError) { cts.dispose(); throw err; }
       // Drop structured output so later attempts can recover in plain mode. Models can reject
       // response_format with generic errors that don't match any particular message pattern, so

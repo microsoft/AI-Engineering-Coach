@@ -85,4 +85,39 @@ describe('callLlmJson structured-output fallback', () => {
     expect(result).toEqual({ ok: true });
     expect(sendRequestMock).toHaveBeenCalledTimes(2);
   });
+
+  it('adds the JSON-only nudge exactly once when replies cannot be parsed', async () => {
+    const { callLlmJson } = await import('./panel-llm');
+    const sent: unknown[][] = [];
+    sendRequestMock.mockImplementation(async (messages: unknown[]) => {
+      sent.push([...messages]);
+      return textStream(['not json at all']);
+    });
+
+    const vscode = await import('vscode');
+    await expect(
+      callLlmJson([vscode.LanguageModelChatMessage.User('hi')] as never)
+    ).rejects.toThrow();
+
+    expect(sent.length).toBeGreaterThan(2);
+    const nudges = (msgs: unknown[]) =>
+      (msgs as { content: { value: string }[] }[]).filter(m =>
+        m.content.some(c => c.value.includes('respond ONLY with a valid JSON'))
+      ).length;
+    expect(nudges(sent[0])).toBe(0);
+    for (const msgs of sent.slice(1)) expect(nudges(msgs)).toBe(1);
+  });
+
+  it('rethrows a CancellationError without another attempt', async () => {
+    const { callLlmJson } = await import('./panel-llm');
+    const vscode = await import('vscode');
+    sendRequestMock.mockImplementation(async () => {
+      throw new vscode.CancellationError();
+    });
+
+    await expect(
+      callLlmJson([vscode.LanguageModelChatMessage.User('hi')] as never)
+    ).rejects.toBeInstanceOf(vscode.CancellationError);
+    expect(sendRequestMock).toHaveBeenCalledTimes(1);
+  });
 });
