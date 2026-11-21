@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { Analyzer } from './analyzer';
-import { withInheritedTurnsRemoved } from './fork-ownership';
+import { withAnalyzedTurns, withInheritedTurnsRemoved } from './fork-ownership';
 import { buildSummaryExportFromAnalyzer } from './summary-export';
 import type { Session, SessionRequest } from './types/session-types';
 
@@ -62,5 +62,14 @@ describe('withInheritedTurnsRemoved', () => {
     const autonomy = report.autonomy;
     expect(report.totals.requests).toBe(3);
     expect((autonomy?.typedTurns ?? 0) + (autonomy?.automatedTurns ?? 0)).toBe(3);
+  });
+
+  it('keeps a fork’s detail view, read again from disk, to the turns the analysis kept', () => {
+    const full = session('fork', [request(0, 'm1', 500), request(20, 'm3')]);
+    const [, analyzed] = withInheritedTurnsRemoved([session('src', [request(0, 'm1')]), full]);
+    const detail = withAnalyzedTurns(full, analyzed);
+    expect([detail.requests.map(r => r.requestId), detail.requestCount, detail.inheritedTurns, detail.forkedFromId]).toEqual([['m3'], 1, 1, 'src']);
+    const plain = session('plain', [request(0, 'x')]);
+    expect(withAnalyzedTurns(plain, plain)).toBe(plain);
   });
 });

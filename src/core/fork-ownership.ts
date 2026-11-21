@@ -52,3 +52,16 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
     };
   });
 }
+
+/** A session re-read in full (for its detail view) with the same turns the analysis kept: a fork's copied turns stay
+ *  counted once, in their source. `analyzed` is the session as the analyzer holds it. */
+export function withAnalyzedTurns(full: Session, analyzed: Session | null): Session {
+  if (!analyzed?.inheritedTurns) return full;
+  const kept = new Set(analyzed.requests.map(r => r.requestId));
+  const requests = full.requests.filter(r => kept.has(r.requestId));
+  return {
+    ...full, requests, requestCount: requests.length, inheritedTurns: analyzed.inheritedTurns,
+    ...(analyzed.forkedFromId ? { forkedFromId: analyzed.forkedFromId } : {}),
+    ...(analyzed.creationDate != null ? { creationDate: analyzed.creationDate } : {}),
+  };
+}

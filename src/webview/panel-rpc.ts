@@ -8,6 +8,7 @@
 import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
 import { loadSessionFromDisk } from '../core/cache';
+import { withAnalyzedTurns } from '../core/fork-ownership';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
 import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
@@ -774,7 +775,8 @@ const rpcHandlers: TypedRpcHandlers = {
     // In-memory sessions have text stripped for memory efficiency.
     // Try loading full session from disk cache for the detail view.
     const fromDisk = await loadSessionFromDisk(sessionId);
-    if (fromDisk) return fromDisk;
+    // A fork's copied turns count once, in their source, here as on every other view.
+    if (fromDisk) return withAnalyzedTurns(fromDisk, a.getSessionDetail(sessionId));
     // Fall back to in-memory (stripped) session.
     return a.getSessionDetail(sessionId);
   },

@@ -19,6 +19,7 @@ describe('session labels', () => {
     expect(scrubLabel('Review octo-dev/shop, as Dev asked me', ctx)).toBe('Review shop, as asked me');
     expect(scrubLabel('Notes in ~/x', { home: '/home/dev', names: [] })).toBe('Notes in ~/x');
     expect(scrubLabel('Read /home/dev/notes.md', { home: '/home/dev', names: [] })).toBe('Read ~/notes.md');
+    expect(scrubLabel('Logs in /mnt/c/Users/someone/repo and /workspaces/shop, run /fork', { names: [] })).toBe('Logs in [path] and [path], run /fork');
     expect(scrubLabel('x'.repeat(120), ctx)).toHaveLength(90);
     // A path with spaces goes whole: quoted, or as long as the following words still carry a separator.
     expect(scrubLabel('See "C:\\Program Files\\My App\\log.txt" now', ctx)).toBe('See [path] now');

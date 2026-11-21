@@ -65,7 +65,9 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME): st
     const variants = new Set([home, home.replaceAll('\\', '/'), home.replaceAll('/', '\\')]);
     for (const variant of variants) out = out.replace(new RegExp(escapeRegExp(variant), 'gi'), '~');
   }
-  out = out.replaceAll(/(^|[\s("'`])\/(?:Users|home)\/[^\s,;)"'`]*/g, '$1[path]');
+  // Any absolute path of two or more segments (`/mnt/c/Users/…`, `/workspaces/…`); a single `/word`, such as a slash
+  // command, stays.
+  out = out.replaceAll(/(^|[\s("'`])\/[^\s/,;)"'`]+\/[^\s,;)"'`]*/g, '$1[path]');
   out = tidy(removeNames(out, usableNames(ctx.names)));
   return out.length > max ? out.slice(0, max - 1).trimEnd() + '…' : out;
 }
