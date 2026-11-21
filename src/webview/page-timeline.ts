@@ -132,7 +132,7 @@ function busiestDay(s: PreparedSession): string {
   for (const t of s.turns) counts.set(toDateStr(t.t), (counts.get(toDateStr(t.t)) ?? 0) + 1);
   const bounds = loaded?.prepared.bounds ?? [-Infinity, Infinity];
   const first = [...clipIntervals(s.work, bounds), ...clipIntervals(s.waiting, bounds)].map(([a]) => a)
-    .concat(s.answers.map(x => x.at).filter(t => t >= bounds[0] && t < bounds[1])).sort((a, b) => a - b)[0];
+    .concat(s.answers.filter(x => x.counted).map(x => x.at).filter(t => t >= bounds[0] && t < bounds[1])).sort((a, b) => a - b)[0];
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
     ?? (first !== undefined ? toDateStr(first) : state.date);
 }
@@ -142,7 +142,7 @@ function activeIn(s: PreparedSession, win: Interval): boolean {
   if (s.ctx) return false;
   const [a, b] = win;
   return s.turns.some(t => t.t >= a && t.t < b) || clipIntervals(s.work, win).length > 0
-    || s.waits.some(w => w.start < b && w.end > a) || s.answers.some(x => x.at >= a && x.at < b);
+    || s.waits.some(w => w.start < b && w.end > a) || s.answers.some(x => x.counted && x.at >= a && x.at < b);
 }
 
 function draw(): void {
@@ -519,9 +519,10 @@ function parentNote(ctx: ViewContext, l: TimelineLane): string | null {
 /** `fork of “X”` for a session forked from another (Codex, Claude Code). */
 function forkNote(ctx: ViewContext, s: PreparedSession): string | null {
   if (s.fork === undefined) return null;
-  const where = s.forkSource === 'missing' ? 'left out' : 'counted in the source';
+  const where = s.forkSource === 'missing' ? 'left out' : s.forkSource === 'ambiguous' ? 'counted in the sessions that hold them' : 'counted in the source';
   const copied = s.inheritedTurns ? ` · ${formatCount(s.inheritedTurns)} copied ${s.inheritedTurns === 1 ? 'turn' : 'turns'} ${where}` : '';
   if (s.fork >= 0) return `fork of “${ctx.namer.name(ctx.p.sessions[s.fork])}”${copied}`;
+  if (s.forkSource === 'ambiguous') return `fork: its source can't be told from these logs, as several sessions hold its copied history` + copied;
   return (s.forkSource === 'missing' ? 'fork of a session not in these logs' : 'fork of a session outside this range') + copied;
 }
 function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {

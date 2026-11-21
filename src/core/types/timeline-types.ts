@@ -45,6 +45,9 @@ export interface TimelineTurnWait {
   at?: number;
   /** The request it answered (see `UserWait.requestId`): pairs a relay with the child's own answer. */
   rid?: string;
+  /** Relays only: paired over the whole log with a child's own record of the same answer (counted there, so this is no
+   *  answer, input or activity of the relaying session). Absent when the pairing is left to the model. */
+  pr?: boolean;
 }
 
 /** How a child session's parent was found: a `create_session`-style tool result (`create`), the relayed first message
@@ -71,9 +74,10 @@ export interface TimelineSessionRecord {
    *  Not when the child began, which its own log records later. Absent when no such call logged it. */
   created?: number;
   /** The session is a fork (Codex, Claude Code): the index of its source in the dataset, or -1 when the source has no
-   *  activity in range. `forkSource`: whether the source is in these logs. Not a family link. */
+   *  activity in range. `forkSource`: whether the source is in these logs (`ambiguous`: several loaded sessions hold
+   *  its copied history equally, so which one it came from can't be told). Not a family link. */
   fork?: number;
-  forkSource?: 'loaded' | 'missing';
+  forkSource?: 'loaded' | 'missing' | 'ambiguous';
   /** Turns the fork copied from its source. They count once, in the source, so they aren't in `turns`. */
   inheritedTurns?: number;
   /** Turns in range, in time order. */

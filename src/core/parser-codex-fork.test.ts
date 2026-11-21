@@ -108,33 +108,38 @@ const inherited = 159_309;
 const calls = [[12_824, 12_881, 13_636], [13_614]];
 const use = (total: number) => ({ input_tokens: total - 100, output_tokens: 100, total_tokens: total });
 const ts = (s: number) => `2025-06-15T09:${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}Z`;
-function nativeLines(keep: (turn: number, call: number) => { record: boolean; snapshot: boolean }) {
+type Keep = (turn: number, call: number) => { record: boolean; snapshot: boolean; counters?: boolean };
+function nativeLines(keep: Keep, plan: number[][] = calls) {
   const out: object[] = [{ type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } }];
-  let thread = inherited;
+  // Running totals, field by field: each call adds its input and 100 output tokens.
+  const sum = (a: { input_tokens: number; output_tokens: number }, total: number) =>
+    ({ input_tokens: a.input_tokens + total - 100, output_tokens: a.output_tokens + 100, total_tokens: a.input_tokens + a.output_tokens + total });
+  let thread = use(inherited);
   let s = 0;
-  for (const [i, turn] of calls.entries()) {
+  for (const [i, turn] of plan.entries()) {
     out.push({ type: 'event_msg', timestamp: ts(s++), payload: { type: 'task_started', turn_id: `t${i}` } },
       { type: 'event_msg', timestamp: ts(s++), payload: { type: 'user_message', message: `Step ${i + 1}.` } });
-    let inTurn = 0;
+    let inTurn = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
     for (const [j, call] of turn.entries()) {
-      thread += call;
-      inTurn += call;
-      const { record, snapshot } = keep(i, j);
+      thread = sum(thread, call);
+      inTurn = sum(inTurn, call);
+      const { record, snapshot, counters = true } = keep(i, j);
       if (record) {
         out.push({ type: 'token_usage_record', timestamp: ts(s++), payload: {
-          thread_id: 'fork', turn_id: `t${i}`, response_id: `r${i}-${j}`, usage: use(call), turn_token_usage: use(inTurn), thread_token_usage: use(thread),
+          thread_id: 'fork', turn_id: `t${i}`, response_id: `r${i}-${j}`, usage: use(call),
+          ...(counters ? { turn_token_usage: inTurn, thread_token_usage: thread } : {}),
         } });
       }
-      if (snapshot) out.push({ type: 'event_msg', timestamp: ts(s++), payload: { type: 'token_count', info: { total_token_usage: use(thread), last_token_usage: use(call) } } });
+      if (snapshot) out.push({ type: 'event_msg', timestamp: ts(s++), payload: { type: 'token_count', info: { total_token_usage: thread, last_token_usage: use(call) } } });
     }
     out.push({ type: 'event_msg', timestamp: ts(s++), payload: { type: 'agent_message', message: 'Done.' } },
       { type: 'event_msg', timestamp: ts(s++), payload: { type: 'task_complete', turn_id: `t${i}` } });
   }
   return out;
 }
-function nativeTotals(keep: (turn: number, call: number) => { record: boolean; snapshot: boolean }) {
+function nativeTotals(keep: Keep, plan: number[][] = calls) {
   let out: { turns: number[]; session: number; coverage: number } = { turns: [], session: 0, coverage: 0 };
-  withCodexFile(nativeLines(keep), (dir) => {
+  withCodexFile(nativeLines(keep, plan), (dir) => {
     const sessions = parseCodexSessions(dir);
     const usages = Object.values(sessions[0].modelUsage ?? {});
     const coverage = new Analyzer(sessions, new Map()).getTokenCoverage();
@@ -159,5 +164,22 @@ describe('Codex fork usage from native turn and thread counters (E5)', () => {
 
   it('does not reuse another turn’s last call as a snapshot’s own when a turn logged no snapshot', () => {
     expect(nativeTotals(i => ({ record: i === 0, snapshot: i === 1 }))).toEqual(nativeTruth);
+  });
+});
+
+describe('Codex fork usage when counters are partial or a tail is missing (G3, G4)', () => {
+  // Three turns; the middle one makes five calls (65,955 tokens).
+  const plan = [[13_614], [12_824, 12_881, 13_636, 13_705, 12_909], [13_602]];
+  const truth = { turns: [13_614, 65_955, 13_602], session: 93_171, coverage: 93_171 };
+
+  it('lets the middle turn’s known responses win over a partial running counter', () => {
+    // Every response logged, but only the middle turn's first record carries the turn and thread counters.
+    expect(nativeTotals((i, j) => ({ record: true, snapshot: false, counters: i !== 1 || j === 0 }), plan)).toEqual(truth);
+    // No anchor (the first turn's record carries no counters), with snapshots.
+    expect(nativeTotals((i, j) => ({ record: true, snapshot: true, counters: i !== 0 && (i !== 1 || j === 0) }), plan)).toEqual(truth);
+  });
+
+  it('keeps a missing tail with its own turn, by where the next turn began, not with the next turn', () => {
+    expect(nativeTotals((i, j) => ({ record: !(i === 1 && j === 4), snapshot: !(i === 1 && j === 4) }), plan)).toEqual(truth);
   });
 });

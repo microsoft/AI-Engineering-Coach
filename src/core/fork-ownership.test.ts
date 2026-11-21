@@ -105,6 +105,20 @@ describe('withInheritedTurnsRemoved with sub-agent turns', () => {
     }
   });
 
+  it('keeps a sub-agent turn with its own transcript when two sources tie, whatever the order, and says the source is unknown (G5, G6)', () => {
+    const shared = () => [live(request(0, 'm1')), live(request(5, 'm2')), live(request(9, 'm3'))];
+    const sub = { ...request(7, 'sub-late'), nonHumanKind: 'subagent' as const };
+    const a = session('a', [...shared(), { ...sub }, live(request(30, 'ma'))]);
+    const b = session('b', [...shared(), live(request(31, 'mb'))]);
+    const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), { ...sub }, live(request(20, 'm4'))]);
+    const seen = [[a, b, fork], [b, a, fork], [fork, a, b], [fork, b, a]].map(order => {
+      const out = withInheritedTurnsRemoved(order);
+      const f = out.find(x => x.sessionId === 'fork');
+      return [f?.requests.map(r => r.userEventId), f?.inheritedTurns, f?.forkSourceAmbiguous, out.reduce((n, x) => n + x.requests.length, 0)];
+    });
+    for (const s of seen) expect(s).toEqual([['sub-late', 'm4'], 3, true, 11]);
+  });
+
   it('counts a copied sub-agent turn logged after the last shared prompt once, in the source', () => {
     // The shared prompt at 10:05 launched a sub-agent that ran at 10:07; the fork's own first prompt came at 10:20.
     const late = { ...request(7, 'sub-late'), nonHumanKind: 'subagent' as const };

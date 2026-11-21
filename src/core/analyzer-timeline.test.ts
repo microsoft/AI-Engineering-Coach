@@ -125,10 +125,13 @@ describe('TimelineAnalyzer', () => {
       const src = makeSession({ sessionId: 'src', harness: 'Codex', requests: [makeRequest({ timestamp: at(9) })] });
       const fork = makeSession({ sessionId: 'fork', harness: 'Codex', forkedFromId: 'src', inheritedTurns: 1, requests: [makeRequest({ timestamp: at(11) })] });
       const orphan = makeSession({ sessionId: 'orphan', harness: 'Codex', forkedFromId: 'gone', requests: [makeRequest({ timestamp: at(12) })] });
-      const data = createAnalyzer([src, fork, orphan]).getTimelineData(undefined, ctx);
+      const tied = makeSession({ sessionId: 'tied', harness: 'Claude', forkSourceAmbiguous: true, inheritedTurns: 2, requests: [makeRequest({ timestamp: at(13) })] });
+      const data = createAnalyzer([src, fork, orphan, tied]).getTimelineData(undefined, ctx);
       const byId = new Map(data.sessions.map(s => [s.id, s]));
       expect(byId.get('fork')).toMatchObject({ fork: data.sessions.indexOf(byId.get('src')!), forkSource: 'loaded', inheritedTurns: 1, parent: -1 });
       expect(byId.get('orphan')).toMatchObject({ fork: -1, forkSource: 'missing' });
+      // Several loaded sessions hold its copied history equally: not "missing" (G6).
+      expect(byId.get('tied')).toMatchObject({ fork: -1, forkSource: 'ambiguous', inheritedTurns: 2 });
       expect(byId.get('src')?.fork).toBeUndefined();
     });
 

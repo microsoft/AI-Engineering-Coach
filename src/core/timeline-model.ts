@@ -61,6 +61,8 @@ export interface TimelineAnswer {
   counted: boolean;
   /** The request it answered, when logged (see `TimelineTurnWait.rid`). */
   rid?: string;
+  /** A relay whose pairing was worked out over the whole log (`TimelineTurnWait.pr`): never paired again here. */
+  settled?: boolean;
 }
 
 export interface PreparedSession extends TimelineSessionRecord {
@@ -243,7 +245,7 @@ function descendsFrom(d: PreparedSession, s: PreparedSession, sessions: readonly
  *  request ID the pair is found by family, kind and time, never by time alone. */
 function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
   const claimed = new Set<TimelineAnswer>();
-  const relays = sessions.flatMap(s => s.answers.filter(x => x.kind === 'relay').map(a => ({ s, a })));
+  const relays = sessions.flatMap(s => s.answers.filter(x => x.kind === 'relay' && !x.settled).map(a => ({ s, a })));
   const candidates = (s: PreparedSession) => sessions.filter(d => d !== s && d.root === s.root && descendsFrom(d, s, sessions))
     .flatMap(d => d.answers.filter(x => x.kind === 'question' && !claimed.has(x)));
   const pair = (a: TimelineAnswer, match: TimelineAnswer | undefined) => {
@@ -267,7 +269,10 @@ function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
 function answerOf(w: TimelineTurnWait): TimelineAnswer {
   const at = w.at ?? w.e;
   const waited = waitedOnYou(w) && at <= w.e ? { waited: [w.s, w.e] as Interval } : {};
-  return { at, start: Math.min(w.s, at), ...waited, instant: w.s === w.e && at === w.s, kind: w.k, counted: true, ...(w.rid ? { rid: w.rid } : {}) };
+  return {
+    at, start: Math.min(w.s, at), ...waited, instant: w.s === w.e && at === w.s, kind: w.k, counted: w.pr !== true,
+    ...(w.rid ? { rid: w.rid } : {}), ...(w.pr !== undefined ? { settled: true } : {}),
+  };
 }
 
 /** Links each session to its family, derives its work, waits and inputs, and counts turns, agent time and waiting
@@ -330,7 +335,7 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
     for (const [a, b] of clipIntervals(s.work, bounds)) forEachDay(a, b, (day, ms) => { totalsOf(day).agentMs += ms; });
     for (const [a, b] of clipIntervals(s.waiting, bounds)) forEachDay(a, b, (day, ms) => { totalsOf(day).waitMs += ms; });
     // An answer is a point in time: its day is active even when nothing else happened on it.
-    for (const a of s.answers) if (a.at >= bounds[0] && a.at < bounds[1]) totalsOf(toDateStr(a.at));
+    for (const a of s.answers) if (a.counted && a.at >= bounds[0] && a.at < bounds[1]) totalsOf(toDateStr(a.at));
   }
   return {
     sessions,
@@ -461,7 +466,8 @@ export function buildLanes(p: PreparedTimeline, from: number, to: number): Timel
     const turns = s.turns.filter(t => t.t >= start && t.t < end);
     const segments = clipIntervals(s.work, win);
     const waits = s.waits.filter(w => w.start < end && w.end > start);
-    const answers = s.answers.filter(a => a.at >= start && a.at < end);
+    // A relay that only delivered a child's answer is no activity of its own.
+    const answers = s.answers.filter(a => a.counted && a.at >= start && a.at < end);
     if (turns.length === 0 && segments.length === 0 && waits.length === 0 && answers.length === 0) continue;
     const typed = turns.filter(t => t.k === 'you').length;
     const waiting = clipIntervals(s.waiting, win);

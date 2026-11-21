@@ -7,13 +7,16 @@
  * counters (`token_count` snapshots, a record's `thread_token_usage`) start with everything the source used. Its own
  * usage is read from what Codex logged for the fork:
  *
+ * - A turn's own usage is at least the sum of its distinct responses' records and at least its `turn_token_usage`: the
+ *   larger wins, so a partial counter never overrides known responses, and a counter only fills what records miss.
  * - With an anchor (the first own record's `thread_token_usage` less its `turn_token_usage`: exactly what the fork
- *   inherited), each turn's own cumulative usage is the largest of the lower bounds the logs give: the thread counter
- *   and the snapshot less the anchor, and the previous turn's plus this turn's `turn_token_usage` (or its records' sum).
- *   A turn's usage is the growth since the previous turn. A missing response record or snapshot can only lower a bound,
- *   never add usage that wasn't logged.
- * - Without one (older builds, records without the counters), a turn takes its `turn_token_usage`, else the sum of its
- *   records, else the growth of its snapshots.
+ *   inherited), each turn's own cumulative usage at its end is the largest of the lower bounds the logs give: the
+ *   previous turn's plus its own, the thread counter and the snapshot less the anchor, and where the next turn began
+ *   (its `thread_token_usage` less its `turn_token_usage`, less the anchor), which is exact. A turn's usage is the growth
+ *   since the previous turn. A missing record or snapshot only lowers a bound, so usage that a later turn's counter
+ *   reveals stays with the turn it belongs to, never with the next one.
+ * - Without one (older builds, records without the counters), a turn takes its own usage as above, else the growth of
+ *   its snapshots.
  *
  * Requests and session totals (so Token Coverage) come from the same allocation. Browser-safe: no Node imports. */
 
@@ -57,12 +60,17 @@ export function usageOf(value: unknown): CodexUsage | undefined {
 
 const larger = (a: CodexUsage | undefined, b: CodexUsage | undefined) => (!a ? b : !b || a.total >= b.total ? a : b);
 
+/** A turn's own usage from its records: its distinct responses' sum or its `turn_token_usage`, whichever is larger. */
+const ownUsage = (e: { responses?: CodexUsage; turn?: CodexUsage } | undefined) => larger(e?.responses, e?.turn);
+
 interface TurnEvidence {
   /** The sum of its responses' own usage, each response once. */
   responses?: CodexUsage;
-  /** The largest `turn_token_usage` and `thread_token_usage` its records logged. */
+  /** The largest `turn_token_usage` and `thread_token_usage` its records logged, and where the turn began on the
+   *  thread's counter (a record's thread less turn usage). */
   turn?: CodexUsage;
   thread?: CodexUsage;
+  start?: CodexUsage;
   /** The turn the first of them arrived in, for a record whose turn has no request. */
   arrival: string;
 }
@@ -93,6 +101,7 @@ export class CodexForkUsage {
       responses: known.responses ? addUsage(known.responses, usage) : usage,
       turn: larger(known.turn, turn),
       thread: larger(known.thread, thread),
+      start: larger(known.start, turn && thread ? lessUsage(thread, turn) : undefined),
     });
   }
 
@@ -118,24 +127,23 @@ export class CodexForkUsage {
       const known = byTurn.get(at);
       byTurn.set(at, known ? {
         arrival: known.arrival, responses: known.responses && e.responses ? addUsage(known.responses, e.responses) : known.responses ?? e.responses,
-        turn: larger(known.turn, e.turn), thread: larger(known.thread, e.thread),
+        turn: larger(known.turn, e.turn), thread: larger(known.thread, e.thread), start: larger(known.start, e.start),
       } : e);
     }
-    const turns = this.anchor ? this.anchored(byTurn, this.anchor) : this.turns.map(t => {
-      const e = byTurn.get(t.key);
-      return e ? e.turn ?? e.responses : undefined;
-    });
+    const turns = this.anchor ? this.anchored(byTurn, this.anchor) : this.turns.map(t => ownUsage(byTurn.get(t.key)));
     const total = this.turns.reduce((sum, t, i) => addUsage(sum, turns[i] ?? t.snapshot), noUsage());
     return { turns, total };
   }
 
   private anchored(byTurn: Map<string, TurnEvidence>, anchor: CodexUsage): CodexUsage[] {
     let before = noUsage();
-    return this.turns.map(t => {
+    return this.turns.map((t, i) => {
       const e = byTurn.get(t.key);
       const snapshot = this.snapshots.get(t.key);
-      const own = e?.turn ?? e?.responses;
-      const after = [before, e?.thread && lessUsage(e.thread, anchor), snapshot && lessUsage(snapshot, anchor), own && addUsage(before, own)]
+      const own = ownUsage(e);
+      const next = byTurn.get(this.turns[i + 1]?.key ?? '')?.start;
+      const after = [before, e?.thread && lessUsage(e.thread, anchor), snapshot && lessUsage(snapshot, anchor), own && addUsage(before, own),
+        next && lessUsage(next, anchor)]
         .reduce<CodexUsage | undefined>(larger, undefined) ?? before;
       const turn = lessUsage(after, before);
       before = after;

@@ -6,56 +6,20 @@
 /* Edge cases of the Timeline rules, end to end from synthetic Copilot logs: answers as points in time, stops with no
  * result, relays, creation times, sessions that only hold an answer, and families with one active member. */
 
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { Analyzer } from './analyzer';
-import { parseCLIEventsFile } from './parser-vscode-cli';
-import { buildSummaryExportFromAnalyzer } from './summary-export';
-import {
-  buildFamilies, buildLanes, buildViewFamilies, createNamer, intervalsMs, prepareTimeline, sessionWork, timelineKpis, timelineWindow,
-  viewInsights,
-} from './timeline-model';
 import { formatTimeline } from '../mcp/formatters';
-import type { DateFilter, Session } from './types';
+import {
+  D17, D18, M, analyzer, at, end, ev, only, prompt, removeTimelineSessions, reply, session, sessionDir, sid, start, view,
+} from '../test/timeline-cli';
+import type { Analyzer } from './analyzer';
+import { buildSummaryExportFromAnalyzer } from './summary-export';
+import { buildFamilies, createNamer, intervalsMs, prepareTimeline, sessionWork } from './timeline-model';
+import type { Session } from './types';
 import type { TimelineTurn } from './types/timeline-types';
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-timeline-edges-'));
-afterAll(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }));
-
-const M = 60_000;
-const D17 = '2026-11-17';
-const D18 = '2026-11-18';
-const at = (day: number, h = 0, m = 0) => new Date(2026, 10, day, h, m).getTime();
-const sid = (i: number) => 'ed9e0000-0000-4000-8000-' + String(i).padStart(12, '0');
-type Ev = { type: string; timestamp: string; data: Record<string, unknown> };
-const ev = (type: string, t: number, data: Record<string, unknown>): Ev => ({ type, timestamp: new Date(t).toISOString(), data });
-const prompt = (t: number, from?: number) => ev('user.message', t, {
-  content: 'Fixture',
-  ...(from ? { transformedContent: `<cross_session_message>\nfrom_session_id: ${sid(from)}\n</cross_session_message>\nFixture` } : {}),
-});
-const reply = (t: number) => ev('assistant.message', t, { content: 'Done' });
-const start = (t: number, id = 'q', toolName = 'ask_user') => ev('tool.execution_start', t, { toolName, toolCallId: id });
-const end = (t: number, id = 'q', content = 'User selected: Yes') => ev('tool.execution_complete', t, { toolCallId: id, success: true, result: { content } });
-
-function session(i: number, events: Ev[], startAt = events[0] ? Date.parse(events[0].timestamp) : at(17), start: Record<string, unknown> = {}): Session | null {
-  const dir = path.join(root, sid(i));
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, 'events.jsonl');
-  fs.writeFileSync(file, [ev('session.start', startAt, { sessionId: sid(i), ...start }), ...events].map(x => JSON.stringify(x)).join('\n'));
-  return parseCLIEventsFile(file, 'ws', 'fixture');
-}
-
-const analyzer = (...sessions: (Session | null)[]) => new Analyzer(sessions.filter((s): s is Session => s !== null), new Map());
-function view(an: Analyzer, day: string, f?: DateFilter) {
-  const p = prepareTimeline(an.getTimelineData(f));
-  const lanes = buildLanes(p, ...timelineWindow('day', day));
-  const families = buildViewFamilies(lanes, p);
-  return { p, lanes, kpis: timelineKpis(lanes, families), fam: buildFamilies(p), waits: viewInsights(lanes, families, createNamer(p, true), 'day', p)[2] };
-}
-const only = (day: string): DateFilter => ({ fromDate: day, toDate: day });
-
+afterAll(removeTimelineSessions);
 describe('answers are points in time', () => {
   // A question asked at 23:54 and answered at exactly midnight.
   const midnight = () => analyzer(session(1, [prompt(at(17, 23, 50)), start(at(17, 23, 54)), reply(at(17, 23, 55)), end(at(18))]));
@@ -158,9 +122,7 @@ describe('fourth review: provenance, attestation and activity', () => {
   const allow = (t: number, id: string) => ev('permission.completed', t, { requestId: id, decisionSource: 'human_response', result: { kind: 'approved' } });
 
   it('labels a session that only holds a permission by its own client metadata (B1)', () => {
-    const dir = path.join(root, sid(40));
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'workspace.yaml'), 'client_name: github/cli\nname: Fixture name\nuser_named: true\nbranch: feature/example\n');
+    writeFileSync(join(sessionDir(40), 'workspace.yaml'), 'client_name: github/cli\nname: Fixture name\nuser_named: true\nbranch: feature/example\n');
     // Both clients log `remoteSteerable`; only the sidecar names the CLI.
     const s = session(40, [perm(at(18, 8, 1), 'x'), allow(at(18, 8, 1) + 100, 'x')], at(18, 8), { remoteSteerable: false });
     expect([s?.harness, s?.requests.length, s?.displayName]).toEqual(['GitHub Copilot CLI', 0, 'Fixture name']);

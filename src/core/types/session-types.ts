@@ -368,6 +368,8 @@ export interface Session {
   /** Turns the fork copied from its source's history. They were removed from `requests` (the source counts them),
    *  even when the source isn't loaded: they are history, not new work. */
   inheritedTurns?: number;
+  /** A fork whose copied history two or more loaded sessions hold equally (Claude Code): its source can't be told. */
+  forkSourceAmbiguous?: boolean;
   /** Stops for you that no turn owns: a session whose only logged activity is your answer to a permission prompt or a
    *  question (Copilot). Such a session has no requests; only the Timeline counts it. */
   userWaits?: UserWait[];

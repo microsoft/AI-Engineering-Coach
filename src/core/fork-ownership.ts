@@ -93,7 +93,9 @@ function prefixCopies(sessions: readonly Session[]): Map<Session, PrefixFork> {
     for (const s of group) {
       if (s.requests.some(isCandidate)) continue;
       const best = prefixSource(s, group);
-      if (best) out.set(s, { copies: prefixCopySet(s, best.source, best.k), ...(best.tie ? {} : { source: best.source }) });
+      // On a tie the copied prompts are the same whichever holder they came from, but a sub-agent turn's owner isn't
+      // known: it stays with the transcript that holds it, whatever order the logs were read in.
+      if (best) out.set(s, best.tie ? { copies: new Set(mainTurns(s).slice(0, best.k)) } : { copies: prefixCopySet(s, best.source, best.k), source: best.source });
     }
   }
   return out;
@@ -125,6 +127,7 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
     const requests = s.requests.filter(r => !removed.has(r));
     const source = prefix ? prefix.source
       : [...inherited].reverse().map(r => (r.userEventId ? owner.get(r.userEventId) : undefined)).find(x => x && x !== s);
+    const ambiguous = prefix !== undefined && prefix.source === undefined;
     const starts = requests.map(r => r.timestamp ?? 0).filter(t => t > 0);
     return {
       ...s,
@@ -133,6 +136,7 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
       inheritedTurns: inherited.length,
       ...(starts.length ? { creationDate: Math.min(...starts) } : {}),
       ...(s.forkedFromId || !source ? {} : { forkedFromId: source.sessionId }),
+      ...(ambiguous && !s.forkedFromId ? { forkSourceAmbiguous: true } : {}),
     };
   });
 }
@@ -145,6 +149,7 @@ export function withAnalyzedTurns(full: Session, analyzed: Session | null): Sess
   return {
     ...full, requests, requestCount: requests.length, inheritedTurns: analyzed.inheritedTurns,
     ...(analyzed.forkedFromId ? { forkedFromId: analyzed.forkedFromId } : {}),
+    ...(analyzed.forkSourceAmbiguous ? { forkSourceAmbiguous: true } : {}),
     ...(analyzed.creationDate != null ? { creationDate: analyzed.creationDate } : {}),
   };
 }
