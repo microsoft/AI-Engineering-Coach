@@ -69,6 +69,7 @@ function timelineTurn(r: SessionRequest, paired: RelayPairs, origin?: Map<Timeli
     comp: Boolean(r.compaction || r.compactions?.length),
     cr: r.aiCredits ?? 0,
     tok: r.loggedTokens ?? Math.max(0, (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
+    ...(r.requestId ? { id: r.requestId } : {}),
     ...(r.totalElapsed == null ? { noDuration: true } : {}),
     ...(waits.length ? { w: waits } : {}),
   };

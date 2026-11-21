@@ -266,6 +266,13 @@ function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
       .sort((x, y) => Math.abs(x.at - a.at) - Math.abs(y.at - a.at))[0]);
   }
 }
+/** A question or permission prompt that belongs to the window [`from`, `to`): asked in it, its measured wait
+ *  overlapping it (half-open), or answered in it. */
+export function waitInWindow(w: TimelineTurnWait, from: number, to: number): boolean {
+  const answered = w.at ?? w.e;
+  return (w.s >= from && w.s < to) || (w.e > w.s && w.e > from && w.s < to) || (w.a && answered >= from && answered < to);
+}
+
 /** Your answer to a question or permission prompt: when the harness recorded it, else when its result came. Asked at
  *  the request, or at the answer when the answer was recorded first. */
 function answerOf(w: TimelineTurnWait): TimelineAnswer {

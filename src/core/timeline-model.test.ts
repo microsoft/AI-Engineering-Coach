@@ -8,6 +8,7 @@ import {
   buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filterLanes, formatDuration, hourTicks,
   NO_LANE_FILTERS, peakParallel, prepareTimeline, sessionWaits, sessionWork, stepDate, timelineKpis, timelineWindow, turnTimes,
   verdictText, VERDICTS, viewInsights, type PreparedTimeline,
+  waitInWindow,
 } from './timeline-model';
 import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TurnSender } from './types/timeline-types';
 
@@ -298,5 +299,16 @@ describe('conditional coaching sentences', () => {
     expect(lane.segments).toEqual([[at(0, 0, 13), at(0, 10, 13)], [at(23, 55, 13), at(0, 0, 14)]]);
     expect(lane.agentMs).toBe(15 * MIN);
     expect(p.days).toEqual(['2024-03-13']);
+  });
+});
+
+describe('waitInWindow', () => {
+  it('takes a question asked, waited on or answered in the window, and not one that only ended at its start', () => {
+    const [from, to] = [100, 200];
+    const w = (s: number, e: number, a = true, at?: number) => ({ s, e, k: 'question' as const, a, ...(at === undefined ? {} : { at }) });
+    expect([
+      waitInWindow(w(150, 150), from, to), waitInWindow(w(50, 150), from, to), waitInWindow(w(50, 90, true, 120), from, to),
+      waitInWindow(w(50, 100, true, 80), from, to), waitInWindow(w(200, 250), from, to), waitInWindow(w(50, 60, false), from, to),
+    ]).toEqual([true, true, true, false, false, false]);
   });
 });

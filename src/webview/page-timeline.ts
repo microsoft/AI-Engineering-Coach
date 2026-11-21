@@ -11,7 +11,7 @@ import type {
   DateFilter, TimelineDataset, TimelineSessionText, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
 } from '../core/types';
 import {
-  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, dayStart, dayTicks, familiesInsights, filterLanes,
+  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
   formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, neededYou, NO_LANE_FILTERS,
   clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
   viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
@@ -843,7 +843,7 @@ function textTime(ctx: ViewContext, t: number, win: Interval): string {
 
 function turnItem(ctx: ViewContext, t: TimelineTurn, tt: TimelineTextTurn | undefined): VNode {
   const hidden = t.k === 'compaction' || t.k === 'other';
-  return textItem(`t:${t.t}`, `${formatWhen(t.t, ctx.view)} · ${TURN_TITLE[t.k]}`, [
+  return textItem(`t:${t.t}${t.id ? `:${t.id}` : ''}`, `${formatWhen(t.t, ctx.view)} · ${TURN_TITLE[t.k]}`, [
     tt?.prompt ? quote(tt.prompt) : html`<p class="note">${hidden ? 'Its text isn’t shown: it is a summary or a harness message, not an instruction.' : 'No message text was logged.'}</p>` as VNode,
     earlier('End of the agent’s reply in this turn', tt?.reply),
   ]);
@@ -884,10 +884,13 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
   if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);
   const { text } = entry;
   const [from, to] = l.win;
-  const byTurn = new Map(text.turns.map(t => [t.t, t]));
-  const asks = text.waits.filter(w => w.e >= from && w.s < to);
+  // Each turn's text by its request's ID (two turns, a sub-agent's for one, can share a time), else by its time.
+  const byId = new Map(text.turns.filter(t => t.id).map(t => [t.id, t]));
+  const byTime = new Map(text.turns.filter(t => !t.id).map(t => [t.t, t]));
+  const textOf = (t: TimelineTurn) => (t.id ? byId.get(t.id) : undefined) ?? byTime.get(t.t);
+  const asks = text.waits.filter(w => waitInWindow(w, from, to));
   const items: [number, VNode][] = [
-    ...l.turns.map(t => [t.t, turnItem(ctx, t, byTurn.get(t.t))] as [number, VNode]),
+    ...l.turns.map(t => [t.t, turnItem(ctx, t, textOf(t))] as [number, VNode]),
     ...asks.map(w => [w.s, askItem(ctx, w, l.win)] as [number, VNode]),
     ...l.waits.filter(w => w.kind === 'idle').map(w => {
       const before = [...text.turns].reverse().find(t => t.t <= w.start);
@@ -897,7 +900,7 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
     }),
   ];
   items.sort((a, b) => a[0] - b[0]);
-  const prompts = l.turns.filter(t => byTurn.get(t.t)?.prompt).length;
+  const prompts = l.turns.filter(t => textOf(t)?.prompt).length;
   return wrap(
     html`<p class="note">${prompts} ${prompts === 1 ? 'prompt' : 'prompts'}${asks.length ? ` and ${asks.length} ${asks.length === 1 ? 'question or permission prompt' : 'questions or permission prompts'}` : ''} this ${ctx.view},
       read again from the session’s log on this machine. Links, email addresses, secret-like tokens, your home folder and your names are replaced;

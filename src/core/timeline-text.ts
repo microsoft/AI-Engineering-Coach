@@ -63,15 +63,17 @@ export function timelineSessionText(session: Session, labels: ScrubContext): Tim
     for (const w of r.userWaits ?? []) waits.push(waitText(w, labels));
     if (!r.timestamp) continue;
     const k = turnSender(r.nonHumanKind);
-    const turn: TimelineTextTurn = { t: r.timestamp, k };
+    const turn: TimelineTextTurn = { t: r.timestamp, k, ...(r.requestId ? { id: r.requestId } : {}) };
     let cut = false;
     if (k !== 'compaction' && k !== 'other' && r.messageText.trim()) {
       const [v, c] = cutHead(scrubText(r.messageText.trim(), labels), MAX_TEXT);
       turn.prompt = v;
       cut ||= c;
     }
-    if (r.responseText.trim()) {
-      const [v, c] = cutTail(scrubText(r.responseText.trim(), labels), MAX_REPLY);
+    // The agent's own messages: the code it wrote to files is no reply.
+    const reply = (r.replyText ?? r.responseText).trim();
+    if (reply) {
+      const [v, c] = cutTail(scrubText(reply, labels), MAX_REPLY);
       turn.reply = v;
       cut ||= c;
     }

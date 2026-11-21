@@ -27,6 +27,8 @@ export interface TimelineTurn {
   cr: number;
   /** Tokens logged for the turn: Copilot usage records, else the turn's prompt and completion tokens. */
   tok: number;
+  /** The request's ID, to join the text read on demand to the turn (two turns can share a time). No text itself. */
+  id?: string;
   /** The harness logged no duration for the turn, so when its work ended is unknown (`d` is 0). */
   noDuration?: boolean;
   /** When the turn was stopped on a question or a permission prompt (absolute ms, in order; they can overlap, and one
@@ -117,6 +119,8 @@ export interface TimelineSessionText {
 export interface TimelineTextTurn {
   t: number;
   k: TurnSender;
+  /** The request's ID: joins the text to its turn (`TimelineTurn.id`); turns can share a time. */
+  id?: string;
   /** The message that started the turn. Left out for compaction and system turns. */
   prompt?: string;
   /** The end of the agent's reply in the turn. */
