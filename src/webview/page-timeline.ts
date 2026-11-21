@@ -893,7 +893,7 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
     ...l.turns.map(t => [t.t, turnItem(ctx, t, textOf(t))] as [number, VNode]),
     ...asks.map(w => [w.s, askItem(ctx, w, l.win)] as [number, VNode]),
     ...l.waits.filter(w => w.kind === 'idle').map(w => {
-      const before = [...text.turns].reverse().find(t => t.t <= w.start);
+      const before = w.after && textOf(w.after);
       return [w.start, textItem(`i:${w.start}`, `${textTime(ctx, w.start, l.win)} · Waited ${formatDuration(w.end - w.start)} for your next prompt`, [
         earlier('End of the agent’s reply before the wait', before?.reply, true) ?? html`<p class="note">No agent reply was logged before it.</p>` as VNode,
       ])] as [number, VNode];

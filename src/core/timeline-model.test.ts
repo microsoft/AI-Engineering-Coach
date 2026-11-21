@@ -56,6 +56,13 @@ describe('timeline model', () => {
     expect(waitsOf([turn(at(9), 0, 'you', { noDuration: true }), turn(at(10), 5), turn(at(10, 30), 5)])).toEqual([[at(10, 5), at(10, 30)]]);
   });
 
+  it('ties a wait for your next prompt to the turn whose end started it, not the latest-started one', () => {
+    const a = turn(at(10), 10, 'you', { id: 'a' });
+    const b = turn(at(10, 2), 1, 'agent', { id: 'b' });
+    const idle = sessionWaits([a, b, turn(at(10, 40), 1)]).waits.find(w => w.kind === 'idle');
+    expect([idle?.start, idle?.after?.id]).toEqual([at(10, 10), 'a']);
+  });
+
   it('measures the longest unattended stretch in a family, up to your next input anywhere in it', () => {
     const p = prepareTimeline(fixture());
     // From the 9:00 prompt the family kept working, but your prompt into child-a at 10:30 ends that stretch; the next one

@@ -85,7 +85,40 @@ describe('timelineSessionText replies and turns', () => {
     ]), labels);
     expect([text.turns[0].reply, text.waits[0].before]).toEqual(['Writing the config.', 'Writing the config.']);
   });
+});
 
+describe('timelineSessionText replies of live and file-writing turns', () => {
+  it('shows no reply for a turn that only wrote files, never the file’s contents', () => {
+    const s = parse([
+      { type: 'user.message', timestamp: at(0), data: { content: 'Add the config' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'create', toolCallId: 'c1', arguments: { path: 'cfg.json', file_text: '{ "port": 1 }' } } },
+      { type: 'tool.execution_complete', timestamp: at(3), data: { toolCallId: 'c1', success: true, result: { content: 'Created' } } },
+    ]);
+    expect([s.requests[0].responseText.includes('"port"'), s.requests[0].replyText, timelineSessionText(s, labels).turns[0].reply]).toEqual([true, '', undefined]);
+  });
+
+  it('keeps a turn’s final task summary in its reply, after its progress messages, once', () => {
+    const text = timelineSessionText(parse([
+      { type: 'user.message', timestamp: at(0), data: { content: 'Fix it' } },
+      { type: 'assistant.message', timestamp: at(1), data: { content: 'Looking at the failing test.' } },
+      { type: 'session.task_complete', timestamp: at(2), data: { success: true, summary: 'Fixed the off-by-one in the parser.' } },
+      { type: 'session.task_complete', timestamp: at(3), data: { success: true, summary: 'Fixed the off-by-one in the parser.' } },
+    ]), labels);
+    expect(text.turns[0].reply).toBe('Looking at the failing test.\n\nFixed the off-by-one in the parser.');
+  });
+
+  it('joins a live turn’s text to the analyzed turn after the turn gained another message', () => {
+    const start = [
+      { type: 'user.message', timestamp: at(0), id: 'u1', data: { content: 'First' } },
+      { type: 'assistant.message', timestamp: at(1), id: 'a1', data: { content: 'One' } },
+    ];
+    const analyzed = new Analyzer([parse(start)], new Map()).getTimelineData().sessions[0].turns;
+    const text = timelineSessionText(parse([...start, { type: 'assistant.message', timestamp: at(2), id: 'a2', data: { content: 'And more' } }]), labels);
+    expect(analyzed.map(t => text.turns.find(x => x.id === t.id)?.prompt)).toEqual(['First']);
+  });
+});
+
+describe('timelineSessionText turns', () => {
   it('joins each turn’s text by its request, not its time, so two turns at the same moment keep their own', () => {
     const s = parse([
       { type: 'user.message', timestamp: at(0), data: { content: 'First' } },

@@ -10,6 +10,7 @@
 
 import type { Session, TimelineSessionText, TimelineTextTurn, TimelineTextWait, UserWait, UserWaitText } from './types';
 import { turnSender } from './analyzer-timeline';
+import { turnIdentity } from './fork-ownership';
 import { scrubText, type ScrubContext } from './session-labels';
 
 /** Longest prompt, question or answer shown; the rest is cut. */
@@ -63,7 +64,7 @@ export function timelineSessionText(session: Session, labels: ScrubContext): Tim
     for (const w of r.userWaits ?? []) waits.push(waitText(w, labels));
     if (!r.timestamp) continue;
     const k = turnSender(r.nonHumanKind);
-    const turn: TimelineTextTurn = { t: r.timestamp, k, ...(r.requestId ? { id: r.requestId } : {}) };
+    const turn: TimelineTextTurn = { t: r.timestamp, k, ...(turnIdentity(r) ? { id: turnIdentity(r) } : {}) };
     let cut = false;
     if (k !== 'compaction' && k !== 'other' && r.messageText.trim()) {
       const [v, c] = cutHead(scrubText(r.messageText.trim(), labels), MAX_TEXT);

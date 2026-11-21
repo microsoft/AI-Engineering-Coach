@@ -44,6 +44,9 @@ export interface TimelineWait {
   start: number;
   end: number;
   kind: 'idle' | TimelineTurnWait['k'];
+  /** For a wait for your next prompt: the turn whose end (or whose last question's) started it. With overlapping
+   *  turns this is the one that ended last, not the one that started last. */
+  after?: TimelineTurn;
 }
 
 /** Your answer to a question or a permission prompt, when you gave it. */
@@ -194,14 +197,17 @@ export function sessionWaits(turns: readonly TimelineTurn[], stops: readonly Tim
   for (const w of stops) if (waitedOnYou(w)) waits.push({ start: w.s, end: w.e, kind: w.k });
   const away: Interval[] = [];
   let busyUntil = -1;
+  let busyTurn: TimelineTurn | undefined;
   for (const t of [...turns].sort((a, b) => a.t - b.t)) {
     if (t.k === 'you' && busyUntil > 0) {
       const gap = t.t - busyUntil;
-      if (gap >= WAIT_MIN_MS && gap <= WAIT_MAX_MS) waits.push({ start: busyUntil, end: t.t, kind: 'idle' });
+      if (gap >= WAIT_MIN_MS && gap <= WAIT_MAX_MS) waits.push({ start: busyUntil, end: t.t, kind: 'idle', ...(busyTurn ? { after: busyTurn } : {}) });
       else if (gap > WAIT_MAX_MS) away.push([busyUntil, t.t]);
     }
     for (const w of t.w ?? []) if (waitedOnYou(w)) waits.push({ start: w.s, end: w.e, kind: w.k });
-    busyUntil = t.noDuration ? -1 : Math.max(busyUntil, t.t + t.d, ...(t.w ?? []).map(w => w.e));
+    const end = Math.max(t.t + t.d, ...(t.w ?? []).map(w => w.e));
+    if (t.noDuration) [busyUntil, busyTurn] = [-1, undefined];
+    else if (end >= busyUntil) [busyUntil, busyTurn] = [end, t];
   }
   return { waits: waits.sort((a, b) => a.start - b.start), away };
 }

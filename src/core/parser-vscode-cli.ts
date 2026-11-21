@@ -284,7 +284,7 @@ function flushTurn(state: CLIParseState): void {
     timestamp: msgTs,
     messageText: turn.userMsg,
     responseText,
-    ...(replyText ? { replyText } : {}),
+    replyText,
     agentName: harnessName(state),
     agentMode: turn.agentMode || 'agent',
     modelId: turn.modelId || state.currentModelId,
@@ -1015,6 +1015,7 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       if (state.turn && ev.data?.success === true && typeof ev.data.summary === 'string' && ev.data.summary.trim()) {
         state.turn.answerEvidence = 'final';
         if (!state.turn.responseChunks.includes(ev.data.summary)) state.turn.responseChunks.push(ev.data.summary);
+        if (!state.turn.agentMessages.includes(ev.data.summary)) state.turn.agentMessages.push(ev.data.summary);
         state.turn.lastAssistantTs = ev.timestamp || state.turn.lastAssistantTs;
       }
       return;

@@ -893,7 +893,7 @@ function buildClaudeRequest(
     timestamp: userTs,
     messageText: getClaudeUserText(line),
     responseText: assistantData.assistantTexts.join('\n'),
-    ...(assistantData.replyTexts.length ? { replyText: assistantData.replyTexts.join('\n') } : {}),
+    replyText: assistantData.replyTexts.join('\n'),
     agentName: 'Claude',
     agentMode: 'agent',
     modelId: assistantData.model,
