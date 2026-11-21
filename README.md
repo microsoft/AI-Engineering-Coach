@@ -148,7 +148,7 @@ A few features depend on the local VS Code language model and are hidden in canv
 | Page               | Description                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------- |
 | **Dashboard**      | Practice scores with week-over-week trends, daily activity chart, top workspace stats |
-| **Timeline**       | Autonomy lanes per day or week, waits on you, and session families with verdicts      |
+| **Timeline**       | Autonomy lanes per day, week or chosen range, waits on you, families with verdicts    |
 | **Coding Moments** | Screenshot gallery from AI coding sessions with story reels and workspace filtering   |
 
 ### Measure

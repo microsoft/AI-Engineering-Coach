@@ -35,7 +35,10 @@ export const WIDE_FAN_OUT = 8;
 const UNATTENDED_CALLOUT_MS = 5 * 60_000;
 const MAX_DEPTH = 64;
 
-export type TimelineView = 'day' | 'week' | 'families';
+export type TimelineView = 'day' | 'week' | 'range' | 'families';
+
+/** The views that draw lanes over a period: a day, a Monday-to-Sunday week, or a custom range of days. */
+export type TimelinePeriod = Exclude<TimelineView, 'families'>;
 
 export type Interval = [number, number];
 
@@ -788,11 +791,11 @@ export function formatClock(ts: number): string {
   return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** Clock time in a day view, weekday and clock time in a week view. */
-export function formatWhen(ts: number, view: 'day' | 'week'): string {
-  return view === 'week'
-    ? `${new Date(ts).toLocaleDateString(undefined, { weekday: 'short' })} ${formatClock(ts)}`
-    : formatClock(ts);
+/** Clock time in a day view, weekday and clock time in a week view, and the date too in a custom range. */
+export function formatWhen(ts: number, view: TimelinePeriod): string {
+  if (view === 'day') return formatClock(ts);
+  const day = new Date(ts).toLocaleDateString(undefined, view === 'week' ? { weekday: 'short' } : { weekday: 'short', day: 'numeric', month: 'short' });
+  return `${day} ${formatClock(ts)}`;
 }
 
 /** Whole AI credits, `1,234`. */
@@ -820,11 +823,11 @@ const them = (n: number) => (n === 1 ? 'it' : 'them');
 
 /* ---- coaching callouts (H) ---- */
 
-/** The three findings of a day or week, as plain sentences: only what the logs show. */
+/** The three findings of a day, week or range, as plain sentences: only what the logs show. */
 export function viewInsights(
-  lanes: readonly TimelineLane[], families: readonly ViewFamily[], namer: Namer, period: 'day' | 'week', p?: PreparedTimeline,
+  lanes: readonly TimelineLane[], families: readonly ViewFamily[], namer: Namer, period: TimelinePeriod, p?: PreparedTimeline,
 ): string[] {
-  const when = period === 'week' ? 'this week' : 'on this day';
+  const when = period === 'week' ? 'this week' : period === 'range' ? 'in this range' : 'on this day';
   return [unattendedInsight(families, namer, when, p), creditsInsight(lanes, namer, when), waitsInsight(lanes, when)];
 }
 
