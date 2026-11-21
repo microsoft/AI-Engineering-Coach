@@ -326,7 +326,7 @@
     "gen-synth-logs": "npx tsx scripts/generate-synthetic-logs.ts",
     "test:oom-synth": "npx tsx scripts/oom-repro.ts",
     "package": "node scripts/package-readme-swap.mjs",
-    "changelog:stamp": "node scripts/stamp-changelog.mjs",
+    "changelog": "node scripts/build-changelog.mjs",
     "spellcheck": "cspell \"src/**/*.ts\" \"docs/**/*.md\" \"*.md\"",
     "knip": "knip",
     "typecheck": "tsc --noEmit",

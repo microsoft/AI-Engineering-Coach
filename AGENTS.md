@@ -68,7 +68,7 @@ AI-Engineering-Coach/
 | End-to-end beside other checkouts | `E2E_PORT=4122 npm run test:e2e` (default 3999; `E2E_REUSE=1` reuses a running server if it serves this checkout) |
 | Package the VSIX | `npm run package` (see [skills/package-extension.md](skills/package-extension.md)) |
 | Bundle-size budget | `npm run check-size` |
-| Date the changelog entries before merge | `npm run changelog:stamp` (see [skills/stamp-changelog.md](skills/stamp-changelog.md)) |
+| Print the dated changelog (fragments + history) | `npm run changelog` (see [skills/changelog-fragments.md](skills/changelog-fragments.md)) |
 
 CI runs `npm run check` (typecheck + lint + spellcheck + knip + test) plus the size check on
 every PR. Run those locally before pushing.
@@ -89,7 +89,7 @@ Available today:
 
 - [`skills/update-docs.md`](skills/update-docs.md) — author or update a Hugo doc page.
 - [`skills/package-extension.md`](skills/package-extension.md) — produce an installable `.vsix`.
-- [`skills/stamp-changelog.md`](skills/stamp-changelog.md) — write changelog entries and date them before merge.
+- [`skills/changelog-fragments.md`](skills/changelog-fragments.md) — write a `changelog.d` fragment; dates come from git on merge.
 
 ## Rule and metric authoring
 
@@ -199,12 +199,12 @@ body and an optional `# Tests` block. See [`docs/AUTHORING_RULES.md`](docs/AUTHO
 - **Inclusive language.** Prefer allowlist/denylist, primary/replica, etc.
 - **Author over generate.** Rules and skills are markdown — write them by hand or via the Rule
   Editor, not as opaque generated artifacts.
-- **Changelog in the same PR, by date.** A user-visible change adds a bullet under `## [Unreleased]`
-  in [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog types: Added, Changed, Deprecated, Removed,
-  Fixed, Security). Summarize the notable, user-facing change with its PR or issue number, don't
-  paste a git log, and mark breaking changes with `**Breaking:**`. Just before merge, run
-  `npm run changelog:stamp` to move the entries under the merge date. There are no versioned
-  releases: don't change `version` or add release tags (see [skills/stamp-changelog.md](skills/stamp-changelog.md)).
+- **Changelog fragment in the same PR.** A user-visible change adds `changelog.d/<PR number>.md`
+  with Keep a Changelog type headings (Added, Changed, Deprecated, Removed, Fixed, Security).
+  Summarize the notable, user-facing change with its PR or issue number, don't paste a git log,
+  and mark breaking changes with `**Breaking:**`. Don't add dates or edit `CHANGELOG.md`: the
+  packaged changelog dates each fragment by its merge commit on `main`. There are no versioned
+  releases: don't change `version` or add release tags (see [skills/changelog-fragments.md](skills/changelog-fragments.md)).
 
 ## Boundaries
 

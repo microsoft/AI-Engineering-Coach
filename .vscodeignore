@@ -26,6 +26,8 @@ test-results/**
 
 # Docs scaffolding (only publish README + LICENSE + dist)
 README.github.md
+CHANGELOG.github.md
+changelog.d/**
 SECURITY.md
 
 # Dev-only config & tooling — not needed at runtime

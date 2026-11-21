@@ -20,8 +20,8 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 4. **Run tests**: `npm test`
 5. **Lint**: `npm run lint`
 6. If you've added code, add tests that cover your changes.
-7. If users will notice the change, describe it under `## [Unreleased]` in
-   [`CHANGELOG.md`](CHANGELOG.md). Don't change `version`; see [Changelog](#changelog).
+7. If users will notice the change, describe it in a fragment,
+   [`changelog.d/<PR number>.md`](changelog.d/README.md). Don't change `version`; see [Changelog](#changelog).
 8. Ensure the test suite passes and linting is clean.
 9. Submit a **pull request**.
 
@@ -160,9 +160,11 @@ security feature globally to get a green run.
 ## Changelog
 
 There are no versioned releases: the extension is built from source, and `version` stays as it is.
-Feature pull requests add their notes under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md),
-then run `npm run changelog:stamp` just before merging, which moves them under that day's date
-(`## YYYY-MM-DD`, newest first). See [`skills/stamp-changelog.md`](skills/stamp-changelog.md).
+Feature pull requests describe user-visible changes in a fragment, `changelog.d/<PR number>.md`
+(see [`changelog.d/README.md`](changelog.d/README.md)), and never add dates. `npm run changelog`
+and `npm run package` merge the fragments into the history in [`CHANGELOG.md`](CHANGELOG.md) under
+the date each one reached `main`, read from git, so nothing needs to happen after a merge. See
+[`skills/changelog-fragments.md`](skills/changelog-fragments.md).
 
 Every build is stamped with its version, commit, branch, and build time, so builds that share a
 version can still be told apart. The bottom of the dashboard sidebar shows the stamp, and so do

@@ -4,14 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 
-/* Pure helpers for CHANGELOG.md, which follows Keep a Changelog 2.0.0 but groups changes by the
- * date they reached main ("## YYYY-MM-DD", newest first) instead of by version. Pull requests add
- * entries under "## [Unreleased]"; stampUnreleased moves them under a date. scripts/stamp-changelog.mjs
- * does the file I/O. */
+/* Pure helpers for the changelog. CHANGELOG.md holds the dated history ("## YYYY-MM-DD", newest
+ * first, Keep a Changelog 2.0.0 types). Each pull request adds a fragment, changelog.d/<name>.md,
+ * and renderChangelog merges the fragments into that history under the date each one reached
+ * main, or under "## [Unreleased]" when it hasn't yet. scripts/build-changelog.mjs reads the
+ * files and the dates from git. */
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_REFERENCE = /^\[([^\]]+)\]:\s*\S/;
-const TYPE_ORDER = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'];
+export const CHANGE_TYPES = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'];
 
 /** @param {string} title text after "## " */
 function sectionKey(title) {
@@ -83,19 +84,21 @@ function groupByType(lines) {
   return groups;
 }
 
+/** @param {string} value */
+function isDate(value) {
+  return DATE.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
+
 /**
- * Dated sections in file order, after checking that every "## " heading other than
- * "[Unreleased]" is a valid YYYY-MM-DD date, used once, newest first.
+ * The dated sections of CHANGELOG.md in file order, after checking that every "## " heading is a
+ * valid YYYY-MM-DD date, used once, newest first.
  * @param {string} text CHANGELOG.md contents
  * @returns {string[]}
  */
 export function changelogDates(text) {
   const dates = [];
-  for (const { key, title } of outline(text).sections) {
-    if (key === 'unreleased') continue;
-    if (!DATE.test(title) || Number.isNaN(Date.parse(`${title}T00:00:00Z`))) {
-      throw new Error(`Expected "## YYYY-MM-DD" or "## [Unreleased]", got "## ${title}"`);
-    }
+  for (const { title } of outline(text).sections) {
+    if (!isDate(title)) throw new Error(`Expected "## YYYY-MM-DD" in CHANGELOG.md, got "## ${title}"`);
     const previous = dates.at(-1);
     if (previous !== undefined && title >= previous) {
       throw new Error(`Dated sections must be unique and newest first: "## ${title}" follows "## ${previous}"`);
@@ -106,54 +109,88 @@ export function changelogDates(text) {
 }
 
 /**
- * Moves the [Unreleased] notes under "## date" and leaves an empty [Unreleased] section on top.
- * When that date already has a section, the notes join it, type by type.
- * @param {string} text CHANGELOG.md contents
- * @param {{ date: string }} options
+ * Checks a changelog fragment: one or more "### Type" headings from Keep a Changelog, each with
+ * bullet entries, and nothing else.
+ * @param {string} name file name, for error messages
+ * @param {string} text
+ * @returns {Map<string, string[]>} entries by type
  */
-export function stampUnreleased(text, { date }) {
-  if (!DATE.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) throw new Error(`Expected a YYYY-MM-DD date, got "${date}"`);
-  const latest = changelogDates(text)[0];
-  if (latest !== undefined && date < latest) throw new Error(`${date} is older than the newest section, ${latest}`);
-  const { eol, lines, sections, refsStart } = outline(text);
-  const index = sections.findIndex(s => s.key === 'unreleased');
-  if (index < 0) throw new Error('CHANGELOG.md has no "## [Unreleased]" section');
-  const unreleased = sections[index];
-  const pending = groupByType(lines.slice(unreleased.start + 1, unreleased.end));
-  if (!hasEntries([...pending.values()].flat().join('\n'))) {
-    throw new Error('Nothing to stamp: add entries under "## [Unreleased]" first');
+export function parseFragment(name, text) {
+  const groups = groupByType(text.split(/\r?\n/));
+  if (groups.has('')) throw new Error(`${name}: put every entry under a "### Type" heading (${CHANGE_TYPES.join(', ')})`);
+  for (const type of groups.keys()) {
+    if (!CHANGE_TYPES.includes(type)) throw new Error(`${name}: unknown type "### ${type}"; use ${CHANGE_TYPES.join(', ')}`);
   }
+  if (groups.size === 0) throw new Error(`${name}: has no entries`);
+  return groups;
+}
 
-  const sameDay = sections.find(s => s.title === date);
-  const merged = sameDay ? groupByType(lines.slice(sameDay.start + 1, sameDay.end)) : new Map();
-  for (const [type, entries] of pending) merged.set(type, [...(merged.get(type) ?? []), ...entries]);
-  const types = [...merged.keys()].sort((a, b) => rank(a) - rank(b));
-  /** @type {string[]} */
-  const dated = [`## ${date}`];
-  for (const type of types) {
-    dated.push('');
-    if (type) dated.push(`### ${type}`, '');
-    dated.push(...(merged.get(type) ?? []));
+/** @param {string} type */
+function rank(type) {
+  if (type === '') return -1;
+  const position = CHANGE_TYPES.indexOf(type);
+  return position < 0 ? CHANGE_TYPES.length : position;
+}
+
+/**
+ * @param {string} title
+ * @param {Map<string, string[]>[]} parts merged in order, type by type
+ */
+function renderSection(title, parts) {
+  /** @type {Map<string, string[]>} */
+  const merged = new Map();
+  for (const part of parts) {
+    for (const [type, entries] of part) merged.set(type, [...(merged.get(type) ?? []), ...entries]);
   }
+  const lines = [`## ${title}`];
+  for (const type of [...merged.keys()].sort((a, b) => rank(a) - rank(b))) {
+    lines.push('');
+    if (type) lines.push(`### ${type}`, '');
+    lines.push(...(merged.get(type) ?? []));
+  }
+  return lines;
+}
 
-  const rest = sections.filter(s => s !== unreleased && s !== sameDay);
-  const older = rest.flatMap(s => ['', ...trimBlankLines(lines.slice(s.start, s.end))]);
+/**
+ * @typedef {object} Fragment
+ * @property {string} name file name in changelog.d
+ * @property {string} text contents
+ * @property {string} [date] YYYY-MM-DD when it reached main; undefined while it hasn't
+ */
+
+/**
+ * The full changelog: the history in CHANGELOG.md with every fragment merged in. Fragments
+ * without a date go under "## [Unreleased]" on top; dated ones join the section for their date.
+ * Within a date and type, history entries come first, then fragments in the given order.
+ * @param {string} history CHANGELOG.md contents
+ * @param {Fragment[]} fragments
+ */
+export function renderChangelog(history, fragments) {
+  changelogDates(history);
+  const { eol, lines, sections, refsStart } = outline(history);
+  const preamble = trimBlankLines(lines.slice(0, sections[0]?.start ?? refsStart));
+  /** @type {Map<string, Map<string, string[]>[]>} */
+  const byDate = new Map();
+  for (const section of sections) byDate.set(section.title, [groupByType(lines.slice(section.start + 1, section.end))]);
+  /** @type {Map<string, string[]>[]} */
+  const unreleased = [];
+  for (const fragment of fragments) {
+    const groups = parseFragment(fragment.name, fragment.text);
+    if (fragment.date === undefined) {
+      unreleased.push(groups);
+      continue;
+    }
+    if (!isDate(fragment.date)) throw new Error(`${fragment.name}: expected a YYYY-MM-DD date, got "${fragment.date}"`);
+    byDate.set(fragment.date, [...(byDate.get(fragment.date) ?? []), groups]);
+  }
+  const rendered = [];
+  if (unreleased.length > 0) rendered.push(renderSection('[Unreleased]', unreleased));
+  for (const date of [...byDate.keys()].sort().reverse()) rendered.push(renderSection(date, byDate.get(date) ?? []));
   const refs = trimBlankLines(lines.slice(refsStart));
   return [
-    ...trimBlankLines(lines.slice(0, unreleased.start)),
-    '',
-    '## [Unreleased]',
-    '',
-    ...dated,
-    ...older,
+    ...preamble,
+    ...rendered.flatMap(section => ['', ...section]),
     ...(refs.length > 0 ? ['', ...refs] : []),
     '',
   ].join(eol);
-
-  /** @param {string} type */
-  function rank(type) {
-    if (type === '') return -1;
-    const position = TYPE_ORDER.indexOf(type);
-    return position < 0 ? TYPE_ORDER.length : position;
-  }
 }

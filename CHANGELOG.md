@@ -4,21 +4,12 @@ All notable changes to AI Engineer Coach are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/), but changes are
 grouped by the date they reached `main`, newest first, instead of by release: the extension is
-built from source and has no versioned releases. Pull requests add entries under
-`## [Unreleased]`, and `npm run changelog:stamp` moves them under the merge date (see
-[skills/stamp-changelog.md](skills/stamp-changelog.md)).
+built from source and has no versioned releases.
 
-## [Unreleased]
-
-### Added
-
-- The bottom of the dashboard sidebar shows which build is running: its version, commit, branch,
-  and build time, with `-dirty` when it was built from uncommitted changes. The activity-bar
-  view, the `[extension] activate` line in `runtime.log`, and `dist/build-info.json` in the
-  installed extension carry the same stamp
-- **AI Engineer Coach: What's New** opens this changelog, also from a link in the activity-bar
-  view. The first time a build with newer dated changes runs, a notification offers it; turn it
-  off with the `aiEngineerCoach.showReleaseNotesAfterUpdate` setting
+Each pull request describes its user-visible changes in its own file in
+[`changelog.d/`](changelog.d/README.md). Nobody dates them by hand: `npm run changelog` and the
+packaged extension (**AI Engineer Coach: What's New**) merge them into this history under the
+date each one was merged, read from git. Changes not yet merged show under `[Unreleased]`.
 
 ## 2026-11-01
 
@@ -206,4 +197,3 @@ built from source and has no versioned releases. Pull requests add entries under
 - Skill Finder and context quality analysis
 - Activity patterns (projects, work hours)
 
-[Unreleased]: https://github.com/microsoft/AI-Engineering-Coach/commits/main

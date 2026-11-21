@@ -46,8 +46,10 @@ The `--no-dependencies` flag is required because runtime dependencies are bundle
 - `ai-engineer-coach-<version>.vsix` at the repo root.
 - `dist/extension.js` (the bundled entry point).
 - `dist/build-info.json`, the build stamp (see [Versioning and build stamps](#versioning-and-build-stamps)).
-- `CHANGELOG.md`, which vsce packages as `extension/changelog.md`: VS Code's **Changelog** tab and
-  **AI Engineer Coach: What's New** show it.
+- `CHANGELOG.md` with the `changelog.d/` fragments merged in under their merge dates (from
+  [`scripts/build-changelog.mjs`](../scripts/build-changelog.mjs)), which vsce packages as
+  `extension/changelog.md`: VS Code's **Changelog** tab and **AI Engineer Coach: What's New** show
+  it. The repository's `CHANGELOG.md` is restored afterwards.
 
 Install locally to smoke-test:
 
@@ -91,7 +93,7 @@ npm run check-size
 
 Don't change `version` when packaging. There are no versioned releases, so every branch packages
 the same file name, and changes are tracked by date in `CHANGELOG.md` (see
-[stamp-changelog](stamp-changelog.md)). Each build is identified by its stamp instead:
+[changelog-fragments](changelog-fragments.md)). Each build is identified by its stamp instead:
 
 - [`scripts/build-info.mjs`](../scripts/build-info.mjs) records `version`, the short `commit`,
   `dirty` (uncommitted changes to tracked files), the `branch`, and `builtAt`.

@@ -11,4 +11,4 @@
 - [ ] `npm run check` passes (typecheck + lint + spellcheck + knip + tests)
 - [ ] Changes are covered by tests (if applicable)
 - [ ] Documentation updated (if applicable)
-- [ ] User-visible changes are described in `CHANGELOG.md` and dated with `npm run changelog:stamp` before merge
+- [ ] User-visible changes are described in a `changelog.d/<PR number>.md` fragment
