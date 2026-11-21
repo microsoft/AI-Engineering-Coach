@@ -134,7 +134,22 @@
 .tlx .dr-links { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; flex-wrap: wrap; }
 .tlx .dr-links a { color: var(--accent-blue); text-decoration: none; cursor: pointer; }
 .tlx .dr-links a:hover { text-decoration: underline; }
-.tlx .who-you { color: var(--text); }
+.tlx-trk .wait { cursor: pointer; }
+.tlx-text { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.tlx-text-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.tlx-text .tx-list { display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow: auto; margin-top: 6px; }
+.tlx-text .tx-item { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.tlx-text .tx-item.focus { border-color: var(--accent-blue); box-shadow: 0 0 0 1px var(--accent-blue); }
+.tlx-text .tx-head { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.tlx-text .tx-body { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto;
+  border-left: 3px solid var(--border); padding: 2px 0 2px 8px; }
+.tlx-text .tx-code { font-family: var(--vscode-editor-font-family, monospace); }
+.tlx-text .tx-meta { font-size: 11px; color: var(--text-muted); margin: 4px 0; }
+.tlx-text .tx-answer { font-size: 12px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tlx-text .tx-answer b { margin-right: 6px; }
+.tlx-text .tx-choices { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.tlx-text .tx-more { margin: 4px 0; font-size: 12px; }
+.tlx-text .tx-more summary { cursor: pointer; color: var(--text-muted); font-size: 11px; }.tlx .who-you { color: var(--text); }
 .tlx .who-agent { color: var(--tl-auto); }
 .tlx .who-autopilot { color: var(--accent-orange); }
 .tlx .who-other { color: var(--text-muted); }

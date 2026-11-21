@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { Session, SessionRequest, UserWait } from './types';
+import { Session, SessionRequest, UserWait, UserWaitText } from './types';
 import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
@@ -108,6 +108,8 @@ interface ClaudeAssistantData {
   nextIndex: number;
   lastTs: number | null;
   assistantTexts: string[];
+  /** The agent's own text blocks, without the code its write tools wrote (`assistantTexts` holds both). */
+  replyTexts: string[];
   toolsUsed: string[];
   editedFiles: string[];
   referencedFiles: string[];
@@ -393,6 +395,25 @@ function toolResultHasContent(block: ClaudeContentBlock): boolean {
     && (typeof (c as { text?: unknown }).text !== 'string' || (c as { text: string }).text.trim() !== ''));
 }
 
+function toolResultText(block: ClaudeContentBlock): string {
+  const content = (block as { content?: unknown }).content;
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content.map(c => (isRecord(c) && typeof c.text === 'string' ? c.text : '')).filter(Boolean).join('\n').trim();
+}
+
+/** An `AskUserQuestion` call's questions and options, your answer (its result) and what the agent said before it. */
+function askUserQuestionText(input: unknown, answer: string | undefined, before: string | undefined): UserWaitText | undefined {
+  const questions = isRecord(input) && Array.isArray(input.questions) ? input.questions.filter(isRecord) : [];
+  const ask = questions.map(q => (typeof q.question === 'string' ? q.question.trim() : '')).filter(Boolean).join('\n');
+  const choices = questions.flatMap((q): unknown[] => (Array.isArray(q.options) ? q.options : []))
+    .map(o => (isRecord(o) && typeof o.label === 'string' ? o.label : '')).filter(Boolean);
+  const text: UserWaitText = {
+    ...(ask ? { ask } : {}), ...(choices.length ? { choices } : {}), ...(answer ? { answer } : {}), ...(before?.trim() ? { before: before.trim() } : {}),
+  };
+  return Object.keys(text).length ? text : undefined;
+}
+
 /** The stream of a line's response: a sub-agent's for a sidechain line, and for any line of a sub-agent's transcript,
  *  marked or not. Read for every line of a request's responses, and for its prompt, so the request's own chain agrees
  *  with their prompt-cache streams. */
@@ -403,7 +424,7 @@ function claudeStream(line: ClaudeLine, cacheState: ClaudeCacheState): 'main' | 
 /** Every `AskUserQuestion` result in the transcript, by its call ID, with when it came and whether it holds an answer.
  *  A result can come after your next prompt, so the whole transcript is read once, not only the asking turn. */
 interface ClaudeQuestionResults {
-  results: Map<string, { ts: number | null; answered: boolean }>;
+  results: Map<string, { ts: number | null; answered: boolean; text: string }>;
   /** Each line's own timestamp or the next one logged after it: where an unanswered question's stop ends. */
   nextTs: (number | null)[];
 }
@@ -414,7 +435,7 @@ function indexClaudeQuestionResults(lines: ClaudeLine[]): ClaudeQuestionResults 
     if (line.type !== 'assistant') continue;
     for (const block of toContentArray(line.message?.content)) if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id) asked.add(block.id);
   }
-  const results = new Map<string, { ts: number | null; answered: boolean }>();
+  const results = new Map<string, { ts: number | null; answered: boolean; text: string }>();
   const nextTs = new Array<number | null>(lines.length).fill(null);
   if (asked.size === 0) return { results, nextTs };
   let next: number | null = null;
@@ -422,14 +443,17 @@ function indexClaudeQuestionResults(lines: ClaudeLine[]): ClaudeQuestionResults 
     next = getTimestamp(lines[i].timestamp) ?? next;
     nextTs[i] = next;
   }
-  for (const line of lines) {
-    if (line.type !== 'user') continue;
-    for (const block of toContentArray(line.message?.content)) {
-      if (block.type !== 'tool_result' || !block.tool_use_id || !asked.has(block.tool_use_id) || results.has(block.tool_use_id)) continue;
-      results.set(block.tool_use_id, { ts: getTimestamp(line.timestamp), answered: block.is_error !== true && toolResultHasContent(block) });
-    }
-  }
+  for (const line of lines) if (line.type === 'user') noteQuestionResults(line, asked, results);
   return { results, nextTs };
+}
+
+/** The first result of each asked question in a user line: when it came, whether you answered and what you said. */
+function noteQuestionResults(line: ClaudeLine, asked: Set<string>, results: ClaudeQuestionResults['results']): void {
+  for (const block of toContentArray(line.message?.content)) {
+    if (block.type !== 'tool_result' || !block.tool_use_id || !asked.has(block.tool_use_id) || results.has(block.tool_use_id)) continue;
+    const answered = block.is_error !== true && toolResultHasContent(block);
+    results.set(block.tool_use_id, { ts: getTimestamp(line.timestamp), answered, text: answered ? toolResultText(block) : '' });
+  }
 }
 
 /** Assistant data of the request whose prompt is the user line at `userIndex`. */
@@ -446,6 +470,7 @@ function collectClaudeAssistantData(
     nextIndex: startIndex,
     lastTs,
     assistantTexts: [],
+    replyTexts: [],
     toolsUsed: [],
     editedFiles: [],
     referencedFiles: [],
@@ -478,13 +503,17 @@ function collectClaudeAssistantData(
       for (const block of toContentArray(next.message?.content)) {
         if (block.type === 'text' && block.text) {
           data.assistantTexts.push(block.text);
+          data.replyTexts.push(block.text);
           continue;
         }
         if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs) {
           // Answered or not, the question stopped the agent: until its result, or, with none logged, the next line.
           const result = questions.results.get(block.id);
           const end = result?.ts ?? questions.nextTs[i + 1] ?? assistantTs;
-          if (end >= assistantTs) data.userWaits.push({ start: assistantTs, end, kind: 'question', answered: result?.answered ?? false });
+          if (end >= assistantTs) {
+            const text = askUserQuestionText(block.input, result?.text, data.replyTexts[data.replyTexts.length - 1]);
+            data.userWaits.push({ start: assistantTs, end, kind: 'question', answered: result?.answered ?? false, ...(text ? { text } : {}) });
+          }
         }
         const incomplete = !!block.id && !toolResults.completed.has(block.id);
         const failed = incomplete || (!!block.id && toolResults.failed.has(block.id));
@@ -864,6 +893,7 @@ function buildClaudeRequest(
     timestamp: userTs,
     messageText: getClaudeUserText(line),
     responseText: assistantData.assistantTexts.join('\n'),
+    ...(assistantData.replyTexts.length ? { replyText: assistantData.replyTexts.join('\n') } : {}),
     agentName: 'Claude',
     agentMode: 'agent',
     modelId: assistantData.model,

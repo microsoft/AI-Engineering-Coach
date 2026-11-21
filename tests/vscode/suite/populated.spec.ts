@@ -55,7 +55,8 @@ describe('Packaged VSIX with synthetic sessions', () => {
     await dashboard.waitForText('#tlxKpis', 'Peak parallel sessions');
     await dashboard.expectCount('.tlx-lane', 3);
     await dashboard.click('.tlx-lane');
-    await dashboard.waitForText('#tlxDetail', 'no prompt or response body is shown');
+    await dashboard.waitForText('#tlxDetail', 'Show prompts and questions');
+    await dashboard.waitForText('#tlxText', 'read again from the session’s log on this machine');
     await dashboard.expectHealthy();
     await dashboard.snapshot('02-timeline', 'Timeline: 3 projects on the latest day, their KPIs and the selected session’s turns');
   });

@@ -9,6 +9,8 @@ import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
 import { loadSessionFromDisk } from '../core/cache';
 import { withAnalyzedTurns } from '../core/fork-ownership';
+import { localScrubContext } from '../core/session-workspace-meta';
+import { timelineSessionText } from '../core/timeline-text';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
 import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
@@ -779,6 +781,14 @@ const rpcHandlers: TypedRpcHandlers = {
     if (fromDisk) return withAnalyzedTurns(fromDisk, a.getSessionDetail(sessionId));
     // Fall back to in-memory (stripped) session.
     return a.getSessionDetail(sessionId);
+  },
+  // The text behind one Timeline lane, read again from its log when the lane is opened: only for the local panel.
+  getTimelineSessionText: async (a, _p, params) => {
+    const sessionId = params?.sessionId;
+    if (!isString(sessionId)) return null;
+    const analyzed = a.getSessionDetail(sessionId);
+    const full = analyzed ? await loadSessionFromDisk(sessionId) : null;
+    return full ? timelineSessionText(withAnalyzedTurns(full, analyzed), localScrubContext()) : null;
   },
   getWorkLifeBalance: (a, _p, params) => a.getWorkLifeBalance(validateDateFilter(params)),
   getAntiPatterns: (a, _p, params) => a.getAntiPatterns(validateDateFilter(params)),

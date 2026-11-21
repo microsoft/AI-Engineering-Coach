@@ -55,7 +55,22 @@ Use the filters above the lanes to show one harness, search a repository or mode
 
 **Impact by session family** ranks the day's families by credits, with typed and automated turns, agent time and the longest unattended stretch; bars compare each family with the largest. Click a row to select the family's coordinator, or its top session shown when the coordinator isn't.
 
-Click a lane to see its details: role and direct parent, branch, harness, model and time span, typed and automated turns, agent time and credits in the day or week, sub-agent launches, and every turn that started in it with its time, sender, its own agent time and the time it was stopped for you. No prompt or response body is shown; a name you gave the session can contain the same words. Links open the parent session, the fork source, the first child, the family in the Families view, and **Context Health › Prompt Cache** (and **Token Types** when token reporting is on).
+Click a lane to see its details: role and direct parent, branch, harness, model and time span, typed and automated turns, agent time and credits in the day or week, sub-agent launches, and every turn that started in it with its time, sender, its own agent time and the time it was stopped for you. Links open the parent session, the fork source, the first child, the family in the Families view, and **Context Health › Prompt Cache** (and **Token Types** when token reporting is on).
+
+### Prompts and questions
+
+**Show prompts and questions**, in the lane's details, shows the text behind the lane's day or week, in time order:
+
+![A lane's prompts and questions](/screenshots/screen-timeline-text.png)
+
+- **Each turn**: the message that started it (what you typed, or what a coordinator, relay or autopilot sent), and the end of the agent's reply in the turn. Compaction summaries and harness messages aren't shown.
+- **Questions**: what the agent asked, with its choices and what it said just before, and your answer and how long you took. A relayed question shows the child's question and your reply.
+- **Permission prompts**: what was requested (the command, path, URL, tool or extension), the kind of request, the agent's stated reason, and the decision. Decisions a policy made aren't requests to you, so they aren't listed.
+- **Waits for your next prompt**: how long the agent waited, and the end of the reply it waited after.
+
+Click a hatched wait on a lane to jump to it. Copilot App and Copilot CLI log all of these; Claude Code logs its `AskUserQuestion` questions and your answers; other harnesses show the turns' messages.
+
+The text is read again from that session's log on this machine when you open the lane, and only for that lane: the Timeline's data, the `@aicoach` chat tool and the summary export never carry it. Links, email addresses, secret-like tokens (keys, `Bearer` tokens, `password=…` style pairs and long random strings), your home folder (as `~`) and your names (as `[name]`) are replaced, and long text is cut. This covers those patterns; it isn't a guarantee that text you or an agent wrote holds nothing private. **Mask names** hides the section. The setting is kept for the panel; turn it off to see only counts and timings.
 
 ## Families
 
@@ -88,9 +103,9 @@ Claude Code sub-agents are part of their parent session's lane.
 ## Names, credits and privacy
 
 - **Names and branches** come from Copilot App and Copilot CLI (`workspace.yaml`). Only names the file marks as given by you (`user_named: true`) are shown, and not even those when they repeat your first prompt or its first words, however few (a name that ends inside a word of the prompt doesn't repeat it): an automatic title often is your prompt, so it and any name of unknown origin read *Untitled … session N*. Before a name, branch, repository or model is shown, links, email addresses, drive, network and absolute paths (quoted ones whole; an unquoted one with spaces up to its first word with a file extension, else up to the next path or the end of the clause), your OS account name and your GitHub handle are removed. An OS account name shorter than three characters is left as it is, since it would match ordinary words; a signed-in GitHub handle of any length is still removed as a branch's first word. A branch loses a first word that is your signed-in GitHub handle; your OS account name in a branch reads `[name]` where it stands, so the branch never passes for its topic alone. Generic account names such as `vscode`, `node` or `root` are ordinary words and stay. A repository named only after you reads *personal repository*. This covers the patterns above; it isn't a guarantee that free text you typed into a name holds nothing personal.
-- **Mask names** replaces session names with *Session N*, hides branches, replaces repositories and every model name with letters (*Repository A*, *Model A*; a model name can be a deployment you named, even behind a provider's prefix), and clears and turns off both search boxes while it is on. It covers the Timeline page only: the sidebar still shows the workspace you picked, and the summary export isn't masked.
+- **Mask names** replaces session names with *Session N*, hides branches, replaces repositories and every model name with letters (*Repository A*, *Model A*; a model name can be a deployment you named, even behind a provider's prefix), hides the prompts and questions in the lane's details, and clears and turns off both search boxes while it is on. It covers the Timeline page only: the sidebar still shows the workspace you picked, and the summary export isn't masked.
 - **Copilot CLI or Copilot App**: `workspace.yaml` `client_name` tells them apart. Without that file the log holds no client field, and such a session is labelled *Copilot App*.
 - **Credits** are the AI credits Copilot App and Copilot CLI log for each model call, sub-agents included. Other harnesses show time and turns.
-- The dashboard runs locally from your session logs, read-only. The Timeline adds no prompt text of its own: names that repeat a first prompt are withheld (above), but a name you gave holds whatever words you typed into it.
+- The dashboard runs locally from your session logs, read-only. The lanes, cards, callouts and the Families view show no prompt text; only **Show prompts and questions** in a lane's details does, for that lane. Names that repeat a first prompt are withheld (above), but a name you gave holds whatever words you typed into it.
 
 Ask `@aicoach` about autonomy and delegation: the `aiEngineerCoach_timeline` tool returns the same KPIs, callouts and family verdicts for the chat model to read, with session and repository names always masked and no branches; the Timeline page is where names appear. It checks that dates are real calendar dates and reports the range you asked for apart from the days it found. The summary export adds an **Autonomy and Delegation** section with counts only.

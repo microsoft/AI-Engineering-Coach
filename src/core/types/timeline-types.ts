@@ -27,6 +27,8 @@ export interface TimelineTurn {
   cr: number;
   /** Tokens logged for the turn: Copilot usage records, else the turn's prompt and completion tokens. */
   tok: number;
+  /** The request's ID, to join the text read on demand to the turn (two turns can share a time). No text itself. */
+  id?: string;
   /** The harness logged no duration for the turn, so when its work ended is unknown (`d` is 0). */
   noDuration?: boolean;
   /** When the turn was stopped on a question or a permission prompt (absolute ms, in order; they can overlap, and one
@@ -101,4 +103,37 @@ export interface TimelineDataset {
    *  waits outside it never count. */
   from?: number;
   to?: number;
+}
+
+/** The text behind one session's turns and stops, for the Timeline detail panel: loaded when a lane is opened, never
+ *  part of the dataset, the chat tool or the export. Scrubbed of links, email addresses, the home directory, the user's
+ *  names and secret-like tokens; long text is cut, with `cut` set. */
+export interface TimelineSessionText {
+  sessionId: string;
+  /** Turns by start time (`t`, as in `TimelineTurn`): the prompt that started each one, and the end of the agent's reply. */
+  turns: TimelineTextTurn[];
+  /** Questions, relayed questions and permission prompts by start time (`s`, as in `TimelineTurnWait`). */
+  waits: TimelineTextWait[];
+}
+
+export interface TimelineTextTurn {
+  t: number;
+  k: TurnSender;
+  /** The request's ID: joins the text to its turn (`TimelineTurn.id`); turns can share a time. */
+  id?: string;
+  /** The message that started the turn. Left out for compaction and system turns. */
+  prompt?: string;
+  /** The end of the agent's reply in the turn. */
+  reply?: string;
+  cut?: boolean;
+}
+
+export interface TimelineTextWait extends TimelineTurnWait {
+  ask?: string;
+  choices?: string[];
+  answer?: string;
+  tool?: string;
+  intention?: string;
+  before?: string;
+  cut?: boolean;
 }

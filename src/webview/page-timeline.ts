@@ -7,9 +7,11 @@
  * and which sessions started which; and a Families view that judges each delegation as a whole. The analyzer sends
  * the range once (`getTimelineData`); every view, filter and the name mask are computed here with the shared model. */
 
-import type { DateFilter, TimelineDataset, TimelineTurn, TurnSender } from '../core/types';
+import type {
+  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
+} from '../core/types';
 import {
-  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, dayStart, dayTicks, familiesInsights, filterLanes,
+  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
   formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, neededYou, NO_LANE_FILTERS,
   clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
   viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
@@ -18,7 +20,7 @@ import {
 } from '../core/timeline-model';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { toDateStr } from '../core/helpers';
-import { rpc } from './shared';
+import { rpc, vscode } from './shared';
 import { html, render, type VNode } from './render';
 import { consumeNavHint } from './nav-hint';
 
@@ -49,12 +51,16 @@ interface TimelineState {
   familySort: FamilySort;
   familyMin: number;
   verdict: VerdictFilter;
+  /** Show prompts and questions in the detail panel (kept in the webview state; null until read). */
+  showText: boolean | null;
+  /** The prompt, question or wait highlighted in the detail panel (`t:<time>`, `w:<kind>:<start>`, `i:<start>`). */
+  textFocus: string | null;
 }
 
 const state: TimelineState = {
   view: 'day', date: '', group: 'tree', color: 'family', strip: 'turns', selected: null, focusId: null,
   collapsed: new Set(), masked: false, filters: { ...NO_LANE_FILTERS }, family: null, familyQuery: '',
-  familySort: 'credits', familyMin: 2, verdict: 'all',
+  familySort: 'credits', familyMin: 2, verdict: 'all', showText: null, textFocus: null,
 };
 
 interface Loaded {
@@ -65,6 +71,12 @@ interface Loaded {
 let loaded: Loaded | null = null;
 let rootEl: HTMLElement | null = null;
 let scrollToSelected = false;
+let scrollToText = false;
+
+/** The text behind each opened lane, by session ID: read once per load, on demand. */
+type TextEntry = { status: 'loading' } | { status: 'ready'; text: TimelineSessionText } | { status: 'missing' };
+const texts = new Map<string, TextEntry>();
+const SHOW_TEXT_KEY = 'timelineShowText';
 
 const FAMILY_COLORS = ['#3794ff', '#2ea043', '#14a38b', '#bf8700', '#db61a2', '#a371f7', '#0969da', '#d18616'];
 const LONE_COLOR = '#8b949e';
@@ -89,6 +101,8 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   const dataset = await rpc<TimelineDataset>('getTimelineData', { filter: currentFilter });
   if (!root.isConnected) return;
   loaded = { prepared: prepareTimeline(dataset) };
+  texts.clear();
+  state.showText ??= (vscode.getState() as Record<string, unknown> | null)?.[SHOW_TEXT_KEY] !== false;
   rootEl = root;
   root.replaceChildren();
   applyNavHint(consumeNavHint(), loaded.prepared);
@@ -152,6 +166,11 @@ function draw(): void {
     scrollToSelected = false;
     requestAnimationFrame(() => rootEl?.querySelector('.tlx-lane.sel, .frow.sel')?.scrollIntoView({ block: 'center' }));
   }
+  const focus = scrollToText && state.textFocus ? rootEl.querySelector(`[data-text-at="${state.textFocus}"]`) : null;
+  if (focus) {
+    scrollToText = false;
+    requestAnimationFrame(() => focus.scrollIntoView({ block: 'nearest' }));
+  }
 }
 
 function update(change: Partial<TimelineState>): void {
@@ -196,15 +215,18 @@ function page(data: Loaded): VNode {
     ${ctx ? filterBar(p, ctx) : null}
     <div class="tlx-view">${ctx ? timelineView(ctx) : familiesView(data, namer)}</div>
     <p class="tlx-foot">Agent time is, for each turn, the time from its prompt to its last logged agent activity, less the time that
-          turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
-          gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
-          answered (from the request to its result; none when your answer was recorded before the request), once per session where they overlap; an answer is dated by Copilot’s record of it when
-          logged; permissions a policy decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
+      turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
+      gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
+      answered (from the request to its result; none when your answer was recorded before the request), once per session where they overlap;
+      an answer is dated by Copilot’s record of it when
+      logged; permissions a policy decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
       Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
       create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
-      session that relayed its first message. The Timeline shows counts, timings, model, harness and repository names and the session names
-      you gave (never automatic titles, nor a name that repeats your first prompt); no prompt or response body, though a name you gave can hold the same words. Mask names hides names, branches, repositories and search
-      text on this page only, not the sidebar.</p>` as VNode;
+      session that relayed its first message. The lanes, cards and callouts show counts, timings, model, harness and repository names and
+      the session names you gave (never automatic titles, nor a name that repeats your first prompt or its first words). Show prompts and questions, in a lane’s
+      details, reads that session’s prompts, questions, answers and permission requests again from its log on this machine when you open
+      the lane; links, email addresses, secret-like tokens, your home folder and your names are replaced, and nothing of it leaves this page.
+      Mask names hides names, branches, repositories, model names, search text and that text on this page only, not the sidebar.</p>` as VNode;
 }
 
 function segment<T extends string>(id: string, options: [T, string][], current: T, onPick: (v: T) => void, disabled = false): VNode {
@@ -554,7 +576,14 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
         ${ctx.ticks.map(([x]) => html`<div class="grid" style=${`left:${pct(ctx, x)}%`}></div>`)}
         ${l.waits.map(w => {
           const [part] = clipIntervals([[w.start, w.end]], plot);
-          return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} title=${waitTip(ctx, w, l.win)} style=${span(part)}></div>` : null;
+          const key = w.kind === 'idle' ? `i:${w.start}` : `w:${w.kind}:${w.start}`;
+          const open = (e: Event) => {
+            e.stopPropagation();
+            scrollToText = true;
+            update({ selected: s.id, textFocus: key });
+          };
+          return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} data-wait-at=${key}
+            title=${waitTip(ctx, w, l.win) + (state.showText && !state.masked ? '\nClick to read it in the details' : '')} style=${span(part)} onClick=${open}></div>` : null;
         })}
         ${clipIntervals(l.segments, plot).map(part => html`<div class="seg" title=${`Agent working ${formatDuration(part[1] - part[0])} (bars are at least 1 px wide, so a very short one can look longer)`} style=${`${span(part)};background:${color}`}></div>`)}
         ${l.turns.map(t => html`<div class=${'mk ' + markKind(t.k)} data-sender=${t.k} title=${turnTip(ctx, s, t)} style=${`left:${pct(ctx, t.t)}%`}></div>`)}
@@ -744,7 +773,8 @@ function detailPanel(ctx: ViewContext): VNode {
         })}
         </tbody></table></div>`}
       <p class="note tlx-note-end">${l.turns.length} ${l.turns.length === 1 ? 'turn' : 'turns'} started this ${ctx.view} · ${formatTokens(l.tokens)} ·
-        rows are whole turns, the cards above only this ${ctx.view} · no prompt or response body is shown</p>
+        rows are whole turns, the cards above only this ${ctx.view}</p>
+      ${textSection(ctx, l)}
       <div class="dr-links">
         ${parent && !parent.ctx ? goLink('Open parent session ›', () => openSession(parent.index), 'tlxOpenParent') : null}
         ${parent?.ctx ? html`<span class="muted">parent outside this range or the sidebar selection</span>` : null}
@@ -758,6 +788,125 @@ function detailPanel(ctx: ViewContext): VNode {
         ${FF_TOKEN_REPORTING_ENABLED ? html`<a href="#" data-page="config-health" data-nav-hint="token-types">Token Types ›</a>` : null}
       </div>
     </div>` as VNode;
+}
+
+/* ---- prompts and questions (detail panel, local only) ---- */
+
+const TURN_TITLE: Record<TurnSender, string> = {
+  you: 'You typed', agent: 'Sent by an agent or session', autopilot: 'Autopilot continuation', compaction: 'Compaction', other: 'System or harness message',
+};
+const ASK_TITLE: Record<TimelineTextWait['k'], string> = {
+  question: 'The agent asked you', relay: 'A child session’s question, relayed to you', permission: 'Permission prompt',
+};
+const DECISIONS: Record<string, string> = {
+  approved: 'approved', 'approved-for-location': 'approved for this location', 'approved-for-session': 'approved for the session',
+  'denied-interactively-by-user': 'denied by you', 'denied-no-approval-rule-and-could-not-request-from-user': 'denied: no rule allowed it and you couldn’t be asked',
+};
+
+function setShowText(on: boolean): void {
+  const saved: unknown = vscode.getState();
+  vscode.setState({ ...(saved && typeof saved === 'object' ? saved : {}), [SHOW_TEXT_KEY]: on });
+  update({ showText: on });
+}
+
+/** The lane's text, read once per load: the first call starts the request and redraws when it answers. */
+function sessionText(id: string): TextEntry {
+  const known = texts.get(id);
+  if (known) return known;
+  const entry: TextEntry = { status: 'loading' };
+  texts.set(id, entry);
+  rpc<TimelineSessionText | null>('getTimelineSessionText', { sessionId: id })
+    .then(text => texts.set(id, text ? { status: 'ready', text } : { status: 'missing' }))
+    .catch(() => texts.set(id, { status: 'missing' }))
+    .finally(draw);
+  return entry;
+}
+
+function textItem(key: string, head: string, body: (VNode | null)[]): VNode {
+  return html`<div class=${'tx-item' + (state.textFocus === key ? ' focus' : '')} data-text-at=${key}>
+    <div class="tx-head">${head}</div>${body}</div>` as VNode;
+}
+
+function quote(text: string | undefined, cls = 'tx-body'): VNode | null {
+  return text ? html`<div class=${cls}>${text}</div>` as VNode : null;
+}
+
+function earlier(label: string, text: string | undefined, open = false): VNode | null {
+  return text ? html`<details class="tx-more" open=${open}><summary>${label}</summary><div class="tx-body">${text}</div></details>` as VNode : null;
+}
+
+/** A time in the detail panel: with its date when it falls outside the shown day or week (a wait that began earlier). */
+function textTime(ctx: ViewContext, t: number, win: Interval): string {
+  if (t >= win[0] && t < win[1]) return formatWhen(t, ctx.view);
+  return new Date(t).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function turnItem(ctx: ViewContext, t: TimelineTurn, tt: TimelineTextTurn | undefined): VNode {
+  const hidden = t.k === 'compaction' || t.k === 'other';
+  return textItem(`t:${t.t}${t.id ? `:${t.id}` : ''}`, `${formatWhen(t.t, ctx.view)} · ${TURN_TITLE[t.k]}`, [
+    tt?.prompt ? quote(tt.prompt) : html`<p class="note">${hidden ? 'Its text isn’t shown: it is a summary or a harness message, not an instruction.' : 'No message text was logged.'}</p>` as VNode,
+    earlier('End of the agent’s reply in this turn', tt?.reply),
+  ]);
+}
+
+function askItem(ctx: ViewContext, w: TimelineTextWait, win: Interval): VNode {
+  // Timed to Copilot's record of your answer when it logged one, else to the result.
+  const answered = w.at ?? w.e;
+  const took = answered >= w.s ? `after ${formatDuration(answered - w.s)}` : 'before the request was logged';
+  const status = w.k === 'permission'
+    ? (w.a ? `decided by you ${took}` : 'no record that you decided it')
+    : (w.a ? `you answered ${took}` : 'not answered: interrupted, or no answer logged');
+  const decision = w.answer ? DECISIONS[w.answer] ?? w.answer : '';
+  return textItem(`w:${w.k}:${w.s}`, `${textTime(ctx, w.s, win)} · ${ASK_TITLE[w.k]} · ${status}`, w.k === 'permission' ? [
+    w.tool ? html`<div class="tx-meta">Requested · ${w.tool}</div>` as VNode : null,
+    quote(w.ask, 'tx-body tx-code'),
+    w.intention ? html`<div class="tx-meta">The agent’s reason: ${w.intention}</div>` as VNode : null,
+    decision ? html`<div class="tx-answer"><b>Decision</b> ${decision}</div>` as VNode : null,
+  ] : [
+    earlier('What the agent said before it asked', w.before),
+    quote(w.ask) ?? html`<p class="note">The question’s text wasn’t logged.</p>` as VNode,
+    w.choices?.length ? html`<ul class="tx-choices">${w.choices.map(c => html`<li>${c}</li>`)}</ul>` as VNode : null,
+    w.answer ? html`<div class="tx-answer"><b>${w.k === 'relay' ? 'Your reply' : 'Your answer'}</b> ${w.answer}</div>` as VNode : null,
+  ]);
+}
+
+/** The prompts that started this window's turns, what each question or permission prompt asked and what you answered,
+ *  and each wait for your next prompt with the message it followed: local text, read when the lane is opened. */
+function textSection(ctx: ViewContext, l: TimelineLane): VNode {
+  const on = !!state.showText && !state.masked;
+  const toggle = html`<label class="tlx-text-toggle"><input type="checkbox" id="tlxShowText" checked=${on} disabled=${state.masked}
+    onChange=${(e: Event) => setShowText((e.target as HTMLInputElement).checked)} /> Show prompts and questions</label>`;
+  const wrap = (...body: (VNode | null)[]) => html`<div class="tlx-text" id="tlxText">${toggle}${body}</div>` as VNode;
+  if (state.masked) return wrap(html`<p class="note">Hidden while names are masked.</p>` as VNode);
+  if (!on) return wrap();
+  const entry = sessionText(l.s.id);
+  if (entry.status === 'loading') return wrap(html`<p class="note">Reading this session’s log…</p>` as VNode);
+  if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);
+  const { text } = entry;
+  const [from, to] = l.win;
+  // Each turn's text by its request's ID (two turns, a sub-agent's for one, can share a time), else by its time.
+  const byId = new Map(text.turns.filter(t => t.id).map(t => [t.id, t]));
+  const byTime = new Map(text.turns.filter(t => !t.id).map(t => [t.t, t]));
+  const textOf = (t: TimelineTurn) => (t.id ? byId.get(t.id) : undefined) ?? byTime.get(t.t);
+  const asks = text.waits.filter(w => waitInWindow(w, from, to));
+  const items: [number, VNode][] = [
+    ...l.turns.map(t => [t.t, turnItem(ctx, t, textOf(t))] as [number, VNode]),
+    ...asks.map(w => [w.s, askItem(ctx, w, l.win)] as [number, VNode]),
+    ...l.waits.filter(w => w.kind === 'idle').map(w => {
+      const before = [...text.turns].reverse().find(t => t.t <= w.start);
+      return [w.start, textItem(`i:${w.start}`, `${textTime(ctx, w.start, l.win)} · Waited ${formatDuration(w.end - w.start)} for your next prompt`, [
+        earlier('End of the agent’s reply before the wait', before?.reply, true) ?? html`<p class="note">No agent reply was logged before it.</p>` as VNode,
+      ])] as [number, VNode];
+    }),
+  ];
+  items.sort((a, b) => a[0] - b[0]);
+  const prompts = l.turns.filter(t => textOf(t)?.prompt).length;
+  return wrap(
+    html`<p class="note">${prompts} ${prompts === 1 ? 'prompt' : 'prompts'}${asks.length ? ` and ${asks.length} ${asks.length === 1 ? 'question or permission prompt' : 'questions or permission prompts'}` : ''} this ${ctx.view},
+      read again from the session’s log on this machine. Links, email addresses, secret-like tokens, your home folder and your names are replaced;
+      long text is cut.</p>` as VNode,
+    items.length ? html`<div class="tx-list">${items.map(([, node]) => node)}</div>` as VNode : null,
+  );
 }
 
 /** Shows a session on the Day view (or the current Week), on its busiest day when it has no lane in the current window. */
