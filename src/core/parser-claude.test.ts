@@ -826,4 +826,27 @@ describe('parseClaudeSessions: who sent a turn', () => {
       expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(request => request.nonHumanKind)).toEqual([undefined, undefined, 'system']);
     });
   });
+
+  it('counts a prompt typed while the agent was busy, and leaves out queued notifications', () => {
+    const queued = (uuid: string, origin: object, prompt: unknown, ts: string) => ({
+      type: 'attachment', uuid, timestamp: ts, sessionId: 'sess-1', cwd: '/Users/me/proj', ...human,
+      attachment: { type: 'queued_command', prompt, commandMode: 'prompt', origin },
+    });
+    withProjectsDir('s.jsonl', [
+      makeUser('Fix the parser.', '2025-06-15T10:00:00Z', { uuid: 'u1', ...human }),
+      makeToolAssistant('Read', { file_path: '/Users/me/proj/a.ts' }, '2025-06-15T10:00:01Z', 'tu-1'),
+      makeToolResultUser('2025-06-15T10:00:02Z'),
+      queued('q1', { kind: 'human' }, [{ type: 'text', text: 'Also check the tests.' }], '2025-06-15T10:00:03Z'),
+      queued('q2', { kind: 'task-notification' }, '<task-notification>done</task-notification>', '2025-06-15T10:00:04Z'),
+      makeAssistant('Both done.', '2025-06-15T10:00:05Z'),
+    ], projectsDir => {
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.userEventId, request.messageText, request.nonHumanKind])).toEqual([
+        ['u1', 'Fix the parser.', undefined],
+        ['q1', 'Also check the tests.', undefined],
+      ]);
+      expect(requests[0].referencedFiles).toEqual(['/Users/me/proj/a.ts']);
+      expect(requests[1].responseText).toBe('Both done.');
+    });
+  });
 });
