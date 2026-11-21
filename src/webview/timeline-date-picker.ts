@@ -49,6 +49,8 @@ const ui = {
   /** Move focus after the picker's next draw: to the focused day, or back to the button. */
   focusDay: false,
   focusButton: false,
+  /** Focus was in the calendar before this draw: it stays there if what held it is gone or disabled. */
+  keepFocus: false,
 };
 
 export function pickerOpen(): boolean {
@@ -67,6 +69,7 @@ const within = (d: string, lo: string, hi: string) => (d < lo ? lo : d > hi ? hi
 let shown: (() => void) | null = null;
 
 function redraw(): void {
+  ui.keepFocus = !!document.activeElement?.closest('#tlxCal');
   shown?.();
 }
 
@@ -105,6 +108,11 @@ function afterDraw(root: Element): void {
   if (ui.focusButton) {
     ui.focusButton = false;
     root.querySelector<HTMLElement>('#tlxDateLabel')?.focus();
+  }
+  // A month button disabled at the first or last loaded month drops focus: it goes to the month's day reached by Tab.
+  if (ui.keepFocus) {
+    ui.keepFocus = false;
+    if (ui.open && !document.activeElement?.closest('#tlxCal')) root.querySelector<HTMLElement>('#tlxCal button[data-date][tabindex="0"]')?.focus();
   }
 }
 

@@ -184,6 +184,31 @@ test.describe('Timeline date picker', () => {
     await page.locator('[data-page="timeline"]').first().click();
     await expect(page.locator('#tlxDateLabel')).toContainText('May 11 – May 17, 2026');
   });
+
+  test('keeps focus in the calendar when a month button it was on turns disabled', async ({ page }) => {
+    type MockWindow = { mockTimelineData: () => { sessions: { turns: { t: number }[] }[] }; mockTimelineDataOverride?: unknown };
+    // Activity from 20 April: ‹ from May opens April, the first loaded month, where ‹ can't go further.
+    await page.evaluate(() => {
+      const w = window as unknown as MockWindow;
+      const data = w.mockTimelineData();
+      const flaky = data.sessions[5];
+      w.mockTimelineDataOverride = { ...data, sessions: [...data.sessions, { ...flaky, id: 'tl-april', turns: [{ ...flaky.turns[0], t: new Date(2026, 3, 20, 10).getTime() }] }] };
+    });
+    await page.locator('[data-page="dashboard"]').first().click();
+    await page.locator('[data-page="timeline"]').first().click();
+    await page.locator('#tlxDateLabel').click();
+    await page.locator('#tlxCalPrev').click();
+    await expect(page.locator('#tlxCalMonth')).toHaveText('April 2026');
+    await expect(page.locator('#tlxCalPrev')).toBeDisabled();
+    const focused = () => page.evaluate(() => (document.activeElement?.closest('#tlxCal') ? (document.activeElement as HTMLElement).dataset.date ?? document.activeElement.id : null));
+    await expect.poll(focused).toBe('2026-04-20');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('#tlxCal'))).toBe(true);
+    await page.locator('#tlxCalNext').click();
+    await expect(page.locator('#tlxCalMonth')).toHaveText('May 2026');
+    await expect(page.locator('#tlxCalNext')).toBeDisabled();
+    await expect.poll(focused).toBe('2026-05-03');
+  });
 });
 
 /** Opens the dashboard at a Timeline link, as a copied link would: no click on the sidebar. */
