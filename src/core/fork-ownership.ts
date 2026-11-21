@@ -55,15 +55,17 @@ function prefixSource(s: Session, group: readonly Session[]): { source: Session;
   }
   return best;
 }
-/** The copied coordinator prompts, plus the sub-agent turns up to the last of them that the source holds too. */
+/** The copied coordinator prompts, plus the sub-agent turns the source holds too (same message and time) from before the
+ *  fork's first prompt of its own: a sub-agent a shared prompt launched can run after it. Without such a prompt, every
+ *  one the source holds. */
 function prefixCopySet(s: Session, source: Session, k: number): Set<SessionRequest> {
   const mine = mainTurns(s);
   const copies = new Set(mine.slice(0, k));
   const key = (r: SessionRequest) => `${r.userEventId}@${r.timestamp}`;
   const theirSubs = new Set(source.requests.filter(r => r.nonHumanKind === 'subagent').map(key));
-  const lastCopy = mine[k - 1].timestamp ?? 0;
+  const firstOwn = mine[k]?.timestamp ?? Infinity;
   for (const r of s.requests) {
-    if (r.nonHumanKind === 'subagent' && r.userEventId && (r.timestamp ?? 0) <= lastCopy && theirSubs.has(key(r))) copies.add(r);
+    if (r.nonHumanKind === 'subagent' && r.userEventId && (r.timestamp ?? 0) < firstOwn && theirSubs.has(key(r))) copies.add(r);
   }
   return copies;
 }
