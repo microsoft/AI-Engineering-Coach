@@ -100,12 +100,14 @@ describe('parseClaudeSessions', () => {
     // Claude Code names a project folder after its whole working directory, so deep repositories give long paths.
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-long-path-'));
     try {
-      const projDir = path.join(root, 'projects', '-C-' + 'very-deep-working-directory-'.repeat(7) + 'repo');
+      // Long whatever the temp folder: a deep home, and a project folder named after a deep working directory.
+      const projects = path.join(root, 'home-folder-'.repeat(8), 'projects');
+      const projDir = path.join(projects, '-C-' + 'very-deep-working-directory-'.repeat(7) + 'repo');
       fs.mkdirSync(projDir, { recursive: true });
       const file = path.join(projDir, '0f0e0d0c-0000-4000-8000-000000000288.jsonl');
       fs.writeFileSync(file, [makeUser('prompt', '2025-06-15T10:00:00Z'), makeAssistant('answer', '2025-06-15T10:00:05Z')].map(l => JSON.stringify(l)).join('\n'));
-      expect(file.length).toBeGreaterThan(288);
-      expect(parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions).map(s => s.requests.length)).toEqual([1]);
+      expect(file.length).toBeGreaterThan(350);
+      expect(parseClaudeSessions(projects).flatMap(w => w.sessions).map(s => s.requests.length)).toEqual([1]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
