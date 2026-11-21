@@ -43,17 +43,21 @@ export function loadSourceSession(source: SessionSource, sessionId: string): Ses
         .map(file => parseClaudeSessionFile(file, source.workspaceId, source.workspaceName, { subagentFile: isClaudeSubagentFile(file) }))
         .filter((session): session is Session => session !== null);
       if (!sessions[0]) return null;
-      const dropped = new Set(source.droppedUserEventIds);
+      // Each user line once, as the parser counts it, and none that another session counted.
+      const seen = new Set(source.droppedUserEventIds);
       const requests = sessions.flatMap(session => session.requests)
-        .filter(request => !request.userEventId || !dropped.has(request.userEventId))
-        .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
-      // A session that lost replayed turns is dated from the turns it kept, as the parser dates it.
-      const creationDates = (dropped.size > 0 ? [earliestRequestTime(requests)] : sessions.map(session => session.creationDate))
-        .filter((date): date is number => date !== null);
+        .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+        .filter(request => {
+          if (!request.userEventId) return true;
+          if (seen.has(request.userEventId)) return false;
+          seen.add(request.userEventId);
+          return true;
+        });
       return {
         ...sessions[0],
         sessionId,
-        creationDate: creationDates.length > 0 ? Math.min(...creationDates) : null,
+        // Dated from the turns it kept, as the parser dates every session.
+        creationDate: earliestRequestTime(requests),
         requests,
         requestCount: requests.length,
         lastMessageDate: Math.max(...sessions.map(session => session.lastMessageDate ?? 0)) || null,

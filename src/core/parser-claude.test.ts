@@ -974,6 +974,20 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
     });
   });
 
+  it('counts and shows a user line repeated within a transcript once', () => {
+    withProjects({
+      '-Users-me-proj/a.jsonl': [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.'),
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.'),
+      ],
+    }, projectsDir => {
+      const sources = new Map<string, SessionSource>();
+      const [session] = parseClaudeSessions(projectsDir, undefined, sources).flatMap(result => result.sessions);
+      expect(session.requests.map(request => request.userEventId)).toEqual(['u1']);
+      expect(loadSourceSession(sources.get('a')!, 'a')?.requests.map(request => request.userEventId)).toEqual(['u1']);
+    });
+  });
+
   it("leaves a fork's replayed turns out of its reloaded session", () => {
     withProjects({
       '-Users-me-proj/original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'original' }), makeAssistant('Done.')],
