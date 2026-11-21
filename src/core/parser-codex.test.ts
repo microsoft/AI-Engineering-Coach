@@ -363,6 +363,20 @@ describe('parseCodexSessions: turn timing', () => {
     });
   });
 
+  it('keeps reasoning and shell calls logged after task_complete in the turn', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-late-items', cwd: '/Users/me/proj', source: 'vscode' } },
+      userItem('2025-06-15T10:00:00Z', 'Why?'),
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:10Z', payload: { type: 'task_complete' } },
+      { type: 'response_item', timestamp: '2025-06-15T10:00:15Z', payload: { type: 'reasoning', summary: [] } },
+      { type: 'response_item', timestamp: '2025-06-15T10:00:25Z', payload: { type: 'local_shell_call', status: 'completed' } },
+      userItem('2025-06-15T11:00:00Z', 'Thanks.'),
+      assistantItem('2025-06-15T11:00:05Z', 'Welcome.'),
+    ], sessionsDir => {
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(25_000);
+    });
+  });
+
   it('does not count a later task with no prompt, such as a manual /compact, as the turn\'s work', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'sess-compact', cwd: '/Users/me/proj', source: 'cli' } },

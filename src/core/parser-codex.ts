@@ -558,6 +558,9 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   }
 }
 
+/** Response items that are the agent's work: logged after the task completed, they extend the turn. */
+const CODEX_LATE_WORK_ITEMS: ReadonlySet<string> = new Set(['reasoning', 'function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call']);
+
 /** Work logged after the task completed: the turn ends with that work instead. */
 function extendCodexTurnEnd(state: CodexParseState, ts: number | null): void {
   if (!state.turnEnded && state.turnEndTs !== null && ts !== null && ts > state.turnEndTs) state.turnEndTs = ts;
@@ -671,7 +674,7 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
     handleUserResponseItem(payload, state, ts, defaultModel);
     return;
   }
-  if (role === 'assistant' || itemType === 'function_call' || itemType === 'custom_tool_call') extendCodexTurnEnd(state, ts);
+  if (role === 'assistant' || CODEX_LATE_WORK_ITEMS.has(itemType)) extendCodexTurnEnd(state, ts);
   if (role === 'assistant' && itemType === 'message') {
     handleAssistantResponseItem(payload, state);
     return;
