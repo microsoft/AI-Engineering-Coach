@@ -57,6 +57,10 @@
 .tlx .sw.wait, .tlx-trk .wait {
   border: 1px dashed rgba(255, 196, 0, 0.55); background: repeating-linear-gradient(45deg, rgba(255, 196, 0, 0.18) 0 3px, transparent 3px 6px);
 }
+/* A question or permission prompt the agent stopped for: the same hatch, solid edge and denser. */
+.tlx .sw.wait.ask, .tlx-trk .wait.ask {
+  border: 1px solid rgba(214, 140, 0, 0.8); background: repeating-linear-gradient(45deg, rgba(214, 140, 0, 0.35) 0 3px, transparent 3px 6px);
+}
 .tlx .conn-sw { display: inline-block; width: 0; height: 12px; border-left: 1.5px dashed var(--text-muted); }
 
 /* Lanes */

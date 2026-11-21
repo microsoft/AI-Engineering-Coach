@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { lastSegment, scrubBranch, scrubLabel, type ScrubContext } from './session-labels';
+import { scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
 
 export interface CliWorkspaceMeta {
   displayName?: string;
@@ -19,16 +19,38 @@ export interface CliWorkspaceMeta {
   forkCount?: number;
 }
 
-/** One top-level scalar from `workspace.yaml` (`key: value`, optionally quoted). */
+/** One top-level value from `workspace.yaml`: plain (a trailing `# comment` dropped), quoted, or a block (`|`, `>`). */
 export function yamlScalar(text: string, key: string): string {
-  const match = new RegExp(`^${key}:[ \\t]*(.*)$`, 'm').exec(text);
-  if (!match) return '';
-  let value = match[1].trim();
-  if (/^'.*'$/.test(value)) value = value.slice(1, -1).replaceAll('\'\'', "'");
-  else if (/^".*"$/.test(value)) {
-    try { value = JSON.parse(value) as string; } catch { value = value.slice(1, -1); }
+  const lines = text.split(/\r?\n/);
+  const at = lines.findIndex(line => line.startsWith(`${key}:`));
+  if (at < 0) return '';
+  const raw = lines[at].slice(key.length + 1).trim();
+  const block = /^([|>])[+-]?\d*[+-]?(?:\s+#.*)?$/.exec(raw);
+  if (block) return yamlBlock(lines.slice(at + 1), block[1] === '>');
+  let value: string;
+  if (raw.startsWith("'")) {
+    const end = /^'((?:[^']|'')*)'/.exec(raw);
+    value = end ? end[1].replaceAll("''", "'") : raw.slice(1);
+  } else if (raw.startsWith('"')) {
+    const end = /^"((?:[^"\\]|\\.)*)"/.exec(raw);
+    try { value = end ? JSON.parse(`"${end[1]}"`) as string : raw.slice(1); } catch { value = end ? end[1] : raw.slice(1); }
+  } else {
+    value = raw.replace(/(?:^|\s+)#.*$/, '').trim();
   }
   return value === '~' || value === 'null' ? '' : value;
+}
+
+/** The indented lines of a block value: kept as lines (`|`) or folded into one (`>`). */
+function yamlBlock(lines: readonly string[], folded: boolean): string {
+  const body: string[] = [];
+  for (const line of lines) {
+    if (line.trim() && !/^\s/.test(line)) break;
+    body.push(line);
+  }
+  while (body.length && !body[body.length - 1].trim()) body.pop();
+  const indent = Math.min(...body.filter(line => line.trim()).map(line => /^\s*/.exec(line)![0].length));
+  const text = body.map(line => line.slice(Number.isFinite(indent) ? indent : 0));
+  return (folded ? text.join(' ').replaceAll(/ {2,}/g, ' ') : text.join('\n')).trim();
 }
 
 function readJson(file: string): unknown {
@@ -82,8 +104,9 @@ export function localScrubContext(): ScrubContext {
   if (cached?.home === home) return cached.ctx;
   const names = [path.basename(home)];
   try { names.push(os.userInfo().username); } catch { /* no account name */ }
-  names.push(...copilotLogins(home), ...ghLogins(home));
-  cached = { home, ctx: { home, names } };
+  const handles = [...copilotLogins(home), ...ghLogins(home)];
+  names.push(...handles);
+  cached = { home, ctx: { home, names, handles } };
   return cached.ctx;
 }
 
@@ -100,8 +123,8 @@ export function readCliWorkspaceMeta(sessionDir: string, ctx: ScrubContext = loc
   if (name) meta.displayName = name;
   const branch = scrubBranch(yamlScalar(text, 'branch'), ctx);
   if (branch) meta.branch = branch;
-  const repo = scrubLabel(lastSegment(yamlScalar(text, 'repository') || yamlScalar(text, 'git_root')), ctx);
-  if (repo && repo !== '[path]') meta.repository = repo;
+  const repo = scrubRepository(yamlScalar(text, 'repository') || yamlScalar(text, 'git_root'), ctx);
+  if (repo) meta.repository = repo;
   const forks = Number.parseInt(yamlScalar(text, 'fork_count'), 10);
   if (Number.isFinite(forks) && forks > 0) meta.forkCount = forks;
   return meta;

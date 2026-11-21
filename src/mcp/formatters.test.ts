@@ -278,11 +278,16 @@ describe('formatTimeline', () => {
     const summary = formatTimeline(new Analyzer(sessions, new Map()), undefined);
     expect(summary).toMatchObject({
       range: { sessions: 2, activeDays: 1 },
-      day: { date: '2026-10-20', turns: 4, typedTurns: 3, peakParallelAgents: 2, childSessions: 1, childCreditSharePct: 75, waitsOnUser: { count: 2, minutes: 110, over30Min: 1 } },
-      families: { count: 1, childSessions: 1, childSessionsThatNeededAPrompt: 1, verdicts: { neededYou: { families: 1, creditSharePct: 100 } }, top: [{ name: 'Checkout', verdict: 'Needed you' }] },
+      day: { date: '2026-10-20', turns: 4, typedTurns: 3, peakParallelAgents: 2, childSessions: 1, childCreditSharePct: 75, waitsOnUser: { count: 2, onQuestionOrPermission: 0, minutes: 110, over30Min: 1 } },
+      families: { count: 1, childSessions: 1, childSessionsThatNeededYou: 1, verdicts: { neededYou: { families: 1, creditSharePct: 100 } }, top: [{ name: 'Session 1', repository: 'Repository A', verdict: 'Needed you' }] },
     });
     const json = JSON.stringify(summary);
     expect(json).not.toContain('secret');
+    // Names are masked unless asked for; branches are never sent.
+    expect(json).not.toContain('Checkout');
+    const named = formatTimeline(new Analyzer(sessions, new Map()), undefined, undefined, true);
+    expect(named.families?.top[0]).toMatchObject({ name: 'Checkout', repository: 'shop' });
+    expect(JSON.stringify(named)).not.toContain('secret');
     expect(formatTimeline(new Analyzer(sessions, new Map()), undefined, '2026-10-21').day)
       .toEqual({ date: '2026-10-21', sessions: 0, note: 'No activity on this day in the selected range.' });
   });

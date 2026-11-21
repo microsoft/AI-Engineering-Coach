@@ -125,7 +125,19 @@ export function familyFixtureFiles(root: string, timestamp: number): Map<string,
   const reply = (ts: string, text: string) => ({ type: 'assistant.message', id: `a-${ts}`, timestamp: ts, data: { content: text, phase: 'final' } });
   const create = (id: string, child: string) => [
     { type: 'tool.execution_start', data: { toolName: 'create_session', toolCallId: id } },
-    { type: 'tool.execution_complete', data: { toolCallId: id, success: true, result: { content: `Created session ${child}.` } } },
+    // The Copilot App's result: the quoted name and project IDs are not the new session; its labelled ID and link are.
+    { type: 'tool.execution_complete', data: { toolCallId: id, success: true, result: {
+      content: `Created session 'Follow-up' (id: ${child}) in project '${FAMILY.lone}'. Link to it with ghapp://sessions/${child}.` } } },
+  ];
+  /** A question the agent asked you (`ask_user`) and your answer. */
+  const ask = (id: string, from: string, to: string) => [
+    { type: 'tool.execution_start', timestamp: from, data: { toolName: 'ask_user', toolCallId: id } },
+    { type: 'tool.execution_complete', timestamp: to, data: { toolCallId: id, success: true, result: { content: 'User selected: Keep both' } } },
+  ];
+  /** A permission prompt and who decided it: you, or a host policy (not a wait on you). */
+  const permission = (id: string, from: string, to: string, decisionSource: 'human_response' | 'host_policy') => [
+    { type: 'permission.requested', timestamp: from, data: { requestId: id, permissionRequest: { kind: 'shell' } } },
+    { type: 'permission.completed', timestamp: to, data: { requestId: id, decisionSource, result: { kind: 'approved' } } },
   ];
   const files = new Map<string, string>();
   const session = (id: string, name: string, branch: string, events: object[]) => {
@@ -137,7 +149,8 @@ export function familyFixtureFiles(root: string, timestamp: number): Map<string,
     start(FAMILY.coordinator), { type: 'user.message', timestamp: at(10), data: { content: 'Split the checkout work into sessions.' } },
     usage(at(10, 1), 3), ...create('c1', FAMILY.payment), ...create('c2', FAMILY.docs), reply(at(10, 5), 'Started two sessions.'),
     { type: 'user.message', timestamp: at(10, 40), data: relay(FAMILY.payment, 'Payment tests pass.') }, reply(at(10, 41), 'Noted.'),
-    { type: 'user.message', timestamp: at(11, 30), data: { content: 'Ship it.' } }, usage(at(11, 40), 2), reply(at(11, 50), 'Shipped.'),
+    { type: 'user.message', timestamp: at(11, 30), data: { content: 'Ship it.' } }, ...permission('pm1', at(11, 31), at(11, 31), 'host_policy'),
+    ...permission('pm2', at(11, 32), at(11, 36), 'human_response'), usage(at(11, 40), 2), reply(at(11, 50), 'Shipped.'),
   ]);
   session(FAMILY.payment, 'Payment tests', `${FAMILY.handle}/payment-tests`, [
     start(FAMILY.payment), { type: 'user.message', timestamp: at(10, 2), data: relay(FAMILY.coordinator, 'Add payment tests.') },
@@ -146,7 +159,7 @@ export function familyFixtureFiles(root: string, timestamp: number): Map<string,
   ]);
   session(FAMILY.docs, 'Docs update', `${FAMILY.handle}/docs`, [
     start(FAMILY.docs), { type: 'user.message', timestamp: at(10, 4), data: relay(FAMILY.coordinator, 'Update the docs.') },
-    usage(at(10, 10), 2), reply(at(10, 20), 'Docs updated.'),
+    ...ask('q1', at(10, 6), at(10, 16)), usage(at(10, 17), 2), reply(at(10, 20), 'Docs updated.'),
   ]);
   session(FAMILY.lint, 'Lint fixes', `${FAMILY.handle}/lint`, [
     start(FAMILY.lint), { type: 'user.message', timestamp: at(10, 6), data: relay(FAMILY.payment, 'Fix the lint errors.') },

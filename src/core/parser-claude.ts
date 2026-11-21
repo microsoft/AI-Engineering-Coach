@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { Session, SessionRequest } from './types';
+import { Session, SessionRequest, UserWait } from './types';
 import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
@@ -120,9 +120,9 @@ interface ClaudeAssistantData {
   answerEvidence: 'final' | 'legacy' | 'missing';
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
+  /** `AskUserQuestion` calls: from the question to your answer (the tool result). */
+  userWaits: UserWait[];
 }
-
-/** Session-wide prompt-cache state across Claude requests. */
 interface ClaudeCacheState {
   sawMain: boolean;
   /** The file is a sub-agent's transcript (`isClaudeSubagentFile`): every call in it is sub-agent work, whether or
@@ -369,20 +369,23 @@ function applyClaudeToolBlock(
 function collectClaudeToolResults(
   lines: ClaudeLine[],
   startIndex: number,
-): { completed: Set<string>; failed: Set<string> } {
+): { completed: Set<string>; failed: Set<string>; resultTs: Map<string, number> } {
   const completed = new Set<string>();
   const failed = new Set<string>();
+  const resultTs = new Map<string, number>();
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
     if (line.type === 'user' && userHasText(line)) break;
     if (line.type !== 'user') continue;
+    const ts = getTimestamp(line.timestamp);
     for (const block of toContentArray(line.message?.content)) {
       if (block.type !== 'tool_result' || !block.tool_use_id) continue;
       completed.add(block.tool_use_id);
+      if (ts) resultTs.set(block.tool_use_id, ts);
       if (block.is_error === true) failed.add(block.tool_use_id);
     }
   }
-  return { completed, failed };
+  return { completed, failed, resultTs };
 }
 
 /** The stream of a line's response: a sub-agent's for a sidechain line, and for any line of a sub-agent's transcript,
@@ -415,6 +418,7 @@ function collectClaudeAssistantData(
     answerEvidence: 'missing',
     investigationDelegations: [],
     webDomains: [],
+    userWaits: [],
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);
@@ -437,6 +441,10 @@ function collectClaudeAssistantData(
         if (block.type === 'text' && block.text) {
           data.assistantTexts.push(block.text);
           continue;
+        }
+        if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs && !toolResults.failed.has(block.id)) {
+          const answeredAt = toolResults.resultTs.get(block.id);
+          if (answeredAt && answeredAt > assistantTs) data.userWaits.push({ start: assistantTs, end: answeredAt, kind: 'question' });
         }
         const incomplete = !!block.id && !toolResults.completed.has(block.id);
         const failed = incomplete || (!!block.id && toolResults.failed.has(block.id));
@@ -838,6 +846,7 @@ function buildClaudeRequest(
     ...(usage.callRowsWithoutCacheData ? { callRowsWithoutCacheData: usage.callRowsWithoutCacheData } : {}),
     ...(usage.contextUsage ? { contextUsage: usage.contextUsage } : {}),
   });
+  if (assistantData.userWaits.length) request.userWaits = assistantData.userWaits;
   mergeRequestEditLoc(editLocIndex, requestId, assistantData.editLocs);
   return request;
 }
@@ -900,8 +909,12 @@ export function parseClaudeSessionFile(
 
   if (requests.length === 0) return null;
 
+  // A fork (`--fork-session`) starts its transcript with the source's messages, copied with their own, older times.
+  const fileStart = lines.map(l => getTimestamp(l.timestamp)).find((ts): ts is number => !!ts) ?? null;
+  const copiesHistory = !subagentFile && firstTs !== null && fileStart !== null && firstTs < fileStart - 1000;
+
   const launcherKind = classifyLauncher(entrypoint);
-  return createSession({
+  const session = createSession({
     sessionId,
     workspaceId: wsId,
     workspaceName: wsName,
@@ -915,4 +928,6 @@ export function parseClaudeSessionFile(
     launcherKind,
     entrypoint,
   });
+  if (copiesHistory) session.copiesHistory = true;
+  return session;
 }

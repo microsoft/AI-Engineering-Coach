@@ -11,9 +11,9 @@ import {
 } from './types';
 import { toDateStr, isoWeek } from './helpers';
 import { AnalyzerBase } from './analyzer-base';
-import { harnessLabel, inferBranchOwner, lastSegment, scrubBranch, scrubLabel, type ScrubContext } from './session-labels';
+import { harnessLabel, scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
 import { localScrubContext } from './session-workspace-meta';
-import { resolveParentLinks, type ParentLink } from './timeline-links';
+import { resolveForkLinks, resolveParentLinks, type ForkLink, type ParentLink } from './timeline-links';
 
 /** The sender marker a turn gets on the Timeline. */
 export function turnSender(kind: NonHumanKind | undefined): TurnSender {
@@ -24,16 +24,23 @@ export function turnSender(kind: NonHumanKind | undefined): TurnSender {
   return 'other';
 }
 
+/** Claude Code's sub-agent tool (`Agent`, `Task` before): each call runs a sub-agent in a sidechain transcript. */
+const CLAUDE_SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
+
 function timelineTurn(r: SessionRequest): TimelineTurn {
+  const t = r.timestamp ?? 0;
+  const d = Math.max(0, r.totalElapsed ?? 0);
+  const waits = (r.userWaits ?? []).filter(w => w.end > w.start).map(w => ({ s: w.start, e: w.end, k: w.kind }));
   return {
-    t: r.timestamp ?? 0,
-    d: Math.max(0, r.totalElapsed ?? 0),
+    t,
+    d,
     k: turnSender(r.nonHumanKind),
-    sub: r.subagentRuns?.length ?? 0,
+    sub: r.subagentRuns?.length ?? (r.agentName === 'Claude' ? r.toolsUsed.filter(t => CLAUDE_SUBAGENT_TOOLS.has(t)).length : 0),
     comp: Boolean(r.compaction || r.compactions?.length),
     cr: r.aiCredits ?? 0,
     tok: r.loggedTokens ?? Math.max(0, (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
     ...(r.totalElapsed == null ? { noDuration: true } : {}),
+    ...(waits.length ? { w: waits } : {}),
   };
 }
 
@@ -44,24 +51,28 @@ function mainModel(requests: readonly SessionRequest[]): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
 }
 
-/** The scrub context plus the personal prefix most of the user's branches share, which tools add from the handle. */
-function withBranchOwner(ctx: ScrubContext, sessions: readonly Session[]): ScrubContext {
-  const owner = inferBranchOwner(sessions.map(s => s.branch ?? '').filter(Boolean));
-  return owner ? { ...ctx, names: [...ctx.names, owner] } : ctx;
+/** A linked fork's source (when it has turns in range) and how many prompts it copied from it. */
+function forkFields(link: ForkLink | undefined, index: ReadonlyMap<string, number>, copied: number): Pick<TimelineSessionRecord, 'fork' | 'copiedTurns'> {
+  if (!link) return {};
+  return { fork: index.get(link.source) ?? -1, ...(copied > 0 ? { copiedTurns: copied } : {}) };
 }
 
 export class TimelineAnalyzer extends AnalyzerBase {
   private links?: Map<string, ParentLink>;
-  private labelContext?: ScrubContext;
+  private forks?: Map<string, ForkLink>;
 
   /** Every session with a turn in range, with its turns as counts and timings, its family link, and its logged
    *  name, branch and repository (never a path). No prompt or response text. */
-  getTimelineData(f?: DateFilter, ctx: ScrubContext = localScrubContext()): TimelineDataset {
+  getTimelineData(f?: DateFilter, labels: ScrubContext = localScrubContext()): TimelineDataset {
     this.links ??= resolveParentLinks(this.sessions);
-    this.labelContext ??= withBranchOwner(ctx, this.sessions);
-    const labels = this.labelContext;
+    this.forks ??= resolveForkLinks(this.sessions);
+    const forks = this.forks;
     const inRange = this.sessionsWithRequestsInRange(f)
-      .map(s => ({ s, requests: s.requests.filter(r => this.requestInRange(r, f)).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0)) }))
+      .map(s => {
+        const copied = forks.get(s.sessionId)?.copied;
+        return { s, requests: s.requests.filter(r => this.requestInRange(r, f) && !(r.userEventId && copied?.has(r.userEventId))).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0)) };
+      })
+      .filter(({ requests }) => requests.length > 0)
       .sort((a, b) => (a.requests[0].timestamp ?? 0) - (b.requests[0].timestamp ?? 0) || a.s.sessionId.localeCompare(b.s.sessionId));
     const index = new Map(inRange.map(({ s }, i) => [s.sessionId, i]));
     const sessions: TimelineSessionRecord[] = inRange.map(({ s, requests }) => {
@@ -71,11 +82,12 @@ export class TimelineAnalyzer extends AnalyzerBase {
         id: s.sessionId,
         name: s.displayName ? scrubLabel(s.displayName, labels) : '',
         branch: s.branch ? scrubBranch(s.branch, labels) : '',
-        repo: scrubLabel(s.repository || lastSegment(s.workspaceName) || 'unknown', labels) || 'unknown',
+        repo: scrubRepository(s.repository || s.workspaceName || '', labels),
         harness: harnessLabel(s.harness),
         model: mainModel(requests),
         parent,
         via: parent >= 0 && link ? link.via : null,
+        ...forkFields(forks.get(s.sessionId), index, s.requests.length - s.requests.filter(r => !(r.userEventId && forks.get(s.sessionId)?.copied.has(r.userEventId))).length),
         turns: requests.map(timelineTurn),
       };
     });

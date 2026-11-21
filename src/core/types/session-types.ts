@@ -256,6 +256,10 @@ export interface SessionRequest {
   compactions?: CompactionEvent[];
   /** Sub-agent runs launched during the turn (Copilot CLI and Copilot App). */
   subagentRuns?: import('./token-usage-types').SubagentRun[];
+  /** Spans inside the turn when the agent stopped and waited for you: a question it asked you (Copilot `ask_user`,
+   *  a question relayed from another session, Claude Code `AskUserQuestion`) or a permission you decided (Copilot
+   *  `permission.requested` → `permission.completed`, unless a policy decided it). Absolute ms, in order. */
+  userWaits?: UserWait[];
   /** AI credits Copilot logged for the turn's model calls, sub-agents included: `session.usage_record`
    *  `copilotUsage.totalNanoAiu` ÷ 1e9 (Copilot CLI and Copilot App). Absent when none were logged. */
   aiCredits?: number;
@@ -266,6 +270,13 @@ export interface SessionRequest {
 export interface CodeBlock {
   language: string;
   loc: number;
+}
+
+/** A span inside a turn when the agent waited for your answer. */
+export interface UserWait {
+  start: number;
+  end: number;
+  kind: 'question' | 'permission';
 }
 
 /** Session-level disposition. Used to distinguish "missing token data
@@ -333,9 +344,13 @@ export interface Session {
   branch?: string;
   /** Repository name without owner or path (`workspace.yaml` `repository`, else `git_root`). */
   repository?: string;
-  /** Forks the harness counted for the session (`workspace.yaml` `fork_count`); no harness logs which session a
-   *  fork came from. */
+  /** Forks the harness counted for the session (Copilot `workspace.yaml` `fork_count`). Copilot logs no fork source. */
   forkCount?: number;
+  /** The session this one was forked from, as the harness logged it (Codex `session_meta.forked_from_id`). */
+  forkedFromId?: string;
+  /** The transcript starts with messages copied, with their older times, from another session: a Claude Code fork
+   *  (`--fork-session`). Its source is the session those messages came from (`resolveForkLinks`). */
+  copiesHistory?: boolean;
   /** Sessions this session started: the session IDs in the results of its `create_session`, `open_pr_session` and
    *  `open_issue_session` calls (Copilot CLI and Copilot App). */
   childSessionIds?: string[];

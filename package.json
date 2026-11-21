@@ -297,6 +297,7 @@
           "type": "object",
           "properties": {
             "date": { "type": "string", "description": "Day to analyze (YYYY-MM-DD); defaults to the latest active day" },
+            "includeNames": { "type": "boolean", "description": "Show session and repository names as logged (scrubbed of paths and the user's names). Off by default: names are masked." },
             "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
             "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
             "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },

@@ -396,7 +396,8 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
       { type: 'session.start', data: { sessionId: COORD, remoteSteerable: true } },
       { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'Split the work' } },
       { type: 'tool.execution_start', data: { toolName: 'create_session', toolCallId: 'c1' } },
-      { type: 'tool.execution_complete', data: { toolCallId: 'c1', success: true, result: { content: `Created session ${KID.toUpperCase()} for ${COORD}` } } },
+      // Other IDs in the result (a quoted name, the project) are not the new session.
+      { type: 'tool.execution_complete', data: { toolCallId: 'c1', success: true, result: { content: `Created session 'Follow up ${OTHER}' (id: ${KID.toUpperCase()}) in project '${COORD}'. Link to it with ghapp://sessions/${KID}.` } } },
       { type: 'tool.execution_start', data: { toolName: 'view', toolCallId: 'v1' } },
       { type: 'tool.execution_complete', data: { toolCallId: 'v1', result: { content: OTHER } } },
       { type: 'user.message', timestamp: '2026-10-01T10:30:00Z', data: relay(KID, 'Done: tests pass') },
@@ -417,6 +418,61 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
         `<ide_selection>\nfrom_session_id: ${KID}\n</ide_selection>\n\`\`\`\nfrom_session_id: ${KID}\n\`\`\`\n<cross_session_message>\nfrom_session_id: ${COORD}\n</cross_session_message>\nRun it` } },
     ]), 'ws', 'ws');
     expect(quoted?.relaySenderId).toBe(COORD);
+  });
+
+  it('reads the started session from each result format and from MCP-prefixed tool names', () => {
+    const started = (toolName: string, result: unknown, extra: Record<string, unknown> = {}) => parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'go' } },
+      { type: 'tool.execution_start', data: { toolName, toolCallId: 'c1', ...extra } },
+      { type: 'tool.execution_complete', data: { toolCallId: 'c1', success: true, result } },
+    ]), 'ws', 'ws')?.childSessionIds;
+    expect(started('create_session', { content: `Created child chat 'Notes' (session_id: ${KID}). Link to it with ghapp://sessions/${KID}.` })).toEqual([KID]);
+    expect(started('open_pr_session', { content: `Opened PR #4 (Fix ${OTHER}) in octo/shop. Session ${KID} is ready in the sidebar.` })).toEqual([KID]);
+    expect(started('create_session', { content: JSON.stringify({ project: OTHER, session_id: KID }) })).toEqual([KID]);
+    expect(started('create_session', { content: 'ok' }, { mcpServerName: 'app' })).toBeUndefined();
+    expect(started('app-create_session', { content: `Created session 'x' (id: ${KID}).` })).toEqual([KID]);
+    expect(started('mcp_app_open_issue_session', { content: `Session ${KID} is ready.` })).toEqual([KID]);
+    expect(started('recreate_session', { content: `Session ${KID} is ready.` })).toBeUndefined();
+    expect(started('view', { content: `Session ${KID} is ready.` })).toBeUndefined();
+  });
+
+  it('records the questions and permission prompts you answered as waits, not policy decisions', () => {
+    const at = (m: number, s = 0) => new Date(Date.UTC(2026, 9, 1, 10, m, s)).toISOString();
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: at(0), data: { content: 'go' } },
+      { type: 'tool.execution_start', timestamp: at(1), data: { toolName: 'ask_user', toolCallId: 'q1' } },
+      { type: 'tool.execution_complete', timestamp: at(6), data: { toolCallId: 'q1', success: true, result: { content: 'User selected: yes' } } },
+      // Interrupted: no answer from you.
+      { type: 'tool.execution_start', timestamp: at(7), data: { toolName: 'ask_user', toolCallId: 'q2' } },
+      { type: 'tool.execution_complete', timestamp: at(8), data: { toolCallId: 'q2', success: false, result: { content: 'Tool execution was interrupted' } } },
+      // A child's question relayed to you and answered.
+      { type: 'tool.execution_start', timestamp: at(9), data: { toolName: 'relay_session_input', toolCallId: 'r1' } },
+      { type: 'tool.execution_complete', timestamp: at(12), data: { toolCallId: 'r1', success: true, result: { content: JSON.stringify({ outcome: 'answered_here', answer: 'b' }) } } },
+      { type: 'permission.requested', timestamp: at(13), data: { requestId: 'p1' } },
+      { type: 'permission.completed', timestamp: at(13, 1), data: { requestId: 'p1', decisionSource: 'host_policy', result: { kind: 'approved' } } },
+      { type: 'permission.requested', timestamp: at(14), data: { requestId: 'p2' } },
+      { type: 'permission.completed', timestamp: at(14, 2), data: { requestId: 'p2', result: { kind: 'approved' } } },
+      { type: 'permission.requested', timestamp: at(15), data: { requestId: 'p3' } },
+      { type: 'permission.completed', timestamp: at(17), data: { requestId: 'p3', decisionSource: 'human_response', result: { kind: 'approved' } } },
+      // Evidence can follow the decision.
+      { type: 'permission.requested', timestamp: at(18), data: { requestId: 'p4' } },
+      { type: 'permission.completed', timestamp: at(19), data: { requestId: 'p4', result: { kind: 'approved' } } },
+      { type: 'human_response.recorded', timestamp: at(19), data: { requestId: 'p4', actor: 'human_response' } },
+      { type: 'assistant.message', timestamp: at(20), data: { content: 'done' } },
+      // A permission answered after the turn's last message still counts, with its own times.
+      { type: 'permission.requested', timestamp: at(21), data: { requestId: 'p5' } },
+      { type: 'permission.completed', timestamp: at(24), data: { requestId: 'p5', result: { kind: 'denied-interactively-by-user' } } },
+    ]), 'ws', 'ws');
+    const ms = (iso: string) => Date.parse(iso);
+    expect(session?.requests[0].userWaits).toEqual([
+      { start: ms(at(1)), end: ms(at(6)), kind: 'question' },
+      { start: ms(at(9)), end: ms(at(12)), kind: 'question' },
+      { start: ms(at(15)), end: ms(at(17)), kind: 'permission' },
+      { start: ms(at(18)), end: ms(at(19)), kind: 'permission' },
+      { start: ms(at(21)), end: ms(at(24)), kind: 'permission' },
+    ]);
   });
 
   it('adds each usage record’s AI credits and tokens to its turn, the first turn taking earlier records', () => {

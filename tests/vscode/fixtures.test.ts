@@ -105,6 +105,10 @@ describe('desktop test fixtures', () => {
       expect(byId.get(FAMILY.coordinator)?.turns.reduce((sum, t) => sum + t.cr, 0)).toBe(5);
       const { families } = buildFamilies(prepareTimeline(data));
       expect(families.map(f => [f.s.id, f.sessions, f.verdict, f.depth])).toEqual([[FAMILY.coordinator, 5, 'needed', 2]]);
+      // The answered question in a child and the permission you decided are waits; the policy decision is not.
+      expect(families[0]).toMatchObject({ childTyped: 1, childAnswered: 1, steppedInto: 2 });
+      expect(byId.get(FAMILY.docs)?.turns[0].w?.map(w => [w.k, (w.e - w.s) / 60_000])).toEqual([['question', 10]]);
+      expect(byId.get(FAMILY.coordinator)?.turns.flatMap(t => t.w ?? []).map(w => [w.k, (w.e - w.s) / 60_000])).toEqual([['permission', 4]]);
       await assertFamilyFixturesUnchanged(root, timestamp);
     });
   });

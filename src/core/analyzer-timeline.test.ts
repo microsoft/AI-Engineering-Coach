@@ -100,19 +100,41 @@ describe('TimelineAnalyzer', () => {
       ]);
     });
 
-    it('scrubs names and branches, including the personal prefix most branches share', () => {
-      const sessions = ['dev2-a', 'dev2-b', 'dev2/c', 'feat/d'].map((branch, i) => makeSession({
+    it('scrubs names, and removes a branch prefix only for a signed-in handle', () => {
+      const sessions = ['dev2-a', 'dev2-b', 'dev2/c', 'feat/d', 'vscode/e'].map((branch, i) => makeSession({
         sessionId: `s${i}`, branch, displayName: i === 0 ? 'Review dev2/shop at https://example.com' : undefined,
-        requests: [makeRequest({ timestamp: at(9 + i) })],
+        workspaceName: i === 4 ? 'C:\\Users\\dev2\\dev2' : 'shop',
+        requests: [makeRequest({ timestamp: at(9 + i), userWaits: i === 1 ? [{ start: at(10, 1), end: at(10, 3), kind: 'question' }] : undefined })],
       }));
-      const data = createAnalyzer(sessions).getTimelineData(undefined, ctx);
-      expect(data.sessions.map(s => s.branch)).toEqual(['a', 'b', 'c', 'feat/d']);
+      const data = createAnalyzer(sessions).getTimelineData(undefined, { ...ctx, names: [...ctx.names, 'dev2', 'vscode'], handles: ['dev2', 'vscode'] });
+      expect(data.sessions.map(s => s.branch)).toEqual(['a', 'b', 'c', 'feat/d', 'vscode/e']);
       expect(data.sessions[0].name).toBe('Review shop at [link]');
+      // A repository that is only the user's name is shown as such, never as "unknown".
+      expect(data.sessions.map(s => s.repo)).toEqual(['shop', 'shop', 'shop', 'shop', 'personal repository']);
+      expect(data.sessions[1].turns[0].w).toEqual([{ s: at(10, 1), e: at(10, 3), k: 'question' }]);
     });
 
     it('counts sessions whose harness logged forks', () => {
       const data = createAnalyzer([makeSession({ forkCount: 2 }), makeSession()]).getTimelineData(undefined, ctx);
       expect(data.forkedSessions).toBe(1);
+    });
+
+    it('links a fork to its source and leaves the turns it copied to the source', () => {
+      const src = makeSession({ sessionId: 'src', harness: 'Claude', requests: [makeRequest({ timestamp: at(9), userEventId: 'm1' }), makeRequest({ timestamp: at(10), userEventId: 'm2' })] });
+      const fork = makeSession({
+        sessionId: 'fork', harness: 'Claude', copiesHistory: true,
+        requests: [makeRequest({ timestamp: at(9), userEventId: 'm1' }), makeRequest({ timestamp: at(11), userEventId: 'm3' })],
+      });
+      const data = createAnalyzer([src, fork]).getTimelineData(undefined, ctx);
+      const byId = new Map(data.sessions.map(s => [s.id, s]));
+      expect(byId.get('fork')).toMatchObject({ fork: data.sessions.indexOf(byId.get('src')!), copiedTurns: 1, parent: -1 });
+      expect(byId.get('fork')?.turns.map(t => t.t)).toEqual([at(11)]);
+      expect(byId.get('src')?.fork).toBeUndefined();
+    });
+
+    it('counts Claude Code sub-agent calls as sub-agent runs', () => {
+      const session = makeSession({ harness: 'Claude', requests: [makeRequest({ timestamp: at(9), agentName: 'Claude', toolsUsed: ['Agent', 'Read', 'Task'] })] });
+      expect(createAnalyzer([session]).getTimelineData(undefined, ctx).sessions[0].turns[0].sub).toBe(2);
     });
   });
   describe('getSessions', () => {

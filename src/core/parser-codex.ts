@@ -55,6 +55,8 @@ interface CodexSessionMeta {
   nonHumanKind?: NonHumanKind;
   /** The thread that spawned this one (`source.subagent.thread_spawn.parent_thread_id`). */
   parentSessionId?: string;
+  /** The thread this one was forked from (`session_meta.forked_from_id`, `codex fork`). */
+  forkedFromId?: string;
 }
 
 interface CodexContentItem {
@@ -93,6 +95,8 @@ interface CodexParseState {
   turnStartTs: number | null;
   /** Latest line of the turn that the agent or harness logged (not the next prompt): where the turn's work ended. */
   turnEndTs: number | null;
+  /** The turn logged its completion (`task_complete`) or abort (`turn_aborted`): `turnEndTs` is final. */
+  turnEnded: boolean;
   turnCanceled: boolean;
   answerEvidence: 'final' | 'legacy' | 'missing';
   prevTotalInput: number;
@@ -194,6 +198,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     turnEffort: null,
     turnStartTs: null,
     turnEndTs: null,
+    turnEnded: false,
     turnCanceled: false,
     answerEvidence: 'missing',
     prevTotalInput: 0,
@@ -339,6 +344,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
   state.turnEndTs = null;
+  state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
   state.currentEditLocs = new Map();
@@ -670,6 +676,7 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
     meta.source = stringValue(payload.source) || meta.source;
     meta.nonHumanKind ??= codexSessionNonHumanKind(payload.source);
     meta.parentSessionId ??= codexParentThreadId(payload.source);
+    meta.forkedFromId ??= stringValue(payload.forked_from_id) || undefined;
   }
   if (line.type === 'turn_context' && !meta.model) {
     meta.model = stringValue(line.payload?.model);
@@ -693,14 +700,27 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
   } else if (line.type === 'response_item') {
     handleResponseItem(line.payload || {}, state, ts, meta.model);
   }
-  if (ts && isTurnWork(line) && (!state.turnEndTs || ts > state.turnEndTs)) state.turnEndTs = ts;
+  recordTurnEnd(line, state, ts);
 }
 
-/** A line the agent or harness logged while working on the turn: not a prompt, and not the next turn's settings. */
+/** Lines that set up the next turn rather than doing work in this one. */
+const CODEX_SETUP_EVENTS = new Set(['user_message', 'task_started', 'thread_settings_applied']);
+
+/** Move the turn's end to the line if it is turn work. A turn that logged its completion or abort ends there: later
+ *  lines (the next turn's start, settings or context) belong to the next turn. */
+function recordTurnEnd(line: CodexLine, state: CodexParseState, ts: number | null): void {
+  if (!ts || state.turnEnded || !isTurnWork(line)) return;
+  if (!state.turnEndTs || ts > state.turnEndTs) state.turnEndTs = ts;
+  const type = line.type === 'event_msg' ? stringValue(line.payload?.type) : '';
+  if (type === 'task_complete' || type === 'turn_aborted') state.turnEnded = true;
+}
+
+/** A line the agent or harness logged while working on the turn: not a prompt, and not the next turn's settings or
+ *  context (`task_started`, `turn_context`, `world_state`, developer or environment messages). */
 function isTurnWork(line: CodexLine): boolean {
   const payload = line.payload ?? {};
-  if (line.type === 'event_msg') return stringValue(payload.type) !== 'user_message';
-  return line.type === 'response_item' && payload.role !== 'user';
+  if (line.type === 'event_msg') return !CODEX_SETUP_EVENTS.has(stringValue(payload.type));
+  return line.type === 'response_item' && payload.role !== 'user' && payload.role !== 'developer' && payload.role !== 'system';
 }
 
 function handleCodexImageLine(line: CodexLine, state: CodexParseState, meta: CodexSessionMeta, scan: CodexImageScan): void {
@@ -856,5 +876,6 @@ export function parseCodexSessionFile(filePath: string, editLocIndex?: EditLocIn
     hasDevcontainer: detectDevcontainerFromRequests(state.requests, meta.cwd),
     workspaceRootPath: meta.cwd || undefined,
     ...(meta.parentSessionId && meta.parentSessionId !== meta.sessionId ? { parentSessionId: meta.parentSessionId } : {}),
+    ...(meta.forkedFromId && meta.forkedFromId !== meta.sessionId ? { forkedFromId: meta.forkedFromId } : {}),
   });
 }

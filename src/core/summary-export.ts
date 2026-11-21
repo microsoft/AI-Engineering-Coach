@@ -15,7 +15,7 @@ import type {
 import type { FlowStateData } from './types/context-types';
 import type { DateFilter } from './types/session-types';
 import type { TimelineDataset } from './types/timeline-types';
-import { buildFamilies, buildLanes, prepareTimeline } from './timeline-model';
+import { buildFamilies, buildLanes, buildViewFamilies, prepareTimeline, timelineKpis } from './timeline-model';
 
 export interface SummaryExportInput {
   generatedAt?: string | Date;
@@ -92,6 +92,8 @@ export interface SummaryAutonomy {
   automatedTurns: number;
   agentHours: number;
   waitsOnYou: number;
+  /** Of those, questions and permission prompts you answered inside a turn. */
+  questionsAnswered: number;
   waitHours: number;
   families: number;
   childSessions: number;
@@ -215,14 +217,15 @@ function buildAutonomy(data: TimelineDataset): SummaryAutonomy | null {
   const p = prepareTimeline(data);
   const lanes = buildLanes(p, -Infinity, Infinity);
   const { totals } = buildFamilies(p);
-  const waits = lanes.flatMap(l => l.waits);
+  const kpis = timelineKpis(lanes, buildViewFamilies(lanes, p));
   const hours = (ms: number) => Math.round(ms / 360_000) / 10;
   return {
     typedTurns: lanes.reduce((n, l) => n + l.typed, 0),
     automatedTurns: lanes.reduce((n, l) => n + l.automated, 0),
-    agentHours: hours(lanes.reduce((n, l) => n + l.agentMs, 0)),
-    waitsOnYou: waits.length,
-    waitHours: hours(waits.reduce((n, [a, b]) => n + b - a, 0)),
+    agentHours: hours(kpis.agentMs),
+    waitsOnYou: kpis.waits,
+    questionsAnswered: kpis.waits - kpis.idleWaits,
+    waitHours: hours(kpis.waitMs),
     families: totals.families,
     childSessions: totals.children,
     childSessionsThatNeededYou: totals.childrenNeedingYou,
@@ -294,8 +297,8 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
       '', '## Autonomy and Delegation (Timeline)',
       `- Turns you typed: ${formatNumber(a.typedTurns)} of ${formatNumber(turns)} (${formatPercent(turns ? a.automatedTurns / turns : 0)} automated)`,
       `- Agent time: ${a.agentHours} h`,
-      `- Agents waited on you: ${formatNumber(a.waitsOnYou)} times, ${a.waitHours} h in total`,
-      `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsThatNeededYou)} needed a prompt from you; ${a.familyCreditSharePct}% of credits)`,
+      `- Agents waited on you: ${formatNumber(a.waitsOnYou)} times (${formatNumber(a.questionsAnswered)} on a question or permission prompt), ${a.waitHours} h in total`,
+      `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsThatNeededYou)} needed a prompt or answer from you; ${a.familyCreditSharePct}% of credits)`,
       `- Verdicts: ${formatNumber(a.workedAlone)} worked alone, ${formatNumber(a.neededYou)} needed you, ${formatNumber(a.wideFanOut)} wide fan-outs`,
     );
   }

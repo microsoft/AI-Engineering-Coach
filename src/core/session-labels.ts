@@ -10,20 +10,30 @@
 export interface ScrubContext {
   /** Home directory, replaced by `~` (after drive paths are replaced). */
   home?: string;
-  /** OS user name and GitHub handles. Names shorter than 3 characters are ignored, so short words survive. */
+  /** OS user name and GitHub handles. Names shorter than 3 characters and generic account names (`vscode`, `root`,
+   *  `runner`…) are ignored, so ordinary words survive. */
   names: string[];
+  /** GitHub handles the user signed in with: the only branch prefixes removed (`handle/topic`). */
+  handles?: string[];
 }
 
 const MAX_NAME = 90;
 const MAX_BRANCH = 60;
 const MIN_NAME = 3;
 
+/** Account names shared by many machines and containers: they say nothing about the user and are ordinary words in
+ *  names and repositories, so they are never removed. */
+const GENERIC_ACCOUNTS = new Set([
+  'vscode', 'codespace', 'codespaces', 'node', 'root', 'runner', 'ubuntu', 'user', 'users', 'admin', 'administrator',
+  'developer', 'default', 'guest', 'vagrant', 'azureuser', 'docker', 'app', 'coder', 'gitpod', 'test', 'owner', 'home',
+]);
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function usableNames(ctx: ScrubContext): string[] {
-  return [...new Set(ctx.names.map(name => name.trim()).filter(name => name.length >= MIN_NAME))]
+function usableNames(names: readonly string[]): string[] {
+  return [...new Set(names.map(name => name.trim()).filter(name => name.length >= MIN_NAME && !GENERIC_ACCOUNTS.has(name.toLowerCase())))]
     .sort((a, b) => b.length - a.length);
 }
 
@@ -54,39 +64,30 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME): st
     for (const variant of variants) out = out.replace(new RegExp(escapeRegExp(variant), 'gi'), '~');
   }
   out = out.replaceAll(/(^|[\s("'`])\/(?:Users|home)\/[^\s,;)"'`]*/g, '$1[path]');
-  out = tidy(removeNames(out, usableNames(ctx)));
+  out = tidy(removeNames(out, usableNames(ctx.names)));
   return out.length > max ? out.slice(0, max - 1).trimEnd() + '…' : out;
 }
 
-/** A branch without the user's handle prefix (`handle/topic`, `handle-topic`) and scrubbed like a label. */
+/** A branch without a GitHub handle prefix (`handle/topic`, `handle-topic`), scrubbed like a label. Only signed-in
+ *  handles are removed as prefixes: `vscode/fix` or `feature-x` keep theirs. */
 export function scrubBranch(value: string, ctx: ScrubContext): string {
   let out = value.trim();
-  for (const name of usableNames(ctx)) {
+  for (const name of usableNames(ctx.handles ?? [])) {
     out = out.replace(new RegExp(`^${escapeRegExp(name)}[/_-]`, 'i'), '');
   }
   return scrubLabel(out, ctx, MAX_BRANCH);
 }
 
-/** Branch prefixes that name a kind of work or a bot, never a person. */
-const COMMON_PREFIXES = new Set([
-  'feat', 'feature', 'features', 'fix', 'fixes', 'bugfix', 'hotfix', 'docs', 'doc', 'chore', 'refactor', 'test', 'tests',
-  'release', 'releases', 'copilot', 'dependabot', 'renovate', 'main', 'master', 'dev', 'develop', 'user', 'users', 'wip',
-  'build', 'ci', 'perf', 'style', 'revert', 'update', 'add', 'experiment', 'exp', 'spike', 'topic', 'bump', 'deps', 'gh', 'pr',
-]);
+/** Shown when a repository or folder name is nothing but the user's name, so scrubbing left nothing. */
+export const PERSONAL_REPOSITORY = 'personal repository';
 
-/** A personal prefix most branches share (`handle-topic`, `handle/topic`), as tools that create branches for you add
- *  the user's handle. Null unless at least 3 branches and 30% of them share it. */
-export function inferBranchOwner(branches: readonly string[]): string | null {
-  const counts = new Map<string, number>();
-  let total = 0;
-  for (const branch of branches) {
-    const token = /^([A-Za-z0-9][A-Za-z0-9_.]*)[/-][A-Za-z0-9]/.exec(branch.trim())?.[1]?.toLowerCase();
-    if (!token) continue;
-    total++;
-    if (token.length >= MIN_NAME && !COMMON_PREFIXES.has(token) && !/^\d+$/.test(token)) counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-  const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  return top && top[1] >= 3 && top[1] >= 0.3 * total ? top[0] : null;
+/** A repository or folder name for display: scrubbed, `personal repository` when only the user's name was left out,
+ *  and empty when none was logged. */
+export function scrubRepository(value: string, ctx: ScrubContext): string {
+  const raw = lastSegment(value.trim());
+  if (!raw) return '';
+  const out = scrubLabel(raw, ctx);
+  return out && out !== '[path]' ? out : PERSONAL_REPOSITORY;
 }
 
 /** Short harness label for chips and filters: `GitHub Copilot App` → `Copilot App`, `Claude` → `Claude Code`. */

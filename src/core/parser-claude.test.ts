@@ -95,6 +95,44 @@ function withProjectsDir(filename: string, lines: object[], run: (projectsDir: s
 }
 
 describe('parseClaudeSessions', () => {
+  it('flags a fork, whose transcript starts with messages copied with their older times', () => {
+    withProjectsDir('fork.jsonl', [
+      { type: 'queue-operation', timestamp: '2025-06-15T10:10:00Z', sessionId: 'fork-1' },
+      makeUser('copied prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'fork-1' }),
+      makeAssistant('copied answer', '2025-06-15T10:00:05Z'),
+      makeUser('new prompt', '2025-06-15T10:10:01Z', { uuid: 'u2', sessionId: 'fork-1' }),
+      makeAssistant('new answer', '2025-06-15T10:10:05Z'),
+    ], (projectsDir) => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].copiesHistory).toBe(true);
+    });
+    withProjectsDir('plain.jsonl', [
+      { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'plain-1' },
+      makeUser('prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'plain-1' }),
+      makeAssistant('answer', '2025-06-15T10:00:05Z'),
+    ], (projectsDir) => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].copiesHistory).toBeUndefined();
+    });
+  });
+
+  it('records an answered AskUserQuestion as a wait on you, not a failed one', () => {
+    const answer = (id: string, ts: string, isError = false) => ({
+      type: 'user', timestamp: ts, sessionId: 'sess-1',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: isError ? 'no user' : 'User answered: B', ...(isError ? { is_error: true } : {}) }] },
+    });
+    withProjectsDir('s.jsonl', [
+      makeUser('plan it', '2025-06-15T10:00:00Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:00:05Z', 'q1'),
+      answer('q1', '2025-06-15T10:04:05Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:04:10Z', 'q2'),
+      answer('q2', '2025-06-15T10:04:11Z', true),
+      makeAssistant('done', '2025-06-15T10:05:00Z'),
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      expect(request.userWaits).toEqual([{ start: Date.parse('2025-06-15T10:00:05Z'), end: Date.parse('2025-06-15T10:04:05Z'), kind: 'question' }]);
+      expect(request.totalElapsed).toBe(300_000);
+    });
+  });
+
   it('extracts current Edit new_string and MultiEdit deltas', () => {
     withProjectsDir('s.jsonl', [
       makeUser('edit files', '2025-06-15T10:00:00Z', { uuid: 'request_claude_edit' }),

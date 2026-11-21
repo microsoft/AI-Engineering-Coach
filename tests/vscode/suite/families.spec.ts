@@ -35,6 +35,8 @@ describe('Packaged VSIX with a synthetic Copilot App session family', () => {
     await dashboard.waitForText('.tlx-lane', 'started by relay');
     await dashboard.waitForText('.tlx-lane', 'Untitled Copilot CLI session');
     await dashboard.expectCount('.tlx-lanes .conn', 4);
+    // The docs child's answered question is drawn as a wait on you.
+    await dashboard.expectCount('.tlx-lane .wait.ask', 2);
     await dashboard.expectHealthy();
     await dashboard.snapshot('01-family-day', 'Timeline: a coordinator, three children, a grandchild and a lone CLI session');
   });
@@ -44,7 +46,7 @@ describe('Packaged VSIX with a synthetic Copilot App session family', () => {
     await dashboard.expectCount('.frow', 1);
     await dashboard.waitForText('.frow', 'Needed you');
     await dashboard.waitForText('#tlxFamilyDetail', 'branch checkout-revamp');
-    await dashboard.waitForText('#tlxFamilyDetail', 'You typed 1 prompt directly into 1 of 4 child sessions');
+    await dashboard.waitForText('#tlxFamilyDetail', 'You typed 1 prompt into and answered 1 question or permission prompt in 2 of 4 child sessions');
     await dashboard.expectHealthy();
     await dashboard.snapshot('02-families', 'Families: one delegation that needed you, with its verdict and habit');
   });

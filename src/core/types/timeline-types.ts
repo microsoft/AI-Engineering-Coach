@@ -13,8 +13,8 @@ export type TurnSender = 'you' | 'agent' | 'autopilot' | 'compaction' | 'other';
 export interface TimelineTurn {
   /** When the turn's prompt was logged (epoch ms). */
   t: number;
-  /** Agent time: the turn's `totalElapsed`, from its prompt to the last assistant message (ms); 0 when not logged.
-   *  It includes any time the turn waited on a question. */
+  /** The turn's span: its `totalElapsed`, from its prompt to the last assistant message (ms); 0 when not logged.
+   *  Agent time is this span minus `w`, the time the turn waited on you. */
   d: number;
   k: TurnSender;
   /** Sub-agent runs the turn launched. */
@@ -27,6 +27,15 @@ export interface TimelineTurn {
   tok: number;
   /** The harness logged no duration for the turn, so when its work ended is unknown (`d` is 0). */
   noDuration?: boolean;
+  /** When the turn stopped for your answer to a question or a permission prompt: absolute spans in order, not
+   *  overlapping. Each ended with your answer. Usually inside [t, t + d]; one can outlast the turn's last message. */
+  w?: TimelineTurnWait[];
+}
+
+export interface TimelineTurnWait {
+  s: number;
+  e: number;
+  k: 'question' | 'permission';
 }
 
 /** How a child session's parent was found: a `create_session`-style tool result (`create`), the relayed first message
@@ -48,12 +57,17 @@ export interface TimelineSessionRecord {
   /** Index of the parent session in `TimelineDataset.sessions`; -1 when it has none in range. */
   parent: number;
   via: TimelineLinkKind | null;
+  /** Index of the session it was forked from (Codex, Claude Code); -1 or absent when it isn't a linked fork or the
+   *  source has no turn in range. Not a family link. */
+  fork?: number;
+  /** Prompts copied from the fork source, left out of `turns` so they count once. */
+  copiedTurns?: number;
   /** Turns in range, in time order. */
   turns: TimelineTurn[];
 }
 
 export interface TimelineDataset {
   sessions: TimelineSessionRecord[];
-  /** Sessions in range whose harness counted a fork. No harness logs which session a fork came from. */
+  /** Sessions in range whose harness counted a fork without logging its source (Copilot `fork_count`). */
   forkedSessions: number;
 }

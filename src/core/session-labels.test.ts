@@ -7,10 +7,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { harnessLabel, inferBranchOwner, lastSegment, scrubBranch, scrubLabel } from './session-labels';
+import { harnessLabel, lastSegment, PERSONAL_REPOSITORY, scrubBranch, scrubLabel, scrubRepository } from './session-labels';
 import { readCliWorkspaceMeta, yamlScalar } from './session-workspace-meta';
 
-const ctx = { home: 'C:\\Users\\Dev', names: ['Dev', 'octo-dev', 'me'] };
+const ctx = { home: 'C:\\Users\\Dev', names: ['Dev', 'octo-dev', 'me'], handles: ['octo-dev'] };
 
 describe('session labels', () => {
   it('removes links, email addresses, paths and the user’s names', () => {
@@ -22,16 +22,26 @@ describe('session labels', () => {
     expect(scrubLabel('x'.repeat(120), ctx)).toHaveLength(90);
   });
 
-  it('drops the handle prefix from a branch', () => {
+  it('drops only a signed-in handle as a branch prefix', () => {
     expect(scrubBranch('octo-dev/timeline-revamp', ctx)).toBe('timeline-revamp');
     expect(scrubBranch('octo-dev-timeline', ctx)).toBe('timeline');
     expect(scrubBranch('feat/timeline', ctx)).toBe('feat/timeline');
+    // The OS account name is no handle: it goes as a word, but a branch named after it keeps its topic.
+    expect(scrubBranch('zed9-cache', { names: ['zed9'], handles: [] })).toBe('cache');
+    expect(scrubBranch('release-zed9', ctx)).toBe('release-zed9');
   });
 
-  it('infers a personal branch prefix only when most branches share it', () => {
-    expect(inferBranchOwner(['zed9-a', 'zed9/b', 'zed9-c', 'feat/d'])).toBe('zed9');
-    expect(inferBranchOwner(['feat/a', 'feat/b', 'feat/c'])).toBeNull();
-    expect(inferBranchOwner(['zed9-a', 'zed9-b', 'x-1', 'y-2', 'z-3', 'w-4', 'v-5', 'u-6', 't-7', 's-8'])).toBeNull();
+  it('never removes generic account names', () => {
+    const generic = { home: '/home/vscode', names: ['vscode', 'node', 'root', 'runner', 'codespace', 'user', 'admin'], handles: ['vscode'] };
+    expect(scrubLabel('Fix the vscode extension for node and root users', generic)).toBe('Fix the vscode extension for node and root users');
+    expect(scrubBranch('vscode/fix-tabs', generic)).toBe('vscode/fix-tabs');
+    expect(scrubRepository('vscode', generic)).toBe('vscode');
+  });
+
+  it('never turns a repository into unknown', () => {
+    expect(scrubRepository('octo-dev/octo-dev', ctx)).toBe(PERSONAL_REPOSITORY);
+    expect(scrubRepository('C:\\Users\\Dev\\octo-dev-shop', ctx)).toBe('shop');
+    expect(scrubRepository('', ctx)).toBe('');
   });
 
   it('shortens harness names and never returns a whole path', () => {
@@ -52,6 +62,11 @@ describe('Copilot workspace.yaml', () => {
     ].join('\n'));
     expect(readCliWorkspaceMeta(dir, ctx)).toEqual({ displayName: "Ship it: 's fix", branch: 'fix-cache', repository: 'shop', forkCount: 2 });
     expect(yamlScalar('name: "a \\"b\\""', 'name')).toBe('a "b"');
+    expect(yamlScalar('name: Fix issue#12 cache # set by the App', 'name')).toBe('Fix issue#12 cache');
+    expect(yamlScalar("name: 'quoted # kept' # comment", 'name')).toBe('quoted # kept');
+    expect(yamlScalar('name: |\n  First line\n  second line\nbranch: x', 'name')).toBe('First line\nsecond line');
+    expect(yamlScalar('name: >-\n  Folded\n  title\n\nbranch: x', 'name')).toBe('Folded title');
+    expect(yamlScalar('summary: x\nname: ~', 'name')).toBe('');
     expect(readCliWorkspaceMeta(path.join(dir, 'missing'), ctx)).toEqual({});
   });
 });

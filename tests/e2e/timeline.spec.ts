@@ -31,7 +31,7 @@ test.describe('Timeline', () => {
     await expect(kpi(page, 'Waiting on you')).toHaveText('1 h 30 m');
     await expect(page.locator('#tlxKpis')).toContainText('3 waits · 2 over 30 min');
     await expect(kpi(page, 'Peak parallel agents')).toHaveText('3');
-    await expect(page.locator('#tlxInsights')).toContainText('Your coordinator “Checkout revamp” and 4 sessions it started kept working 1 h 13 m');
+    await expect(page.locator('#tlxInsights')).toContainText('Your coordinator “Checkout revamp” and 4 sessions of its family kept working 1 h 13 m');
     await expect(page.locator('#tlxCount')).toHaveText('6 of 6 sessions shown');
     // Tree order: coordinator, child, its grandchild, then the other children; one connector per shown child.
     await expect(page.locator('.tlx-lane .nm')).toHaveText(['Checkout revamp', 'Payment API tests', 'Lint fixes', 'Docs update', 'Perf probe', 'Investigate flaky test']);
@@ -51,6 +51,11 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxDetail')).toContainText('compaction');
     await page.locator('#tlxOpenParent').click();
     await expect(page.locator('#tlxDetailName')).toHaveText('Payment API tests');
+    // ↑ ↓ change lane only when the timeline has focus.
+    await page.locator('[data-page="timeline"]').first().focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('#tlxDetailName')).toHaveText('Payment API tests');
+    await page.locator('#tlxLanes').focus();
     await page.keyboard.press('ArrowDown');
     await expect(page.locator('#tlxDetailName')).toHaveText('Lint fixes');
     await page.locator('#tlxShowFamily').click();
@@ -72,6 +77,10 @@ test.describe('Timeline', () => {
   test('changes day with the arrows and the strip, and switches to the week', async ({ page }) => {
     await page.keyboard.press('ArrowLeft');
     await expect(page.locator('.tlx-lane .nm')).toHaveText(['Release notes', 'Changelog', /^Untitled Copilot CLI session/]);
+    // A question the agent waited on inside a turn: drawn as a wait, left out of agent time.
+    await expect(page.locator('.tlx-lane[data-session="tl-notes"] .wait.ask')).toHaveCount(1);
+    await expect(page.locator('#tlxKpis')).toContainText('(1 on a question or permission)');
+    await expect(kpi(page, 'Agent time')).toHaveText('0.4 h');
     await page.locator('.tlx-strip-bars [data-day="2026-05-03"]').click();
     await expect(kpi(page, 'Turns you typed')).toHaveText('5 of 11');
     await page.locator('#tlxView [data-value="week"]').click();
@@ -96,7 +105,7 @@ test.describe('Timeline', () => {
     await expect(page.locator('.frow')).toHaveCount(2);
     await expect(page.locator('.frow').first()).toContainText('Checkout revamp');
     await expect(page.locator('.frow').first()).toContainText('Needed you');
-    await expect(page.locator('#tlxFamilyDetail')).toContainText('You typed 1 prompt directly into 1 of 4 child sessions');
+    await expect(page.locator('#tlxFamilyDetail')).toContainText('You typed 1 prompt into 1 of 4 child sessions (marked ✋)');
     await expect(page.locator('#tlxFamilyDetail .hand')).toHaveText('✋ 1');
     await page.locator('[data-verdict="alone"]').click();
     await expect(page.locator('.frow')).toHaveCount(1);

@@ -38,6 +38,47 @@ describe('parseCodexSessions', () => {
       expect(parseCodexSessions(sessionsDir)[0].requests.map(r => r.totalElapsed)).toEqual([300_000, 120_000]);
     });
   });
+
+  it('ends a turn at task_complete or turn_aborted, not at the next turn’s setup lines', () => {
+    // The order codex-cli 0.167 logs: the next turn's settings, task_started, context and developer message arrive
+    // minutes after the previous task_complete, before its user message.
+    const at = (m: number, s = 0) => new Date(Date.UTC(2025, 5, 15, 9, m, s)).toISOString();
+    const user = (text: string) => ({ role: 'user', type: 'message', content: [{ type: 'input_text', text }] });
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-codex-turns', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: at(0), payload: { type: 'task_started' } },
+      { type: 'response_item', timestamp: at(0), payload: { role: 'developer', type: 'message', content: [{ type: 'input_text', text: 'rules' }] } },
+      { type: 'turn_context', timestamp: at(0), payload: { model: 'gpt-5-mini' } },
+      { type: 'response_item', timestamp: at(0, 1), payload: user('Fix the build.') },
+      { type: 'response_item', timestamp: at(1), payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'Fixed.' }] } },
+      { type: 'event_msg', timestamp: at(1, 1), payload: { type: 'token_count' } },
+      { type: 'event_msg', timestamp: at(1, 2), payload: { type: 'task_complete', last_agent_message: 'Fixed.' } },
+      { type: 'event_msg', timestamp: at(9), payload: { type: 'thread_settings_applied' } },
+      { type: 'event_msg', timestamp: at(9), payload: { type: 'task_started' } },
+      { type: 'turn_context', timestamp: at(9), payload: { model: 'gpt-5-mini' } },
+      { type: 'world_state', timestamp: at(9) },
+      { type: 'response_item', timestamp: at(9, 1), payload: { role: 'developer', type: 'message', content: [{ type: 'input_text', text: 'rules' }] } },
+      { type: 'response_item', timestamp: at(9, 2), payload: user('Stop.') },
+      { type: 'response_item', timestamp: at(9, 30), payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'Stopping' }] } },
+      { type: 'event_msg', timestamp: at(9, 31), payload: { type: 'turn_aborted' } },
+      { type: 'event_msg', timestamp: at(20), payload: { type: 'thread_settings_applied' } },
+      { type: 'event_msg', timestamp: at(20), payload: { type: 'task_started' } },
+      { type: 'response_item', timestamp: at(20, 1), payload: user('Go on.') },
+      { type: 'response_item', timestamp: at(21, 1), payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'Done.' }] } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests.map(r => r.totalElapsed)).toEqual([61_000, 29_000, 60_000]);
+    });
+  });
+
+  it('reads the thread a fork came from', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork-thread', forked_from_id: 'source-thread', source: 'exec', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Try the other way.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:01:00Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0]).toMatchObject({ sessionId: 'fork-thread', forkedFromId: 'source-thread' });
+    });
+  });
   it('captures current custom_tool_call apply_patch deltas', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'sess-codex-patch', cwd: '/Users/me/proj' } },
