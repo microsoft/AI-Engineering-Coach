@@ -89,6 +89,10 @@ interface CodexParseState {
   turnModel: string;
   turnEffort: 'max' | 'high' | 'medium' | 'low' | null;
   turnStartTs: number | null;
+  /** When the turn's task completed or was aborted; later lines until the next prompt are idle time. */
+  turnEndTs: number | null;
+  /** A task started after the turn's task ended: nothing more belongs to this turn. */
+  turnEnded: boolean;
   turnCanceled: boolean;
   answerEvidence: 'final' | 'legacy' | 'missing';
   prevTotalInput: number;
@@ -189,6 +193,8 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     turnModel: initialModel,
     turnEffort: null,
     turnStartTs: null,
+    turnEndTs: null,
+    turnEnded: false,
     turnCanceled: false,
     answerEvidence: 'missing',
     prevTotalInput: 0,
@@ -291,6 +297,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
   state.prevTotalOutput = state.curTotalOutput;
 
   const requestId = `${state.sessionId || 'unknown'}:codex:${state.requests.length}`;
+  const turnEnd = state.turnEndTs ?? state.lastTs;
   state.requests.push(createRequest({
     requestId,
     timestamp: state.turnStartTs,
@@ -308,7 +315,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     referencedFiles: [...new Set(state.currentReferencedFiles)],
     skillsUsed: [...new Set(state.currentSkillsUsed)],
     variableKinds: state.currentImageCount > 0 ? { image: state.currentImageCount } : {},
-    totalElapsed: state.turnStartTs && state.lastTs ? state.lastTs - state.turnStartTs : null,
+    totalElapsed: state.turnStartTs && turnEnd ? turnEnd - state.turnStartTs : null,
     promptTokens: reqPromptTokens,
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
@@ -333,6 +340,8 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentReferencedFiles = [];
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
+  state.turnEndTs = null;
+  state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
   state.currentEditLocs = new Map();
@@ -549,12 +558,31 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   }
 }
 
+/** Response items that are the agent's work: logged after the task completed, they extend the turn. */
+const CODEX_LATE_WORK_ITEMS: ReadonlySet<string> = new Set(['reasoning', 'function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call']);
+
+/** Work logged after the task completed: the turn ends with that work instead. */
+function extendCodexTurnEnd(state: CodexParseState, ts: number | null): void {
+  if (!state.turnEnded && state.turnEndTs !== null && ts !== null && ts > state.turnEndTs) state.turnEndTs = ts;
+}
+
+/** A task_complete or turn_aborted ends the turn's work; time until the next prompt is the user's, not the agent's.
+ *  A task with no prompt of its own (a manual `/compact`) is not a turn's work, whether it starts after the turn's
+ *  task ended or before the first prompt. An end stamped before the prompt or unreadable is ignored. */
+function trackCodexTaskEnd(eventType: string, state: CodexParseState, ts: number | null): void {
+  if (eventType === 'task_started' && state.turnEndTs !== null) state.turnEnded = true;
+  if (eventType !== 'task_complete' && eventType !== 'turn_aborted') return;
+  if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
+  state.turnEndTs = ts;
+}
+
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
   const eventType = stringValue(payload.type);
   if (eventType === 'user_message') {
     handleUserMessageEvent(payload, state, ts, defaultModel);
     return;
   }
+  if (eventType === 'agent_reasoning' || eventType === 'function_call' || eventType === 'assistant_message') extendCodexTurnEnd(state, ts);
   if (eventType === 'agent_reasoning') {
     state.currentAssistantTexts.push(stringValue(payload.text));
     return;
@@ -579,6 +607,7 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     state.answerEvidence = 'final';
   }
   if (eventType === 'turn_aborted') state.turnCanceled = true;
+  trackCodexTaskEnd(eventType, state, ts);
 }
 
 function handleTurnContext(payload: Record<string, unknown>, state: CodexParseState): void {
@@ -645,6 +674,7 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
     handleUserResponseItem(payload, state, ts, defaultModel);
     return;
   }
+  if (role === 'assistant' || CODEX_LATE_WORK_ITEMS.has(itemType)) extendCodexTurnEnd(state, ts);
   if (role === 'assistant' && itemType === 'message') {
     handleAssistantResponseItem(payload, state);
     return;
