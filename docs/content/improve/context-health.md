@@ -54,7 +54,11 @@ The Context Management tab analyzes how efficiently your coding sessions use the
 ### Key Metrics
 
 - **Context Score** -- Overall efficiency rating (0-100)
-- **Compactions** -- Number of times the context window was compacted because it ran out of space. Every compaction counts, including several in one turn.
+- **Compactions** -- Number of times the context window was compacted, because it ran out of space or because you asked (`/compact`). Every compaction counts, including several in one turn. Claude Code and Codex compactions count too. Codex doesn't log the size of a compaction, so the context before it is the prompt of the last model call.
+
+**Context Amnesia Risk** flags compactions that started above 85% of the context limit. It skips a Claude Code compaction when no limit was logged: Claude Code doesn't log its limit, and an estimate from the session's own largest prompt would put every compaction near full.
+
+**Runaway Context Growth** measures a session from its last compaction, because a compaction resets the context. A long session that compacted and kept working isn't flagged for the growth before the compaction.
 
 ### Reported and estimated context limits
 
