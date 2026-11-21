@@ -918,6 +918,22 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
     });
   });
 
+  it('keeps a turn in the transcript it was typed in when a copy in another project folder is parsed first', () => {
+    withProjects({
+      '-Users-me-proj/original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'original' }), makeAssistant('Done.')],
+      '-Users-me-a/copy.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'copy' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'copy' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'copy' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.workspaceId, session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['claude--Users-me-a', 'copy', ['u2']], ['claude--Users-me-proj', 'original', ['u1']],
+      ]);
+    });
+  });
+
   it("leaves a fork's replayed turns out of its reloaded session", () => {
     withProjects({
       '-Users-me-proj/original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'original' }), makeAssistant('Done.')],
