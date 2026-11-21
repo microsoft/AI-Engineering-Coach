@@ -5,8 +5,8 @@ import { harnessUrl } from './harness-url';
 
 const HARNESS_URL = harnessUrl();
 
-async function openTimeline(page: Page, hash = ''): Promise<void> {
-  await page.goto(HARNESS_URL + hash);
+async function openTimeline(page: Page): Promise<void> {
+  await page.goto(HARNESS_URL);
   await page.waitForFunction(() => {
     const content = document.getElementById('content');
     return content && content.innerHTML.length > 200 && !content.querySelector('.loading-spinner') && !content.querySelector('.error-boundary');
@@ -135,24 +135,54 @@ test.describe('Timeline date picker', () => {
     await page.mouse.click(5, 5);
     await expect(page.locator('#tlxCal')).toHaveCount(0);
   });
+
+  test('keeps a picked date without activity when the Timeline loads again', async ({ page }) => {
+    type MockWindow = { mockTimelineData: () => { sessions: { turns: { t: number }[] }[] }; mockTimelineDataOverride?: unknown };
+    // Activity on 2, 3 and 17 May: 11 May lies between, with none.
+    await page.evaluate(() => {
+      const w = window as unknown as MockWindow;
+      const data = w.mockTimelineData();
+      const flaky = data.sessions[5];
+      w.mockTimelineDataOverride = { ...data, sessions: [...data.sessions, { ...flaky, id: 'tl-late', turns: [{ ...flaky.turns[0], t: new Date(2026, 4, 17, 10).getTime() }] }] };
+    });
+    await page.locator('[data-page="dashboard"]').first().click();
+    await page.locator('[data-page="timeline"]').first().click();
+    await page.locator('#tlxView button[data-value="week"]').click();
+    await page.locator('#tlxDateLabel').click();
+    await day(page, '2026-05-11').click();
+    await expect(page.locator('#tlxDateLabel')).toContainText('May 11 – May 17, 2026');
+    await page.locator('[data-page="dashboard"]').first().click();
+    await page.locator('[data-page="timeline"]').first().click();
+    await expect(page.locator('#tlxDateLabel')).toContainText('May 11 – May 17, 2026');
+  });
 });
 
+/** Opens the dashboard at a Timeline link, as a copied link would: no click on the sidebar. */
+async function openLink(page: Page, hash: string): Promise<void> {
+  await page.goto(HARNESS_URL + hash);
+  await expect(page.locator('#tlxKpis')).toBeVisible({ timeout: 10000 });
+}
+
 test.describe('Timeline range links', () => {
-  test('opens a range from its link and keeps it in the address', async ({ page }) => {
-    await openTimeline(page, '#view=range&from=2026-05-02&to=2026-05-03');
+  test('opens the Timeline at a range from its link, and keeps the view in the address', async ({ page }) => {
+    await openLink(page, '#view=range&from=2026-05-02&to=2026-05-03');
+    await expect(page.locator('.nav-links a.active[data-page="timeline"]')).toHaveCount(1);
     await expect(page.locator('#tlxView button[data-value="range"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(kpi(page, 'Turns you typed')).toHaveText('7 of 14');
     await page.locator('#tlxView button[data-value="week"]').click();
     await expect(page).toHaveURL(/#view=week&date=2026-05-03$/);
+    // On another page the address no longer names a Timeline view.
+    await page.locator('[data-page="dashboard"]').first().click();
+    await expect(page).not.toHaveURL(/#view=/);
   });
 
   test('cuts a linked range to the loaded days', async ({ page }) => {
-    await openTimeline(page, '#view=range&from=2026-04-20&to=2026-05-02');
+    await openLink(page, '#view=range&from=2026-04-20&to=2026-05-02');
     await expect(page).toHaveURL(/#view=range&from=2026-05-02&to=2026-05-02$/);
   });
 
   test('opens the Day view for a linked range with no loaded day', async ({ page }) => {
-    await openTimeline(page, '#view=range&from=2026-01-01&to=2026-01-31');
+    await openLink(page, '#view=range&from=2026-01-01&to=2026-01-31');
     await expect(page.locator('#tlxView button[data-value="day"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page).toHaveURL(/#view=day&date=2026-05-03$/);
   });

@@ -58,7 +58,16 @@ if (!FF_TOKEN_REPORTING_ENABLED) {
 }
 
 /* ---- Global state ---- */
-let currentPage = new URLSearchParams(window.location.search).get('page') === 'curiosity' ? 'curiosity' : 'dashboard';
+/** A Timeline link in the address (`#view=range&from=…&to=…`, or a day, week or the families). */
+const TIMELINE_LINK = /^#view=(day|week|range|families)(&|$)/;
+
+/** The page the dashboard opens on: the one its address names, else the Dashboard. */
+function startPage(): string {
+  if (new URLSearchParams(window.location.search).get('page') === 'curiosity') return 'curiosity';
+  return TIMELINE_LINK.test(window.location.hash) ? 'timeline' : 'dashboard';
+}
+
+let currentPage = startPage();
 const currentFilter: DateFilter = {};
 let _dataIsReady = false;
 let matchedWorkspaceId: string | undefined;
@@ -436,6 +445,14 @@ export function navigateTo(page: string): void {
   page = normalizePageForFeatureFlags(page);
   if (!llmAvailable() && (page === 'skills' || page === 'level-up')) page = 'dashboard';
   currentPage = page;
+  // A Timeline link names the Timeline's view; on another page it would open the Timeline again on reload.
+  if (page !== 'timeline' && TIMELINE_LINK.test(window.location.hash)) {
+    try {
+      history.replaceState(history.state, '', window.location.pathname + window.location.search);
+    } catch {
+      // A host that doesn't allow it keeps the address as it is.
+    }
+  }
   document.body.classList.toggle('github-app-view', isGitHubAppPage(page));
   for (const a of $$<HTMLAnchorElement>('.nav-links a')) a.classList.toggle('active', a.dataset.page === page);
   void renderPage(page);

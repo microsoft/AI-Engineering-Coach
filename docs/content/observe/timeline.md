@@ -25,7 +25,7 @@ Click the date at the top to open a calendar:
 
 A range is drawn whole: its axis marks every 6 hours over two or three days, each day up to two weeks, every other day up to a month, then each Monday. The lanes, KPIs, callouts, impact table and the strip's highlight all describe the range. Over more than a month the lanes get dense, and the page suggests picking fewer days.
 
-The view is kept by its dates, so reopening the dashboard shows it again; in a browser, the address holds it as a link, for example `#view=range&from=2026-11-10&to=2026-11-17` (also `#view=day&date=…`, `#view=week&date=…` and `#view=families`). A linked range is kept within the loaded days; one with no loaded day opens the Day view.
+The view is kept by its dates, so reopening the dashboard shows it again, also a picked day with no activity. In a browser, the address holds it as a link that opens the Timeline at that view, for example `#view=range&from=2026-11-10&to=2026-11-17` (also `#view=day&date=…`, `#view=week&date=…` and `#view=families`). A linked range is kept within the loaded days; one with no loaded day opens the Day view.
 
 ## Definitions
 

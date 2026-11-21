@@ -123,7 +123,11 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   rootEl = root;
   root.replaceChildren();
   applyNavHint(consumeNavHint() ?? firstLoadLink(), loaded.prepared);
-  if (!loaded.prepared.days.includes(state.date)) state.date = nearestDay(state.date, loaded.prepared.days, loaded.prepared.bounds[0]);
+  // A picked date stays, with or without activity, while it's within the loaded days; else the nearest active day.
+  const [lo, hi] = selectable(loaded.prepared);
+  if (!isDate(state.date) || state.date < lo || state.date > hi) {
+    state.date = nearestDay(state.date, loaded.prepared.days, loaded.prepared.bounds[0]);
+  }
   keepRange(loaded.prepared);
   draw();
 }
