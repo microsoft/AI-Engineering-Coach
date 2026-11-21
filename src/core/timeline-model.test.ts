@@ -326,3 +326,15 @@ describe('textScope', () => {
     expect(scope).toEqual({ from: at(9), to: at(18), turns: [{ t: at(10), id: 'a' }, { t: at(11) }, { t: at(11), id: 'b' }] });
   });
 });
+
+describe('a dense session', () => {
+  it('builds its lane and family whatever its number of turns', () => {
+    // More values than a call can take as arguments: Math.min(...values) throws a RangeError on them.
+    const turns = Array.from({ length: 300_000 }, (_, i) => turn(at(0) + i * 1_000, 0, i % 2 ? 'agent' : 'you'));
+    const p = prepareTimeline({ forkedSessions: 0, sessions: [session('busy', turns), session('kid', [turn(at(1), 5, 'agent')], { parent: 0, via: 'create' })] });
+    const [lane] = buildLanes(p, at(0), at(0, 0, 25));
+    expect([lane.first, lane.turns.length]).toEqual([at(0), 300_000]);
+    expect(lane.last).toBeGreaterThanOrEqual(turns[turns.length - 1].t);
+    expect(buildFamilies(p).families[0].from).toBe('2024-03-15');
+  });
+});

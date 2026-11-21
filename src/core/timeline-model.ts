@@ -533,8 +533,8 @@ export function buildLanes(p: PreparedTimeline, from: number, to: number): Timel
       waitMs: intervalsMs(waiting),
       credits: sum(turns, t => t.cr),
       tokens: sum(turns, t => t.tok),
-      first: Math.min(...edges),
-      last: Math.max(...edges),
+      first: minOf(edges),
+      last: maxOf(edges),
       subagents: sum(turns, t => t.sub),
       waits,
       away: s.away.filter(([, b]) => b >= start && b < end).length,
@@ -666,7 +666,7 @@ export function buildViewFamilies(lanes: TimelineLane[], p: PreparedTimeline): V
       root,
       lanes: members,
       ordered,
-      first: Math.min(...members.map(l => l.first)),
+      first: minOf(members.map(l => l.first)),
       size: p.familySize.get(root) ?? members.length,
       typed: sum(members, l => l.typed),
       automated: sum(members, l => l.automated),
@@ -1056,8 +1056,8 @@ function familyNode(s: PreparedSession, depth: number, bounds: Interval): Family
     agentMs: intervalsMs(work),
     credits: sum(s.turns, t => t.cr),
     tokens: sum(s.turns, t => t.tok),
-    first: starts.length ? Math.min(...starts) : 0,
-    last: ends.length ? Math.max(...ends) : 0,
+    first: starts.length ? minOf(starts) : 0,
+    last: ends.length ? maxOf(ends) : 0,
     subagents: sum(s.turns, t => t.sub),
   };
 }
@@ -1138,9 +1138,9 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     perChild: kids.length > 0 ? childCredits / kids.length : 0,
     verdict: steppedInto > 0 ? 'needed' : 'alone',
     wide: kids.length >= WIDE_FAN_OUT,
-    from: firsts.length > 0 ? toDateStr(Math.min(...firsts)) : '',
-    to: lasts.length > 0 ? toDateStr(Math.max(...lasts)) : '',
-    busiest: busiestDayOf(counted) || (firsts.length > 0 ? toDateStr(Math.min(...firsts)) : ''),
+    from: firsts.length > 0 ? toDateStr(minOf(firsts)) : '',
+    to: lasts.length > 0 ? toDateStr(maxOf(lasts)) : '',
+    busiest: busiestDayOf(counted) || (firsts.length > 0 ? toDateStr(minOf(firsts)) : ''),
     rank: 0,
   };
 }
@@ -1235,6 +1235,20 @@ export function familiesInsights(t: FamiliesTotals): string[] {
     ? `${plural(t.wide.families, 'family', 'families')} started ${WIDE_FAN_OUT} or more child sessions at any depth (wide fan-out)${t.totalCredits > 0 ? ` and used ${t.wide.creditShare.toFixed(0)}% of all credits` : ''}.`
     : `No family started ${WIDE_FAN_OUT} or more children.`);
   return tips;
+}
+
+/** The smallest of `values`: a loop, since spreading a dense lane's values into `Math.min` overflows the call stack. */
+function minOf(values: readonly number[]): number {
+  let min = Infinity;
+  for (const v of values) if (v < min) min = v;
+  return min;
+}
+
+/** The largest of `values` (see `minOf`). */
+function maxOf(values: readonly number[]): number {
+  let max = -Infinity;
+  for (const v of values) if (v > max) max = v;
+  return max;
 }
 
 function sum<T>(items: readonly T[], value: (item: T) => number): number {
