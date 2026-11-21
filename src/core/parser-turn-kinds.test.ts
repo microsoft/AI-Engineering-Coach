@@ -295,6 +295,30 @@ describe('codexSessionNonHumanKind', () => {
   });
 });
 
+describe('claudeNonHumanKind with sender fields', () => {
+  const line = (textValue: string, extra: Record<string, unknown> = {}) =>
+    ({ type: 'user', message: { content: [{ type: 'text', text: textValue }] }, ...extra });
+  const human = { origin: { kind: 'human' }, promptSource: 'sdk', turnOrigin: 'human' };
+  const sdk = { promptSource: 'sdk', turnOrigin: 'sdk' };
+  const scheduled = { promptSource: 'system', turnOrigin: 'scheduled', isMeta: true };
+  const localCommand = [line('<local-command-caveat>Caveat.</local-command-caveat>', { isMeta: true }), line('<command-name>/cost</command-name>')];
+
+  it.each<[string, Array<ReturnType<typeof line>>, NonHumanKind | undefined]>([
+    ['a typed prompt', [line('Why?', human)], undefined],
+    ['a task notification by origin alone', [line('Task done.', { origin: { kind: 'task-notification' } })], 'system'],
+    ['a message from another session', [line('Status?', { origin: { kind: 'peer', from: 'a1' } })], 'relayed'],
+    ['another sender', [line('Run it.', { origin: { kind: 'cron' } })], 'system'],
+    ['a scheduled run', [line('Check the hosts.', scheduled)], 'system'],
+    ['a scheduled run straight after a local command', [...localCommand, line('Check the hosts.', scheduled)], 'system'],
+    ['an SDK prompt without origin', [line('Add a line.', sdk)], undefined],
+    ['an SDK prompt straight after a local command', [...localCommand, line('Add a line.', sdk)], undefined],
+    ['a line without origin', [line('Why?')], undefined],
+    ['a command expansion', [line('<command-name>/review</command-name>'), line('Review it.', { isMeta: true })], undefined],
+  ])('%s', (_label, lines, expected) => {
+    expect(claudeNonHumanKind(lines, lines.length - 1)).toBe(expected);
+  });
+});
+
 describe('openCodeMessageNonHumanKind', () => {
   const typed = { type: 'text', text: 'Read this file.' };
   const synthetic = (value: string) => ({ type: 'text', text: value, synthetic: true });

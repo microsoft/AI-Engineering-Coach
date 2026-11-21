@@ -810,3 +810,20 @@ describe('parseClaudeSessions: long lines and inline data', () => {
     });
   });
 });
+
+describe('parseClaudeSessions: who sent a turn', () => {
+  const human = { origin: { kind: 'human' }, version: '2.1.300' };
+
+  it('keeps SDK prompts typed and leaves out scheduled runs', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('Why?', '2025-06-15T09:59:00Z', human),
+      makeAssistant('Because.', '2025-06-15T09:59:02Z'),
+      makeUser('Reply with exactly: ok', '2025-06-15T10:00:00Z', { version: '2.1.300', promptSource: 'sdk', turnOrigin: 'sdk' }),
+      makeAssistant('ok'),
+      makeUser('Check the hosts.', '2025-06-15T10:01:00Z', { version: '2.1.300', promptSource: 'system', turnOrigin: 'scheduled', isMeta: true }),
+      makeAssistant('All up.', '2025-06-15T10:01:02Z'),
+    ], projectsDir => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(request => request.nonHumanKind)).toEqual([undefined, undefined, 'system']);
+    });
+  });
+});
