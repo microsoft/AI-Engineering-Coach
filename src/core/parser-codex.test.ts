@@ -396,4 +396,17 @@ describe('parseCodexSessions: turn timing', () => {
       expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(31_000);
     });
   });
+
+  it('falls back to the next prompt when a task_complete is stamped before its prompt', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-early-end', cwd: '/Users/me/proj', source: 'cli' } },
+      userItem('2025-06-15T10:00:00Z', 'Why?'),
+      assistantItem('2025-06-15T10:00:30Z', 'Because.'),
+      { type: 'event_msg', timestamp: '2025-06-15T09:59:00Z', payload: { type: 'task_complete' } },
+      userItem('2025-06-15T10:05:00Z', 'And then?'),
+      assistantItem('2025-06-15T10:05:10Z', 'Done.'),
+    ], sessionsDir => {
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(300_000);
+    });
+  });
 });

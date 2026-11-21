@@ -565,11 +565,11 @@ function extendCodexTurnEnd(state: CodexParseState, ts: number | null): void {
 
 /** A task_complete or turn_aborted ends the turn's work; time until the next prompt is the user's, not the agent's.
  *  A task with no prompt of its own (a manual `/compact`) is not a turn's work, whether it starts after the turn's
- *  task ended or before the first prompt. */
+ *  task ended or before the first prompt. An end stamped before the prompt or unreadable is ignored. */
 function trackCodexTaskEnd(eventType: string, state: CodexParseState, ts: number | null): void {
   if (eventType === 'task_started' && state.turnEndTs !== null) state.turnEnded = true;
   if (eventType !== 'task_complete' && eventType !== 'turn_aborted') return;
-  if (state.turnEnded || state.turnStartTs === null || ts === null) return;
+  if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
   state.turnEndTs = ts;
 }
 
