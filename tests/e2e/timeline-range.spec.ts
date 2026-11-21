@@ -115,6 +115,22 @@ test.describe('Timeline date picker', () => {
     await expect(page.locator('#tlxDateLabel')).toContainText('May 3, 2026');
   });
 
+  test('opens a parent active in the range on the range, whatever day the Day view was left on', async ({ page }) => {
+    await page.locator('#tlxDateLabel').click();
+    await page.locator('#tlxCalMode button[data-value="range"]').click();
+    await day(page, '2026-05-02').click();
+    await day(page, '2026-05-02').click();
+    // The Day view moves to 3 May; back on the Range view, the range is still 2 May.
+    await page.locator('.tlx-strip-bars .d[data-day="2026-05-03"]').click();
+    await page.locator('#tlxView button[data-value="range"]').click();
+    await expect(page).toHaveURL(/from=2026-05-02&to=2026-05-02$/);
+    await page.locator('.tlx-lane[data-session="tl-log"]').click();
+    await page.locator('#tlxOpenParent').click();
+    await expect(page.locator('#tlxView button[data-value="range"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page).toHaveURL(/from=2026-05-02&to=2026-05-02$/);
+    await expect(page.locator('#tlxDetailName')).toHaveText('Release notes');
+  });
+
   test('offers Today and the quick ranges, kept within the loaded days', async ({ page }) => {
     await page.locator('#tlxView button[data-value="week"]').click();
     await page.locator('#tlxDateLabel').click();

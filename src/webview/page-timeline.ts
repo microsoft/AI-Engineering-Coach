@@ -1110,16 +1110,22 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
   );
 }
 
-/** Shows a session on the Day view (or the current Week), on its busiest day when it has no lane in the current window. */
+/** Shows a session on the Day view (or the current Week), on its busiest day when it has no lane in the current window.
+ *  The Range view stays when it holds the day asked for or, with none asked, when the session has a lane in it. */
 function openSession(index: number, date?: string): void {
   if (!loaded) return;
   const s = loaded.prepared.sessions[index];
   if (s.ctx) return;
-  if (date) state.date = date;
-  else if (state.view === 'families' || !activeIn(s, windowOf(period()))) state.date = busiestDay(s);
-  // A range that doesn't hold that day gives way to the day.
-  const outside = state.view === 'range' && state.range && (state.date < state.range.from || state.date > state.range.to);
-  if (state.view === 'families' || outside) state.view = 'day';
+  if (state.view === 'range' && state.range) {
+    const { from, to } = state.range;
+    const keep = date ? date >= from && date <= to : activeIn(s, rangeWindow(state.range));
+    if (date) state.date = date;
+    if (!keep) Object.assign(state, { view: 'day', date: date ?? busiestDay(s) });
+  } else {
+    if (date) state.date = date;
+    else if (state.view === 'families' || !activeIn(s, windowOf(period()))) state.date = busiestDay(s);
+    if (state.view === 'families') state.view = 'day';
+  }
   state.focusId = s.id;
   state.filters = { ...NO_LANE_FILTERS };
   draw();
