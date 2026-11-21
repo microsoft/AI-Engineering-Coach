@@ -9,6 +9,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { detectAntiPatterns } from './detector-registry';
+import { createRequest, createSession } from './parser-shared';
 import { evaluateRule } from './rule-engine';
 import { parseRule } from './rule-parser';
 
@@ -29,9 +31,10 @@ describe('threshold placeholders in rule text', () => {
     expect(result.description).toBe(`limit ${rule.thresholds[key]}`);
   });
 
-  it('lets the detector extra win over a threshold of the same name', () => {
-    const rule = load('mcp-tool-bloat');
-    rule.descriptionTemplate = '{{extra.maxToolsPerSession}}';
-    expect(evaluateRule(rule, { count: 1, total: 1, ratio: 1, examples: [], extra: { maxToolsPerSession: 77 } }).description).toBe('77');
+  it('renders {{thresholds.X}} in a finding, with the measured {{extra.X}} of the same name (instruction-bloat)', () => {
+    const requests = [createRequest({ messageText: 'Explain the parser', responseText: 'ok', timestamp: Date.UTC(2026, 9, 1) })];
+    const sessions = [createSession({ sessionId: 's', workspaceId: 'ws', workspaceName: 'ws', harness: 'Local Agent', customInstructionsBytes: 9000, requests })];
+    const finding = detectAntiPatterns(requests, sessions, false).patterns.find(p => p.id === 'instruction-bloat');
+    expect(finding?.description).toContain('larger than 4000 bytes (largest: 9000 bytes)');
   });
 });
