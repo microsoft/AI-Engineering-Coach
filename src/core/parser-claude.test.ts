@@ -891,7 +891,7 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
     });
   });
 
-  it('counts a turn replayed into a resumed transcript once', () => {
+  it('counts a turn replayed into a forked transcript once', () => {
     withProjects({
       '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
       '-Users-me-proj/b.jsonl': [

@@ -730,8 +730,8 @@ function workspaceNameFromCwd(cwds: (string | undefined)[], dirName: string): st
 }
 
 /**
- * What to leave out across project folders. A transcript can be hard-linked into a second project folder, and Claude
- * replays earlier turns, with the same `uuid`, into a resumed or forked transcript; each is counted once.
+ * What to leave out across project folders. A transcript can be hard-linked into a second project folder, and a fork,
+ * or a copy of a session in another project folder, replays earlier turns with the same `uuid`; each is counted once.
  */
 interface ClaudeDiscovery {
   /** Top-level transcripts to skip: hard links of one parsed from another project folder. */
@@ -841,8 +841,8 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
   return discovery;
 }
 
-/** When a transcript was started: its first line's timestamp. A fork or resume replays older turns, but its own
- *  first line is written when it starts. */
+/** When a transcript was started: its first line's timestamp. A fork, or a copy of a session in another project
+ *  folder, replays older turns, but its own first line is normally written when it starts. */
 function transcriptStart(filePath: string, size: bigint): number {
   let start = Number.POSITIVE_INFINITY;
   readClaudeHead(filePath, size, raw => {
