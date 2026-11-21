@@ -123,15 +123,20 @@ export class Dashboard {
           const target = expected.toLowerCase();
           if (exact ? text === target : text.includes(target)) return true;
         }
-        await this.reenter();
-        return false;
       } catch (err: unknown) {
-        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError || err instanceof error.NoSuchFrameError
-          || (err instanceof Error && err.message.startsWith('WebviewMixin.switchToFrame: outer iframe became stale during frame switch.'))) {
-          return false;
+        if (!(err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError || err instanceof error.NoSuchFrameError
+          || err instanceof error.NoSuchWindowError)) {
+          throw err;
         }
-        throw err;
       }
+      // A poll that found nothing, or failed on the old frame: the next one starts from the webview's current frame.
+      await this.reenter().catch((err: unknown) => {
+        if (!(err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchFrameError || err instanceof error.NoSuchElementError
+          || (err instanceof Error && err.message.startsWith('WebviewMixin.switchToFrame: outer iframe became stale during frame switch.')))) {
+          throw err;
+        }
+      });
+      return false;
     }, READY_TIMEOUT, `Expected ${selector} to ${exact ? 'equal' : 'contain'} ${JSON.stringify(expected)}`);
   }
 
