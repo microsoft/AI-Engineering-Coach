@@ -25,7 +25,11 @@ const TOKEN_FORMATS = new RegExp(String.raw`\b(?:${[
   String.raw`sk-[A-Za-z0-9_-]{20,}`, String.raw`[srp]k_(?:live|test)_[A-Za-z0-9]{10,}`, String.raw`npm_[A-Za-z0-9]{36}`,
   String.raw`glpat-[A-Za-z0-9_-]{20,}`, String.raw`hf_[A-Za-z0-9]{30,}`, String.raw`SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}`,
   String.raw`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
+  String.raw`dapi[a-f0-9]{32}`, String.raw`shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}`, String.raw`SK[0-9a-f]{32}`, String.raw`pypi-[A-Za-z0-9_-]{50,}`,
 ].join('|')})`, 'g');
+
+/** An Entra ID (Azure AD) client secret: three characters, a digit, `Q~`, then 31 to 34 more. */
+const ENTRA_SECRET = /(?<![A-Za-z0-9_~.-])[A-Za-z0-9_~.-]{3}\dQ~[A-Za-z0-9_~.-]{31,34}(?![A-Za-z0-9_~.-])/g;
 
 /** A private key block, to its end line or, cut off, to the end of the text. */
 const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----|$)/g;
@@ -36,9 +40,9 @@ const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----[\s\S]
 const QUOTED = String.raw`(\\?["'])(?:((?:(?!\QQ)[^\r\n])+)\QQ|([^\r\n]+))`;
 const quoted = (group: number) => QUOTED.replaceAll('QQ', String(group));
 
-/** An `Authorization` (or API key) header: its whole value, scheme and all, to the closing quote or the line's end. */
+/** An `Authorization`, API key or cookie header: its whole value, scheme and all, to the closing quote or the line's end. */
 const AUTH_HEADER = new RegExp(
-  String.raw`\b((?:proxy-)?authorization|x-api-key|api-key|ocp-apim-subscription-key)(\\?["']?[ \t]*[:=][ \t]*)(?:${quoted(3)}|([^\r\n"'\`]+))`, 'gi');
+  String.raw`\b((?:proxy-)?authorization|x-api-key|api-key|ocp-apim-subscription-key|private-token|x-auth-token|set-cookie|cookie)(\\?["']?[ \t]*[:=][ \t]*)(?:${quoted(3)}|([^\r\n"'\`]+))`, 'gi');
 
 /** `Bearer …` and other schemes outside a header. */
 const AUTH_SCHEME = /\b(Bearer|Basic|Digest|SharedKey)\s+([A-Za-z0-9._~+/=:%-]{12,})/gi;
@@ -46,21 +50,30 @@ const AUTH_SCHEME = /\b(Bearer|Basic|Digest|SharedKey)\s+([A-Za-z0-9._~+/=:%-]{1
 /** A connection string's secret field, to the next `;`, spaces and all. */
 const CONNECTION_FIELD = /((?:^|[;\s"'])(?:password|pwd|account[ _]?key|shared[ _]?access[ _]?key|shared[ _]?access[ _]?signature|client[ _]?secret)[ \t]*=)([^;\r\n"']+)(?=;)/gim;
 
-/** Names whose value is a secret whatever it looks like. A name may end with one (`DB_PASSWORD`, `clientSecret`). */
-const STRONG_KEYS = String.raw`api[_-]?key|apikey|secret|token|passwords?|passwd|passphrase|pwd|account[_-]?key|access[_-]?key|private[_-]?key|secret[_-]?key|shared[_-]?access[_-]?key|sharedaccesssignature|credentials?|subscription[_-]?key|client[_-]?secret`;
+/** Names whose value is a secret whatever it looks like. A name may end with one (`DB_PASSWORD`, `clientSecret`, `SMTP_PASS`). */
+const STRONG_KEYS = String.raw`api[_-]?key|apikey|secret|token|passwords?|passwd|passphrase|passcode|(?<![A-Za-z0-9])pass|pwd|account[_-]?key|access[_-]?key|private[_-]?key|secret[_-]?key|shared[_-]?access[_-]?key|sharedaccesssignature|credentials?|subscription[_-]?key|client[_-]?secret`;
 /** Names whose value is a secret only when it looks like a key: `key`, `sig`, `auth`, `pat`. */
 const WEAK_KEYS = String.raw`key[_-]?id|key|signature|sig|auth|pat`;
 
-/** `name = value`, `name: value`, `"name": "value"`, `name=value&…`: the value whole when quoted. */
+/** `name = value`, `name: value`, `"name": "value"` (the value on the next line too, when quoted), `name=value&…`: the
+ *  value whole when quoted. */
 const KEY_VALUE = new RegExp(
-  String.raw`(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,80}?(?:(${STRONG_KEYS})|(?:${WEAK_KEYS}))(?:\\?["'])?[ \t]*[:=][ \t]*)(?:${quoted(3)}|\\?["']?([^\s"'\`,;&]{4,}))`, 'gi');
+  String.raw`(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,80}?(?:(${STRONG_KEYS})|(?:${WEAK_KEYS}))(?:\\?["'])?[ \t]*[:=][ \t]*(?:\r?\n[ \t]*(?=\\?["']))?)(?:${quoted(3)}|\\?["']?([^\s"'\`,;&]{4,}))`, 'gi');
 
 /** `--token value`, `--password "two words"`, `--client-secret value`, `--account-key value`. */
 const SECRET_FLAG = new RegExp(
   String.raw`(?<![A-Za-z0-9_-])(--?[A-Za-z0-9-]{0,40}?(?:api-?key|secret|token|password|passwd|passphrase|pass|account-?key|access-?key|sas(?:-token)?|subscription-key)[ \t]+)(?:${quoted(2)}|(?!-)([^\s"'\`,;&]+))`, 'gi');
 
-/** A value that looks like a generated key: long, with a digit or a base64 sign. */
-const keyShaped = (value: string) => value.length >= 8 && /[\d+/=]/.test(value) && value !== MARK;
+/** A value that looks like a generated key: long with a digit or a base64 sign, or longer still. */
+const keyShaped = (value: string) => value !== MARK && value.length >= 8 && (/[\d+/=]/.test(value) || value.length >= 16);
+
+/** `the password is …`, `change the token to …`: a credential named in prose, and the word after it when that looks
+ *  like one (with a digit or a sign, or long). `the token is expired` stays. */
+const PROSE_SECRET = /\b(password|passwd|passphrase|passcode|pin (?:code|number)|secret|token|api[ -]?key|access key)(\s+(?:is|was|to|=|:)\s+)(["'`]?)([^\s"'`]+)/gi;
+const proseShaped = (value: string) => {
+  const word = value.replace(/[.,;:!?)\]]+$/, '');
+  return word !== MARK && ((word.length >= 6 && /[^A-Za-z]/.test(word)) || word.length >= 12);
+};
 
 /** The mark in place of a value: inside its quotes when they were closed, after the opening one when not. */
 const quotedMark = (q: string | undefined, closed = true) => (q ? `${q}${MARK}${closed ? q : ''}` : MARK);
@@ -70,6 +83,7 @@ function scrubShapes(text: string): string {
   return text
     .replaceAll(PRIVATE_KEY, MARK)
     .replaceAll(TOKEN_FORMATS, MARK)
+    .replaceAll(ENTRA_SECRET, MARK)
     .replaceAll(AUTH_HEADER, (_m, ...groups: (string | undefined)[]) => {
       const [name, sep, q, closed] = groups;
       return `${name ?? ''}${sep ?? ''}${quotedMark(q, closed !== undefined)}`;
@@ -86,9 +100,21 @@ function scrubShapes(text: string): string {
     .replaceAll(/((?:^|\s)-u[ \t]*[^\s"'`]{1,200}[ \t]+-p)([ \t]*)(?!-)[^\s"'`]+/g, `$1$2${MARK}`)
     .replaceAll(/(\bsshpass[ \t]+-p[ \t]*)[^\s"'`]+/g, `$1${MARK}`)
     .replaceAll(/(?<![A-Za-z0-9])(pass:)(?!\s)[^\s"'`]+/g, `$1${MARK}`)
-    // Long random strings: base64-like in both cases with a digit, 32 hex digits (a 40-digit commit stays), 52 base32.
+    // Long random strings: base64-like in both cases with a digit; 32 hex digits on their own (a 40-digit commit
+    // stays); 64 hex digits, unless a sha256 digest; 52 base32.
     .replaceAll(/[A-Za-z0-9+/_-]{32,}={0,2}/g, m => (m.length >= 32 && /[a-z]/.test(m) && /[A-Z]/.test(m) && /\d/.test(m) ? MARK : m))
-    .replaceAll(/\b(?:[a-f0-9]{32}|[A-F0-9]{32}|[a-z2-7]{52})\b/g, MARK);
+    .replaceAll(/(?<![0-9a-fA-F])(?:[a-f0-9]{32}|[A-F0-9]{32})(?![0-9a-fA-F])/g, MARK)
+    .replaceAll(/(?<!sha256:)(?<![0-9a-fA-F])(?:[a-f0-9]{64}|[A-F0-9]{64})(?![0-9a-fA-F])/g, MARK)
+    .replaceAll(/(?<![a-z2-7])[a-z2-7]{52}(?![a-z2-7])/g, MARK)
+    .replaceAll(PROSE_SECRET, (m, ...groups: string[]) => {
+      const [name, sep, q, value] = groups;
+      return proseShaped(value) ? `${name}${sep}${q}${MARK}` : m;
+    });
+}
+
+/** Whether a question or message asks for a credential: your answer to it is taken for one. */
+export function asksForSecret(text: string): boolean {
+  return /\b(?:password|passwd|passphrase|passcode|pin (?:code|number)|otp|one[- ]time (?:code|password)|2fa|mfa|token|api[ -]?key|secret|credentials?|private key|access key)\b/i.test(text);
 }
 
 /** A line that names a credential. */

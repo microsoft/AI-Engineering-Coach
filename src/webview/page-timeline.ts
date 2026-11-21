@@ -8,7 +8,7 @@
  * the range once (`getTimelineData`); every view, filter and the name mask are computed here with the shared model. */
 
 import type {
-  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextScope, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
+  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextScope, TimelineTextSuperseded, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
 } from '../core/types';
 import {
   addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
@@ -78,6 +78,8 @@ let scrollToText = false;
 /** The text behind each opened lane, by session ID: read once per load, on demand. */
 type TextEntry = { status: 'loading' } | { status: 'ready'; text: TimelineSessionText } | { status: 'missing' };
 const texts = new Map<string, TextEntry>();
+/** The read of the lane whose details show now (`sessionId|from|to`). */
+let shownTextKey: string | null = null;
 const SHOW_TEXT_KEY = 'timelineShowText';
 
 const FAMILY_COLORS = ['#3794ff', '#2ea043', '#14a38b', '#bf8700', '#db61a2', '#a371f7', '#0969da', '#d18616'];
@@ -829,6 +831,7 @@ function setShowText(on: boolean): void {
  *  the read returns that and nothing more. */
 function sessionText(l: TimelineLane): TextEntry {
   const key = `${l.s.id}|${l.win[0]}|${l.win[1]}`;
+  shownTextKey = key;
   const known = texts.get(key);
   if (known) return known;
   const entry: TextEntry = { status: 'loading' };
@@ -839,10 +842,16 @@ function sessionText(l: TimelineLane): TextEntry {
     texts.set(key, next);
     draw();
   };
+  // A read dropped for a newer one is forgotten, and read again if its lane is the one shown.
+  const superseded = () => {
+    if (texts.get(key) !== entry) return;
+    texts.delete(key);
+    if (shownTextKey === key) draw();
+  };
   const listed = [...l.turns, ...l.waits.flatMap(w => (w.after ? [w.after] : []))];
   const scope: TimelineTextScope = { from: l.win[0], to: l.win[1], turns: listed.map(t => ({ t: t.t, ...(t.id ? { id: t.id } : {}) })) };
-  rpc<TimelineSessionText | null>('getTimelineSessionText', { sessionId: l.s.id, scope })
-    .then(text => settle(text ? { status: 'ready', text } : { status: 'missing' }))
+  rpc<TimelineSessionText | TimelineTextSuperseded | null>('getTimelineSessionText', { sessionId: l.s.id, scope })
+    .then(text => (text && 'superseded' in text ? superseded() : settle(text ? { status: 'ready', text } : { status: 'missing' })))
     .catch(() => settle({ status: 'missing' }));
   return entry;
 }

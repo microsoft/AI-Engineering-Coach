@@ -113,6 +113,11 @@ export interface TimelineTextScope {
   turns: { t: number; id?: string }[];
 }
 
+/** A lane-text read dropped unread because a newer one was asked for before it ran (only one lane's details show). */
+export interface TimelineTextSuperseded {
+  superseded: true;
+}
+
 /** The text behind one session's turns and stops, for the Timeline detail panel: loaded when a lane is opened, never
  *  part of the dataset, the chat tool or the export. Scrubbed of links, email addresses, the home directory, the user's
  *  names and credentials; long text is cut, with `cut` set. Read for one lane's scope: nothing it doesn't show. */

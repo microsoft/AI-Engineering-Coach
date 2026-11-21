@@ -12,6 +12,7 @@ import type { Session, SessionRequest, TimelineSessionText, TimelineTextScope, T
 import { turnSender } from './analyzer-timeline';
 import { turnIdentity } from './fork-ownership';
 import { scrubText, type ScrubContext } from './session-labels';
+import { asksForSecret } from './secret-scrub';
 import { textTurnFinder, waitInWindow } from './timeline-model';
 
 /** Longest prompt, question or answer shown; the rest is cut. */
@@ -36,11 +37,13 @@ function waitText(w: UserWait, labels: ScrubContext): TimelineTextWait {
     s: w.start, e: w.end, k: w.kind, a: w.answered, ...(w.answered && w.answeredAt !== undefined && w.answeredAt !== w.end ? { at: w.answeredAt } : {}),
   };
   const text: UserWaitText = w.text ?? {};
+  // Your answer to a question that asks for a credential is one, whatever it looks like.
+  const secretAnswer = w.kind !== 'permission' && !!text.ask && asksForSecret(text.ask);
   let cut = false;
   for (const key of ['ask', 'answer', 'intention'] as const) {
     const value = text[key]?.trim();
     if (!value) continue;
-    const [v, c] = cutHead(scrubText(value, labels), MAX_TEXT);
+    const [v, c] = key === 'answer' && secretAnswer ? ['[secret]', false] : cutHead(scrubText(value, labels), MAX_TEXT);
     out[key] = v;
     cut ||= c;
   }
@@ -76,17 +79,25 @@ export function timelineSessionText(session: Session, labels: ScrubContext, scop
     : allWaits;
   return {
     sessionId: session.sessionId,
-    turns: shown.map(x => textTurn(x.r, x.t, labels)).sort((a, b) => a.t - b.t),
+    turns: shown.map(x => textTurn(x.r, x.t, labels, answersSecretRequest(x.r, requests))).sort((a, b) => a.t - b.t),
     waits: waits.map(w => waitText(w, labels)).sort((a, b) => a.s - b.s),
   };
 }
 
-function textTurn(r: SessionRequest, t: number, labels: ScrubContext): TimelineTextTurn {
+/** A lone word you sent right after the agent asked for a credential (`Please paste the API key.`): taken for one. */
+function answersSecretRequest(r: SessionRequest, requests: readonly SessionRequest[]): boolean {
+  const prompt = r.messageText.trim();
+  if (r.nonHumanKind || !prompt || prompt.length > 200 || /\s/.test(prompt)) return false;
+  const before = requests[requests.indexOf(r) - 1];
+  return !!before && asksForSecret((before.replyText ?? before.responseText).slice(-400));
+}
+
+function textTurn(r: SessionRequest, t: number, labels: ScrubContext, secretPrompt = false): TimelineTextTurn {
   const k = turnSender(r.nonHumanKind);
   const turn: TimelineTextTurn = { t, k, ...(turnIdentity(r) ? { id: turnIdentity(r) } : {}) };
   let cut = false;
   if (k !== 'compaction' && k !== 'other' && r.messageText.trim()) {
-    const [v, c] = cutHead(scrubText(r.messageText.trim(), labels), MAX_TEXT);
+    const [v, c] = secretPrompt ? ['[secret]', false] : cutHead(scrubText(r.messageText.trim(), labels), MAX_TEXT);
     turn.prompt = v;
     cut ||= c;
   }

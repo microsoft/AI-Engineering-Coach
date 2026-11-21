@@ -53,7 +53,7 @@ import type { ContextManagementData, FlowStateData, SessionRangeMatch, Workspace
 import type { PromptCacheData, PromptCacheSessionsData } from './prompt-cache-types';
 import type { SessionTimelineData } from './session-timeline-types';
 import type { TokenTypesData } from './token-usage-types';
-import type { TimelineDataset, TimelineSessionText, TimelineTextScope } from './timeline-types';
+import type { TimelineDataset, TimelineSessionText, TimelineTextScope, TimelineTextSuperseded } from './timeline-types';
 import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
 import type { CuriosityData, CuriosityFilter } from './curiosity-types';
@@ -74,7 +74,7 @@ export interface RpcMethodMap {
   getAiCreditBurndown: { params: { config: BurndownConfig; filter?: DateFilter }; result: AiCreditBurndownData };
   getTokenCoverage: { params: DateFilter | undefined; result: TokenCoverageData };
   getTimelineData: { params: { filter?: DateFilter } | undefined; result: TimelineDataset };
-  getTimelineSessionText: { params: { sessionId: string; scope: TimelineTextScope }; result: TimelineSessionText | null };
+  getTimelineSessionText: { params: { sessionId: string; scope: TimelineTextScope }; result: TimelineSessionText | TimelineTextSuperseded | null };
   getSessions: { params: { page: number; pageSize: number; filter?: DateFilter; search?: string }; result: SessionList };
   getSessionDetail: { params: { sessionId: string }; result: Session | null };
   getWorkLifeBalance: { params: DateFilter | undefined; result: WorkLifeBalanceResult | null };

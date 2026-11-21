@@ -175,6 +175,15 @@ test.describe('Timeline', () => {
     await expect(focus).toContainText('Include the beta features?');
   });
 
+  test('reads a lane again when its read was dropped for a newer one', async ({ page }) => {
+    await page.evaluate(() => {
+      let calls = 0;
+      (window as unknown as { mockTimelineTextHook?: () => unknown }).mockTimelineTextHook = () => (calls++ === 0 ? { superseded: true } : undefined);
+    });
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(page.locator('#tlxText [data-text-at^="t:"] > .tx-body').first()).toHaveText('Why is the checkout test flaky?');
+  });
+
   test('says a wait for your next prompt followed a compaction, not that no reply was logged', async ({ page }) => {
     await page.evaluate(() => {
       (window as unknown as { mockTimelineTextHook?: (id: string) => unknown }).mockTimelineTextHook = id => ({

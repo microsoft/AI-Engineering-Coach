@@ -160,6 +160,9 @@ describe('timelineSessionText turns', () => {
     expect(turns.map(t => [t.t, text.turns.find(x => x.id === t.id)?.prompt])).toEqual([[turns[0].t, 'First'], [turns[0].t, 'Second']]);
   });
 
+});
+
+describe('timelineSessionText scope and secrets asked for', () => {
   it('builds only what a lane’s scope lists, and only the turns the analysis kept', () => {
     const s = parse([
       { type: 'user.message', timestamp: at(0), id: 'u1', data: { content: 'Before the window' } },
@@ -179,6 +182,25 @@ describe('timelineSessionText turns', () => {
     expect([kept.turns, kept.waits]).toEqual([[], []]);
   });
 
+  it('hides your answer to a question that asks for a secret, and a lone word you send after the agent asks for one', () => {
+    const answer = 'Plum' + '2024!';
+    const s = parse([
+      { type: 'user.message', timestamp: at(0), id: 'u1', data: { content: 'Connect the app' } },
+      { type: 'assistant.message', timestamp: at(1), data: { content: 'I need the database password.' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'What is the database password?' } } },
+      { type: 'tool.execution_complete', timestamp: at(3), data: { toolCallId: 'q1', success: true, result: { content: `User responded: ${answer}` } } },
+      { type: 'assistant.message', timestamp: at(4), data: { content: 'It failed. Please paste the new API key.' } },
+      { type: 'user.message', timestamp: at(10), id: 'u2', data: { content: 'Mango' + '7731' } },
+      { type: 'assistant.message', timestamp: at(11), data: { content: 'Connected.' } },
+      { type: 'user.message', timestamp: at(20), id: 'u3', data: { content: 'Thanks, go on' } },
+    ]);
+    const text = timelineSessionText(s, labels);
+    expect(text.waits.map(w => [w.ask, w.answer])).toEqual([['What is the database password?', '[secret]']]);
+    expect(text.turns.map(t => t.prompt)).toEqual(['Connect the app', '[secret]', 'Thanks, go on']);
+  });
+});
+
+describe('timelineSessionText kinds and boundaries', () => {
   it('shows no text for compaction or system turns', () => {
     const s = fixture();
     s.requests[0].nonHumanKind = 'compaction';

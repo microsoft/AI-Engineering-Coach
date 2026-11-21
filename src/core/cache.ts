@@ -14,7 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
-import { Session, Workspace, type TimelineSessionText, type TimelineTextScope } from './types';
+import { Session, Workspace, type TimelineSessionText, type TimelineTextScope, type TimelineTextSuperseded } from './types';
 import { EditLoc, EditLocIndex } from './edit-loc-diff';
 import { warnCore } from './log';
 import { loadSessionDetails, loadSessionTimelineText } from './session-image-loader';
@@ -488,7 +488,7 @@ async function sessionSource(sessionId: string): Promise<SessionSource | undefin
 /** One Timeline lane's text, read again from its log and scrubbed in the parse worker (see `TimelineTextRequest`). */
 export async function loadTimelineTextFromDisk(
   sessionId: string, scope: TimelineTextScope, labels: ScrubContext, kept?: string[],
-): Promise<TimelineSessionText | null> {
+): Promise<TimelineSessionText | TimelineTextSuperseded | null> {
   try {
     const source = await sessionSource(sessionId);
     if (!source) return null;

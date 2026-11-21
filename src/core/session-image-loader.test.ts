@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionImageLoader } from './session-image-loader';
 import type { SessionSourceRequest } from './session-images';
 import type { SessionSource } from './cache';
+import type { TimelineSessionText } from './types';
 
 class FakeWorker extends EventEmitter {
   requests: SessionSourceRequest[] = [];
@@ -110,6 +111,24 @@ describe('image worker lifecycle', () => {
     await rejected;
   });
 
+  it('drops a lane-text read a newer one replaced before it ran, so the lane shown is read next', async () => {
+    const worker = new FakeWorker();
+    const loader = new SessionImageLoader(() => worker);
+    loaders.push(loader);
+    const text = (from: number) => ({ type: 'timeline-text' as const, source, sessionId: 'session', scope: { from, to: from + 1, turns: [] }, labels: { names: [] } });
+    const busy = loader.load(source, 'session', 'image');
+    const older = loader.loadTimelineText(text(1));
+    const newer = loader.loadTimelineText(text(2));
+    await Promise.resolve();
+    worker.emit('message', { type: 'session-images', images: [] });
+    await busy;
+    expect(await older).toEqual({ superseded: true });
+    await Promise.resolve();
+    expect(worker.requests.map(r => r.type === 'timeline-text' ? r.scope.from : r.type)).toEqual(['session-images', 2]);
+    worker.emit('message', { type: 'timeline-text', text: null });
+    expect(await newer).toBeNull();
+  });
+
   it('takes from the worker only the fields a lane shows', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const worker = new FakeWorker();
@@ -192,7 +211,7 @@ describe('image worker lifecycle', () => {
       const text = await loader.loadTimelineText({
         type: 'timeline-text', source: { ...source, filePath: events }, sessionId: 'session',
         scope: { from: day, to: day + 86_400_000, turns: [{ t: Date.parse(at(2, 0)), id: 'u2' }] }, labels: { names: [] },
-      });
+      }) as TimelineSessionText | null;
       expect(text?.turns.map(t => t.prompt)).toEqual(['Deploy with [secret]']);
       expect(text?.waits.map(w => w.ask)).toEqual(['Today’s question?']);
       expect(JSON.stringify(text)).not.toContain('Yesterday');

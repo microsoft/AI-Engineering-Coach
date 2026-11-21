@@ -6,6 +6,7 @@
 /* A synthetic secret corpus: fake credentials in the shapes people paste into prompts, commands and config, built at
  * run time so no token-shaped literal sits in the repository. No part of any of them may reach what the Timeline shows
  * of a lane's text, nor its dataset, the chat tool or the summary export. */
+// cspell:ignore shpat numpy
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -85,10 +86,25 @@ function corpus(): Case[] {
     c('oversized values', ([a, b, d, e, f, g]) => [
       `{"password": "${a}"}`, `login --password "${b}"`, `login --password "${d}`, `DB_PASSWORD=${e}`, `Authorization: Bearer ${f}`, `push ${g}`,
     ].join('\n'), rand(LOWER, 2100), rand(LOWER, 2500), rand(LOWER, 3000), rand(LOWER, 2600), mixed(3000), 'ghp_' + mixed(400)),
+    c('long lower-case values of a key', ([a]) => `?key=${a}`, rand(LOWER, 20)),
   ];
 }
 
-const CASES = corpus();
+/** Credentials written as people talk and paste them: in prose, cookies, pretty-printed JSON, newer key formats. */
+function moreCorpus(): Case[] {
+  const c = (name: string, text: (s: string[]) => string, ...secrets: string[]): Case => ({ name, text: text(secrets), secrets });
+  return [
+    c('short passwords in prose and *_PASS names', ([a, b, d]) => `change the password to ${a}\nSMTP_PASS=${b}\nthe PIN code is ${d}`,
+      rand(UPPER, 1) + rand(LOWER, 6) + rand(DIGITS, 4) + '!', rand(LOWER, 5) + rand(DIGITS, 3), rand(DIGITS, 6)),
+    c('cookies and other auth headers', ([a, b]) => `curl -H "Cookie: session=${a}; theme=dark" -H 'Private-Token: ${b}' x`, mixed(24), urlSafe(20)),
+    c('pretty-printed JSON', ([a]) => `{\n  "password":\n    "${a}"\n}`, rand(LOWER, 6) + rand(DIGITS, 4)),
+    c('Azure AD client secret', ([a]) => `client secret ${a}`, rand(ALNUM, 3) + '8Q~' + rand(ALNUM + '_~.-', 34)),
+    c('hex keys with a prefix, and 64-hex secrets', ([a, b, d, e]) => `${a} ${b} ${d}\nwebhook ${e}`,
+      'dapi' + hex(32), 'shpat_' + hex(32), 'SK' + hex(32), hex(64)),
+  ];
+}
+
+const CASES = [...corpus(), ...moreCorpus()];
 
 /** Every part of a secret that would give it away: each word of a phrase, and every 8-character run of a token. */
 function leaks(out: string, secrets: readonly string[]): string[] {
@@ -115,6 +131,8 @@ describe('scrubText against the secret corpus', () => {
       'claude-sonnet-4-5-20250929 used 1200 tokens; set max_tokens=4096',
       'design=wide, mkdir -p out && sort -u names.txt && npm run -s build -- --token-file cfg.json --max-tokens 4096',
       'Primary key: userId. Released 2.4.1 on 2026-05-02 at 15:02.',
+      'The token is expired; the password is unchanged. Pull image@sha256:' + 'ab'.repeat(32) + ', set bypass=true and compass: north.',
+      'Pin numpy to 1.26.4, then pin to 2.0.1.',
     ].join('\n');
     expect(scrubText(plain, labels)).toBe(plain);
   });
