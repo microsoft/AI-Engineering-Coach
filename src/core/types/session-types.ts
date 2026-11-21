@@ -293,6 +293,25 @@ export interface UserWait {
   /** The request it answered, as logged: a relay's `request_id`, or the `requestId` the record of your answer to a
    *  question carried. The same request in two sessions is the same answer. */
   requestId?: string;
+  /** What was asked and answered, as logged. Kept only when one session is re-read for its detail view; the sessions
+   *  the analyzers hold have it stripped (`stripSingleSession`). */
+  text?: UserWaitText;
+}
+
+/** The text behind a question, relayed question or permission prompt. */
+export interface UserWaitText {
+  /** Questions and relays: the question. Permission prompts: what was requested (a command, a path, a URL…). */
+  ask?: string;
+  /** The choices a question offered. */
+  choices?: string[];
+  /** Your answer (questions, relays) or the decision logged for a permission prompt (`approved`, `denied…`). */
+  answer?: string;
+  /** Permission prompts: the kind of request the harness logged (`shell`, `write`, `read`, `url`, `mcp`…). */
+  tool?: string;
+  /** Permission prompts: why the agent asked, in its words. */
+  intention?: string;
+  /** The agent's last message before it stopped, when one was logged in the same turn. */
+  before?: string;
 }
 
 /** Session-level disposition. Used to distinguish "missing token data

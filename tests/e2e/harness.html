@@ -93,8 +93,8 @@ function acquireVsCodeApi() {
         });
       }
     },
-    getState() { return {}; },
-    setState(s) { return s; }
+    getState() { return window.mockWebviewState ?? {}; },
+    setState(s) { window.mockWebviewState = s; return s; }
   };
 }
 window.acquireVsCodeApi = acquireVsCodeApi;
@@ -622,6 +622,20 @@ function mockTimelineData() {
   };
 }
 
+/* The text behind two Timeline lanes (the Claude Code session that waited for a prompt, and the session with a
+ * question); any other lane's log reads as unavailable. */
+function mockTimelineText(sessionId) {
+  const at = (day, h, m = 0) => new Date(2026, 4, day, h, m).getTime();
+  if (sessionId === 'tl-flaky') return { sessionId, waits: [], turns: [
+    { t: at(3, 14), k: 'you', prompt: 'Why is the checkout test flaky?', reply: 'It races on the clock.' },
+    { t: at(3, 14, 40), k: 'you', prompt: 'Fix it with a fake clock.', reply: 'Done.' },
+  ] };
+  if (sessionId === 'tl-notes') return { sessionId, turns: [{ t: at(2, 15), k: 'you', prompt: 'Draft the release notes for 2.4', reply: 'Drafted them.' }], waits: [
+    { s: at(2, 15, 2), e: at(2, 15, 6), k: 'question', a: true, ask: 'Include the beta features?', choices: ['Yes', 'No'], answer: 'No', before: 'I found three beta features.' },
+  ] };
+  return null;
+}
+
 function mockSessionTimeline(sessionId) {
   if (sessionId === 's5') return mockContextTimeline(sessionId);
   if (sessionId === 'pc-3') {
@@ -897,6 +911,7 @@ function getMockData(method, params) {
     getTokenTypes: () => mockTokenTypes(window.mockTokenTypesMode),
 
     getTimelineData: () => window.mockTimelineDataOverride ?? mockTimelineData(),
+    getTimelineSessionText: () => mockTimelineText(params.sessionId),
     getHeatmap: () => ({
       heatmap: Array.from({ length: 7 }, (day) => Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? Math.floor(Math.random() * 30) + 10 : Math.floor(Math.random() * 3))),
       byType: {},

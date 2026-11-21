@@ -46,7 +46,7 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxImpact tr[data-family="tl-flaky"] td').last()).toHaveText('0.0%');
   });
 
-  test('shows the selected session’s turns without prompt text, and links its family', async ({ page }) => {
+  test('shows the selected session’s turns and links its family', async ({ page }) => {
     await expect(page.locator('#tlxDetailName')).toHaveText('Payment API tests');
     await page.locator('.tlx-lane[data-session="tl-lint"]').click();
     await expect(page.locator('#tlxDetail')).toContainText('Grandchild · parent “Payment API tests”');
@@ -66,6 +66,47 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxFamilyDetail h2')).toHaveText('Checkout revamp');
     await expect(page.locator('#tlxFamilyDetail tr[data-session]')).toHaveCount(5);
     await expect(page.locator('#tlxFamilyDetail tr[data-session="tl-lint"]')).toBeVisible();
+  });
+
+  test('shows the prompts and questions behind a lane, hides them when masked, and jumps to a wait', async ({ page }) => {
+    const text = page.locator('#tlxText');
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(page.locator('#tlxShowText')).toBeChecked();
+    await expect(text).toContainText('2 prompts this day, read again from the session’s log on this machine');
+    await expect(text.locator('[data-text-at^="t:"] > .tx-body')).toHaveText(['Why is the checkout test flaky?', 'Fix it with a fake clock.']);
+    await expect(text.locator('[data-text-at^="i:"]')).toContainText('Waited 35 min for your next prompt');
+    await expect(text.locator('[data-text-at^="i:"] .tx-body')).toHaveText('It races on the clock.');
+    // A hatched wait opens its lane and highlights the wait.
+    await page.locator('.tlx-lane[data-session="tl-coord"] .tlx-lbl').click();
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .wait').click();
+    await expect(page.locator('#tlxDetailName')).toHaveText('Investigate flaky test');
+    await expect(text.locator('.tx-item.focus')).toContainText('Waited 35 min');
+    // A question: what the agent said before it, the question, its choices and your answer.
+    await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
+    await page.locator('.tlx-lane[data-session="tl-notes"] .tlx-lbl').click();
+    const ask = text.locator('[data-text-at^="w:question:"]');
+    await expect(text).toContainText('1 prompt and 1 question or permission prompt this day');
+    await expect(ask.locator('.tx-head')).toContainText('The agent asked you · you answered after 4 min');
+    await expect(ask.locator('.tx-choices li')).toHaveText(['Yes', 'No']);
+    await expect(ask.locator('.tx-answer')).toHaveText('Your answer No');
+    await expect(ask.locator('details summary')).toHaveText('What the agent said before it asked');
+    // A lane whose log can't be read again says so.
+    await page.locator('.tlx-lane[data-session="tl-log"] .tlx-lbl').click();
+    await expect(text).toContainText('couldn’t be read again');
+    // Masked: hidden, and the setting can't be turned on.
+    await page.locator('.tlx-lane[data-session="tl-notes"] .tlx-lbl').click();
+    await page.locator('#tlxMask').check();
+    await expect(page.locator('#tlxShowText')).toBeDisabled();
+    await expect(text).toContainText('Hidden while names are masked');
+    await expect(page.locator('#tlx-root')).not.toContainText('Include the beta features');
+    await page.locator('#tlxMask').uncheck();
+    await expect(text).toContainText('Include the beta features?');
+    // Turned off, it stays off for other lanes and after the page is drawn again.
+    await page.locator('#tlxShowText').uncheck();
+    await expect(text.locator('.tx-list')).toHaveCount(0);
+    await page.locator('[data-page="timeline"]').first().click();
+    await page.locator('.tlx-lane').first().locator('.tlx-lbl').click();
+    await expect(page.locator('#tlxShowText')).not.toBeChecked();
   });
 
   test('filters recompute the KPIs, and Clear restores every session', async ({ page }) => {
