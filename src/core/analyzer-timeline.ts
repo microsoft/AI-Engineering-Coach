@@ -43,19 +43,24 @@ function subagentLaunches(r: SessionRequest): number {
  *  while the pairing itself is being worked out. */
 type RelayPairs = ((w: UserWait) => boolean) | undefined;
 
-function timelineWaits(waits: readonly UserWait[] | undefined, paired: RelayPairs): TimelineTurnWait[] {
-  return (waits ?? []).filter(w => w.end >= w.start).map(w => ({
-    s: w.start, e: w.end, k: w.kind, a: w.answered,
-    ...(w.answered && w.answeredAt !== undefined && w.answeredAt !== w.end ? { at: w.answeredAt } : {}),
-    ...(w.answered && w.requestId ? { rid: w.requestId } : {}),
-    ...(paired && w.kind === 'relay' && w.answered ? { pr: paired(w) } : {}),
-  }));
+/** The turn's waits for the dataset; `origin` (the pairing pass) records which logged wait each came from. */
+function timelineWaits(waits: readonly UserWait[] | undefined, paired: RelayPairs, origin?: Map<TimelineTurnWait, UserWait>): TimelineTurnWait[] {
+  return (waits ?? []).filter(w => w.end >= w.start).map(w => {
+    const out: TimelineTurnWait = {
+      s: w.start, e: w.end, k: w.kind, a: w.answered,
+      ...(w.answered && w.answeredAt !== undefined && w.answeredAt !== w.end ? { at: w.answeredAt } : {}),
+      ...(w.answered && w.requestId ? { rid: w.requestId } : {}),
+      ...(paired && w.kind === 'relay' && w.answered ? { pr: paired(w) } : {}),
+    };
+    origin?.set(out, w);
+    return out;
+  });
 }
 
-function timelineTurn(r: SessionRequest, paired: RelayPairs): TimelineTurn {
+function timelineTurn(r: SessionRequest, paired: RelayPairs, origin?: Map<TimelineTurnWait, UserWait>): TimelineTurn {
   const t = r.timestamp ?? 0;
   const d = Math.max(0, r.totalElapsed ?? 0);
-  const waits = timelineWaits(r.userWaits, paired);
+  const waits = timelineWaits(r.userWaits, paired, origin);
   return {
     t,
     d,
@@ -86,24 +91,27 @@ function repositoryOf(s: Session): string {
 const turnEnd = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
 /** When you answered: the harness's record of your answer, else the result. */
 const answerPoint = (w: UserWait) => w.answeredAt ?? w.end;
-/** The key that ties a relayed answer to its pairing, worked out once over the whole log. */
-const relayKey = (sessionId: string, at: number, start: number) => `${sessionId}|${at}|${start}`;
-/** The relayed answers of session `id` that `pairs` holds. */
-const pairsOf = (pairs: Set<string> | undefined, id: string): RelayPairs => (pairs
-  ? (w: UserWait) => w.kind === 'relay' && w.answered && pairs.has(relayKey(id, answerPoint(w), Math.min(w.start, answerPoint(w))))
-  : undefined);
+/** The relayed answers that `pairs` holds: the same decision as a child's own record of it. */
+const pairsOf = (pairs: WeakSet<UserWait> | undefined): RelayPairs => (pairs ? (w: UserWait) => pairs.has(w) : undefined);
+/** No relayed answer is a delivery (the pairing is still being worked out). */
+const none = () => false;
+/** An answer of yours: an answered stop, unless it only delivered a child's own answer. */
+const yours = (w: UserWait, delivered: (w: UserWait) => boolean) => w.answered && !delivered(w);
 /** When the turn last held anything: its work, a question or permission still open after it, or your answer to one. */
-const turnReach = (r: SessionRequest) =>
-  Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end), ...(r.userWaits ?? []).filter(w => w.answered).map(answerPoint));
+const turnReach = (r: SessionRequest, delivered: (w: UserWait) => boolean) =>
+  Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end), ...(r.userWaits ?? []).filter(w => yours(w, delivered)).map(answerPoint));
 /** Your answer at a moment in [`from`, `to`). */
-const answeredIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
-  (waits ?? []).some(w => w.answered && answerPoint(w) >= from && (to === undefined || answerPoint(w) < to));
-/** Activity in [`from`, `to`) even when no turn is: your answer at a moment in it, or a measured wait on you overlapping it
- *  (answered, longer than zero, and not answered before it was asked). Neither an unanswered stop, nor the span between
- *  an answer and a result logged on either side of the range, is activity. */
-const answerIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
-  answeredIn(waits, from, to) || (waits ?? []).some(w => w.answered && w.end > w.start && (w.answeredAt === undefined || w.answeredAt >= w.start)
-    && w.end > from && (to === undefined || w.start < to));
+const answeredIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined, delivered: (w: UserWait) => boolean) =>
+  (waits ?? []).some(w => yours(w, delivered) && answerPoint(w) >= from && (to === undefined || answerPoint(w) < to));
+/** A measured wait on you: answered, longer than zero, and not answered before it was asked. A relay that delivered a
+ *  child's answer still blocked its own agent for that long: its time is this session's waiting, as the model counts
+ *  it, though its answer is the child's. */
+const measuredWait = (w: UserWait) => w.answered && w.end > w.start && (w.answeredAt === undefined || w.answeredAt >= w.start);
+/** Activity in [`from`, `to`) even when no turn is: your answer at a moment in it, or a measured wait on you overlapping it.
+ *  Neither an unanswered stop, nor the span between an answer and a result logged on either side of the range, nor a
+ *  delivered answer's moment, is activity. */
+const answerIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined, delivered: (w: UserWait) => boolean) =>
+  answeredIn(waits, from, to, delivered) || (waits ?? []).some(w => measuredWait(w) && w.end > from && (to === undefined || w.start < to));
 /** The turn did measured work after `from` (and before `to`): its span less every stop for you in it, the way agent
  *  time is measured. A turn that only lies open across the range, stopped on a question, isn't activity in it. */
 function worksIn(r: SessionRequest, from: number, to: number | undefined): boolean {
@@ -116,41 +124,32 @@ function worksIn(r: SessionRequest, from: number, to: number | undefined): boole
   return parts.length > 0;
 }
 /** The turn holds an input from you: you typed it, or you answered a question or a permission in it. */
-const hasInput = (r: SessionRequest, before: number) =>
-  (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => w.answered && answerPoint(w) < before);
+const hasInput = (r: SessionRequest, before: number, delivered: (w: UserWait) => boolean) =>
+  (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => yours(w, delivered) && answerPoint(w) < before);
 
 /** A session's turns in time order, split by the range: those in it, and the context its totals need (see
  *  `TimelineSessionRecord.context`). A relayed answer that only delivered a child's answer (`delivered`) is no input and
- *  no activity of this session, so it is left out of these decisions (it still stopped the agent). */
-function splitByRange(s: Session, from: number | undefined, to: number | undefined, delivered?: (w: UserWait) => boolean) {
-  const decisions = new Map<SessionRequest, SessionRequest>();
-  const view = (r: SessionRequest) => {
-    if (!delivered || !r.userWaits?.some(delivered)) return r;
-    let v = decisions.get(r);
-    if (!v) decisions.set(r, v = { ...r, userWaits: r.userWaits.filter(w => !delivered(w)) });
-    return v;
-  };
-  const ownWaits = delivered ? s.userWaits?.filter(w => !delivered(w)) : s.userWaits;
+ *  no answer of this session; the time it blocked the agent still counts, like any stop. */
+function splitByRange(s: Session, from: number | undefined, to: number | undefined, delivered: (w: UserWait) => boolean = none) {
   const own = s.requests.filter(r => r.timestamp != null && r.timestamp > 0).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
   const inside = own.filter(r => (from === undefined || (r.timestamp ?? 0) >= from) && (to === undefined || (r.timestamp ?? 0) < to));
   const before = from === undefined ? [] : own.filter(r => (r.timestamp ?? 0) < from);
   let lastInput = -1;
-  for (let i = before.length - 1; i >= 0 && lastInput < 0; i--) if (hasInput(view(before[i]), from ?? 0)) lastInput = i;
+  for (let i = before.length - 1; i >= 0 && lastInput < 0; i--) if (hasInput(before[i], from ?? 0, delivered)) lastInput = i;
   // No input from you before the range: all of it, since a stretch that a parent's prompt started can run through it.
-  const context = before.filter((r, i) => i >= lastInput || turnReach(view(r)) >= (from ?? 0));
+  const context = before.filter((r, i) => i >= lastInput || turnReach(r, delivered) >= (from ?? 0));
   const after = to === undefined ? undefined : own.find(r => (r.timestamp ?? 0) >= to);
   if (after) context.push(after);
   // A turn outside the range that holds your answer inside it (logged before its own prompt, or after a later one).
-  const holders = own.filter(r => !inside.includes(r) && answeredIn(view(r).userWaits, from ?? -Infinity, to));
+  const holders = own.filter(r => !inside.includes(r) && answeredIn(r.userWaits, from ?? -Infinity, to, delivered));
   context.push(...holders.filter(r => !context.includes(r)));
-  const reachesIn = from !== undefined && before.some(r => worksIn(r, from, to) || answerIn(view(r).userWaits, from, to));
-  const loose = answerIn(ownWaits, from ?? -Infinity, to);
+  const reachesIn = from !== undefined && before.some(r => worksIn(r, from, to) || answerIn(r.userWaits, from, to, delivered));
+  const loose = answerIn(s.userWaits, from ?? -Infinity, to, delivered);
   return { all: own, inside, context, active: inside.length > 0 || reachesIn || holders.length > 0 || loose };
 }
-
 export class TimelineAnalyzer extends AnalyzerBase {
   private links?: Map<string, ParentLink>;
-  private relayPairs?: Set<string>;
+  private relayPairs?: WeakSet<UserWait>;
 
   /** `timelineSessions`: every session the Timeline draws, also those holding only your answers to stops (no turn);
    *  the Sessions list and the work-life view keep to `sessions`, the sessions with turns. */
@@ -170,21 +169,30 @@ export class TimelineAnalyzer extends AnalyzerBase {
 
   /** The relayed answers that only delivered a child's own answer, paired once over the whole log and every family
    *  member, so that no range or filter, which can leave out the child's record, turns one decision into two. */
-  private pairedRelays(labels: ScrubContext): Set<string> {
+  private pairedRelays(labels: ScrubContext): WeakSet<UserWait> {
     if (this.relayPairs) return this.relayPairs;
-    const p = prepareTimeline(this.dataset(undefined, labels, undefined));
-    this.relayPairs = new Set(p.sessions.flatMap(s => s.answers.filter(a => a.kind === 'relay' && !a.counted).map(a => relayKey(s.id, a.at, a.start))));
-    return this.relayPairs;
+    // Each wait the model paired, traced back to the logged wait it came from: by identity, never by its times.
+    const origin = new Map<TimelineTurnWait, UserWait>();
+    const p = prepareTimeline(this.dataset(undefined, labels, undefined, origin));
+    const pairs = new WeakSet<UserWait>();
+    for (const s of p.sessions) {
+      for (const a of s.answers) {
+        const source = a.kind === 'relay' && !a.counted && a.of ? origin.get(a.of) : undefined;
+        if (source) pairs.add(source);
+      }
+    }
+    return (this.relayPairs = pairs);
   }
 
-  private dataset(f: DateFilter | undefined, labels: ScrubContext, pairs: Set<string> | undefined): TimelineDataset {
+  private dataset(f: DateFilter | undefined, labels: ScrubContext, pairs: WeakSet<UserWait> | undefined,
+    origin?: Map<TimelineTurnWait, UserWait>): TimelineDataset {
     const links = (this.links ??= resolveParentLinks(this.timelineSessions));
     const from = f?.fromDate ? dayStart(f.fromDate) : undefined;
     const to = f?.toDate ? addDays(dayStart(f.toDate), 1) : undefined;
     const byId = new Map(this.timelineSessions.map(s => [s.sessionId, s]));
     const shown = this.timelineSessions
       .filter(s => this.matchesWorkspaceFilter(s, f?.workspaceId) && (!f?.harness || s.harness === f.harness))
-      .map(s => ({ s, ...splitByRange(s, from, to, pairsOf(pairs, s.sessionId)), ctx: false }))
+      .map(s => ({ s, ...splitByRange(s, from, to, pairsOf(pairs)), ctx: false }))
       .filter(x => x.active);
     // Whole families of the shown sessions: the other members, hidden by the range or the filters, as context.
     const children = new Map<string, string[]>();
@@ -246,9 +254,9 @@ export class TimelineAnalyzer extends AnalyzerBase {
           forkSource: source && byId.has(source) ? 'loaded' as const : s.forkSourceAmbiguous ? 'ambiguous' as const : 'missing' as const,
         } : {}),
         ...(s.inheritedTurns ? { inheritedTurns: s.inheritedTurns } : {}),
-        turns: turns.map(r => timelineTurn(r, pairsOf(pairs, s.sessionId))),
-        ...(s.userWaits?.length ? { stops: timelineWaits(s.userWaits, pairsOf(pairs, s.sessionId)) } : {}),
-        ...(context.length ? { context: context.map(r => timelineTurn(r, pairsOf(pairs, s.sessionId))) } : {}),
+        turns: turns.map(r => timelineTurn(r, pairsOf(pairs), origin)),
+        ...(s.userWaits?.length ? { stops: timelineWaits(s.userWaits, pairsOf(pairs), origin) } : {}),
+        ...(context.length ? { context: context.map(r => timelineTurn(r, pairsOf(pairs), origin)) } : {}),
         ...(x.ctx ? { ctx: true } : {}),
       };
     });

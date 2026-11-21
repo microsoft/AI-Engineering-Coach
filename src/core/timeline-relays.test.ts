@@ -67,3 +67,47 @@ describe('seventh review: a relayed decision stays one input whatever the range 
       .toEqual([0, [], 0, 0, null]);
   });
 });
+describe('eighth review: a paired relay keeps its blocked time in every range (H1, H2)', () => {
+  const mid = new Date(2026, 10, 18).getTime();
+  const human = (time: number, id: string, requestId: string) => ev('human_response.recorded', time, { toolCallId: id, requestId, response: { answer: 'Yes' } });
+  const relay = (time: number, id: string, requestId: string) => ev('tool.execution_start', time, { toolName: 'relay_session_input', toolCallId: id, arguments: { request_id: requestId } });
+  const two: DateFilter = { fromDate: D17, toDate: D18 };
+  // The coordinator is stopped on the relay from 23:46 to 00:14; the child's answer, recorded at 00:13:59, is the decision.
+  const pair = () => analyzer(
+    session(200, [prompt(mid - 20 * M), relay(mid - 14 * M, 'r', 'req'), end(mid + 14 * M, 'r', '{"outcome":"answered_in_session"}')]),
+    session(201, [prompt(mid - 19 * M, 200), start(mid + 13 * M, 'q'), human(mid + 14 * M - 1000, 'q', 'req'), end(mid + 14 * M - 1000, 'q'), reply(mid + 14 * M)]),
+  );
+  const minutes = (an: Analyzer, f: DateFilter, day: string) =>
+    (formatTimeline(an, f, day) as { day?: { waitsOnUser?: { minutes?: number } } }).day?.waitsOnUser?.minutes;
+
+  it('gives the same waiting, lanes and answers for a Day opened fresh or from a wider range, in the browser and the chat tool', () => {
+    const an = pair();
+    const fresh = view(an, D18, only(D18));
+    const wide = view(an, D18, two);
+    expect([fresh.kpis.waitMs, fresh.lanes.length, fresh.kpis.answered]).toEqual([wide.kpis.waitMs, wide.lanes.length, wide.kpis.answered]);
+    // Both sessions waited on the one question: the coordinator from 00:00 and the child from 00:13.
+    expect([fresh.lanes.length, fresh.kpis.answered]).toEqual([2, 1]);
+    expect(minutes(an, only(D18), D18)).toBe(Math.round(fresh.kpis.waitMs / M));
+  });
+
+  it('adds the days up to the range: waiting to the millisecond, and the exports', () => {
+    const an = pair();
+    const days = view(an, D17, only(D17)).kpis.waitMs + view(an, D18, only(D18)).kpis.waitMs;
+    const p = prepareTimeline(an.getTimelineData(two));
+    const week = buildLanes(p, ...timelineWindow('week', D18));
+    expect(timelineKpis(week, buildViewFamilies(week, p)).waitMs).toBe(days);
+    const hours = (f: DateFilter) => buildSummaryExportFromAnalyzer(an, f).autonomy?.waitHours ?? 0;
+    expect(Math.abs(hours(only(D17)) + hours(only(D18)) - hours(two))).toBeLessThanOrEqual(0.1);
+    expect(hours(two)).toBe(Math.round(days / 360_000) / 10);
+  });
+
+  it('keeps two relays with the same times as two decisions when only one was delivered by a child (H2)', () => {
+    const t = mid + 10 * 60 * M;
+    const an = analyzer(
+      session(210, [prompt(t), relay(t + M, 'r1', 'one'), end(t + 3 * M, 'r1', '{"outcome":"answered_in_session"}'),
+        relay(t + M, 'r2', 'two'), end(t + 3 * M, 'r2', '{"outcome":"answered_here"}'), reply(t + 4 * M)]),
+      session(211, [prompt(t + 10, 210), start(t + 2 * M, 'q'), human(t + 3 * M - 500, 'q', 'one'), end(t + 3 * M - 500, 'q'), reply(t + 3 * M)]),
+    );
+    expect(view(an, D18).kpis.answered).toBe(2);
+  });
+});

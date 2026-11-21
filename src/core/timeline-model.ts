@@ -63,6 +63,8 @@ export interface TimelineAnswer {
   rid?: string;
   /** A relay whose pairing was worked out over the whole log (`TimelineTurnWait.pr`): never paired again here. */
   settled?: boolean;
+  /** The wait it answers. */
+  of?: TimelineTurnWait;
 }
 
 export interface PreparedSession extends TimelineSessionRecord {
@@ -271,7 +273,7 @@ function answerOf(w: TimelineTurnWait): TimelineAnswer {
   const waited = waitedOnYou(w) && at <= w.e ? { waited: [w.s, w.e] as Interval } : {};
   return {
     at, start: Math.min(w.s, at), ...waited, instant: w.s === w.e && at === w.s, kind: w.k, counted: w.pr !== true,
-    ...(w.rid ? { rid: w.rid } : {}), ...(w.pr !== undefined ? { settled: true } : {}),
+    ...(w.rid ? { rid: w.rid } : {}), ...(w.pr !== undefined ? { settled: true } : {}), of: w,
   };
 }
 
