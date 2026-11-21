@@ -605,7 +605,7 @@ export interface ViewFamily {
 
 /** The family's longest unattended stretch inside the window. */
 export function familyUnattendedMs(p: PreparedTimeline, root: number, win: Interval): number {
-  return Math.max(0, ...(p.stretches.get(root) ?? []).map(([a, b]) => overlap(a, b, Math.max(win[0], p.bounds[0]), Math.min(win[1], p.bounds[1]))));
+  return Math.max(0, maxOf((p.stretches.get(root) ?? []).map(([a, b]) => overlap(a, b, Math.max(win[0], p.bounds[0]), Math.min(win[1], p.bounds[1])))));
 }
 
 /** Most sessions doing agent work at once inside the lanes' window, and when that first happened. */
@@ -730,7 +730,7 @@ export function timelineKpis(lanes: readonly TimelineLane[], families: readonly 
     answered: sum(lanes, l => l.answered),
     agentMs,
     agentMsPerPrompt: typed > 0 ? agentMs / typed : null,
-    unattendedMs: Math.max(0, ...families.map(f => f.unattendedMs)),
+    unattendedMs: Math.max(0, maxOf(families.map(f => f.unattendedMs))),
     waits: started.length,
     idleWaits: started.filter(w => w.kind === 'idle').length,
     waitMs: sum(lanes, l => l.waitMs),
@@ -1116,8 +1116,8 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     members: nodes.length,
     sessions: counted.length,
     children: kids.length,
-    depth: Math.max(0, ...counted.map(n => n.depth)),
-    fanOut: Math.max(0, ...nodes.map(activeKids)),
+    depth: Math.max(0, maxOf(counted.map(n => n.depth))),
+    fanOut: Math.max(0, maxOf(nodes.map(activeKids))),
     repos: new Set(counted.map(n => n.s.repo)).size,
     // The repository named first: the coordinator's when it has activity in range, else the first active member's.
     repoSession: (counted[0] ?? coordinator).s,
@@ -1173,8 +1173,8 @@ function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): Familie
     childTyped: sum(families, f => f.childTyped),
     childAnswered: sum(families, f => f.childAnswered),
     childrenNeedingYou: sum(families, f => f.steppedInto),
-    maxDepth: Math.max(0, ...families.map(f => f.depth)),
-    maxFanOut: Math.max(0, ...families.map(f => f.fanOut)),
+    maxDepth: Math.max(0, maxOf(families.map(f => f.depth))),
+    maxFanOut: Math.max(0, maxOf(families.map(f => f.fanOut))),
     top3Share: sum(families.slice(0, 3), f => f.creditShare),
     alone: group(families.filter(f => f.verdict === 'alone')),
     needed: group(families.filter(f => f.verdict === 'needed')),

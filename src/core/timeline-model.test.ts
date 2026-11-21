@@ -330,11 +330,28 @@ describe('textScope', () => {
 describe('a dense session', () => {
   it('builds its lane and family whatever its number of turns', () => {
     // More values than a call can take as arguments: Math.min(...values) throws a RangeError on them.
-    const turns = Array.from({ length: 300_000 }, (_, i) => turn(at(0) + i * 1_000, 0, i % 2 ? 'agent' : 'you'));
-    const p = prepareTimeline({ forkedSessions: 0, sessions: [session('busy', turns), session('kid', [turn(at(1), 5, 'agent')], { parent: 0, via: 'create' })] });
-    const [lane] = buildLanes(p, at(0), at(0, 0, 25));
-    expect([lane.first, lane.turns.length]).toEqual([at(0), 300_000]);
-    expect(lane.last).toBeGreaterThanOrEqual(turns[turns.length - 1].t);
-    expect(buildFamilies(p).families[0].from).toBe('2024-03-15');
+    // Measured agent turns between your prompts: a stretch the family ran unattended for each.
+    const prepared = (n: number) => {
+      const list = Array.from({ length: n }, (_, i) => turn(at(0) + i * 60_000, i % 2 ? 0.5 : 0, i % 2 ? 'agent' : 'you'));
+      return { list, p: prepareTimeline({ forkedSessions: 0, sessions: [session('busy', list), session('kid', [turn(at(22, 0, 14), 5, 'agent')], { parent: 0, via: 'create' })] }) };
+    };
+    const { list: turns, p } = prepared(300_000);
+    const win: [number, number] = [at(0), at(0, 0, 15 + 220)];
+    // The same pattern in 10 turns (the child is before the window): the longest unattended stretch doesn't depend on how many there are.
+    const small = prepared(10).p;
+    const smallLanes = buildLanes(small, ...win);
+    const longest = buildViewFamilies(smallLanes, small)[0].unattendedMs;
+    expect(longest).toBeGreaterThan(0);
+    const lanes = buildLanes(p, ...win);
+    expect([lanes[0].first, lanes[0].turns.length]).toEqual([at(0), 300_000]);
+    expect(lanes[0].last).toBeGreaterThanOrEqual(turns[turns.length - 1].t);
+    expect(p.stretches.get(0)!.length).toBe(150_000);
+    const families = buildViewFamilies(lanes, p);
+    expect(families[0].unattendedMs).toBe(longest);
+    expect(timelineKpis(lanes, families).unattendedMs).toBe(longest);
+    expect(viewInsights(lanes, families, createNamer(p, false), 'range', p).length).toBeGreaterThan(0);
+    const overview = buildFamilies(p);
+    expect(overview.families[0].from).toBe('2024-03-14');
+    expect(familiesInsights(overview.totals).length).toBeGreaterThan(0);
   });
 });
