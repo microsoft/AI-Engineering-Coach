@@ -3,8 +3,9 @@ import { curiosityBalance } from '../../src/core/curiosity-balance';
 import type { CuriosityData } from '../../src/core/types/curiosity-types';
 import { curiosityAntiPatterns } from '../../src/core/curiosity-patterns';
 import type { AntiPatternData } from '../../src/core/types';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 type MockWindow = Window & {
   getMockData: (method: string, params: Record<string, unknown>) => unknown;
   recordedRequests?: string[];
@@ -130,6 +131,115 @@ test.describe('Anti-Patterns', () => {
     await expect(finding.locator('.occ-explain-btn')).toHaveCount(0);
     await expect(finding.getByRole('link', { name: 'View example', exact: true })).toHaveCount(1);
     await expect(finding.locator('.occ-session-link')).toHaveCSS('color', 'rgb(55, 148, 255)');
+  });
+
+  test('shows a rule that could not be evaluated as not evaluated, and its group score as incomplete', async ({ page }) => {
+    const failure = { ruleId: 'broken-rule', ruleName: 'Broken Rule', group: 'prompt-quality', error: 'Parse error at position 0: Unexpected token' };
+    await page.evaluate(failure => {
+      const root = window as MockWindow;
+      const original = root.getMockData;
+      const rule = (id: string, name: string) => ({
+        id, name, group: 'prompt-quality', severity: 'high', scope: 'requests', requiresIdeContext: false, description: `${name}.`,
+        descriptionTemplate: '', suggestionTemplate: '', exampleTemplate: '', thresholds: {}, tags: [], source: 'personal',
+        sourceFilePath: '', version: 1, rawSource: '',
+      });
+      const preview = (ruleId: string, ruleName: string) => ({
+        ruleId, ruleName, triggered: false, occurrences: 0, total: 1, pct: 0, severity: 'high', group: 'prompt-quality',
+        previewDescription: 'Not triggered with current data.', previewExamples: [],
+      });
+      root.getMockData = (method, params) => {
+        const base = original(method, params) as AntiPatternData;
+        if (method === 'getAntiPatterns') {
+          return {
+            ...base,
+            patterns: base.patterns.filter(p => p.group !== 'prompt-quality'),
+            groupScores: base.groupScores.map(g => g.group === 'prompt-quality'
+              ? { ...g, score: 100, topIssue: null, improvements: [], patternCount: 0, failedRules: [failure] } : g),
+            failedRules: [failure],
+          };
+        }
+        if (method !== 'getRuleEditor') return base;
+        return {
+          rules: [rule('broken-rule', 'Broken Rule'), rule('clean-rule', 'Clean Rule')],
+          previews: [
+            { ...preview('broken-rule', 'Broken Rule'), previewDescription: `Not evaluated: ${failure.error}`, evaluationError: failure.error },
+            preview('clean-rule', 'Clean Rule'),
+          ],
+          layers: [], pending: [],
+        };
+      };
+    }, failure);
+    await page.locator('#sidebar [data-page="anti-patterns"]').click();
+
+    const card = page.locator('.ap-score-card[data-group="prompt-quality"]');
+    await expect(card).toContainText('Incomplete: 1 rule not evaluated (Broken Rule)');
+    await expect(card).not.toContainText('No issues detected');
+    const group = page.locator('.ap-group-details').first();
+    await group.locator('summary').first().click();
+    await expect(group.locator('.ap-group-incomplete')).toContainText("Incomplete: 1 rule couldn't be evaluated");
+    await expect(group.locator('.ap-group-incomplete')).toContainText(`Broken Rule (broken-rule): ${failure.error}`);
+    await expect(group).not.toContainText('All checks passing');
+
+    await page.locator('.ap-tab[data-tab="rules"]').click();
+    const broken = page.locator('.rule-card[data-rule-id="broken-rule"]');
+    await expect(broken).toHaveClass(/rule-card-failed/);
+    await expect(broken).toContainText(`Not evaluated: ${failure.error}`);
+    await expect(page.locator('.rule-card[data-rule-id="clean-rule"]')).toHaveClass(/rule-card-clean/);
+    await broken.click();
+    const stats = page.locator('#rule-detail-content .rule-preview-stats');
+    await expect(stats).toContainText('NOT EVALUATED');
+    await expect(stats).not.toContainText('CLEAN');
+    await expect(page.locator('#rule-detail-content .rule-preview-desc')).toHaveText(`Not evaluated: ${failure.error}`);
+  });
+
+  test('refreshes the description with the stats after a threshold edit, so a rule shows or drops its error', async ({ page }) => {
+    const error = 'Parse error at position 0: Unexpected token';
+    await page.evaluate(error => {
+      const root = window as MockWindow;
+      const original = root.getMockData;
+      const preview = (failed: boolean) => ({
+        ruleId: 'tuned-rule', ruleName: 'Tuned Rule', triggered: false, occurrences: 0, total: 1, pct: 0, severity: 'low',
+        group: 'prompt-quality', previewDescription: failed ? `Not evaluated: ${error}` : 'Not triggered with current data.',
+        previewExamples: [], ...(failed ? { evaluationError: error } : {}),
+      });
+      let edits = 0;
+      root.getMockData = (method, params) => {
+        if (method === 'getRuleEditor') {
+          return {
+            rules: [{
+              id: 'tuned-rule', name: 'Tuned Rule', group: 'prompt-quality', severity: 'low', scope: 'requests', requiresIdeContext: false,
+              description: 'Tuned Rule.', descriptionTemplate: '', suggestionTemplate: '', exampleTemplate: '', thresholds: { minChars: 30 },
+              tags: [], source: 'personal', sourceFilePath: '', version: 1, rawSource: '',
+            }],
+            previews: [preview(true)], layers: [], pending: [],
+          };
+        }
+        if (method === 'updateRuleThreshold') {
+          edits++;
+          return { ok: true };
+        }
+        // The first edit makes the rule evaluate; the second breaks it again.
+        if (method === 'getRulePreview') return preview(edits !== 1);
+        return original(method, params);
+      };
+    }, error);
+    await page.locator('#sidebar [data-page="anti-patterns"]').click();
+    await page.locator('.ap-tab[data-tab="rules"]').click();
+    await page.locator('.rule-card[data-rule-id="tuned-rule"]').click();
+    const stats = page.locator('#rule-detail-content .rule-preview-stats');
+    const description = page.locator('#rule-detail-content .rule-preview-desc');
+    const input = page.locator('#rule-detail-content .rule-threshold-input[data-key="minChars"]');
+    await expect(description).toHaveText(`Not evaluated: ${error}`);
+
+    await input.fill('31');
+    await input.dispatchEvent('change');
+    await expect(stats).toContainText('CLEAN');
+    await expect(description).toHaveText('Not triggered with current data.');
+
+    await input.fill('29');
+    await input.dispatchEvent('change');
+    await expect(stats).toContainText('NOT EVALUATED');
+    await expect(description).toHaveText(`Not evaluated: ${error}`);
   });
 });
 
@@ -259,5 +369,236 @@ test.describe('Anti-Patterns Why? explanations', () => {
 
     await expect(modal).toBeVisible();
     await expect(name).toHaveValue('Draft rule that must survive');
+  });
+});
+
+const BOTH_SCOPE_RULE = [
+  '---',
+  'id: context-both',
+  'name: Context both',
+  'group: prompt-quality',
+  'severity: medium',
+  'scope: both',
+  'version: 1',
+  'tags: [context]',
+  'thresholds:',
+  '  minReqs: 30',
+  '---',
+  '',
+  '# Description',
+  'Audits context engineering.',
+  '',
+  '# When Triggered',
+  '{{count}} signals missing.',
+  '',
+  '# How to Improve',
+  'Add instructions.',
+  '',
+  '# Examples',
+  '{{extra.gapCount}} signals missing',
+  '',
+  '# Detection Logic',
+  '```detect',
+  'scan: requests',
+  'match: true',
+  'check: count >= thresholds.minReqs',
+  '```',
+  '',
+  '# Tests',
+  '```test',
+  '{harness: "Local Agent"} -> triggered',
+  '```',
+  '',
+].join('\n');
+
+type RuleEditorWindow = MockWindow & { ruleEditorCalls?: Array<{ method: string; params: Record<string, unknown> }> };
+type RuleListWindow = RuleEditorWindow & { releaseRuleSource?: (id: string) => void };
+
+/** The both-scope rule under another id and name. */
+const ruleCalled = (id: string) => BOTH_SCOPE_RULE.replace('id: context-both', `id: ${id}`).replace('name: Context both', `name: ${id}`);
+
+/** Lists one rule whose source is `source`, then opens it with Edit Source. */
+async function editRuleSource(page: Page, source: string) {
+  await page.evaluate(source => {
+    const root = window as RuleEditorWindow;
+    const original = root.getMockData;
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    root.ruleEditorCalls = calls;
+    root.getMockData = (method, params) => {
+      calls.push({ method, params });
+      if (method === 'getRuleEditor') {
+        return {
+          rules: [{
+            id: 'context-both', name: 'Context both', group: 'prompt-quality', severity: 'medium', scope: 'both',
+            requiresIdeContext: false, description: 'Audits context engineering.', descriptionTemplate: '',
+            suggestionTemplate: '', exampleTemplate: '', thresholds: { minReqs: 30 }, tags: ['context'],
+            source: 'built-in', sourceFilePath: '', version: 1, rawSource: source,
+          }],
+          previews: [], layers: [], pending: [],
+        };
+      }
+      if (method === 'getRuleSource') return { source };
+      if (method === 'testRuleLive') {
+        return {
+          ok: true, triggered: true, occurrences: 4, total: 5, pct: '80%', severity: 'medium',
+          description: '4 signals missing.', suggestion: '', examples: [],
+        };
+      }
+      return original(method, params);
+    };
+  }, source);
+  await page.locator('#sidebar [data-page="anti-patterns"]').click();
+  await page.locator('.ap-tab[data-tab="rules"]').click();
+  await page.locator('.rule-card[data-rule-id="context-both"]').click();
+  await page.locator('#rule-edit-source-btn').click();
+  await expect(page.locator('#rule-editor-modal')).toBeVisible();
+}
+
+/** Runs Test Rule and returns the markdown the editor sent. */
+async function testRuleMarkdown(page: Page): Promise<string> {
+  await page.locator('#rule-editor-test').click();
+  await expect(page.locator('#rule-test-results')).toContainText('TRIGGERED');
+  return page.evaluate(() => {
+    const call = (window as RuleEditorWindow).ruleEditorCalls?.find(c => c.method === 'testRuleLive');
+    return String(call?.params.markdown);
+  });
+}
+
+/** Lists the rules `ids` on the Rules tab. The source of a rule in `held` answers only once the test releases it. */
+async function listRules(page: Page, ids: string[], held: string[] = []) {
+  const sources = Object.fromEntries(ids.map(id => [id, ruleCalled(id)]));
+  await page.evaluate(({ ids, held, sources }) => {
+    const root = window as RuleListWindow;
+    const original = root.getMockData;
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const waiting = new Map<string, Array<() => void>>();
+    root.ruleEditorCalls = calls;
+    root.releaseRuleSource = id => {
+      for (const release of waiting.get(id) ?? []) release();
+      waiting.delete(id);
+    };
+    root.getMockData = (method, params) => {
+      calls.push({ method, params });
+      if (method === 'getRuleEditor') {
+        return {
+          rules: ids.map(id => ({
+            id, name: id, group: 'prompt-quality', severity: 'medium', scope: 'both', requiresIdeContext: false,
+            description: `Rule ${id}.`, descriptionTemplate: '', suggestionTemplate: '', exampleTemplate: '',
+            thresholds: { minReqs: 30 }, tags: ['context'], source: 'built-in', sourceFilePath: '', version: 1,
+            rawSource: sources[id],
+          })),
+          previews: [], layers: [], pending: [],
+        };
+      }
+      if (method === 'getRuleSource') {
+        const id = String(params.ruleId);
+        const answer = { source: sources[id] };
+        if (!held.includes(id)) return answer;
+        return new Promise(resolve => waiting.set(id, [...(waiting.get(id) ?? []), () => resolve(answer)]));
+      }
+      if (method === 'saveRule') return { ok: true };
+      return original(method, params);
+    };
+  }, { ids, held, sources });
+  await page.locator('#sidebar [data-page="anti-patterns"]').click();
+  await page.locator('.ap-tab[data-tab="rules"]').click();
+}
+
+/** The parameters the editor sent with each call of `method`. */
+function sentParams(page: Page, method: string): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate(name => (window as RuleEditorWindow).ruleEditorCalls!
+    .filter(call => call.method === name).map(call => call.params), method);
+}
+
+test.describe('Anti-Patterns Rule Editor', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-09-30T12:00:00Z'));
+    await navigateToAntiPatterns(page);
+  });
+
+  test('shows scope: both in the form and keeps it, with the # Tests, when testing the rule', async ({ page }) => {
+    await editRuleSource(page, BOTH_SCOPE_RULE);
+    await expect(page.locator('#rf-id')).toHaveValue('context-both');
+    await expect(page.locator('#rf-scope')).toHaveValue('both');
+    await expect(page.locator('#rf-scope option:checked')).toHaveText('Both');
+
+    const markdown = await testRuleMarkdown(page);
+    expect(markdown).toMatch(/^scope: both$/m);
+    expect(markdown).toContain('# Tests\n```test\n{harness: "Local Agent"} -> triggered\n```');
+    expect(markdown).toBe(BOTH_SCOPE_RULE);
+  });
+
+  test('tunes the thresholds block the rule uses with a slider, and keeps an earlier one', async ({ page }) => {
+    // The rule parser and the form use the last thresholds block (minReqs: 30); the earlier one is inactive.
+    const source = BOTH_SCOPE_RULE.replace('thresholds:\n', 'thresholds:\n  minReqs: 5\nthresholds:\n');
+    const tuned = source.replace('  minReqs: 30', '  minReqs: 12');
+    await editRuleSource(page, source);
+    await expect(page.locator('#rf-thresholds')).toHaveValue('minReqs: 30');
+    expect(await testRuleMarkdown(page)).toBe(source);
+
+    const slider = page.locator('.rule-threshold-slider[data-key="minReqs"]');
+    const shown = page.locator('[data-threshold-value="minReqs"]');
+    await expect(slider).toHaveValue('30');
+    await expect(shown).toHaveText('30');
+    await slider.fill('12');
+    await expect.poll(() => page.evaluate(() => (window as RuleEditorWindow).ruleEditorCalls!
+      .filter(call => call.method === 'testRuleLive').map(call => String(call.params.markdown)))).toEqual([source, tuned]);
+    await expect(slider).toHaveValue('12');
+    await expect(shown).toHaveText('12');
+  });
+
+  test('fills the form from a rule with CRLF line endings and tests that rule', async ({ page }) => {
+    await editRuleSource(page, BOTH_SCOPE_RULE.replaceAll('\n', '\r\n'));
+    await expect(page.locator('#rf-id')).toHaveValue('context-both');
+    await expect(page.locator('#rf-name')).toHaveValue('Context both');
+    await expect(page.locator('#rf-scope')).toHaveValue('both');
+    await expect(page.locator('#rf-thresholds')).toHaveValue('minReqs: 30');
+    await expect(page.locator('#rf-description')).toHaveValue('Audits context engineering.');
+    await expect(page.locator('#rf-detect')).toHaveValue('scan: requests\nmatch: true\ncheck: count >= thresholds.minReqs');
+
+    expect(await testRuleMarkdown(page)).toBe(BOTH_SCOPE_RULE);
+  });
+
+  test('opens one editor, for the rule shown, after other rules were shown', async ({ page }) => {
+    await listRules(page, ['rule-a', 'rule-b', 'rule-c']);
+    for (const id of ['rule-a', 'rule-b']) {
+      await page.locator(`.rule-card[data-rule-id="${id}"]`).click();
+      await expect(page.locator('#rule-detail-panel')).toBeVisible();
+      await page.locator('#rule-back-btn').click();
+    }
+    await page.locator('.rule-card[data-rule-id="rule-c"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+
+    await expect(page.locator('#rf-id')).toHaveValue('rule-c');
+    expect(await sentParams(page, 'getRuleSource')).toEqual([{ ruleId: 'rule-c' }]);
+  });
+
+  test('keeps the rule opened last when an earlier rule\'s source answers after it, and saves that rule', async ({ page }) => {
+    await listRules(page, ['rule-a', 'rule-b'], ['rule-a']);
+    await page.locator('.rule-card[data-rule-id="rule-a"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+    await expect(page.locator('#rule-editor-modal')).toBeVisible();
+    await page.locator('#rule-editor-cancel').click();
+    await page.locator('#rule-back-btn').click();
+    await page.locator('.rule-card[data-rule-id="rule-b"]').click();
+    await page.locator('#rule-edit-source-btn').click();
+    await expect(page.locator('#rf-id')).toHaveValue('rule-b');
+
+    // Release rule A's source, and return once the page has handled it.
+    await page.evaluate(() => new Promise<void>(resolve => {
+      const handled = (event: MessageEvent<{ type?: string; data?: { source?: string } }>) => {
+        if (event.data?.type !== 'response' || !event.data.data?.source?.includes('id: rule-a')) return;
+        window.removeEventListener('message', handled);
+        setTimeout(resolve, 0);
+      };
+      window.addEventListener('message', handled);
+      (window as RuleListWindow).releaseRuleSource!('rule-a');
+    }));
+    await expect(page.locator('#rf-id')).toHaveValue('rule-b');
+    await expect(page.locator('#rule-editor-raw')).toHaveValue(ruleCalled('rule-b'));
+
+    await page.locator('#rule-editor-save').click();
+    await expect(page.locator('#rule-editor-modal')).toBeHidden();
+    expect(await sentParams(page, 'saveRule')).toEqual([{ markdown: ruleCalled('rule-b'), ruleId: 'rule-b' }]);
   });
 });

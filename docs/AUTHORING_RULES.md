@@ -26,26 +26,38 @@ For the full DSL reference — field schema, function catalog, and metric primit
 ## Anatomy of a rule
 
 A rule file lives at `src/core/rules/<rule-id>.md`. Below is
-[`lazy-prompting.md`](../src/core/rules/lazy-prompting.md) annotated section by section:
+[`lazy-prompting.md`](../src/core/rules/lazy-prompting.md) annotated section by section. In the
+front matter, a comment is a whole line that starts with `#`: after a value, a `#` and the rest of
+the line are read as part of the value.
 
 ````markdown
 ---
-id: lazy-prompting              # Stable identifier, must match the filename
-name: Lazy Prompting             # Human-readable name shown in the UI
-group: prompt-quality            # Practice category: prompt-quality | session-hygiene |
-                                 #   code-review | tool-mastery | context-management
-severity: medium                 # low | medium | high — drives score weighting
-scope: requests                  # requests (per-message) or sessions (per-session)
-version: 1                       # Bump when changing detection logic
-tags: [prompt, quality, short]   # Free-form tags surfaced in the rule filter
-thresholds:                      # Tunable knobs. Referenced as thresholds.<name> in DSL.
-  minChars: 30                   #   Sliders for these appear in the Rule Editor.
+# Stable identifier, must match the filename
+id: lazy-prompting
+# Human-readable name shown in the UI
+name: Lazy Prompting
+# Practice category: prompt-quality | session-hygiene | code-review | tool-mastery | context-management
+group: prompt-quality
+# low | medium | high — drives score weighting
+severity: medium
+# requests (per-message) or sessions (per-session)
+scope: requests
+# Bump when changing detection logic
+version: 1
+# Free-form tags surfaced in the rule filter
+tags: [prompt, quality, short]
+# Tunable knobs, referenced as thresholds.<name> in the detection logic.
+# Sliders for these appear in the Rule Editor.
+thresholds:
+  minChars: 30
   maxRatio: 0.3
   minSample: 10
 ---
 
 # Description
-Short, user-facing summary of what this rule detects.
+Short, user-facing summary of what this rule detects, shown on its card in the Rules
+list and in full in its detail. Plain text: template variables aren't filled here, so
+a Description that has one shows "Detects <name> patterns." instead.
 
 # When Triggered
 One-line finding text. Supports template variables: {{count}}, {{total}}, {{pct}},
@@ -59,12 +71,15 @@ Template for the per-occurrence example list. {{message}} and any field on the
 matched row (e.g. {{extra.charCount}}) are available.
 
 # Detection Logic
+The DSL has no comments. In the block below, scan sets what to iterate over, match is the predicate
+(fields, thresholds.* and DSL helpers), aggregate is count or ratio, and check is the trigger
+condition. A line that ends with a backslash continues on the next line.
 ```detect
-scan: requests                                    # What to iterate over
-match: messageLength < thresholds.minChars        # Predicate; uses field schema
-       AND messageLength > 0                      #   + thresholds.* + DSL helpers
-aggregate: ratio                                  # count | ratio | sum | someWhere | ...
-check: ratio > thresholds.maxRatio                # The trigger condition
+scan: requests
+match: messageLength < thresholds.minChars \
+       AND messageLength > 0
+aggregate: ratio
+check: ratio > thresholds.maxRatio \
        AND count > thresholds.minSample
 examples: "{{messageText | truncate:80}}" ({{messageLength}} chars)
 ```
@@ -77,29 +92,61 @@ examples: "{{messageText | truncate:80}}" ({{messageLength}} chars)
 ```
 ````
 
-The `# Tests` block is optional but strongly encouraged — each line is a synthetic row evaluated
-against the rule. Tests run as part of the standard `npm test` suite.
+The `# Tests` block is optional but strongly encouraged. Each line is a relaxed-JSON object (bare
+keys), `->`, and the expected outcome: `triggered` or `clean`.
+[`src/core/rule-inline-tests.test.ts`](../src/core/rule-inline-tests.test.ts) runs every built-in
+rule's block through the detector pipeline as part of `npm test`:
+
+- A line describes one request. Its fields override the defaults of `createRequest` in
+  [`src/core/parser-shared.ts`](../src/core/parser-shared.ts), which derives fields such as
+  `messageLength` from `messageText` unless the line sets them.
+- Fields the DSL reference lists with scope `session` or `both`, such as `harness`, `workspaceName`
+  and `requestCount`, go on the request's session. `harness` defaults to `Local Agent` (VS Code).
+- `timestamp` defaults to noon on a Wednesday. A string `timestamp` such as `"2026-01-17T02:00:00"`
+  is a local date-time, so `hour()` and `dayOfWeek()` tests pass in every time zone.
+- A line is a typed prompt unless it sets `humanTurn: false`, or `nonHumanKind` to a reason the
+  parser records, such as `"autopilot"` or `"agent"`.
+- The request is repeated 100 times, each copy in its own session, so one line clears the rule's
+  sample-size thresholds. A line can't mix different rows or stay under a threshold; cover those
+  cases in a unit test.
+- Every line must parse. Strings use double or single quotes and can contain `:`.
+
+### Rules about the user's own time
+
+Harnesses also log "user" turns that the user didn't type: messages from another agent or session,
+autopilot continuations, prompts a parent agent gave a sub-agent, and text the harness wrote. Each
+parser records why in `nonHumanKind`, and request rows expose the result as the read-only boolean
+`humanTurn`. A rule about when the user works, such as
+[`late-night-coding.md`](../src/core/rules/late-night-coding.md), matches `humanTurn == true`. A
+ratio counts only typed prompts in its total too:
+[`weekend-overwork.md`](../src/core/rules/weekend-overwork.md) sets
+`emitTotal: typedReqs` with `typedReqs: countWhere(all, "humanTurn", "==", true)`. Rules about
+session size or context, such as `mega-sessions`, keep every turn.
 
 ## Anatomy of a metric
 
 Metrics are simpler than rules — they emit a single named value that rules and dashboards can
 consume. A metric file lives at `src/core/metrics/<metric-id>.metric.md`. Below is
-[`weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md):
+[`weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md), with its front
+matter comments on their own lines. `# Filter` is a predicate over the scope, and `# Metric` is the
+aggregation: count, ratio, sum or avg.
 
 ```markdown
 ---
-id: weekend-requests             # Stable identifier; reference as metrics.weekendRequests
+# Stable identifier; reference as metrics.weekendRequests
+id: weekend-requests
 name: Weekend Requests
-scope: requests                  # requests or sessions
+# requests or sessions
+scope: requests
 version: 1
 tags: [wellbeing, time]
 ---
 
 # Filter
-dayOfWeek(timestamp) == 0 OR dayOfWeek(timestamp) == 6   # Predicate over the scope
+dayOfWeek(timestamp) == 0 OR dayOfWeek(timestamp) == 6
 
 # Metric
-ratio                            # Aggregation: count | ratio | sum | avg
+ratio
 
 # Examples
 {{messageText | truncate:60}} ({{dayOfWeek(timestamp)}})
@@ -107,6 +154,36 @@ ratio                            # Aggregation: count | ratio | sum | avg
 
 Once defined, a metric is automatically available in the Rule Playground metric list and can be
 referenced from any rule's detection logic.
+
+## Patterns
+
+A rule can keep its regular expressions in front matter under `patterns:` and use them as
+`patterns.<name>` in its detection logic. Every entry is an array of strings, even one written as a
+single string:
+
+```yaml
+patterns:
+  frustration: ["!{3,}", "\\?{3,}", "wtf|come on|why won't"]
+  headings: "(?m)^#+\\s"
+```
+
+Rule and metric front matter reads values this way:
+
+- A list splits on commas outside quotes. Quote any item that contains a comma: `"!{3,}"` is one
+  item, but an unquoted `!{3,}` becomes the two items `!{3` and `}`.
+- In double quotes, `\\` is one backslash and `\"` is a double quote. Any other backslash stays as
+  written, so `"\\d"` and `"\d"` are both `\d`. YAML escapes such as `\n` and `\t` aren't processed.
+- In single quotes, `''` is one single quote, and a backslash is always literal.
+- An unquoted value is used as written. If a quote is never closed, the value is read the old way: a
+  list splits on every comma, and a rule file drops one quote character from each end of a value.
+- A pattern can start with inline flags such as `(?i)` or `(?m)`.
+
+These functions take one pattern or an array of patterns, and match when any pattern matches:
+`matches(text, pattern)`, `matchesAny(text, patterns)`, `anyMatch(strings, pattern)` (1 or 0),
+`hasSkillByPattern(reqs, pattern)` (1 or 0), and the `"matches"` operator of `countWhere`, `anyWhere`,
+`someWhere` and `flatSomeWhere`. An empty array, an empty pattern and a value that isn't a string
+match nothing, so an entry written as `[]` or left blank never matches. A regex literal such as
+`/^fix/i` works only in `matches()`; elsewhere, write `"(?i)^fix"`.
 
 ## Local testing workflow
 
@@ -117,8 +194,8 @@ Before opening a pull request:
    npm install
    npm run build
    ```
-2. **Run the rule and metric tests** — these load every markdown file under `src/core/rules/` and
-   `src/core/metrics/`, validate the frontmatter, and execute any `# Tests` blocks:
+2. **Run the unit tests.** `npm test` parses every built-in rule and runs each rule's `# Tests`
+   block:
    ```bash
    npm test
    ```
@@ -138,6 +215,8 @@ Before opening a pull request:
 - Built-in rules: [`src/core/rules/`](../src/core/rules/) — 45 worked examples across all categories
 - Built-in metrics: [`src/core/metrics/`](../src/core/metrics/)
 - A minimal rule with tests: [`src/core/rules/lazy-prompting.md`](../src/core/rules/lazy-prompting.md)
+- A rule that counts only the harnesses that log a field: [`src/core/rules/no-custom-instructions.md`](../src/core/rules/no-custom-instructions.md)
+- A ratio over the prompts the user typed: [`src/core/rules/weekend-overwork.md`](../src/core/rules/weekend-overwork.md)
 - A rule using a custom aggregator and `extra.*` fields: [`src/core/rules/yolo-mode.md`](../src/core/rules/yolo-mode.md)
 - A minimal metric: [`src/core/metrics/weekend-requests.metric.md`](../src/core/metrics/weekend-requests.metric.md)
 - Anti-Patterns overview: [content/improve/anti-patterns.md](content/improve/anti-patterns.md)

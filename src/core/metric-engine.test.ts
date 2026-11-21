@@ -546,3 +546,35 @@ messageLength > 0
     expect(parseMetric(md)).toBeNull();
   });
 });
+
+/* ---- Quoted front matter values (same rules as parseRule) ---- */
+describe('front matter quoting', () => {
+  it('reads quoted values and keeps a comma inside a quoted list item', () => {
+    const metric = parseMetric([
+      '---', 'id: "quoted-metric"', String.raw`name: "Say \"hi\" to C:\\temp"`, `scope: 'sessions'`, 'version: "2"',
+      `tags: ["a, b", 'it''s', plain, 3]`, '---', '', '# Filter', 'messageLength > 0', '',
+    ].join('\n'));
+    expect(metric).toMatchObject({
+      id: 'quoted-metric', name: String.raw`Say "hi" to C:\temp`, scope: 'sessions', version: 2, tags: ['a, b', `it's`, 'plain', '3'],
+    });
+  });
+
+  it('reads quoted requires items, inline and as a block list', () => {
+    const inline = parseRuleExtensions(['---', 'id: x', `metric: "short-messages"`, `requires: ["a, b", 'c']`, '---', ''].join('\n'));
+    expect(inline.metricRef).toBe('short-messages');
+    expect(inline.requires).toEqual(['a, b', 'c']);
+    const block = parseRuleExtensions(['---', 'id: x', 'deps:', '  requires:', '    - "a, b"', `    - 'c'`, '    - d', '---', ''].join('\n'));
+    expect(block.requires).toEqual(['a, b', 'c', 'd']);
+  });
+
+  it('keeps a value whose quote is never closed as written', () => {
+    const ext = parseRuleExtensions(['---', 'id: x', 'metric: "open', 'requires: ["a, b]', '---', ''].join('\n'));
+    expect(ext.metricRef).toBe('"open');
+    expect(ext.requires).toEqual(['"a', 'b']);
+  });
+
+  it('parses CRLF front matter the same as LF', () => {
+    const lines = ['---', 'id: m', 'name: "M, N"', `tags: ["a, b", c]`, '---', '', '# Filter', 'messageLength > 0', ''];
+    expect(parseMetric(lines.join('\r\n'))).toMatchObject({ name: 'M, N', tags: ['a, b', 'c'] });
+  });
+});

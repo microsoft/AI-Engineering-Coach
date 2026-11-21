@@ -1,9 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { CuriosityData } from '../../src/core/types/curiosity-types';
 import { curiosityBalance } from '../../src/core/curiosity-balance';
 import type { Session } from '../../src/core/types';
+import { harnessUrl } from './harness-url';
 
-const URL = 'http://localhost:3999/tests/e2e/harness?page=curiosity';
+const URL = harnessUrl('tests/e2e/harness?page=curiosity');
 type MockWindow = Window & {
   getMockData: (method: string, params: Record<string, unknown>) => unknown;
   curiosityParams?: Record<string, unknown>;
@@ -38,6 +39,15 @@ async function dataFor(page: Page): Promise<CuriosityData> {
 async function setMockPrompt(page: Page, text = 'Please inspect the recorded source expansion and explain why this specific feature fails. '.repeat(3)): Promise<void> {
   await page.evaluate(text => { (window as MockWindow).mockCuriosityPrompt = text; }, text);
   await page.locator('.curiosity-range .cons-range-btn.active').click();
+}
+// Chromium applies a wheel's scroll in a later compositor frame. Over these prompt panes the scroll
+// begin needs a main-thread hit test, after which Chromium can leave the update queued until the
+// next frame. This idle page requests none (page.clock fakes its requestAnimationFrame), so polling
+// with evaluate can wait forever; waitForFunction's 'raf' polling uses real frames, which apply it.
+async function wheelScroll(page: Page, pane: Locator, deltaY: number): Promise<void> {
+  await pane.hover();
+  await page.mouse.wheel(0, deltaY);
+  await page.waitForFunction(element => element.scrollTop > 0, await pane.elementHandle(), { polling: 'raf', timeout: 5_000 });
 }
 function captureChartText(page: Page) {
   return page.addInitScript(() => {
@@ -371,9 +381,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
       await expect(overlay).toBeInViewport({ ratio: 1 });
       expect(await pane.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
       expect(await pane.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-      await pane.hover();
-      await page.mouse.wheel(0, 500);
-      await expect.poll(() => pane.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+      await wheelScroll(page, pane, 500);
       await page.waitForTimeout(220);
       await expect(overlay).toBeVisible();
       await pane.focus();
@@ -507,9 +515,7 @@ test('keeps inspected prompts open while other previews appear and close', async
   await expect(overlay).toBeHidden();
   const pane = row.getByLabel('Prompt text');
   await expect(pane).toHaveText(text);
-  await pane.hover();
-  await page.mouse.wheel(0, 150);
-  await expect.poll(() => pane.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await wheelScroll(page, pane, 150);
   const scrollTop = await pane.evaluate(element => element.scrollTop);
   await page.getByRole('heading', { name: 'Curiosity', exact: true }).hover();
   await source.focus();

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, it, expect } from 'vitest';
+import { NON_HUMAN_KINDS } from './human-turns';
 import { SessionSchema, SessionRequestSchema, validateSessions } from './schemas';
 
 function makeRequest(overrides: Record<string, unknown> = {}) {
@@ -67,6 +68,16 @@ describe('SessionRequestSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.webDomains).toEqual(['docs.python.org']);
     expect(SessionRequestSchema.safeParse(makeRequest({ webDomains: [42] })).success).toBe(false);
+  });
+
+  it('keeps every non-human marker and rejects values outside the enum', () => {
+    for (const kind of NON_HUMAN_KINDS) {
+      const result = SessionRequestSchema.safeParse(makeRequest({ nonHumanKind: kind }));
+      expect(result.success && result.data.nonHumanKind).toBe(kind);
+    }
+    expect(SessionRequestSchema.safeParse(makeRequest()).success).toBe(true);
+    expect(SessionRequestSchema.safeParse(makeRequest({ nonHumanKind: 'robot' })).success).toBe(false);
+    expect(SessionRequestSchema.safeParse(makeRequest({ nonHumanKind: true })).success).toBe(false);
   });
 
   it('rejects request missing required field', () => {

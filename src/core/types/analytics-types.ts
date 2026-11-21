@@ -3,7 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { RuleFailure } from './rule-types';
 import type { CuriosityTier } from './curiosity-types';
+import type { NonHumanKind } from './session-types';
 
 export interface DailyHarnessData {
   harness: string;
@@ -26,11 +28,20 @@ export interface HourlyDistribution {
   byType: Record<string, number[]>;
 }
 
+/** How many turns the user typed, and how many other turns a measure left out, by kind. */
+export interface TurnBasis {
+  humanTurns: number;
+  automatedTurns: number;
+  automatedByKind: Partial<Record<NonHumanKind, number>>;
+}
+
 export interface HeatmapData {
   heatmap: number[][];
   byType: Record<string, number[][]>;
   /** 7×24 grid of focus scores (0-100) based on activity density */
   focusHeatmap: number[][];
+  /** The heatmaps count only turns the user typed. */
+  turnBasis: TurnBasis;
 }
 
 export interface CalendarDay {
@@ -43,6 +54,8 @@ export interface CalendarDay {
 export interface CalendarActivityData {
   days: CalendarDay[];
   maxRequests: number;
+  /** The days count only turns the user typed. */
+  turnBasis: TurnBasis;
 }
 
 export interface CodeProductionData {
@@ -599,6 +612,8 @@ export interface GroupScore {
   topIssue: string | null;
   improvements: string[];
   patternCount: number;
+  /** The group's rules that couldn't be evaluated. When there are any, the score and findings are incomplete. */
+  failedRules: RuleFailure[];
 }
 
 export interface AntiPatternData {
@@ -608,6 +623,8 @@ export interface AntiPatternData {
   groupScores: GroupScore[];
   weeklyScores: { labels: string[]; series: { group: PracticeGroup; scores: number[] }[] };
   curiosityTier?: CuriosityTier;
+  /** Every rule that couldn't be evaluated, including those of groups without a score. */
+  failedRules: RuleFailure[];
 }
 
 export interface WorkLifeBalanceResult {
@@ -627,22 +644,32 @@ export interface WorkLifeBalanceResult {
   maxBreak: number;
   activeDays: number;
   weeklyTrend: { labels: string[]; weekday: number[]; weekend: number[] };
+  /** Every figure counts only turns the user typed. */
+  turnBasis: TurnBasis;
 }
 
 export interface ProjectOverviewItem {
   workspaceName: string;
   workspaceId: string;
+  /** Turns the user typed in the project. */
   totalRequests: number;
+  /** From the turns the user typed. */
   estimatedHours: number;
+  /** From every turn, including automated ones. */
   languages: string[];
+  /** From the turns the user typed. */
   timePattern: string;
+  /** From every turn, including automated ones. */
   topFiles: string[];
+  /** From every turn, including automated ones. */
   estimatedLoc: number;
   gitPath: string | null;
 }
 
 export interface ProjectOverviewData {
   projects: ProjectOverviewItem[];
+  /** Turns in the range across every project: hours, prompts and work pattern count only the typed ones. */
+  turnBasis: TurnBasis;
 }
 
 export interface StatsResult {

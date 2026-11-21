@@ -13,7 +13,8 @@ import { createRequest, createSession, stripSingleSession } from './parser-share
 import { detectCuriosity } from './curiosity';
 import type { SessionRequest } from './types';
 
-const TIME = Date.parse('2026-09-30T12:00:00Z');
+// Local noon: the analyzer groups by local day, so a fixed UTC time falls on another date in some time zones.
+const TIME = new Date(2026, 8, 30, 12).getTime();
 let serial = 0;
 function request(text = 'Why does this happen?', overrides: Partial<SessionRequest> = {}) {
   const id = `event-${++serial}`;

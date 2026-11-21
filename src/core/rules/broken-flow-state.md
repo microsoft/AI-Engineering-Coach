@@ -4,7 +4,7 @@ name: Broken Flow State
 group: session-hygiene
 severity: medium
 scope: sessions
-version: 1
+version: 2
 tags: [session, flow, focus, interruptions]
 thresholds:
   rapidFollowupSec: 30
@@ -15,7 +15,7 @@ thresholds:
 ---
 
 # Description
-Detects fragmented coding flow with long pauses between prompts, indicating frequent context switches, interruptions, or multitasking.
+Detects fragmented coding flow with long pauses between prompts, indicating frequent context switches, interruptions, or multitasking. Only prompts you typed count. A pause runs from the end of the assistant's work, including turns that an agent, autopilot or a still-running sub-agent sent, to your next prompt.
 
 # When Triggered
 {{count}}/{{extra.totalDays}} days ({{pct}}) show fragmented flow -- long pauses between prompts, short scattered work blocks.

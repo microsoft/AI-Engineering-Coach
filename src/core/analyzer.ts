@@ -12,7 +12,8 @@ import {
   AntiPatternData, WorkLifeBalanceResult, StatsResult, HarnessComparisonData,
   WorkflowOptimizationData, ConfigHealthData, FlowStateData, Workspace,
   CalendarActivityData, ProjectOverviewData, ContextManagementData, InsightsData,
-  ParserCoverageData, ParserPreviewData,
+  ParserCoverageData, ParserPreviewData, SessionRangeMatch,
+  PromptCacheData, PromptCacheSessionsData, SessionTimelineData, TokenTypesData,
 } from './types';
 import { DashboardAnalyzer } from './analyzer-dashboard';
 import { ProductionAnalyzer } from './analyzer-production';
@@ -23,6 +24,8 @@ import { WorkflowAnalyzer } from './analyzer-workflows';
 import { ConfigAnalyzer } from './analyzer-config';
 import { FlowAnalyzer } from './analyzer-flow';
 import { ContextAnalyzer } from './analyzer-context';
+import { PromptCacheAnalyzer } from './analyzer-prompt-cache';
+import { TokenTypesAnalyzer } from './analyzer-token-types';
 import { InsightsAnalyzer } from './analyzer-insights';
 import { ImageAnalyzer, ImageGalleryData } from './analyzer-images';
 import { CuriosityAnalyzer } from './analyzer-curiosity';
@@ -45,11 +48,14 @@ export class Analyzer {
   private readonly insights: InsightsAnalyzer;
   private readonly flow: FlowAnalyzer;
   private readonly context: ContextAnalyzer;
+  private readonly promptCache: PromptCacheAnalyzer;
+  private readonly tokenTypes: TokenTypesAnalyzer;
   private readonly images: ImageAnalyzer;
   private readonly curiosity: CuriosityAnalyzer;
   private readonly sessions: Session[];
   private readonly editLocIndex: EditLocIndex;
   private readonly workspaces: Map<string, Workspace>;
+  private readonly requestSessionMap: Map<SessionRequest, Session>;
   private cache = new Map<string, unknown>();
 
   constructor(sessions: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
@@ -58,6 +64,7 @@ export class Analyzer {
     this.editLocIndex = elIdx;
     this.workspaces = workspaces ?? new Map<string, Workspace>();
     const sharedMap = AnalyzerBase.buildRequestSessionMap(sessions);
+    this.requestSessionMap = sharedMap;
     this.dashboard = new DashboardAnalyzer(sessions, elIdx, sharedMap);
     this.production = new ProductionAnalyzer(sessions, elIdx, sharedMap);
     this.consumption = new ConsumptionAnalyzer(sessions, elIdx, sharedMap);
@@ -68,6 +75,8 @@ export class Analyzer {
     this.insights = new InsightsAnalyzer(sessions, elIdx, sharedMap);
     this.flow = new FlowAnalyzer(sessions, elIdx, sharedMap);
     this.context = new ContextAnalyzer(sessions, elIdx, sharedMap);
+    this.promptCache = new PromptCacheAnalyzer(sessions, elIdx, sharedMap);
+    this.tokenTypes = new TokenTypesAnalyzer(sessions, elIdx, sharedMap);
     this.images = new ImageAnalyzer(sessions, elIdx, sharedMap);
     this.curiosity = new CuriosityAnalyzer(sessions, elIdx, sharedMap);
   }
@@ -140,6 +149,8 @@ export class Analyzer {
   filterRequests(f?: DateFilter): SessionRequest[] { return this.patterns.getFilteredRequests(f); }
   /** Public access to filtered sessions for rule editor preview. */
   filterSessions(f?: DateFilter): Session[] { return this.patterns.getFilteredSessions(f); }
+  /** Every request's session, including sessions a date filter drops, so rule rows can resolve `harness`. */
+  getRequestSessionMap(): ReadonlyMap<SessionRequest, Session> { return this.requestSessionMap; }
   getHarnessComparison(f?: DateFilter): HarnessComparisonData { return this.dashboard.getHarnessComparison(f); }
   getParserCoverage(): ParserCoverageData { return this.dashboard.getParserCoverage(); }
   getParserPreview(focusField?: string): ParserPreviewData { return this.dashboard.getParserPreview(focusField); }
@@ -189,8 +200,8 @@ export class Analyzer {
   getFlowState(f?: DateFilter): FlowStateData { return this.flow.getFlowState(f); }
 
   getContextManagement(f?: DateFilter): ContextManagementData { return this.context.getContextManagement(f); }
-  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter): ReturnType<ContextAnalyzer['getWorkspaceContextSessions']> {
-    return this.context.getWorkspaceContextSessions(workspaceId, f);
+  getWorkspaceContextSessions(workspaceId: string, f?: DateFilter, rangeMatch?: SessionRangeMatch): ReturnType<ContextAnalyzer['getWorkspaceContextSessions']> {
+    return this.context.getWorkspaceContextSessions(workspaceId, f, rangeMatch);
   }
   getContextRangeAvailability(f?: DateFilter): {
     rangesWithTokens: number[];
@@ -200,6 +211,13 @@ export class Analyzer {
   } {
     return this.context.getContextRangeAvailability(f);
   }
+
+  getPromptCache(f?: DateFilter): PromptCacheData { return this.promptCache.getPromptCache(f); }
+  getPromptCacheSessions(workspaceId: string, harness?: string, f?: DateFilter): PromptCacheSessionsData {
+    return this.promptCache.getPromptCacheSessions(workspaceId, harness, f);
+  }
+  getSessionTimeline(sessionId: string): SessionTimelineData | null { return this.promptCache.getSessionTimeline(sessionId); }
+  getTokenTypes(f?: DateFilter): TokenTypesData { return this.tokenTypes.getTokenTypes(f); }
 
   getCalendarActivity(f?: DateFilter): CalendarActivityData { return this.dashboard.getCalendarActivity(f); }
 

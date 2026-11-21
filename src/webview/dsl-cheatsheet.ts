@@ -16,7 +16,7 @@ id: rule-id
 name: Human-Readable Name
 group: prompt-quality | session-hygiene | code-review | tool-mastery | context-management
 severity: low | medium | high
-scope: requests | sessions
+scope: requests | sessions | both
 version: 1
 tags: [tag1, tag2]
 thresholds:
@@ -53,7 +53,11 @@ severity: <boolean expression for dynamic severity upgrade>
 messageText, messageLength, timestamp, totalElapsed, modelId, agentMode, agentName,
 slashCommand, referencedFiles (array), customInstructions (array), skillsUsed (array),
 toolsUsed (array), toolConfirmations (array), aiCode (array of {language, loc}),
-userCode (array), cancelled (boolean), sessionId, workspaceName
+userCode (array), cancelled (boolean), sessionId, workspaceName,
+harness (the request's session harness, e.g. "Local Agent" for VS Code),
+humanTurn (boolean: false when an agent, autopilot, the harness or a parent agent sent the turn;
+use humanTurn == true for time-of-day and weekday rules, and count the denominator with
+countWhere(all, "humanTurn", "==", true) as emitTotal)
 
 ## Available Row Fields (sessions)
 sessionId, workspaceName, requestCount, requests (array), harness, startTime, endTime,
@@ -62,7 +66,9 @@ creationDate, lastMessageDate
 ## DSL Functions
 - hasProfanity(text) - true if text contains profanity
 - hasConstraint(text) - true if text has constraint keywords
-- matchesAny(text, patterns) - regex match against pattern array
+- matches(text, pattern) - regex match; pattern can be an array (true if any pattern matches)
+- matchesAny(text, patterns) - true if text matches any pattern in the array
+- anyMatch(strings, pattern) - 1 if any string matches the pattern (or any pattern of an array)
 - capsWordRatio(text, minWords) - ratio of ALL-CAPS words
 - isSpecDriven(requests) - true if session starts with specs
 - isStructured(request) - true if request has bullet points/structure
@@ -77,7 +83,7 @@ creationDate, lastMessageDate
 - instructionBloatStats(sessions[, maxBytes]) - custom-instructions size analysis
 
 - excessFileContextStats(reqs[, minFiles]) - outliers attaching huge file context
-- hasSkillByPattern(reqs, /pattern/) - any skillsUsed matches the regex
+- hasSkillByPattern(reqs, "(?i)pattern") - 1 if any skillsUsed entry matches (pattern can be an array)
 - first(arr) - first element
 - length(arr) - array length
 - round(n), floor(n), ceil(n), abs(n), min(a,b), max(a,b)
@@ -86,8 +92,8 @@ creationDate, lastMessageDate
 - profanityMatches(reqs) -> {count, total, flaggedWords}
 - contextGapCount(reqs) -> {gapCount, gaps[], reqCount}
 - modelStats(reqs) -> {topModel, topCount, topShare, modelCount, total}
-- flowScoreStats(sessions, minReqs, rapidMs) -> {fragmentedDays, totalDays, avgScore, lowScoreRate}
-- adjacentPairCount(sessions, minLoc, maxGapMs) -> {count, avgLoc, avgGap}
+- flowScoreStats(sessions, minReqs, rapidMs) -> {fragmentedDays, totalDays, avgScore, lowScoreRate} (turns the user typed; a gap runs from the end of the assistant's work)
+- adjacentPairCount(sessions, minLoc, maxGapMs) -> {count, avgLoc, avgGap} (the next turn must be one the user typed)
 - mdRatioByWorkspace(sessions, minLoc, docLangs) -> {lowCount, totalWorkspaces, overallRatio, workspaces[]}
 - devcontainerStats(sessions, reqs) -> {terminalReqs, vscodeReqs, sandboxedTerminalReqs, totalTerminalReqs, terminalRate}
 - langExplorationWeeks(reqs) -> {weeksSinceNew, totalLangs, recentNew, totalWeeks}
@@ -97,6 +103,14 @@ creationDate, lastMessageDate
 
 ## Match Expression Operators
 AND, OR, NOT, ==, !=, >, <, >=, <=, field.length, field access with dot notation
+
+## Patterns
+Keep regexes in front matter and use them as patterns.<name>. Each entry is an array of strings:
+patterns:
+  frustration: ["!{3,}", "\\\\?{3,}", "wtf|come on"]
+Quote any pattern that contains a comma. In double quotes, \\\\ is one backslash and \\" is a quote;
+other backslashes stay as written, so "\\b" and "\\\\b" both mean \\b.
+Start a pattern with (?i) or (?m) for flags. A /re/i literal works only in matches(); elsewhere use "(?i)re".
 
 ## Reduce Expressions
 After match, use reduce keys to compute aggregates over matched rows.

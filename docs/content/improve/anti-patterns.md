@@ -39,8 +39,10 @@ Measures how well you provide context to the AI. Representative rules:
 Evaluates how you manage your coding sessions:
 
 - **Mega Sessions / Abandoned Sessions / Session Drift** -- Flag sessions that run too long, stop abruptly, or drift across unrelated topics
-- **Late-Night Coding / Weekend Overwork** -- Detect overwork patterns
+- **Late-Night Coding / Weekend Overwork** -- Detect overwork patterns in the prompts you typed
 - **Repeated Prompts** -- Surface near-duplicate prompts that suggest your context isn't landing
+
+The time-based rules count only the prompts you typed. Harnesses also log "user" turns that another agent, autopilot, a parent agent or the harness sent; those show when your agents ran, not when you worked. **Late-Night Coding** and **Weekend Overwork** leave them out, and Weekend Overwork divides by the prompts you typed, not by every turn. The weekly Session Hygiene score does the same for late-night and weekend hours, while canceled requests still count over every turn. **Broken Flow State** measures each pause from the end of the assistant's work, including automated turns that are still running, such as a sub-agent's, to your next prompt. **Speed Accept** (under Code Review) counts only a message you typed right after the code. Session-size rules such as **Mega Sessions** and **Session Drift** count every turn, because automated turns fill the context too. Your own rules can do the same with the `humanTurn` request field; see the [Rule Editor](/improve/rule-editor/).
 
 ### Code Review
 
@@ -57,6 +59,8 @@ Evaluates how broadly you use available features:
 - **No Slash Commands / No Plan Mode / Agentic No Tools** -- Underused productivity features
 - **Premium Waste / Model Overreliance** -- Using expensive models for simple questions
 - **No Skills / No Custom Instructions** -- Gaps in your context-engineering setup
+
+Some rules read fields that only some harnesses log, so they count only those harnesses' requests. **No Plan Mode** counts VS Code, GitHub Copilot CLI and App, and OpenCode, whose logs record plan mode. **No Custom Instructions**, and the custom-instructions signal of **Context Engineering Gaps**, count only VS Code, the only harness that logs active instruction files.
 
 ### Context Management
 
@@ -77,6 +81,13 @@ Each finding includes:
 ## Trends
 
 Week-over-week (WoW) and month-over-month (MoM) trend indicators appear on each score card, so you can see whether your practices are improving or regressing.
+
+## Rules that can't be evaluated
+
+When a personal or project rule's detection logic can't run, for example because a `match:` expression doesn't
+parse, the other rules still run. The rule's practice group is marked **Incomplete** on its score card and in its
+findings, with the rule and the error, instead of reporting that all checks pass. The rule's card in the
+[Rule Editor](rule-editor.md) shows **Not evaluated**.
 
 ## Curiosity checks
 

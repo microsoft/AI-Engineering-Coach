@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { AntiPattern, OccurrenceDetail, PracticeGroup, Session, SessionRequest } from './types';
-import type { DetectionRule, DetectorEmission, RuleTemplateVars } from './types';
+import type { DetectionRule, DetectorEmission, RuleFailure, RuleTemplateVars } from './types';
 import { getAllRules } from './rule-engine';
 import { registerAllBuiltinRules, loadPersonalRules, registerAllBuiltinMetrics } from './rule-loader';
 import { fillTemplate } from './rule-parser';
-import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from './rule-pipeline';
+import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance, type Pipeline } from './rule-pipeline';
 import { isoWeek } from './helpers';
+import { runtimeDebug } from './runtime-debug';
+import { toRuleRequestRows } from './rule-rows';
 
 registerAllBuiltinRules();
 registerAllBuiltinMetrics();
@@ -26,7 +28,8 @@ export interface DetectorDefinition {
   group: PracticeGroup;
   requiresIdeContext?: boolean;
   rule?: DetectionRule;
-  run: (ctx: DetectorContext) => AntiPattern | null;
+  /** The rule's anti-pattern when it triggers, null when it doesn't, or why it couldn't be evaluated. */
+  run: (ctx: DetectorContext) => AntiPattern | RuleFailure | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -228,28 +231,59 @@ function parseIsoWeek(wk: string): Date {
 /*  Pipeline-based registry build                                     */
 /* ------------------------------------------------------------------ */
 
-function buildRegistry(): DetectorDefinition[] {
-  const rules = getAllRules();
-  const registry: DetectorDefinition[] = [];
+/** Rule id and message of each detection failure already logged, so a broken rule is logged once. */
+const loggedFailures = new Set<string>();
 
-  for (const rawRule of rules) {
-    const rule = resolveInheritance(rawRule);
-    const pipeline = parsePipeline(rule);
-
-    registry.push({
-      name: rule.name,
-      group: rule.group,
-      requiresIdeContext: rule.requiresIdeContext,
-      rule,
-      run: (ctx) => {
-        const emission = executePipeline(pipeline, rule, ctx);
-        if (!checkPipelineTrigger(pipeline, emission, rule)) return null;
-        return emissionToAntiPattern(emission, rule);
-      },
-    });
+/**
+ * The rule's emission, or why it couldn't be evaluated when its detection logic throws, such as a `match:` expression
+ * that doesn't parse. A broken personal or project rule then doesn't stop the other rules: it is reported as not
+ * evaluated, neither triggered nor clean, and the reason also goes to the Output log (runtimeDebug) once per rule and
+ * message.
+ */
+function emitOrFail(pipeline: Pipeline, rule: DetectionRule, ctx: DetectorContext): DetectorEmission | RuleFailure {
+  try {
+    return executePipeline(pipeline, rule, ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${rule.id}\n${message}`;
+    if (!loggedFailures.has(key)) {
+      loggedFailures.add(key);
+      runtimeDebug('detectors', 'rule-skipped', `${rule.id}: ${message}`);
+    }
+    return { ruleId: rule.id, ruleName: rule.name, group: rule.group, error: message };
   }
+}
 
-  return registry;
+function buildDetector(rawRule: DetectionRule): DetectorDefinition {
+  const rule = resolveInheritance(rawRule);
+  const pipeline = parsePipeline(rule);
+
+  return {
+    name: rule.name,
+    group: rule.group,
+    requiresIdeContext: rule.requiresIdeContext,
+    rule,
+    run: (ctx) => {
+      const emission = emitOrFail(pipeline, rule, ctx);
+      if ('error' in emission) return emission;
+      if (!checkPipelineTrigger(pipeline, emission, rule)) return null;
+      return emissionToAntiPattern(emission, rule);
+    },
+  };
+}
+
+function buildRegistry(): DetectorDefinition[] {
+  return getAllRules().map(rule => buildDetector(rule));
+}
+
+/** Rules read each request with its session's `harness` (see toRuleRequestRows). */
+function detectorContext(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): DetectorContext {
+  return { reqs: toRuleRequestRows(reqs, sessionOf ?? sessions), sessions, skipIdeDetectors };
 }
 
 let _registry: DetectorDefinition[] | null = null;
@@ -263,6 +297,7 @@ export const DETECTOR_REGISTRY: DetectorDefinition[] = new Proxy([] as DetectorD
 
 export function invalidateDetectorRegistry(): void {
   _registry = null;
+  loggedFailures.clear();
 }
 
 export function getActiveDetectors(skipIdeDetectors: boolean): DetectorDefinition[] {
@@ -270,23 +305,73 @@ export function getActiveDetectors(skipIdeDetectors: boolean): DetectorDefinitio
   return registry.filter(detector => !skipIdeDetectors || !detector.requiresIdeContext);
 }
 
-export function runDetectors(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): AntiPattern[] {
-  return getActiveDetectors(skipIdeDetectors)
-    .map(detector => detector.run({ reqs, sessions, skipIdeDetectors }))
-    .filter((pattern): pattern is AntiPattern => pattern !== null);
+/** What the active rules found: the anti-patterns of the triggered rules, and the rules that couldn't be evaluated. */
+export interface DetectionResult {
+  patterns: AntiPattern[];
+  failures: RuleFailure[];
 }
 
 /**
- * Run emitters only (no trigger evaluation). Used by rule-engine preview.
+ * Run every active rule. A rule whose detection logic throws is in `failures`; the other rules still run. `sessionOf`
+ * resolves each request's session for its `harness`; pass it when `reqs` can hold requests whose session isn't in
+ * `sessions`.
  */
-export function runEmitters(reqs: SessionRequest[], sessions: Session[], skipIdeDetectors: boolean): Map<string, DetectorEmission> {
+export function detectAntiPatterns(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): DetectionResult {
+  const ctx = detectorContext(reqs, sessions, skipIdeDetectors, sessionOf);
+  const result: DetectionResult = { patterns: [], failures: [] };
+  for (const detector of getActiveDetectors(skipIdeDetectors)) {
+    const outcome = detector.run(ctx);
+    if (!outcome) continue;
+    if ('error' in outcome) result.failures.push(outcome);
+    else result.patterns.push(outcome);
+  }
+  return result;
+}
+
+/**
+ * The anti-patterns of the triggered rules. Use detectAntiPatterns to also know which rules couldn't be evaluated.
+ * `sessionOf` works as in detectAntiPatterns.
+ */
+export function runDetectors(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): AntiPattern[] {
+  return detectAntiPatterns(reqs, sessions, skipIdeDetectors, sessionOf).patterns;
+}
+
+/** Run one rule the way runDetectors does, e.g. for the rule's inline `# Tests`. Throws when the rule can't be evaluated. */
+export function runDetector(rule: DetectionRule, reqs: SessionRequest[], sessions: Session[]): AntiPattern | null {
+  const outcome = buildDetector(rule).run(detectorContext(reqs, sessions, false));
+  if (outcome && 'error' in outcome) throw new Error(outcome.error);
+  return outcome;
+}
+
+/**
+ * Run emitters only (no trigger evaluation). Used by rule-engine preview. A rule that couldn't be evaluated has no
+ * emission; detectAntiPatterns reports why. `sessionOf` works as in runDetectors.
+ */
+export function runEmitters(
+  reqs: SessionRequest[],
+  sessions: Session[],
+  skipIdeDetectors: boolean,
+  sessionOf?: ReadonlyMap<SessionRequest, Session>,
+): Map<string, DetectorEmission> {
   const rules = getAllRules();
+  const ctx = detectorContext(reqs, sessions, skipIdeDetectors, sessionOf);
   const results = new Map<string, DetectorEmission>();
   for (const rawRule of rules) {
     if (skipIdeDetectors && rawRule.requiresIdeContext) continue;
     const rule = resolveInheritance(rawRule);
     const pipeline = parsePipeline(rule);
-    results.set(rule.id, executePipeline(pipeline, rule, { reqs, sessions, skipIdeDetectors }));
+    const emission = emitOrFail(pipeline, rule, ctx);
+    if (!('error' in emission)) results.set(rule.id, emission);
   }
   return results;
 }

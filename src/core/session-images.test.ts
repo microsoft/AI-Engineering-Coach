@@ -457,8 +457,12 @@ describe('harness-aware image loading', () => {
     expect(extractSourceImages(source, 'oc-db', "' OR 1=1 --")).toEqual([]);
     const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
     expect(loadSourceSession(source, 'oc-db')?.requests[0].variableKinds.image).toBe(1);
-    expect(prepare.mock.calls.map(([sql]) => sql)).toHaveLength(3);
-    expect(prepare.mock.calls.every(([sql]) => / WHERE (?:id|session_id) = \?/.test(sql))).toBe(true);
+    // One schema probe (does `session.parent_id` exist?), then three row queries, each limited to the session.
+    const statements = prepare.mock.calls.map(([sql]) => sql);
+    expect(statements.filter(sql => sql.startsWith('PRAGMA '))).toEqual(['PRAGMA table_info(session)']);
+    const rowQueries = statements.filter(sql => !sql.startsWith('PRAGMA '));
+    expect(rowQueries).toHaveLength(3);
+    expect(rowQueries.every(sql => / WHERE (?:id|session_id) = \?/.test(sql))).toBe(true);
   });
 
   it('registers loadable external sources during cold parsing and asynchronous refresh', async () => {

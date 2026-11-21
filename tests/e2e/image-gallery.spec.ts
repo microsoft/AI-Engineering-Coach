@@ -1,7 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { ImageGalleryData } from '../../src/core/analyzer-images';
+import { harnessUrl } from './harness-url';
 
-const URL = 'http://localhost:3999/tests/e2e/harness.html';
+const URL = harnessUrl();
 const IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
 const harnesses = ['VS Code', 'Insiders', 'Copilot CLI', 'Copilot App', 'Claude', 'Codex', 'OpenCode JSON', 'OpenCode SQLite', 'Xcode'];
 

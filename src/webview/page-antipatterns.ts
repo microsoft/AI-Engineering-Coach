@@ -7,10 +7,10 @@
 
 import { DateFilter, PracticeGroup, PRACTICE_GROUPS } from '../core/types';
 import { toDateStr } from '../core/helpers';
-import type { RuleSource } from '../core/types/rule-types';
+import type { RuleFailure, RuleSource } from '../core/types/rule-types';
 import { CURIOSITY_TIER_LABELS, type CuriosityTier } from '../core/types/curiosity-types';
 import { rpc, el, COLORS, scoreColor, scoreLabel } from './shared';
-import { html, render, type ComponentChildren, ScoreRing, PctBadge } from './render';
+import { html, render, type ComponentChildren, ScoreRing, PctBadge, IncompleteScoreTip } from './render';
 import { consumeNavHint } from './app';
 import { renderCoverageHeatmap } from './page-antipatterns-heatmap';
 import { openRuleEditor, wireRuleEditorModal } from './page-antipatterns-editor';
@@ -51,6 +51,7 @@ interface GroupScore {
   topIssue: string | null;
   improvements: string[];
   patternCount: number;
+  failedRules?: RuleFailure[];
 }
 
 interface ApData {
@@ -72,6 +73,8 @@ interface RulePreview {
   group: PracticeGroup;
   previewDescription: string;
   previewExamples: string[];
+  /** Why the rule couldn't be evaluated; then it's neither triggered nor clean. */
+  evaluationError?: string;
 }
 
 interface RuleLayerInfo {
@@ -149,6 +152,24 @@ function getDatasetValue(element: HTMLElement, key: string): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/**
+ * Listeners by container and by what added them. Saving a rule renders the page again into the same elements, and
+ * each rule detail renders into the same panel, so wiring them again first removes what the last wiring added.
+ */
+const listenerOwners = new WeakMap<HTMLElement, Map<'tabs' | 'rules' | 'detail', AbortController>>();
+
+function replaceListeners(container: HTMLElement, owner: 'tabs' | 'rules' | 'detail'): AbortSignal {
+  let owners = listenerOwners.get(container);
+  if (!owners) {
+    owners = new Map();
+    listenerOwners.set(container, owners);
+  }
+  owners.get(owner)?.abort();
+  const controller = new AbortController();
+  owners.set(owner, controller);
+  return controller.signal;
+}
+
 function severityIcon(sev: string): ComponentChildren {
   if (sev === 'high') return html`<span class="sev-icon sev-high" title="High impact">!</span>`;
   if (sev === 'medium') return html`<span class="sev-icon sev-medium" title="Medium impact">~</span>`;
@@ -167,6 +188,17 @@ function sourceBadge(source: RuleSource): ComponentChildren {
 
 function statPill(label: string, value: string | number, color?: string): ComponentChildren {
   return html`<span class="rule-stat-pill" style=${color ? `color:${color}` : undefined}><span class="rule-stat-value">${value}</span><span class="rule-stat-label">${label}</span></span>`;
+}
+
+/** The group's rules that couldn't be evaluated, and why: its score and findings leave them out. */
+function notEvaluatedNotice(failed: RuleFailure[]): HTMLElement {
+  const notice = el('div', 'ap-group-incomplete');
+  const rules = failed.length === 1 ? '1 rule' : `${failed.length} rules`;
+  render(html`<span>
+    <div>Incomplete: ${rules} couldn't be evaluated, so this score and these findings leave ${failed.length === 1 ? 'it' : 'them'} out.</div>
+    <ul>${failed.map(rule => html`<li><strong>${rule.ruleName}</strong> (<code>${rule.ruleId}</code>): ${rule.error}</li>`)}</ul>
+  </span>`, notice);
+  return notice;
 }
 
 function sparklineSvg(scores: number[], color: string): ComponentChildren {
@@ -278,11 +310,12 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
               ${spark ? html`<div class="ap-sparkline-row">${spark}</div>` : null}
               ${g.group === 'prompt-quality' && apData.curiosityTier
                 ? html`<div class="ap-score-tip" title="Activity balance has three levels: Balanced, Needs review, Strongly skewed. This does not measure question quality or learning.">Curiosity: <strong>${CURIOSITY_TIER_LABELS[apData.curiosityTier]}</strong></div>` : null}
+              <${IncompleteScoreTip} failed=${g.failedRules} />
               ${g.improvements.length > 0
                 ? html`<div class="ap-score-tip ap-improvements">${g.improvements.map(i => html`<span>${i}</span>`)}</div>`
                 : g.topIssue
                   ? html`<div class="ap-score-tip">${g.topIssue}</div>`
-                  : html`<div class="ap-score-tip muted">No issues detected</div>`}
+                  : g.failedRules?.length ? null : html`<div class="ap-score-tip muted">No issues detected</div>`}
             </div>`;
         })}
       </div>
@@ -399,11 +432,13 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
               <select id="rf-scope">
                 <option value="requests">Requests</option>
                 <option value="sessions">Sessions</option>
+                <option value="both">Both</option>
               </select>
             </div>
             <div class="rule-form-field">
               <label>Version</label>
-              <input type="number" id="rf-version" value="1" min="1" />
+              <!-- No value prop: a save renders the page again, and Preact would reset an open editor's version. -->
+              <input type="number" id="rf-version" min="1" />
             </div>
           </div>
           <div class="rule-form-field">
@@ -424,7 +459,7 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
           </div>
           <div class="rule-form-field">
             <label>Examples Template</label>
-            <input type="text" id="rf-examples" placeholder=${"\"{{message}}...\""} />
+            <textarea id="rf-examples" rows="2" placeholder=${"\"{{message}}...\""}></textarea>
           </div>
           <div class="rule-form-field">
             <label>Thresholds <span class="muted">(key: value, one per line)</span></label>
@@ -434,9 +469,6 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
             <label>Detection Logic <span class="muted">(DSL)</span></label>
             <textarea id="rf-detect" rows="8" class="rule-mono" spellcheck="false" placeholder=${"scan: requests\nmatch: messageLength > 0\naggregate: count\ncheck: count >= thresholds.myThreshold\nexamples: \"{{messageText | truncate:60}}\""}></textarea>
           </div>
-          <textarea id="rf-patterns" style="display:none"></textarea>
-          <textarea id="rf-filetypes" style="display:none"></textarea>
-          <textarea id="rf-extra-fm" style="display:none"></textarea>
         </div>
 
         <!-- Source view -->
@@ -547,11 +579,15 @@ export async function renderAntiPatterns(container: HTMLElement, currentFilter: 
 
   // Wire up rules section
   wireRulesSection(container, rules, previewMap, currentFilter);
+
+  const openRuleId = container.querySelector<HTMLElement>('#rule-detail-panel')!.dataset.ruleId;
+  if (openRuleId) showRuleDetail(container, openRuleId, rules, previewMap, currentFilter);
 }
 
 /* ── Tab switching ── */
 
 function wireTabBar(container: HTMLElement): void {
+  const signal = replaceListeners(container, 'tabs');
   const tabs = container.querySelectorAll<HTMLElement>('.ap-tab');
   const panels = container.querySelectorAll<HTMLElement>('.ap-tab-content');
 
@@ -563,7 +599,7 @@ function wireTabBar(container: HTMLElement): void {
       for (const p of panels) {
         p.style.display = p.id === `tab-${target}` ? '' : 'none';
       }
-    });
+    }, { signal });
   }
 }
 
@@ -577,6 +613,7 @@ function renderFindings(
 ): void {
   const detailsContainer = container.querySelector('#apDetails')!;
   const allGroupKeys: PracticeGroup[] = ['prompt-quality', 'session-hygiene', 'code-review', 'tool-mastery'];
+  const sections: HTMLElement[] = [];
 
   for (const groupKey of allGroupKeys) {
     const gs = scores.find(s => s.group === groupKey);
@@ -603,10 +640,15 @@ function renderFindings(
       <p class="ap-group-desc">${groupDesc}</p>
     `, section);
 
+    const failedRules = gs?.failedRules ?? [];
+    if (failedRules.length > 0) section.appendChild(notEvaluatedNotice(failedRules));
+
     if (groupPatterns.length === 0) {
-      const good = el('div', 'ap-group-clean');
-      good.textContent = 'All checks passing -- no anti-patterns detected.';
-      section.appendChild(good);
+      if (failedRules.length === 0) {
+        const good = el('div', 'ap-group-clean');
+        good.textContent = 'All checks passing -- no anti-patterns detected.';
+        section.appendChild(good);
+      }
     } else {
       if (gs && gs.improvements.length > 0) {
         const banner = el('div', 'ap-improvements-banner');
@@ -636,8 +678,9 @@ function renderFindings(
         section.appendChild(card);
       }
     }
-    detailsContainer.appendChild(section);
+    sections.push(section);
   }
+  detailsContainer.replaceChildren(...sections);
 
   const hint = consumeNavHint();
   if (hint) {
@@ -912,8 +955,9 @@ function renderRuleCard(
   const occurrences = preview?.occurrences ?? 0;
   const total = preview?.total ?? 0;
   const pct = preview?.pct ?? 0;
-  const statusClass = triggered ? 'rule-card-triggered' : 'rule-card-clean';
-  const histSvg = histogram ? miniHistogramSvg(histogram.counts, histogram.labels, triggered ? COLORS.yellow : groupColor) : null;
+  const error = preview?.evaluationError;
+  const statusClass = error !== undefined ? 'rule-card-failed' : triggered ? 'rule-card-triggered' : 'rule-card-clean';
+  const histSvg = histogram && error === undefined ? miniHistogramSvg(histogram.counts, histogram.labels, triggered ? COLORS.yellow : groupColor) : null;
 
   return html`
     <div class="rule-card ${statusClass}" data-rule-id=${rule.id} data-tags=${rule.tags.join(',')} data-name=${rule.name.toLowerCase()} data-source=${rule.source}>
@@ -926,7 +970,7 @@ function renderRuleCard(
         <div class="rule-card-desc">${rule.description}</div>
       </div>
       <div class="rule-card-bottom">
-        <div class="rule-card-stats">
+        ${error !== undefined ? html`<div class="rule-card-error" title=${error}>Not evaluated: ${error}</div>` : html`<div class="rule-card-stats">
           <div class="rule-card-stat">
             <span class="rule-card-stat-value ${triggered ? 'stat-warn' : 'stat-ok'}">${occurrences}</span>
             <span class="rule-card-stat-label">flagged</span>
@@ -939,7 +983,7 @@ function renderRuleCard(
             <span class="rule-card-stat-value ${triggered ? 'stat-warn' : 'stat-ok'}">${pct}%</span>
             <span class="rule-card-stat-label">rate</span>
           </div>
-        </div>
+        </div>`}
         ${histSvg ? html`<div class="rule-card-histogram" title="Weekly trend">${histSvg}</div>` : null}
       </div>
     </div>
@@ -954,6 +998,7 @@ function wireRulesSection(
   previewMap: Map<string, RulePreview>,
   currentFilter: DateFilter,
 ): void {
+  const signal = replaceListeners(container, 'rules');
   // Search + local-only filter
   const searchInput = container.querySelector<HTMLInputElement>('#rule-search');
   const localOnly = container.querySelector<HTMLInputElement>('#rule-filter-local');
@@ -976,14 +1021,14 @@ function wireRulesSection(
       section.style.display = visible.length > 0 ? '' : 'none';
     }
   };
-  searchInput?.addEventListener('input', applyFilters);
-  localOnly?.addEventListener('change', applyFilters);
+  searchInput?.addEventListener('input', applyFilters, { signal });
+  localOnly?.addEventListener('change', applyFilters, { signal });
 
   // Review pending local rules banner
   container.querySelector('#rule-review-pending-btn')?.addEventListener('click', toEventListener(async () => {
     await rpc<{ ok: boolean }>('reviewLocalRules');
     // The command itself reloads the dashboard; no follow-up render needed here.
-  }));
+  }), { signal });
 
   // Rule card click -> detail
   container.querySelector('#rule-list')?.addEventListener('click', (e) => {
@@ -994,31 +1039,26 @@ function wireRulesSection(
     if (!card) return;
     const ruleId = getDatasetValue(card, 'ruleId');
     if (ruleId) showRuleDetail(container, ruleId, rules, previewMap, currentFilter);
-  });
+  }, { signal });
 
   // Back button
-  container.querySelector('#rule-back-btn')?.addEventListener('click', () => {
-    container.querySelector<HTMLElement>('#rule-list')!.style.display = '';
-    container.querySelector<HTMLElement>('#rule-detail-panel')!.style.display = 'none';
-    container.querySelector<HTMLElement>('#rule-search-bar')!.style.display = '';
-    container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = '';
-  });
+  container.querySelector('#rule-back-btn')?.addEventListener('click', () => hideRuleDetail(container), { signal });
 
   // Unified Rule Editor
-  wireRuleEditorModal(container, currentFilter, () => renderAntiPatterns(container, currentFilter));
+  wireRuleEditorModal(container, currentFilter, () => renderAntiPatterns(container, currentFilter), signal);
 
   // New rule button -> open editor in create mode
   container.querySelector('#rule-new-btn')?.addEventListener('click', () => {
     openRuleEditor(container, null);
-  });
+  }, { signal });
 
   // Help
   container.querySelector('#rule-help-btn')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-help-modal')!.style.display = 'flex';
-  });
+  }, { signal });
   container.querySelector('#rule-help-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-help-modal')!.style.display = 'none';
-  });
+  }, { signal });
 
   // DSL Reference modal
   let dslRefLoaded = false;
@@ -1035,27 +1075,40 @@ function wireRulesSection(
         dslRefLoaded = false;
       }
     }
-  }));
+  }), { signal });
   container.querySelector('#rule-dsl-ref-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-dsl-ref-modal')!.style.display = 'none';
-  });
+  }, { signal });
 
   // Coverage heatmap
   container.querySelector('#rule-coverage-btn')?.addEventListener('click', () => {
     const modal = container.querySelector<HTMLElement>('#rule-coverage-modal')!;
     modal.style.display = 'flex';
     void renderCoverageHeatmap(container, currentFilter);
-  });
+  }, { signal });
   container.querySelector('#rule-coverage-close')?.addEventListener('click', () => {
     container.querySelector<HTMLElement>('#rule-coverage-modal')!.style.display = 'none';
-  });
+  }, { signal });
 }
 
 /* ── Rule detail view ── */
 
 function renderRulePreviewStats(preview: RulePreview | undefined): ComponentChildren {
+  if (preview?.evaluationError !== undefined) return html`${statPill('Total', preview.total)}${statPill('Status', 'NOT EVALUATED', 'var(--accent-red)')}`;
   const flaggedColor = preview?.triggered ? 'var(--yellow)' : 'var(--green)';
   return html`${statPill('Flagged', preview?.occurrences ?? 0, flaggedColor)}${statPill('Total', preview?.total ?? 0)}${statPill('Rate', `${preview?.pct ?? 0}%`, flaggedColor)}${statPill('Status', preview?.triggered ? 'TRIGGERED' : 'CLEAN', flaggedColor)}`;
+}
+
+/** The preview's description, which says why when the rule couldn't be evaluated, and its examples. */
+function renderRulePreviewDetails(preview: RulePreview | undefined): ComponentChildren {
+  return html`
+    ${preview?.previewDescription ? html`<div class="rule-preview-desc">${preview.previewDescription}</div>` : null}
+    ${preview && preview.previewExamples.length > 0 ? html`
+      <details class="rule-preview-examples">
+        <summary>${preview.previewExamples.length} example(s)</summary>
+        <ul>${preview.previewExamples.map(ex => html`<li>${ex}</li>`)}</ul>
+      </details>
+    ` : null}`;
 }
 
 function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefined, ruleId: string): ComponentChildren {
@@ -1081,13 +1134,7 @@ function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefi
       <div class="rule-detail-section">
         <h3>Current Data Preview</h3>
         <div class="rule-preview-stats">${renderRulePreviewStats(preview)}</div>
-        ${preview?.previewDescription ? html`<div class="rule-preview-desc">${preview.previewDescription}</div>` : null}
-        ${preview && preview.previewExamples.length > 0 ? html`
-          <details class="rule-preview-examples">
-            <summary>${preview.previewExamples.length} example(s)</summary>
-            <ul>${preview.previewExamples.map(ex => html`<li>${ex}</li>`)}</ul>
-          </details>
-        ` : null}
+        <div class="rule-preview-details">${renderRulePreviewDetails(preview)}</div>
       </div>
 
       ${thresholdEntries.length > 0 ? html`
@@ -1120,7 +1167,7 @@ function renderRuleDetailContent(rule: RuleDetail, preview: RulePreview | undefi
   </div>`;
 }
 
-function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFilter: DateFilter): void {
+function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFilter: DateFilter, signal: AbortSignal): void {
   for (const input of content.querySelectorAll<HTMLInputElement>('.rule-threshold-input')) {
     input.addEventListener('change', toEventListener(async (e: Event) => {
       const target = e.target;
@@ -1133,14 +1180,19 @@ function wireRuleThresholdInputs(content: HTMLElement, ruleId: string, currentFi
       try {
         await rpc<{ ok: boolean }>('updateRuleThreshold', { ruleId, key, value });
         const preview = await rpc<RulePreview>('getRulePreview', { ruleId, ...(currentFilter as Record<string, unknown>) });
+        // Another rule's detail may be shown by now.
+        if (signal.aborted) return;
         const stats = content.querySelector<HTMLElement>('.rule-preview-stats');
         if (stats) {
           render(renderRulePreviewStats(preview), stats);
         }
+        // With the stats, so a rule that now fails shows why, and a fixed one drops its old error.
+        const details = content.querySelector<HTMLElement>('.rule-preview-details');
+        if (details) render(renderRulePreviewDetails(preview), details);
       } catch {
         /* ignore */
       }
-    }));
+    }), { signal });
   }
 }
 
@@ -1161,7 +1213,10 @@ function showRuleDetail(
   currentFilter: DateFilter,
 ): void {
   const rule = rules.find(r => r.id === ruleId);
-  if (!rule) return;
+  if (!rule) {
+    hideRuleDetail(container);
+    return;
+  }
 
   const preview = previewMap.get(ruleId);
   container.querySelector<HTMLElement>('#rule-list')!.style.display = 'none';
@@ -1170,17 +1225,29 @@ function showRuleDetail(
 
   const panel = container.querySelector<HTMLElement>('#rule-detail-panel')!;
   panel.style.display = '';
+  panel.dataset.ruleId = ruleId;
 
   const content = container.querySelector<HTMLElement>('#rule-detail-content')!;
   render(renderRuleDetailContent(rule, preview, ruleId), content);
 
-  wireRuleThresholdInputs(content, ruleId, currentFilter);
+  // Every detail renders into the same panel and reuses its elements: drop the last detail's handlers first.
+  const signal = replaceListeners(container, 'detail');
+  wireRuleThresholdInputs(content, ruleId, currentFilter, signal);
 
   container.querySelector('#rule-edit-source-btn')?.addEventListener('click', () => {
     openRuleEditor(container, ruleId);
-  });
+  }, { signal });
 
   wireRuleDetailExplainButtons(content, currentFilter);
+}
+
+function hideRuleDetail(container: HTMLElement): void {
+  const panel = container.querySelector<HTMLElement>('#rule-detail-panel')!;
+  panel.style.display = 'none';
+  delete panel.dataset.ruleId;
+  container.querySelector<HTMLElement>('#rule-list')!.style.display = '';
+  container.querySelector<HTMLElement>('#rule-search-bar')!.style.display = '';
+  container.querySelector<HTMLElement>('#ap-rules-header')!.style.display = '';
 }
 
 function renderLayerStatus(layers: RuleLayerInfo[], layerName: string): ComponentChildren {

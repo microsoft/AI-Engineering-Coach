@@ -9,7 +9,7 @@
  */
 
 import { parentPort } from 'worker_threads';
-import { stripSessionsForMemory } from './cache';
+import { flushCacheWrites, stripSessionsForMemory } from './cache';
 import { emitResultChunks, DEFAULT_SESSION_CHUNK_SIZE } from './parse-chunking';
 import { createAckWindow, shouldSendProgressImmediately } from './parse-worker-stream';
 import { parseAllLogsAsyncDetailed, type LoadProgress } from './parser';
@@ -212,6 +212,14 @@ onMessage(async (msg) => {
       SESSION_CHUNK_SIZE,
     );
     onAck = null;
+
+    // The parent terminates this worker as soon as `done` arrives, which would also kill the
+    // cache write that parseAllLogsAsyncDetailed started in its own thread (it overlaps the
+    // streaming above). Let it land first, or every launch cold-parses again. The wait is
+    // bounded so a stalled disk cannot hold the parse result hostage.
+    const flushStarted = Date.now();
+    const cacheWriteSettled = await flushCacheWrites();
+    runtimeDebug('parse-worker', 'cache-write-wait', `waitMs=${Date.now() - flushStarted} settled=${cacheWriteSettled}`);
 
     send({
       type: 'done',

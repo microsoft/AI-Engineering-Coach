@@ -14,7 +14,8 @@ import { detectCuriosity } from './curiosity';
 import { createRequest, createSession } from './parser-shared';
 import type { Session } from './types';
 
-const MONDAY = Date.parse('2026-09-28T12:00:00Z');
+// Local noon: Prompt Quality groups by local day and week, so a fixed UTC time falls on another date in some time zones.
+const MONDAY = new Date(2026, 8, 28, 12).getTime();
 const QUESTION = 'Why does the parser return this shared value?';
 function dataset(counts: ActivityCounts, offset = 0, name = 'source'): Session {
   const tools = { direct: [], web: ['web_fetch'], repository: ['view'], action: ['apply_patch'] };

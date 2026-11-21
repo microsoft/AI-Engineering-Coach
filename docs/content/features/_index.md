@@ -24,7 +24,7 @@ AI Engineer Coach organizes its capabilities into three areas that mirror a cont
 - [Rule Playground](/improve/rule-playground/) -- Interactive REPL for the rule DSL with a field browser, function catalog, and metric list
 - [Data Explorer](/improve/data-explorer/) -- Inspect request/session fields and distributions
 - [Skill Finder](/improve/skill-finder/) -- Discover repeated prompts and matching community skills
-- [Context Health](/improve/context-health/) -- Evaluate context quality and session management efficiency
+- [Context Health](/improve/context-health/) -- Evaluate context quality, session management efficiency, and prompt caching
 
 ## Chat
 
