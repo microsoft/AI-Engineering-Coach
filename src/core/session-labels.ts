@@ -57,7 +57,9 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME): st
   let out = value
     .replaceAll(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[link]')
     .replaceAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]')
-    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s,;)"'`]*/g, '[path]');
+    // A quoted path is one path, spaces and all; an unquoted one goes on through later words that carry a separator.
+    .replaceAll(/(["'`])(?:[A-Za-z]:[\\/]|\\\\)[^"'`\n]*\1/g, '[path]')
+    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s,;)"'`]*(?: [^\s,;)"'`]*[\\/][^\s,;)"'`]*)*/g, '[path]');
   if (ctx.home && ctx.home.length > 1) {
     const home = ctx.home.replace(/[\\/]+$/, '');
     const variants = new Set([home, home.replaceAll('\\', '/'), home.replaceAll('/', '\\')]);
@@ -72,7 +74,9 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME): st
  *  handles are removed as prefixes: `vscode/fix` or `feature-x` keep theirs. */
 export function scrubBranch(value: string, ctx: ScrubContext): string {
   let out = value.trim();
-  for (const name of usableNames(ctx.handles ?? [])) {
+  // Handles are known exactly, so even a short one is removed when it is the branch's first word.
+  const handles = [...new Set((ctx.handles ?? []).map(h => h.trim()).filter(h => h && !GENERIC_ACCOUNTS.has(h.toLowerCase())))];
+  for (const name of handles.sort((a, b) => b.length - a.length)) {
     out = out.replace(new RegExp(`^${escapeRegExp(name)}[/_-]`, 'i'), '');
   }
   return scrubLabel(out, ctx, MAX_BRANCH);

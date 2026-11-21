@@ -5,25 +5,29 @@
 
 /* Timeline model: the Day, Week and Families views derived from a `TimelineDataset`. Pure and browser-safe, so the
  * webview recomputes a view instantly when a filter changes, and the analyzer, chat tools and tests share the rules.
+ * Every measure is built from intervals over the whole dataset first, then clipped to the range and to the day or week,
+ * so a range gives the same per-day values as its days one at a time.
  *
- *   Agent time         per turn, its span (prompt → last assistant message) minus the time it waited for your answer
- *                      to a question or a permission prompt. A day or week counts the part inside it.
- *   Waiting on you     per session, over the whole range: from the end of a turn to your next typed prompt (2–120 min;
- *                      longer gaps are time away), and every question or permission prompt you answered inside a
- *                      turn. A day or week counts the part inside it; a wait is counted on the day it started.
- *   Your input         a prompt you typed, or your answer to a question or a permission prompt.
- *   Unattended         per family: from one of your inputs, for as long as agent work the family started before your
- *                      next input kept running (pauses under 2 min don't end it). Work stops at a question, so it can
- *                      only outlast your next input in a session that didn't get it. Computed over the whole range,
- *                      then clipped to the day or week.
- *   Peak parallel      most turns doing agent work at once (waits excluded).
+ *   Your input         a prompt you typed, or your answer to a question or a permission prompt (at the time you
+ *                      answered; a relayed question counts once, in the session that asked it).
+ *   Blocked            a turn stopped on a question or a permission prompt, answered or not. Not agent work.
+ *   Agent time         per session, the union of its turns' spans (prompt → last logged agent activity) minus the time
+ *                      they were blocked.
+ *   Waiting on you     per session, the union of the gaps from the end of its work to your next typed prompt (2–120 min;
+ *                      longer gaps are time away) and the questions and permission prompts you answered. Counted on
+ *                      the day each wait started; its time counts where it falls.
+ *   Unattended         per family: from one of your inputs anywhere in the family, for as long as the family's agent
+ *                      work kept running (pauses under 2 min don't end it), and never past your next input anywhere in
+ *                      the family. All members count, whatever the filters show.
+ *   Peak parallel      most sessions doing agent work at once.
  *   Family             a coordinator session and every session it started, directly or through its children. */
 
 import { toDateStr } from './helpers';
-import type { TimelineDataset, TimelineSessionRecord, TimelineTurn } from './types/timeline-types';
+import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
 
 export const WAIT_MIN_MS = 2 * 60_000;
 export const WAIT_MAX_MS = 120 * 60_000;
+/** Waits of this length or more are called long. */
 export const LONG_WAIT_MS = 30 * 60_000;
 /** Children from which a family counts as a wide fan-out. */
 export const WIDE_FAN_OUT = 8;
@@ -35,11 +39,17 @@ export type TimelineView = 'day' | 'week' | 'families';
 
 export type Interval = [number, number];
 
-/** A time a session waited on you: after a turn, for your next prompt (`idle`), or inside a turn, for your answer. */
+/** A time a session waited on you: after its work, for your next prompt (`idle`), or for your answer. */
 export interface TimelineWait {
   start: number;
   end: number;
-  kind: 'idle' | 'question' | 'permission';
+  kind: 'idle' | TimelineTurnWait['k'];
+}
+
+/** Your answer to a question or a permission prompt, when you gave it. */
+export interface TimelineAnswer {
+  at: number;
+  kind: TimelineTurnWait['k'];
 }
 
 export interface PreparedSession extends TimelineSessionRecord {
@@ -50,11 +60,18 @@ export interface PreparedSession extends TimelineSessionRecord {
   depth: number;
   /** Sessions it started directly. */
   children: number;
-  /** Turns before the range it needs for waits and work crossing into it (never counted as turns). */
   context: TimelineTurn[];
-  /** Every time it waited on you, in order (ones that started before the range included; windows clip them). */
+  /** Every turn, context included, in time order. */
+  all: TimelineTurn[];
+  /** When its agent was working, merged: turn spans minus the time they were blocked. */
+  work: Interval[];
+  /** Every time it waited on you, in order. */
   waits: TimelineWait[];
-  /** Gaps of more than 2 h between the end of a turn and your next prompt: time away, not waiting. */
+  /** The union of `waits`. */
+  waiting: Interval[];
+  /** Your answers to its questions and permission prompts. */
+  answers: TimelineAnswer[];
+  /** Gaps of more than 2 h between the end of its work and your next prompt: time away, not waiting. */
   away: Interval[];
 }
 
@@ -62,15 +79,18 @@ export interface DayTotals {
   typed: number;
   automated: number;
   agentMs: number;
+  waitMs: number;
 }
 
 export interface PreparedTimeline {
   sessions: PreparedSession[];
-  /** Days with a turn or agent work, in order. */
+  /** Days with a turn, agent work or waiting on you, in order. */
   days: string[];
   dayTotals: Map<string, DayTotals>;
-  /** Sessions per family, keyed by the family's root index. */
+  /** Sessions per family in the dataset (context records included), keyed by the family's root index. */
   familySize: Map<number, number>;
+  /** Each family's unattended stretches over the whole dataset, keyed by its root index. */
+  stretches: Map<number, Interval[]>;
   totalCredits: number;
   harnesses: string[];
   forkedSessions: number;
@@ -78,40 +98,78 @@ export interface PreparedTimeline {
   bounds: Interval;
 }
 
-/* ---- turns ---- */
+/* ---- intervals ---- */
 
-/** When the turn's agent was working: its span minus the time it waited on you. Empty without a logged duration. */
-export function workSegments(t: TimelineTurn): Interval[] {
-  if (t.d <= 0) return [];
-  const end = t.t + t.d;
+/** Sorted, with overlapping and touching intervals joined. */
+export function mergeIntervals(list: readonly Interval[]): Interval[] {
+  const sorted = list.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
   const out: Interval[] = [];
-  let from = t.t;
-  for (const w of t.w ?? []) {
-    const s = Math.min(Math.max(w.s, from), end);
-    if (s > from) out.push([from, s]);
-    from = Math.max(from, Math.min(w.e, end));
+  for (const [a, b] of sorted) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
   }
-  if (end > from) out.push([from, end]);
   return out;
 }
 
-/** Agent time of a turn, or of the part of it inside [start, end). */
-export function workMs(t: TimelineTurn, start = -Infinity, end = Infinity): number {
-  return sum(workSegments(t), ([a, b]) => overlap(a, b, start, end));
+/** `spans` minus `holes`, both merged. */
+function subtract(spans: readonly Interval[], holes: readonly Interval[]): Interval[] {
+  const out: Interval[] = [];
+  let j = 0;
+  for (const [a, b] of spans) {
+    let from = a;
+    while (j < holes.length && holes[j][1] <= from) j++;
+    for (let k = j; k < holes.length && holes[k][0] < b; k++) {
+      if (holes[k][0] > from) out.push([from, holes[k][0]]);
+      from = Math.max(from, holes[k][1]);
+    }
+    if (b > from) out.push([from, b]);
+  }
+  return out;
 }
 
-/** Questions and permission prompts the turn waited on you for. */
-export function answersOf(t: TimelineTurn): number {
-  return t.w?.length ?? 0;
+/** The parts of the intervals inside the window. */
+export function clipIntervals(list: readonly Interval[], win: Interval): Interval[] {
+  const out: Interval[] = [];
+  for (const [a, b] of list) {
+    const from = Math.max(a, win[0]);
+    const to = Math.min(b, win[1]);
+    if (to > from) out.push([from, to]);
+  }
+  return out;
+}
+
+export function intervalsMs(list: readonly Interval[]): number {
+  return sum(list, ([a, b]) => b - a);
 }
 
 function overlap(a: number, b: number, start: number, end: number): number {
   return Math.max(0, Math.min(b, end) - Math.max(a, start));
 }
 
-/** The session's waits over all its turns: the gaps from the end of a turn to your next typed prompt (2–120 min), and
- *  the questions and permission prompts it waited on inside turns. After a turn without a logged duration, when the
- *  work ended is unknown, so no gap is counted until the next timed turn. */
+/** The part of a wait inside the window. */
+export function clippedMs(w: TimelineWait, win: Interval): number {
+  return overlap(w.start, w.end, win[0], win[1]);
+}
+
+/* ---- sessions ---- */
+
+/** When a session's agent was working: its turns' spans minus every question and permission prompt they were stopped
+ *  on, answered or not. Turns without a logged duration add nothing. */
+export function sessionWork(turns: readonly TimelineTurn[]): Interval[] {
+  const spans = mergeIntervals(turns.filter(t => t.d > 0).map(t => [t.t, t.t + t.d]));
+  const blocked = mergeIntervals(turns.flatMap(t => (t.w ?? []).map(w => [w.s, w.e] as Interval)));
+  return subtract(spans, blocked);
+}
+
+/** A turn's own agent time and the time it was stopped on a question or a permission prompt (whole turn, not clipped). */
+export function turnTimes(t: TimelineTurn): { workMs: number; blockedMs: number } {
+  return { workMs: intervalsMs(sessionWork([t])), blockedMs: intervalsMs(mergeIntervals((t.w ?? []).map(w => [w.s, w.e]))) };
+}
+
+/** A session's waits on you: the gaps from the end of its work (or of a question still open after it) to your next
+ *  typed prompt (2–120 min; longer gaps are time away), and the questions and permission prompts you answered. After a
+ *  turn without a logged duration, when the work ended is unknown, so no gap is counted until the next timed turn. */
 export function sessionWaits(turns: readonly TimelineTurn[]): { waits: TimelineWait[]; away: Interval[] } {
   const waits: TimelineWait[] = [];
   const away: Interval[] = [];
@@ -122,19 +180,53 @@ export function sessionWaits(turns: readonly TimelineTurn[]): { waits: TimelineW
       if (gap >= WAIT_MIN_MS && gap <= WAIT_MAX_MS) waits.push({ start: busyUntil, end: t.t, kind: 'idle' });
       else if (gap > WAIT_MAX_MS) away.push([busyUntil, t.t]);
     }
-    for (const w of t.w ?? []) waits.push({ start: w.s, end: w.e, kind: w.k });
-    busyUntil = t.noDuration ? -1 : Math.max(busyUntil, t.t + t.d);
+    for (const w of t.w ?? []) if (w.a && w.e > w.s) waits.push({ start: w.s, end: w.e, kind: w.k });
+    busyUntil = t.noDuration ? -1 : Math.max(busyUntil, t.t + t.d, ...(t.w ?? []).map(w => w.e));
   }
   return { waits: waits.sort((a, b) => a.start - b.start), away };
 }
 
-/** Links each session to its family, finds its waits and counts turns and agent time per day. */
+/** Your inputs into a session: its typed prompts, and your answers (relayed ones too: they reached the family). */
+function inputsOf(s: PreparedSession): number[] {
+  return [...s.all.filter(t => t.k === 'you').map(t => t.t), ...s.answers.map(a => a.at)];
+}
+
+/** The family's unattended stretches: from each of your inputs, through the agent work running at it or starting
+ *  within 2 min of the stretch's end so far, up to your next input. */
+export function unattendedStretches(inputs: readonly number[], work: readonly Interval[]): Interval[] {
+  const sorted = [...new Set(inputs)].sort((a, b) => a - b);
+  const out: Interval[] = [];
+  let j = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const from = sorted[i];
+    const until = sorted[i + 1] ?? Infinity;
+    while (j < work.length && work[j][1] <= from) j++;
+    let reach = from;
+    for (let k = j; k < work.length && work[k][0] < until && work[k][0] <= reach + WAIT_MIN_MS; k++) reach = Math.max(reach, work[k][1]);
+    reach = Math.min(reach, until);
+    if (reach > from) out.push([from, reach]);
+  }
+  return out;
+}
+
+/** Links each session to its family, derives its work, waits and inputs, and counts turns, agent time and waiting
+ *  per day. */
 export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
   const records = data.sessions;
   const bounds: Interval = [data.from ?? -Infinity, data.to ?? Infinity];
-  const sessions: PreparedSession[] = records.map((s, index) => ({
-    ...s, index, root: index, depth: 0, children: 0, context: s.context ?? [], ...sessionWaits([...(s.context ?? []), ...s.turns]),
-  }));
+  const sessions: PreparedSession[] = records.map((s, index) => {
+    const context = s.context ?? [];
+    const all = [...context, ...s.turns].sort((a, b) => a.t - b.t);
+    const { waits, away } = sessionWaits(all);
+    return {
+      ...s, index, root: index, depth: 0, children: 0, context, all,
+      work: sessionWork(all),
+      waits,
+      waiting: mergeIntervals(waits.map(w => [w.start, w.end])),
+      answers: all.flatMap(t => (t.w ?? []).filter(w => w.a).map(w => ({ at: w.e, kind: w.k }))).sort((a, b) => a.at - b.at),
+      away,
+    };
+  });
   for (const s of sessions) {
     let at = s.index;
     let depth = 0;
@@ -147,32 +239,41 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
     if (s.parent >= 0) sessions[s.parent].children++;
   }
   const familySize = new Map<number, number>();
+  const members = new Map<number, PreparedSession[]>();
+  for (const s of sessions) {
+    familySize.set(s.root, (familySize.get(s.root) ?? 0) + 1);
+    members.set(s.root, [...(members.get(s.root) ?? []), s]);
+  }
+  const stretches = new Map<number, Interval[]>();
+  for (const [root, list] of members) {
+    stretches.set(root, unattendedStretches(list.flatMap(inputsOf), mergeIntervals(list.flatMap(s => s.work))));
+  }
   const dayTotals = new Map<string, DayTotals>();
   const totalsOf = (day: string): DayTotals => {
     let totals = dayTotals.get(day);
-    if (!totals) dayTotals.set(day, totals = { typed: 0, automated: 0, agentMs: 0 });
+    if (!totals) dayTotals.set(day, totals = { typed: 0, automated: 0, agentMs: 0, waitMs: 0 });
     return totals;
   };
   let totalCredits = 0;
-  for (const s of sessions) {
-    familySize.set(s.root, (familySize.get(s.root) ?? 0) + 1);
+  const active = sessions.filter(s => !s.ctx);
+  for (const s of active) {
     for (const t of s.turns) {
       const totals = totalsOf(toDateStr(t.t));
       if (t.k === 'you') totals.typed++;
       else totals.automated++;
       totalCredits += t.cr;
     }
-    for (const t of [...s.context, ...s.turns]) {
-      for (const [a, b] of workSegments(t)) forEachDay(Math.max(a, bounds[0]), Math.min(b, bounds[1]), (day, ms) => { totalsOf(day).agentMs += ms; });
-    }
+    for (const [a, b] of clipIntervals(s.work, bounds)) forEachDay(a, b, (day, ms) => { totalsOf(day).agentMs += ms; });
+    for (const [a, b] of clipIntervals(s.waiting, bounds)) forEachDay(a, b, (day, ms) => { totalsOf(day).waitMs += ms; });
   }
   return {
     sessions,
     days: [...dayTotals.keys()].sort(),
     dayTotals,
     familySize,
+    stretches,
     totalCredits,
-    harnesses: [...new Set(sessions.map(s => s.harness))].sort(),
+    harnesses: [...new Set(active.map(s => s.harness))].sort(),
     forkedSessions: data.forkedSessions,
     bounds,
   };
@@ -254,18 +355,21 @@ export interface TimelineLane {
   s: PreparedSession;
   /** Turns that started in the window, in time order: what the counts count. */
   turns: TimelineTurn[];
-  /** Turns that started before the window and were still running in it: drawn, not counted. */
-  carried: TimelineTurn[];
+  /** Agent work inside the window, merged: what the lane draws. */
+  segments: Interval[];
   typed: number;
   automated: number;
-  /** Questions and permission prompts you answered in the window's turns. */
+  /** Questions and permission prompts you answered in the window (relayed ones count in the child that asked). */
   answered: number;
   /** Agent time inside the window. */
   agentMs: number;
+  /** Time waiting on you inside the window. */
+  waitMs: number;
   credits: number;
   tokens: number;
+  /** When its activity in the window started. */
   first: number;
-  /** End of the last turn's span. */
+  /** When its activity in the window ended. */
   last: number;
   subagents: number;
   /** The session's waits that overlap the window (whole spans; `clippedMs` gives the part inside). */
@@ -278,40 +382,42 @@ export interface TimelineLane {
   win: Interval;
 }
 
-/** The part of a wait inside the window. */
-export function clippedMs(w: TimelineWait, win: Interval): number {
-  return overlap(w.start, w.end, win[0], win[1]);
-}
-
-/** One lane per session with a turn that started in [start, end) or ran into it. The window is clipped to the range. */
+/** One lane per session with activity in [from, to) (a turn, agent work, waiting on you or an answer), clipped to the
+ *  range. Context records never get a lane. */
 export function buildLanes(p: PreparedTimeline, from: number, to: number): TimelineLane[] {
   const start = Math.max(from, p.bounds[0]);
   const end = Math.min(to, p.bounds[1]);
+  const win: Interval = [start, end];
   const lanes: TimelineLane[] = [];
   if (start >= end) return lanes;
   for (const s of p.sessions) {
+    if (s.ctx) continue;
     const turns = s.turns.filter(t => t.t >= start && t.t < end);
-    const carried = [...s.context, ...s.turns].filter(t => t.t < start && t.t + t.d > start);
-    if (turns.length === 0 && carried.length === 0) continue;
+    const segments = clipIntervals(s.work, win);
+    const waits = s.waits.filter(w => w.start < end && w.end > start);
+    const answers = s.answers.filter(a => a.at >= start && a.at < end);
+    if (turns.length === 0 && segments.length === 0 && waits.length === 0 && answers.length === 0) continue;
     const typed = turns.filter(t => t.k === 'you').length;
-    const drawn = [...carried, ...turns];
+    const waiting = clipIntervals(s.waiting, win);
+    const edges = [...turns.map(t => t.t), ...segments.flat(), ...waiting.flat(), ...answers.map(a => a.at)];
     lanes.push({
       s,
       turns,
-      carried,
+      segments,
       typed,
       automated: turns.length - typed,
-      answered: sum(turns, answersOf),
-      agentMs: sum(drawn, t => workMs(t, start, end)),
+      answered: answers.filter(a => a.kind !== 'relay').length,
+      agentMs: intervalsMs(segments),
+      waitMs: intervalsMs(waiting),
       credits: sum(turns, t => t.cr),
       tokens: sum(turns, t => t.tok),
-      first: turns[0]?.t ?? start,
-      last: Math.max(...drawn.map(t => t.t + t.d)),
+      first: Math.min(...edges),
+      last: Math.max(...edges),
       subagents: sum(turns, t => t.sub),
-      waits: s.waits.filter(w => w.start < end && w.end > start),
+      waits,
       away: s.away.filter(([, b]) => b >= start && b < end).length,
       visibleParent: -1,
-      win: [start, end],
+      win,
     });
   }
   return lanes;
@@ -346,7 +452,7 @@ export function filterLanes(
     && (!q || repoLabel(l.s).toLowerCase().includes(q) || l.s.model.toLowerCase().includes(q))
     && (!f.onlyFamilies || (p.familySize.get(l.s.root) ?? 1) > 1)
     && (!f.youTyped || l.typed > 0)
-    && (!f.waitedOnYou || l.waits.length > 0)
+    && (!f.waitedOnYou || l.waitMs > 0)
     && (!f.usedSubagents || l.subagents > 0)
     && (!f.hideOneTurn || l.turns.length > 1));
 }
@@ -359,7 +465,7 @@ export interface ViewFamily {
   /** Lanes in tree order with their depth under the family's top shown session. */
   ordered: { lane: TimelineLane; depth: number }[];
   first: number;
-  /** Sessions in the whole family over the range, shown or not. */
+  /** Sessions in the whole family, shown or not. */
   size: number;
   typed: number;
   automated: number;
@@ -367,52 +473,23 @@ export interface ViewFamily {
   agentMs: number;
   credits: number;
   tokens: number;
+  /** The family's longest unattended stretch inside the window, over all its members. */
   unattendedMs: number;
   /** Share of the shown sessions' credits (%). */
   share: number;
-  /** Color slot for families of 2+ sessions in the range; -1 for a lone session. */
+  /** Color slot for families of 2+ sessions; -1 for a lone session. */
   color: number;
 }
 
-/** The longest stretch the agents kept working after one of your inputs (a typed prompt or an answer): from the
- *  input, through the agent work the lanes' sessions started before your next input, for as long as some of that work
- *  is running (pauses under 2 min don't end it). Over all their turns in the range, clipped to `win`. */
-export function unattendedMs(lanes: readonly TimelineLane[], win: Interval = [-Infinity, Infinity]): number {
-  const turns = lanes.flatMap(l => [...l.s.context, ...l.s.turns]);
-  const inputs = [...new Set([
-    ...turns.filter(t => t.k === 'you').map(t => t.t),
-    ...turns.flatMap(t => (t.w ?? []).map(w => w.e)),
-  ])].sort((a, b) => a - b);
-  const segments = turns.flatMap(workSegments).sort((a, b) => a[0] - b[0]);
-  let best = 0;
-  let j = 0;
-  for (let i = 0; i < inputs.length; i++) {
-    const from = inputs[i];
-    const until = inputs[i + 1] ?? Infinity;
-    while (j < segments.length && segments[j][0] < from) j++;
-    let reach = from;
-    let chained = true;
-    for (; j < segments.length && segments[j][0] < until; j++) {
-      if (chained && segments[j][0] <= reach + WAIT_MIN_MS) reach = Math.max(reach, segments[j][1]);
-      else chained = false;
-    }
-    if (reach > from) best = Math.max(best, overlap(from, reach, win[0], win[1]));
-  }
-  return best;
+/** The family's longest unattended stretch inside the window. */
+export function familyUnattendedMs(p: PreparedTimeline, root: number, win: Interval): number {
+  return Math.max(0, ...(p.stretches.get(root) ?? []).map(([a, b]) => overlap(a, b, Math.max(win[0], p.bounds[0]), Math.min(win[1], p.bounds[1]))));
 }
 
-/** Most turns doing agent work at once inside the lanes' window, and when that first happened. */
+/** Most sessions doing agent work at once inside the lanes' window, and when that first happened. */
 export function peakParallel(lanes: readonly TimelineLane[]): { count: number; at: number | null } {
   const events: [number, number][] = [];
-  for (const l of lanes) {
-    for (const t of [...l.carried, ...l.turns]) {
-      for (const [a, b] of workSegments(t)) {
-        const from = Math.max(a, l.win[0]);
-        const to = Math.min(b, l.win[1]);
-        if (to > from) events.push([from, 1], [to, -1]);
-      }
-    }
-  }
+  for (const l of lanes) for (const [a, b] of l.segments) events.push([a, 1], [b, -1]);
   events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   let current = 0;
   let count = 0;
@@ -455,7 +532,7 @@ export function buildViewFamilies(lanes: TimelineLane[], p: PreparedTimeline): V
       list.push(l);
       kids.set(l.visibleParent, list);
     }
-    for (const list of kids.values()) list.sort((a, b) => a.first - b.first);
+    for (const list of kids.values()) list.sort((a, b) => a.first - b.first || a.s.index - b.s.index);
     const ordered: ViewFamily['ordered'] = [];
     const walk = (l: TimelineLane, depth: number): void => {
       ordered.push({ lane: l, depth });
@@ -475,12 +552,12 @@ export function buildViewFamilies(lanes: TimelineLane[], p: PreparedTimeline): V
       agentMs: sum(members, l => l.agentMs),
       credits,
       tokens: sum(members, l => l.tokens),
-      unattendedMs: unattendedMs(members, members[0].win),
+      unattendedMs: familyUnattendedMs(p, root, members[0].win),
       share: totalCredits > 0 ? 100 * credits / totalCredits : 0,
       color: -1,
     });
   }
-  families.sort((a, b) => a.first - b.first);
+  families.sort((a, b) => a.first - b.first || a.root - b.root);
   let slot = 0;
   for (const f of families) if (f.size > 1) f.color = slot++;
   return families;
@@ -501,6 +578,7 @@ export interface TimelineKpis {
   idleWaits: number;
   /** Time waiting on you inside the window. */
   waitMs: number;
+  /** Waits that started in the window and lasted 30 min or more. */
   longWaits: number;
   /** Gaps over 2 h before your next prompt: time away, not counted as waiting. */
   away: number;
@@ -511,10 +589,14 @@ export interface TimelineKpis {
   childLanes: number;
 }
 
-export function timelineKpis(lanes: readonly TimelineLane[], families: readonly ViewFamily[]): TimelineKpis {
+/** Waits of the lanes that started in their window. */
+function startedWaits(lanes: readonly TimelineLane[]): TimelineWait[] {
   const win = lanes[0]?.win ?? [-Infinity, Infinity];
-  const all = lanes.flatMap(l => l.waits);
-  const started = all.filter(w => w.start >= win[0] && w.start < win[1]);
+  return lanes.flatMap(l => l.waits).filter(w => w.start >= win[0] && w.start < win[1]);
+}
+
+export function timelineKpis(lanes: readonly TimelineLane[], families: readonly ViewFamily[]): TimelineKpis {
+  const started = startedWaits(lanes);
   const typed = sum(lanes, l => l.typed);
   const agentMs = sum(lanes, l => l.agentMs);
   const credits = sum(lanes, l => l.credits);
@@ -529,7 +611,7 @@ export function timelineKpis(lanes: readonly TimelineLane[], families: readonly 
     unattendedMs: Math.max(0, ...families.map(f => f.unattendedMs)),
     waits: started.length,
     idleWaits: started.filter(w => w.kind === 'idle').length,
-    waitMs: sum(all, w => clippedMs(w, win)),
+    waitMs: sum(lanes, l => l.waitMs),
     longWaits: started.filter(w => w.end - w.start >= LONG_WAIT_MS).length,
     away: sum(lanes, l => l.away),
     peak: peakParallel(lanes),
@@ -564,19 +646,21 @@ export function createNamer(p: PreparedTimeline, masked: boolean): Namer {
     name: s => {
       if (masked) return `${s.parent < 0 ? 'Session' : 'Child session'} ${s.index + 1}`;
       if (s.name) return s.name;
-      const first = s.turns[0]?.t ?? s.context[0]?.t;
+      const first = s.turns[0]?.t ?? s.all[0]?.t;
       const when = first ? new Date(first).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
-      return `Untitled ${s.harness} session${when ? ' · ' + when : ''}`;
+      return `Untitled ${s.harness} session ${s.index + 1}${when ? ' · ' + when : ''}`;
     },
     repo: s => (masked ? repoMask.get(s.repo) ?? 'Repository' : s.repo || NO_REPOSITORY),
     branch: s => (masked ? '' : s.branch),
   };
 }
 
-/** What the session was in its family: `coordinator · 3 children`, `child`, `grandchild` or `session`. */
+/** What the session was in its family: `coordinator · 3 children`, `child`, `grandchild`, `descendant · depth 3` or
+ *  `session`. */
 export function roleOf(s: PreparedSession): string {
   if (s.parent < 0) return s.children > 0 ? `coordinator · ${s.children} ${s.children === 1 ? 'child' : 'children'}` : 'session';
-  return s.depth === 1 ? 'child' : 'grandchild';
+  if (s.depth === 1) return 'child';
+  return s.depth === 2 ? 'grandchild' : `descendant · depth ${s.depth}`;
 }
 
 /* ---- formatting ---- */
@@ -622,36 +706,38 @@ function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${n === 1 ? one : many}`;
 }
 
+/** `typed 3 prompts into it and answered 2 questions or permission prompts in it`; empty without either. */
+function inputWords(typed: number, answered: number, into: string, inside: string): string {
+  return [typed > 0 ? `typed ${plural(typed, 'prompt', 'prompts')} into ${into}` : '',
+    answered > 0 ? `answered ${plural(answered, 'question or permission prompt', 'questions or permission prompts')} in ${inside}` : '']
+    .filter(Boolean).join(' and ');
+}
+
+const them = (n: number) => (n === 1 ? 'it' : 'them');
+
 /* ---- coaching callouts (H) ---- */
 
-/** The three findings of a day or week, as plain sentences. */
+/** The three findings of a day or week, as plain sentences: only what the logs show. */
 export function viewInsights(
   lanes: readonly TimelineLane[], families: readonly ViewFamily[], namer: Namer, period: 'day' | 'week', p?: PreparedTimeline,
 ): string[] {
   const when = period === 'week' ? 'this week' : 'on this day';
-  return [unattendedInsight(families, namer, when, p), creditsInsight(lanes, namer, when), waitsInsight(lanes)];
+  return [unattendedInsight(families, namer, when, p), creditsInsight(lanes, namer, when), waitsInsight(lanes, when)];
 }
 
 function unattendedInsight(families: readonly ViewFamily[], namer: Namer, when: string, p?: PreparedTimeline): string {
   const top = [...families].sort((a, b) => b.unattendedMs - a.unattendedMs)[0];
   if (!top || top.unattendedMs < UNATTENDED_CALLOUT_MS) {
-    return `No agent worked more than 5 min on its own after one of your prompts or answers ${when}.`;
+    return `No agent work kept running more than 5 min after one of your prompts or answers ${when} before it paused or you gave the next one.`;
   }
-  const span = formatDuration(top.unattendedMs);
-  const counts = `(${plural(top.typed, 'typed', 'typed')}, ${plural(top.automated, 'automated turn', 'automated turns')} shown)`;
-  const tail = ' Reuse the brief that made this work.';
   const rootLane = top.lanes.find(l => l.s.index === top.root);
-  if (rootLane && top.lanes.length > 1) {
-    return `Your coordinator “${namer.name(rootLane.s)}” and ${plural(top.lanes.length - 1, 'session', 'sessions')} of its family kept working ${span} after one of your prompts or answers, with no further input into the session doing that work ${counts}.${tail}`;
-  }
-  if (rootLane) {
-    return `Your session “${namer.name(rootLane.s)}” kept working ${span} after one of your prompts or answers, with no further input from you ${counts}.${tail}`;
-  }
-  const coordinator = p ? `the coordinator “${namer.name(p.sessions[top.root])}”` : 'their coordinator';
-  const who = top.lanes.length === 1
-    ? `The child session “${namer.name(top.lanes[0].s)}” of ${coordinator}`
-    : `${plural(top.lanes.length, 'session', 'sessions')} started by ${coordinator}`;
-  return `${who} (not shown here) kept working ${span} after one of your prompts or answers, with no further input into the session doing that work ${counts}.${tail}`;
+  const shown = `${formatCount(top.lanes.length)} of ${plural(top.size, 'session', 'sessions')} shown`;
+  let who: string;
+  if (top.size === 1 && rootLane) who = `your session “${namer.name(rootLane.s)}”`;
+  else if (rootLane) who = `the family of your coordinator “${namer.name(rootLane.s)}” (${shown})`;
+  else if (p) who = `the family of “${namer.name(p.sessions[top.root])}”, whose coordinator isn’t shown here (${shown})`;
+  else who = `a family whose coordinator isn’t shown here (${shown})`;
+  return `The longest unattended stretch ${when} was ${formatDuration(top.unattendedMs)}, in ${who}: agent work kept running after one of your prompts or answers, with no pause over 2 min and no further prompt or answer from you anywhere in the family.`;
 }
 
 function creditsInsight(lanes: readonly TimelineLane[], namer: Namer, when: string): string {
@@ -659,35 +745,33 @@ function creditsInsight(lanes: readonly TimelineLane[], namer: Namer, when: stri
   const children = lanes.filter(l => l.s.parent >= 0);
   if (credits <= 0) return `No AI credits were logged ${when}. Only Copilot logs credits; other harnesses show time and turns.`;
   if (children.length === 0) {
-    return `None of the ${plural(lanes.length, 'session', 'sessions')} shown was started by another session, so no credits went to child sessions.`;
+    return `None of the ${plural(lanes.length, 'session', 'sessions')} shown has a linked parent session, so none of the credits went to child sessions.`;
   }
-  const share = 100 * sum(children, l => l.credits) / credits;
+  const childCredits = sum(children, l => l.credits);
+  if (childCredits <= 0) return `The ${plural(children.length, 'child session', 'child sessions')} shown logged no AI credits ${when}.`;
   const big = [...children].sort((a, b) => b.credits - a.credits)[0];
-  const input = [big.typed > 0 ? `typed ${plural(big.typed, 'prompt', 'prompts')} into it` : '',
-    big.answered > 0 ? `answered ${plural(big.answered, 'question or permission prompt', 'questions or permission prompts')} in it` : '']
-    .filter(Boolean).join(' and ');
-  return `Child sessions used ${share.toFixed(1)}% of the credits shown. The child “${namer.name(big.s)}” alone used ${Math.round(100 * big.credits / credits)}%`
-    + (input ? `, and you ${input}: open it to see why it needed you.` : ', with no prompt or answer from you.');
+  const input = inputWords(big.typed, big.answered, 'it', 'it');
+  return `Child sessions used ${(100 * childCredits / credits).toFixed(1)}% of the credits shown. The child “${namer.name(big.s)}” used ${Math.round(100 * big.credits / credits)}%`
+    + (input ? `; you ${input} ${when}.` : `; no prompt or answer from you was recorded in it ${when}.`);
 }
 
-function waitsInsight(lanes: readonly TimelineLane[]): string {
-  const win = lanes[0]?.win ?? [-Infinity, Infinity];
-  const all = lanes.flatMap(l => l.waits);
-  const started = all.filter(w => w.start >= win[0] && w.start < win[1]);
+function waitsInsight(lanes: readonly TimelineLane[], when: string): string {
+  const started = startedWaits(lanes);
+  const total = sum(lanes, l => l.waitMs);
   const away = sum(lanes, l => l.away);
-  if (started.length === 0 && all.length === 0) {
-    return away > 0
-      ? `No agent waited 2–120 min for your next prompt or on a question; ${plural(away, 'gap was', 'gaps were')} longer than 2 h, counted as time away rather than waiting.`
-      : 'No agent waited on you for more than 2 min, and none stopped for a question or a permission prompt.';
+  if (total <= 0) {
+    const none = `No wait on you was recorded ${when}: no gap of 2–120 min before your next prompt, and no question or permission prompt you answered.`;
+    return away > 0 ? `${none} ${plural(away, 'longer gap', 'longer gaps')} before your next prompt ${away === 1 ? 'counts' : 'count'} as time away, not waiting.` : none;
   }
+  if (started.length === 0) return `Only waits that started earlier ran into this period: ${formatDuration(total)} of waiting on you.`;
   const idle = started.filter(w => w.kind === 'idle').length;
   const asked = started.length - idle;
   const long = started.filter(w => w.end - w.start >= LONG_WAIT_MS).length;
-  const parts = [idle > 0 ? `${plural(idle, 'time', 'times')} after finishing a turn` : '',
-    asked > 0 ? `${plural(asked, 'time', 'times')} on a question or permission prompt` : ''].filter(Boolean).join(' and ');
-  return `Agents waited on you ${parts || 'from an earlier day'}, ${formatDuration(sum(all, w => clippedMs(w, win)))} in total`
+  const parts = [idle > 0 ? `${plural(idle, 'time', 'times')} for your next prompt after their work` : '',
+    asked > 0 ? `${plural(asked, 'time', 'times')} on a question or permission prompt you answered` : ''].filter(Boolean).join(' and ');
+  return `Agents waited on you ${parts} ${when}, ${formatDuration(total)} in total`
     + (long > 0
-      ? `; ${plural(long, 'wait was', 'waits were')} longer than 30 min. Answer from the session list, or let autopilot carry on with routine steps.`
+      ? `; ${plural(long, 'wait', 'waits')} lasted 30 min or more. Answering from the session list, or letting autopilot carry on with routine steps, could shorten such waits.`
       : '.');
 }
 
@@ -695,18 +779,19 @@ function waitsInsight(lanes: readonly TimelineLane[]): string {
 
 export type FamilyVerdict = 'alone' | 'needed';
 
+/** What the logs show about each family's children, and one habit to consider. Observations, not causes. */
 export const VERDICTS: Record<FamilyVerdict | 'wide', { label: string; habit: string }> = {
   alone: {
-    label: 'Worked alone',
-    habit: 'Reuse this brief: copy the coordinator’s opening prompt into a prompt file or skill, so the next delegation starts the same way.',
+    label: 'No input in children',
+    habit: 'If this delegation went the way you wanted, its opening prompt could become a prompt file or skill, so the next one starts the same way.',
   },
   needed: {
-    label: 'Needed you',
-    habit: 'Open the child sessions you stepped into (marked ✋) and note what was missing. Put that context, files or acceptance criteria into the coordinator’s brief next time.',
+    label: 'You stepped in',
+    habit: 'Open the child sessions marked ✋ to see what you typed or answered there. If the coordinator could have passed that on, you might add it to its brief next time.',
   },
   wide: {
     label: 'Wide fan-out',
-    habit: 'Check whether the child sessions overlap. Give each one a narrow scope and the cheapest model that works.',
+    habit: 'You could check whether the child sessions overlap, and whether each one needs its own scope and model.',
   },
 };
 
@@ -714,6 +799,8 @@ export interface FamilyNode {
   s: PreparedSession;
   /** Depth below the coordinator. */
   depth: number;
+  /** A context record: no activity in range, or hidden by the sidebar filters. Not counted. */
+  ctx: boolean;
   typed: number;
   automated: number;
   /** Questions and permission prompts you answered in it. */
@@ -729,8 +816,9 @@ export interface FamilyNode {
 export interface FamilySummary {
   root: number;
   s: PreparedSession;
-  /** Every session of the family in tree order, the coordinator first. */
+  /** Every session of the family in tree order, the coordinator first; context records included (`ctx`). */
   nodes: FamilyNode[];
+  /** Counts below are of the sessions with activity in range. */
   sessions: number;
   children: number;
   depth: number;
@@ -739,11 +827,13 @@ export interface FamilySummary {
   harnesses: string[];
   typed: number;
   coordinatorTyped: number;
+  /** The coordinator has activity in range. */
+  coordinatorActive: boolean;
   /** Prompts you typed into child sessions. */
   childTyped: number;
   /** Questions and permission prompts you answered in child sessions. */
   childAnswered: number;
-  /** Child sessions you typed into or answered in: the ones that needed you. */
+  /** Child sessions you typed into or answered in. */
   steppedInto: number;
   automated: number;
   agentMs: number;
@@ -794,29 +884,27 @@ export interface FamiliesOverview {
   totals: FamiliesTotals;
 }
 
-/** Agent time of a session inside the range: its turns, and the part of earlier turns that ran into the range. */
-function sessionAgentMs(s: PreparedSession, bounds: Interval): number {
-  return sum([...s.context, ...s.turns], t => workMs(t, bounds[0], bounds[1]));
-}
-
 function familyNode(s: PreparedSession, depth: number, bounds: Interval): FamilyNode {
   const typed = s.turns.filter(t => t.k === 'you').length;
+  const work = clipIntervals(s.work, bounds);
+  const activity = [...s.turns.map(t => t.t), ...work.flat(), ...clipIntervals(s.waiting, bounds).flat()];
   return {
     s,
     depth,
+    ctx: Boolean(s.ctx),
     typed,
     automated: s.turns.length - typed,
-    answered: sum(s.turns, answersOf),
-    agentMs: sessionAgentMs(s, bounds),
+    answered: s.answers.filter(a => a.kind !== 'relay' && a.at >= bounds[0] && a.at < bounds[1]).length,
+    agentMs: intervalsMs(work),
     credits: sum(s.turns, t => t.cr),
     tokens: sum(s.turns, t => t.tok),
-    first: s.turns[0]?.t ?? 0,
-    last: Math.max(0, ...s.turns.map(t => t.t + t.d)),
+    first: activity.length ? Math.min(...activity) : 0,
+    last: activity.length ? Math.max(...activity) : 0,
     subagents: sum(s.turns, t => t.sub),
   };
 }
 
-/** A child session needed you: you typed into it, or answered one of its questions or permission prompts. */
+/** A child session you stepped into: you typed into it, or answered one of its questions or permission prompts. */
 export function neededYou(n: Pick<FamilyNode, 'typed' | 'answered'>): boolean {
   return n.typed > 0 || n.answered > 0;
 }
@@ -838,7 +926,7 @@ function familyNodes(root: PreparedSession, kidsOf: Map<number, PreparedSession[
   const nodes: FamilyNode[] = [];
   const walk = (s: PreparedSession, depth: number): void => {
     nodes.push(familyNode(s, depth, bounds));
-    const kids = [...(kidsOf.get(s.index) ?? [])].sort((a, b) => (a.turns[0]?.t ?? 0) - (b.turns[0]?.t ?? 0));
+    const kids = [...(kidsOf.get(s.index) ?? [])].sort((a, b) => (a.all[0]?.t ?? 0) - (b.all[0]?.t ?? 0) || a.index - b.index);
     for (const kid of kids) walk(kid, depth + 1);
   };
   walk(root, 0);
@@ -854,48 +942,54 @@ function busiestDayOf(nodes: readonly FamilyNode[]): string {
 function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSession[]>, p: PreparedTimeline): FamilySummary {
   const totalCredits = p.totalCredits;
   const nodes = familyNodes(root, kidsOf, p.bounds);
-  const kids = nodes.filter(n => n.depth > 0);
-  const credits = sum(nodes, n => n.credits);
+  const counted = nodes.filter(n => !n.ctx);
+  const kids = counted.filter(n => n.depth > 0);
+  const credits = sum(counted, n => n.credits);
   const childCredits = sum(kids, n => n.credits);
   const steppedInto = kids.filter(neededYou).length;
-  const firsts = nodes.map(n => n.first).filter(t => t > 0);
-  const lasts = nodes.map(n => n.s.turns[n.s.turns.length - 1]?.t ?? 0).filter(t => t > 0);
+  const firsts = counted.map(n => n.first).filter(t => t > 0);
+  const lasts = counted.map(n => n.last).filter(t => t > 0);
+  const activeKids = (n: FamilyNode) => (kidsOf.get(n.s.index) ?? []).filter(k => !k.ctx).length;
+  const coordinator = nodes[0];
   return {
     root: root.index,
     s: root,
     nodes,
-    sessions: nodes.length,
+    sessions: counted.length,
     children: kids.length,
-    depth: Math.max(...nodes.map(n => n.depth)),
-    fanOut: Math.max(0, ...nodes.map(n => kidsOf.get(n.s.index)?.length ?? 0)),
-    repos: new Set(nodes.map(n => n.s.repo)).size,
-    harnesses: [...new Set(nodes.map(n => n.s.harness))],
-    typed: sum(nodes, n => n.typed),
-    coordinatorTyped: nodes[0].typed,
+    depth: Math.max(0, ...counted.map(n => n.depth)),
+    fanOut: Math.max(0, ...nodes.map(activeKids)),
+    repos: new Set(counted.map(n => n.s.repo)).size,
+    harnesses: [...new Set(counted.map(n => n.s.harness))],
+    typed: sum(counted, n => n.typed),
+    coordinatorTyped: coordinator.ctx ? 0 : coordinator.typed,
+    coordinatorActive: !coordinator.ctx,
     childTyped: sum(kids, n => n.typed),
     childAnswered: sum(kids, n => n.answered),
     steppedInto,
-    automated: sum(nodes, n => n.automated),
-    agentMs: sum(nodes, n => n.agentMs),
+    automated: sum(counted, n => n.automated),
+    agentMs: sum(counted, n => n.agentMs),
     credits,
     childCredits,
-    tokens: sum(nodes, n => n.tokens),
+    tokens: sum(counted, n => n.tokens),
     creditShare: totalCredits > 0 ? 100 * credits / totalCredits : 0,
     childShare: credits > 0 ? 100 * childCredits / credits : 0,
     perChild: kids.length > 0 ? childCredits / kids.length : 0,
     verdict: steppedInto > 0 ? 'needed' : 'alone',
     wide: kids.length >= WIDE_FAN_OUT,
     from: firsts.length > 0 ? toDateStr(Math.min(...firsts)) : '',
-    to: lasts.length > 0 ? toDateStr(Math.max(...lasts)) : '',
-    busiest: busiestDayOf(nodes),
+    // An activity ending exactly at midnight belongs to the day before.
+    to: lasts.length > 0 ? toDateStr(Math.max(...lasts) - 1) : '',
+    busiest: busiestDayOf(counted),
     rank: 0,
   };
 }
 
 function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): FamiliesTotals {
   const totalCredits = p.totalCredits;
-  const totalTokens = sum(p.sessions, s => sum(s.turns, t => t.tok));
-  const totalAgent = sum(p.sessions, s => sessionAgentMs(s, p.bounds));
+  const active = p.sessions.filter(s => !s.ctx);
+  const totalTokens = sum(active, s => sum(s.turns, t => t.tok));
+  const totalAgent = sum(active, s => intervalsMs(clipIntervals(s.work, p.bounds)));
   const share = (part: number, whole: number) => (whole > 0 ? 100 * part / whole : 0);
   const group = (list: FamilySummary[]) => ({
     families: list.length,
@@ -904,7 +998,7 @@ function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): Familie
   });
   const wide = families.filter(f => f.wide);
   return {
-    sessions: p.sessions.length,
+    sessions: active.length,
     families: families.length,
     sessionsInFamilies: sum(families, f => f.sessions),
     children: sum(families, f => f.children),
@@ -928,58 +1022,56 @@ function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): Familie
   };
 }
 
-/** Every family of two or more sessions in range, ranked by credits, and what they add up to. */
+/** Every family of two or more sessions with activity in range, ranked by credits, and what they add up to. Members
+ *  without activity in range (context records) give the family its structure; they aren't counted. */
 export function buildFamilies(p: PreparedTimeline): FamiliesOverview {
   const members = groupBy(p.sessions, s => s.root);
   const kidsOf = groupBy(p.sessions, s => (s.parent >= 0 ? s.parent : null));
   const families = [...members.entries()]
-    .filter(([, list]) => list.length > 1)
+    .filter(([, list]) => list.length > 1 && list.some(s => !s.ctx))
     .map(([root]) => summarizeFamily(p.sessions[root], kidsOf, p))
-    .sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs || b.sessions - a.sessions);
+    .sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs || b.sessions - a.sessions || a.root - b.root);
   for (const [i, f] of families.entries()) f.rank = i + 1;
   return { families, totals: familiesTotals(p, families) };
 }
 
-/** What you put into child sessions: `3 prompts` and/or `2 answers`. */
-function childInput(typed: number, answered: number): string {
-  return [typed > 0 ? `typed ${plural(typed, 'prompt', 'prompts')} into` : '',
-    answered > 0 ? `answered ${plural(answered, 'question or permission prompt', 'questions or permission prompts')} in` : '']
-    .filter(Boolean).join(' and ');
-}
-
-/** The verdict in words, for the selected family. */
+/** What the logs show about the selected family, in words. */
 export function verdictText(f: FamilySummary): string {
-  const coordinator = f.coordinatorTyped > 0
-    ? `You typed ${plural(f.coordinatorTyped, 'prompt', 'prompts')}, all in the coordinator.`
-    : 'You typed no prompt in the coordinator either.';
+  const coordinator = !f.coordinatorActive
+    ? 'The coordinator has no activity in this range.'
+    : f.coordinatorTyped > 0
+      ? `You typed ${plural(f.coordinatorTyped, 'prompt', 'prompts')} into the coordinator.`
+      : 'You typed no prompt into the coordinator in this range.';
+  const children = f.children === 1 ? 'the child session' : `the ${formatCount(f.children)} child sessions`;
   const base = f.verdict === 'alone'
-    ? `${f.children === 1 ? 'The child session' : `All ${formatCount(f.children)} child sessions`} needed no prompt or answer from you. ${coordinator}`
-    : `You ${childInput(f.childTyped, f.childAnswered)} ${formatCount(f.steppedInto)} of ${formatCount(f.children)} child sessions (marked ✋): they needed more than the coordinator’s brief.`;
+    ? `No prompt or answer from you was recorded in ${f.children === 0 ? 'any child session' : children} in this range. ${coordinator}`
+    : `${formatCount(f.steppedInto)} of ${plural(f.children, 'child session', 'child sessions')} (marked ✋) got input from you: you ${inputWords(f.childTyped, f.childAnswered, them(f.steppedInto), them(f.steppedInto))}. ${coordinator}`;
   if (!f.wide) return base;
-  return `${base} It fanned out to ${formatCount(f.children)} children` + (f.childCredits > 0 ? `, ${formatCredits(f.perChild)} credits each on average.` : '.');
+  return `${base} It started ${formatCount(f.children)} children` + (f.childCredits > 0 ? `, ${formatCredits(f.perChild)} credits each on average.` : '.');
 }
 
-/** What the families add up to, as plain sentences. */
+/** What the families add up to, as plain sentences: only what the logs show. */
 export function familiesInsights(t: FamiliesTotals): string[] {
   if (t.families === 0) return [];
   const tips: string[] = [];
   const families = (n: number) => plural(n, 'family', 'families');
+  const noCredits = 'No AI credits were logged: only Copilot logs credits.';
   if (t.needed.families === 0) {
-    tips.push(`${t.families === 1 ? 'The family' : `All ${families(t.families)}`} worked alone: no child session needed a prompt or answer from you.`
-      + (t.totalCredits > 0 ? ` ${t.families === 1 ? 'It' : 'They'} used ${t.alone.creditShare.toFixed(0)}% of all credits.` : ' No AI credits were logged: only Copilot logs credits.'));
+    tips.push(`No prompt or answer from you was recorded in a child session of ${t.families === 1 ? 'the family' : `any of the ${families(t.families)}`}.`
+      + (t.totalCredits > 0 ? ` ${t.families === 1 ? 'It' : 'They'} used ${t.alone.creditShare.toFixed(0)}% of all credits.` : ` ${noCredits}`));
   } else if (t.totalCredits <= 0) {
-    tips.push(`${t.needed.families === 1 ? '1 family needed' : `${formatCount(t.needed.families)} families needed`} you in a child session and ${formatCount(t.alone.families)} worked alone. No AI credits were logged: only Copilot logs credits.`);
-  } else if (t.alone.families === 0) {
-    tips.push(`Every family needed you in at least one child session (${families(t.needed.families)}, ${t.needed.creditShare.toFixed(0)}% of all credits). Clearer briefs would let them run alone.`);
+    tips.push(`You stepped into a child session in ${families(t.needed.families)}; ${formatCount(t.alone.families)} had no input from you in their children. ${noCredits}`);
   } else {
-    const compare = `Families where you stepped into a child used ${t.needed.creditShare.toFixed(0)}% of all credits (${families(t.needed.families)}, ${formatCredits(t.needed.avgCredits)} credits on average), against ${t.alone.creditShare.toFixed(0)}% for the ${formatCount(t.alone.families)} that worked alone (${formatCredits(t.alone.avgCredits)} on average).`;
-    tips.push(t.needed.creditShare > t.alone.creditShare ? `${compare} Clearer briefs are the biggest lever.` : compare);
+    const needed = `Families where you stepped into a child used ${t.needed.creditShare.toFixed(0)}% of all credits (${families(t.needed.families)}, ${formatCredits(t.needed.avgCredits)} credits on average)`;
+    tips.push(t.alone.families === 0
+      ? `${needed}; every family had input from you in at least one child.`
+      : `${needed}; the ${formatCount(t.alone.families)} with no input in ${t.alone.families === 1 ? 'its' : 'their'} children used ${t.alone.creditShare.toFixed(0)}% (${formatCredits(t.alone.avgCredits)} on average).`);
   }
   tips.push(t.childrenNeedingYou > 0
-    ? `${formatCount(t.childrenNeedingYou)} of ${formatCount(t.children)} child sessions needed you: you ${childInput(t.childTyped, t.childAnswered)} them. Show Needed you and open the ✋ children to see what their brief was missing.`
-    : t.children === 1 ? 'The child session needed no prompt or answer from you.' : `None of the ${formatCount(t.children)} child sessions needed a prompt or answer from you.`);
+    ? `${formatCount(t.childrenNeedingYou)} of ${plural(t.children, 'child session', 'child sessions')} got input from you: you ${inputWords(t.childTyped, t.childAnswered, them(t.childrenNeedingYou), them(t.childrenNeedingYou))}. Show “${VERDICTS.needed.label}” and open the ✋ children to see where.`
+    : t.children === 1 ? 'No prompt or answer from you was recorded in the child session.' : `No prompt or answer from you was recorded in any of the ${formatCount(t.children)} child sessions.`);
   tips.push(t.wide.families > 0
-    ? `${plural(t.wide.families, 'wide fan-out', 'wide fan-outs')} (${WIDE_FAN_OUT}+ children) used ${t.wide.creditShare.toFixed(0)}% of all credits. Check them for children doing overlapping work.`
+    ? `${plural(t.wide.families, 'family', 'families')} started ${WIDE_FAN_OUT} or more children (wide fan-out) and used ${t.wide.creditShare.toFixed(0)}% of all credits.`
     : `No family started ${WIDE_FAN_OUT} or more children.`);
   return tips;
 }

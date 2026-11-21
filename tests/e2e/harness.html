@@ -616,7 +616,7 @@ function mockTimelineData() {
       s('tl-perf', 'Perf probe', [turn(at(3, 12), 25, 'agent', { cr: 7 })], { parent: 0, via: 'relay' }),
       s('tl-flaky', 'Investigate flaky test', [turn(at(3, 14), 5, 'you', { tok: 5000 }), turn(at(3, 14, 40), 3, 'you')], { harness: 'Claude Code', repo: 'my-api', model: 'claude-sonnet-4.6' }),
       s('tl-early', '', [turn(at(2, 16), 10, 'you', { cr: 3 })], { harness: 'Copilot CLI', repo: 'my-api' }),
-      s('tl-notes', 'Release notes', [turn(at(2, 15), 10, 'you', { cr: 5, w: [{ s: at(2, 15, 2), e: at(2, 15, 6), k: 'question' }] })]),
+      s('tl-notes', 'Release notes', [turn(at(2, 15), 10, 'you', { cr: 5, w: [{ s: at(2, 15, 2), e: at(2, 15, 6), k: 'question', a: true }] })]),
       s('tl-log', 'Changelog', [turn(at(2, 15, 5), 10, 'agent', { cr: 2 })], { parent: 7, via: 'create' }),
     ],
   };

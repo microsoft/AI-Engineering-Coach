@@ -8,7 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { harnessLabel, lastSegment, PERSONAL_REPOSITORY, scrubBranch, scrubLabel, scrubRepository } from './session-labels';
-import { readCliWorkspaceMeta, yamlScalar } from './session-workspace-meta';
+import { isPromptText, readCliClient, readCliWorkspaceMeta, yamlScalar } from './session-workspace-meta';
 
 const ctx = { home: 'C:\\Users\\Dev', names: ['Dev', 'octo-dev', 'me'], handles: ['octo-dev'] };
 
@@ -20,6 +20,9 @@ describe('session labels', () => {
     expect(scrubLabel('Notes in ~/x', { home: '/home/dev', names: [] })).toBe('Notes in ~/x');
     expect(scrubLabel('Read /home/dev/notes.md', { home: '/home/dev', names: [] })).toBe('Read ~/notes.md');
     expect(scrubLabel('x'.repeat(120), ctx)).toHaveLength(90);
+    // A path with spaces goes whole: quoted, or as long as the following words still carry a separator.
+    expect(scrubLabel('See "C:\\Program Files\\My App\\log.txt" now', ctx)).toBe('See [path] now');
+    expect(scrubLabel('See C:\\My Docs\\notes.md now', ctx)).toBe('See [path] now');
   });
 
   it('drops only a signed-in handle as a branch prefix', () => {
@@ -29,6 +32,8 @@ describe('session labels', () => {
     // The OS account name is no handle: it goes as a word, but a branch named after it keeps its topic.
     expect(scrubBranch('zed9-cache', { names: ['zed9'], handles: [] })).toBe('cache');
     expect(scrubBranch('release-zed9', ctx)).toBe('release-zed9');
+    // A signed-in handle is known exactly, so even a short one goes as the branch's first word.
+    expect(scrubBranch('ab/fix', { names: [], handles: ['ab'] })).toBe('fix');
   });
 
   it('never removes generic account names', () => {
@@ -67,6 +72,38 @@ describe('Copilot workspace.yaml', () => {
     expect(yamlScalar('name: |\n  First line\n  second line\nbranch: x', 'name')).toBe('First line\nsecond line');
     expect(yamlScalar('name: >-\n  Folded\n  title\n\nbranch: x', 'name')).toBe('Folded title');
     expect(yamlScalar('summary: x\nname: ~', 'name')).toBe('');
+    // Quoted, `~` and `null` are text; a quoted value can go on over several lines.
+    expect([yamlScalar("name: 'null'", 'name'), yamlScalar('name: "~"', 'name')]).toEqual(['null', '~']);
+    expect(yamlScalar("name: 'First\n  second'\nbranch: x", 'name')).toBe('First second');
     expect(readCliWorkspaceMeta(path.join(dir, 'missing'), ctx)).toEqual({});
+  });
+});
+
+describe('automatic Copilot titles', () => {
+  let dir = '';
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+  const write = (lines: string[]) => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-ws-'));
+    fs.writeFileSync(path.join(dir, 'workspace.yaml'), lines.join('\n'));
+    return dir;
+  };
+
+  it('never shows a title you didn’t give: an automatic one often repeats your first prompt', () => {
+    expect(readCliWorkspaceMeta(write(['name: Fix the flaky cache test', 'user_named: false']), ctx).displayName).toBeUndefined();
+    expect(readCliWorkspaceMeta(write(['name: Fix the flaky cache test', 'user_named: true']), ctx).displayName).toBe('Fix the flaky cache test');
+    // Older files have no user_named: a title that is the first prompt, or its start, is that prompt.
+    expect(readCliWorkspaceMeta(write(['name: Please fix the flaky cache test…']), ctx, 'please fix the flaky cache test in ci and push').displayName).toBeUndefined();
+    expect(readCliWorkspaceMeta(write(['name: Cache work']), ctx, 'please fix the flaky cache test').displayName).toBe('Cache work');
+  });
+
+  it('matches a title to the prompt it was made from, ignoring case, spacing and a trailing ellipsis', () => {
+    expect(isPromptText('Fix  the BUILD...', 'fix the build')).toBe(true);
+    expect(isPromptText('Fix the', 'Fix the build now')).toBe(false);
+    expect(isPromptText('Refactor', '')).toBe(false);
+  });
+
+  it('reads which client started the session', () => {
+    expect(readCliClient(write(['name: x', 'client_name: github/cli']))).toBe('github/cli');
+    expect(readCliClient(path.join(dir, 'missing'))).toBe('');
   });
 });

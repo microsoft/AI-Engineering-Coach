@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { resolveForkLinks, resolveParentLinks, type ForkableSession, type LinkableSession } from './timeline-links';
+import { resolveParentLinks, type LinkableSession } from './timeline-links';
 
 const s = (sessionId: string, creationDate: number, extra: Partial<LinkableSession> = {}): LinkableSession =>
   ({ sessionId, creationDate, ...extra });
@@ -21,6 +21,16 @@ describe('resolveParentLinks', () => {
       child: { parent: 'coord', via: 'create' },
       relayed: { parent: 'child', via: 'relay' },
     });
+  });
+
+  it('does not take a session that open_pr_session reopened for one it created', () => {
+    const minute = 60_000;
+    const links = resolveParentLinks([
+      s('old', 0),
+      s('coord', 10 * minute, { childSessionIds: ['old', 'new'], childSessionCreatedAt: { old: 20 * minute, new: 30 * minute } }),
+      s('new', 30 * minute + 5_000),
+    ]);
+    expect(Object.fromEntries(links)).toEqual({ new: { parent: 'coord', via: 'create' } });
   });
 
   it('takes the parent a harness logged before a relay, and the earliest creator when two report the same child', () => {
@@ -42,33 +52,5 @@ describe('resolveParentLinks', () => {
     expect(Object.fromEntries(links)).toEqual({ kid: { parent: 'coord', via: 'create' } });
     const loop = resolveParentLinks([s('a', 1, { childSessionIds: ['b'] }), s('b', 2, { childSessionIds: ['a'] })]);
     expect([...loop.keys()]).toEqual(['b']);
-  });
-});
-
-describe('resolveForkLinks', () => {
-  /** `ids` are the session's prompts; a `*` marks one it copied from its source. */
-  const fork = (sessionId: string, ids: string[], extra: Partial<ForkableSession> = {}): ForkableSession =>
-    ({ sessionId, requests: ids.map(id => (id.startsWith('*') ? { userEventId: id.slice(1), copiedHistory: true } : { userEventId: id })), ...extra });
-
-  it('links a Codex fork by its logged source, and a Claude Code fork by the prompts it copied', () => {
-    const links = resolveForkLinks([
-      fork('src', ['m1', 'm2', 'm3']),
-      fork('claude-fork', ['*m1', '*m2', 'm4']),
-      // A fork of the fork copies m4 from the fork in between: it counts there, not twice.
-      fork('fork-of-fork', ['*m1', '*m2', '*m4', 'm5']),
-      fork('codex-fork', ['c9'], { forkedFromId: 'SRC' }),
-      // Shares a prompt ID but copied nothing: not a fork.
-      fork('lookalike', ['m1']),
-    ]);
-    expect(Object.fromEntries([...links].map(([id, l]) => [id, [l.source, [...l.copied]]]))).toEqual({
-      'claude-fork': ['src', ['m1', 'm2']],
-      // A fork of a fork goes to the session the copied history started in.
-      'fork-of-fork': ['src', ['m1', 'm2', 'm4']],
-      'codex-fork': ['src', []],
-    });
-  });
-
-  it('links nothing for a session that copies history from no known session', () => {
-    expect(resolveForkLinks([fork('a', ['*x']), fork('b', ['y'], { forkedFromId: 'gone' })]).size).toBe(0);
   });
 });

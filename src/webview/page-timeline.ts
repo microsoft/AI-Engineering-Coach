@@ -11,8 +11,8 @@ import type { DateFilter, TimelineDataset, TimelineTurn, TurnSender } from '../c
 import {
   addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, dayStart, dayTicks, familiesInsights, filterLanes,
   formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, neededYou, NO_LANE_FILTERS,
-  prepareTimeline, roleOf, stepDate, timelineKpis, timelineWindow, verdictText, VERDICTS, viewInsights, weekStart, WIDE_FAN_OUT,
-  workMs, workSegments,
+  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
+  viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
   type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
   type TimelineLane, type TimelineView, type TimelineWait, type ViewFamily,
 } from '../core/timeline-model';
@@ -103,13 +103,18 @@ function applyNavHint(hint: string | undefined, p: PreparedTimeline): void {
   state.view = view === 'week' || view === 'families' ? view : 'day';
   const date = params.get('date');
   if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) state.date = date;
-  const session = p.sessions.find(x => x.id === params.get('session'));
+  const session = p.sessions.find(x => x.id === params.get('session') && !x.ctx);
   if (session) {
     state.focusId = session.id;
     if (!date) state.date = busiestDay(session);
   }
   const family = p.sessions.find(x => x.id === params.get('family'));
-  if (family) state.family = p.sessions[family.root].id;
+  if (family) {
+    state.family = p.sessions[family.root].id;
+    // A deep link to a family shows it, whatever was filtered before.
+    Object.assign(state, { verdict: 'all', familyMin: 2, familyQuery: '' });
+  }
+  if (session || family) state.filters = { ...NO_LANE_FILTERS };
 }
 
 function nearestDay(date: string, days: readonly string[]): string {
@@ -118,10 +123,22 @@ function nearestDay(date: string, days: readonly string[]): string {
   return [...days].reverse().find(d => d <= date) ?? days[0];
 }
 
+/** The day with most of the session's turns in range; without one, the first day of its work or waiting in range. */
 function busiestDay(s: PreparedSession): string {
   const counts = new Map<string, number>();
   for (const t of s.turns) counts.set(toDateStr(t.t), (counts.get(toDateStr(t.t)) ?? 0) + 1);
-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? state.date;
+  const bounds = loaded?.prepared.bounds ?? [-Infinity, Infinity];
+  const first = [...clipIntervals(s.work, bounds), ...clipIntervals(s.waiting, bounds)].map(([a]) => a).sort((a, b) => a - b)[0];
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
+    ?? (first !== undefined ? toDateStr(first) : state.date);
+}
+
+/** The session has a lane in the window: a turn, work, waiting or an answer in it. */
+function activeIn(s: PreparedSession, win: Interval): boolean {
+  if (s.ctx) return false;
+  const [a, b] = win;
+  return s.turns.some(t => t.t >= a && t.t < b) || clipIntervals(s.work, win).length > 0
+    || s.waits.some(w => w.start < b && w.end > a) || s.answers.some(x => x.at >= a && x.at < b);
 }
 
 function draw(): void {
@@ -138,6 +155,20 @@ function update(change: Partial<TimelineState>): void {
   draw();
 }
 
+/** Masking also clears both searches: what you typed is often a real repository or session name. */
+function setMasked(masked: boolean): void {
+  update(masked ? { masked, filters: { ...state.filters, query: '' }, familyQuery: '' } : { masked });
+}
+
+/** Activates a click-only row from the keyboard (Enter or Space). */
+function onActivate(go: () => void): (e: KeyboardEvent) => void {
+  return e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    go();
+  };
+}
+
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
@@ -151,7 +182,7 @@ function shortDate(date: string | undefined, year = false): string {
 
 function page(data: Loaded): VNode {
   const p = data.prepared;
-  if (p.sessions.length === 0) {
+  if (!p.sessions.some(s => !s.ctx)) {
     return html`<p class="muted tlx-empty">No sessions in this range. Pick a longer range, or another workspace or harness.</p>` as VNode;
   }
   const namer = createNamer(p, state.masked);
@@ -160,13 +191,15 @@ function page(data: Loaded): VNode {
     ${toolbar(p)}
     ${ctx ? filterBar(p, ctx) : null}
     <div class="tlx-view">${ctx ? timelineView(ctx) : familiesView(data, namer)}</div>
-    <p class="tlx-foot">Agent time runs from a prompt to the turn’s last assistant message, minus the time the turn waited for your answer
-      to a question or a permission prompt. Waiting on you counts the gaps from a finished turn to your next prompt (2–120 min) and the
-      questions and permission prompts you answered; permissions a policy decided aren’t counted.
+    <p class="tlx-foot">Agent time is the time from a prompt to the turn’s last logged agent activity, merged per session, minus the time
+      the turn was stopped on a question or a permission prompt. Waiting on you counts the gaps from the end of a session’s work to your next
+      prompt (2–120 min) and the questions and permission prompts you answered, once per session where they overlap; permissions a policy
+      decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
       Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
-      create_session, open_pr_session or open_issue_session call returned its ID, else the session that relayed its first message, or the
-      parent Codex and OpenCode log. Only counts, timings, model and harness names and the session names your harness logged are shown,
-      never prompt text. Use Mask names before sharing a screenshot.</p>` as VNode;
+      create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
+      session that relayed its first message. The Timeline shows counts, timings, model, harness and repository names and the session names
+      you gave (never prompt text, and never automatic titles, which repeat it). Mask names hides names, branches, repositories and search
+      text on this page only, not the sidebar.</p>` as VNode;
 }
 
 function segment<T extends string>(id: string, options: [T, string][], current: T, onPick: (v: T) => void, disabled = false): VNode {
@@ -207,8 +240,8 @@ function toolbar(p: PreparedTimeline): VNode {
       ${segment<Group>('tlxGroup', [['tree', 'Session tree'], ['flat', 'Flat']], state.group, v => update({ group: v }), families)}
       <span class=${'tlx-seg-l' + (families ? ' disabled' : '')}>Color</span>
       ${segment<Color>('tlxColor', [['family', 'Family'], ['harness', 'Harness']], state.color, v => update({ color: v }), families)}
-      <label class="tlx-mask" title="Hide session names, branches and repositories, for example before taking a screenshot">
-        <input type="checkbox" id="tlxMask" checked=${state.masked} onChange=${(e: Event) => update({ masked: (e.target as HTMLInputElement).checked })} />
+      <label class="tlx-mask" title="Hide session names, branches, repositories and search text on this page, for example before taking a screenshot">
+        <input type="checkbox" id="tlxMask" checked=${state.masked} onChange=${(e: Event) => setMasked((e.target as HTMLInputElement).checked)} />
         Mask names
       </label>
     </div>` as VNode;
@@ -273,7 +306,7 @@ function trackRange(lanes: TimelineLane[], view: 'day' | 'week', start: number, 
     d.setMinutes(0, 0, 0);
     return d.getTime();
   };
-  const lo = Math.min(...lanes.map(l => (l.carried.length ? start : l.first)));
+  const lo = Math.min(...lanes.map(l => l.first));
   const hi = Math.min(end, Math.max(...lanes.map(l => l.last)));
   let r0 = Math.max(start, hour(lo, -1) - 3.6e6);
   let r1 = Math.min(end, hour(hi, 1) + 3.6e6);
@@ -304,8 +337,11 @@ function viewContext(p: PreparedTimeline, namer: Namer): ViewContext {
     }
     state.focusId = null;
   }
-  if (lanes.length > 0 && !lanes.some(l => l.s.id === state.selected)) {
-    state.selected = [...lanes].sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs)[0].s.id;
+  // The selection stays on a row you can see: not filtered out, not inside a collapsed family.
+  const visible = state.group === 'flat' ? lanes
+    : lanes.filter(l => !(state.collapsed.has(rootId(l)) && (familyOf.get(l.s.index)?.lanes.length ?? 1) > 1));
+  if (!visible.some(l => l.s.id === state.selected)) {
+    state.selected = [...visible].sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs || a.s.index - b.s.index)[0]?.s.id ?? null;
   }
   return {
     p, namer, view, all: all.length, inWindow: new Set(all.map(l => l.s.index)), lanes, families, familyOf, ...trackRange(lanes, view, start, end),
@@ -331,18 +367,19 @@ function timelineView(ctx: ViewContext): VNode {
   const insights = viewInsights(lanes, families, ctx.namer, view, p);
   const hours = (ms: number) => `${(ms / 3.6e6).toFixed(1)} h`;
   const asked = kpis.waits - kpis.idleWaits;
+  const typedShare = kpis.turns ? `${Math.round(100 * kpis.typed / kpis.turns)}% from you · ${formatCount(kpis.turns - kpis.typed)} automated` : 'no turn started here';
   return html`
     <div class="ctx-cache-tips tlx-insights" id="tlxInsights" role="note">
       <div class="ctx-cache-tips-title">What happened ${view === 'week' ? 'this week' : `on ${state.date}`}</div>
       ${insights.map(t => html`<div class="ctx-cache-tip">• ${t}</div>`)}
     </div>
     <div class="ctx-comp-kpis tlx-kpis" id="tlxKpis">
-      ${kpiCard(hours(kpis.agentMs), 'Agent time', `sum over ${formatCount(kpis.sessions)} ${kpis.sessions === 1 ? 'session' : 'sessions'} · waits left out`)}
-      ${kpiCard(`${formatCount(kpis.typed)} of ${formatCount(kpis.turns)}`, 'Turns you typed', `${kpis.turns ? Math.round(100 * kpis.typed / kpis.turns) : 0}% · the rest automated`)}
+      ${kpiCard(hours(kpis.agentMs), 'Agent time', `over ${formatCount(kpis.sessions)} ${kpis.sessions === 1 ? 'session' : 'sessions'} · questions and permissions left out`)}
+      ${kpiCard(kpis.turns ? `${formatCount(kpis.typed)} of ${formatCount(kpis.turns)}` : '—', 'Turns you typed', typedShare)}
       ${kpiCard(kpis.agentMsPerPrompt == null ? '—' : `${Math.round(kpis.agentMsPerPrompt / 60_000)} min`, 'Agent time per prompt', `${hours(kpis.agentMs)} ÷ ${formatCount(kpis.typed)} typed ${kpis.typed === 1 ? 'prompt' : 'prompts'}`)}
-      ${kpiCard(formatDuration(kpis.unattendedMs), 'Longest unattended', 'one family, after one prompt or answer')}
-      ${kpiCard(formatDuration(kpis.waitMs), 'Waiting on you', `${formatCount(kpis.waits)} ${kpis.waits === 1 ? 'wait' : 'waits'}${asked ? ` (${formatCount(asked)} on a question or permission)` : ''} · ${formatCount(kpis.longWaits)} over 30 min`)}
-      ${kpiCard(String(kpis.peak.count), 'Peak parallel agents', kpis.peak.at != null && kpis.peak.count > 0 ? `at ${formatWhen(kpis.peak.at, view)}` : '—')}
+      ${kpiCard(formatDuration(kpis.unattendedMs), 'Longest unattended', 'in one family, from one of your inputs to its next')}
+      ${kpiCard(formatDuration(kpis.waitMs), 'Waiting on you', `${formatCount(kpis.waits)} ${kpis.waits === 1 ? 'wait' : 'waits'} started${asked ? ` (${formatCount(asked)} on a question or permission)` : ''} · ${formatCount(kpis.longWaits)} of 30 min or more`)}
+      ${kpiCard(String(kpis.peak.count), 'Peak parallel sessions', kpis.peak.at != null && kpis.peak.count > 0 ? `doing agent work at ${formatWhen(kpis.peak.at, view)}` : '—')}
     </div>
     ${dayStrip(p, view)}
     ${legend(view)}
@@ -361,18 +398,18 @@ function dayStrip(p: PreparedTimeline, view: 'day' | 'week'): VNode {
   };
   const max = Math.max(1e-9, ...p.days.map(value));
   const week = view === 'week' ? timelineWindow('week', state.date) : null;
-  const today = p.dayTotals.get(state.date) ?? { typed: 0, automated: 0, agentMs: 0 };
+  const today = p.dayTotals.get(state.date) ?? { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
   return html`
     <div class="tlx-strip" id="tlxStrip">
       <div class="tlx-strip-head">
-        <span><b>${hours ? 'Agent hours per day' : 'Turns per day'}</b> · ${hours ? 'agent working time' : 'you vs automated'} · ${p.days[0]} → ${p.days[p.days.length - 1]} · click a day</span>
+        <span><b>${hours ? 'Agent hours per day' : 'Turns per day'}</b> · ${hours ? 'agent working time' : 'you vs automated'} · every session in range, before filters · ${p.days[0]} → ${p.days[p.days.length - 1]} · click a day</span>
         ${segment<StripMode>('tlxStripMode', [['turns', 'Turns'], ['hours', 'Agent hours']], state.strip, v => update({ strip: v }))}
       </div>
       <div class="tlx-strip-bars">
         ${p.days.map(d => {
           const x = p.dayTotals.get(d)!;
           const inWeek = week != null && dayStart(d) >= week[0] && dayStart(d) < week[1];
-          const tip = `${d}: ${x.typed} typed · ${x.automated} automated · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours`;
+          const tip = `${d}: ${x.typed} typed · ${x.automated} automated · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours · ${formatDuration(x.waitMs)} waiting on you`;
           return html`<button type="button" class=${'d' + (d === state.date ? ' sel' : '') + (inWeek ? ' inwk' : '')} data-day=${d} title=${tip} aria-label=${tip}
             onClick=${() => update({ date: d })}>
             ${hours
@@ -384,7 +421,7 @@ function dayStrip(p: PreparedTimeline, view: 'day' | 'week'): VNode {
       <div class="tlx-lg">
         ${hours ? html`<span><i class="sw h"></i>agent hours</span>`
           : html`<span><i class="sw you"></i>prompts you typed</span><span><i class="sw auto"></i>automated: agents, relays, autopilot</span>`}
-        <span class="tlx-lg-end">${state.date}: ${today.typed} typed · ${today.automated} automated · ${(today.agentMs / 3.6e6).toFixed(1)} agent-hours</span>
+        <span class="tlx-lg-end">Selected day ${state.date}: ${today.typed} typed · ${today.automated} automated · ${(today.agentMs / 3.6e6).toFixed(1)} agent-hours</span>
       </div>
     </div>` as VNode;
 }
@@ -399,9 +436,9 @@ function legend(view: 'day' | 'week'): VNode {
       <span><i class="mk agent static"></i>sent by an agent or session</span>
       <span><i class="mk autopilot static"></i>autopilot</span>
       <span><i class="mk other static"></i>system / compaction</span>
-      <span><b class="sub static">n</b>sub-agent runs</span>
-      <span><i class="conn-sw"></i>created child session</span>
-      <span class="tlx-lg-end">click a lane for details · click a family header to collapse · ← → change ${view} · ↑ ↓ change lane</span>
+      <span><b class="sub static">n</b>sub-agent launches in the turn</span>
+      <span><i class="conn-sw"></i>child session, from when it was created</span>
+      <span class="tlx-lg-end">click a lane for details · click a family header to collapse · ← → change ${view} · ↑ ↓ change lane (lanes focused)</span>
     </div>` as VNode;
 }
 
@@ -413,59 +450,73 @@ function laneColor(ctx: ViewContext, l: TimelineLane): string {
   return state.color === 'harness' ? HARNESS_COLORS[l.s.harness] ?? LONE_COLOR : familyColor(ctx.familyOf.get(l.s.index));
 }
 
+/** `Child of “X”`, `Grandchild · parent “X”`: the role, with the direct parent. */
+function roleWithParent(s: PreparedSession, namer: Namer, p: PreparedTimeline): string {
+  const parent = s.parent >= 0 ? p.sessions[s.parent] : null;
+  if (!parent) return capitalize(roleOf(s));
+  return s.depth === 1 ? `Child of “${namer.name(parent)}”` : `${capitalize(roleOf(s))} · parent “${namer.name(parent)}”`;
+}
+
 function sessionTip(s: PreparedSession, namer: Namer, p: PreparedTimeline): string {
   const typed = s.turns.filter(t => t.k === 'you').length;
-  const agent = s.turns.reduce((a, t) => a + workMs(t), 0);
+  const agent = intervalsMs(clipIntervals(s.work, p.bounds));
   const credits = s.turns.reduce((a, t) => a + t.cr, 0);
   const when = (t: number) => new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  const parent = s.parent >= 0 ? p.sessions[s.parent] : null;
   const branch = namer.branch(s);
   return [
     namer.name(s),
-    parent ? `${s.depth === 1 ? 'Child' : 'Grandchild'} of “${namer.name(parent)}”` : capitalize(roleOf(s)),
+    roleWithParent(s, namer, p),
     `${namer.repo(s)}${branch ? ' · branch ' + branch : ''}`,
     `${s.harness}${s.model ? ' · ' + s.model : ''}`,
-    s.turns.length ? `${when(s.turns[0].t)} → ${when(s.turns[s.turns.length - 1].t)}` : '',
-    `${typed} typed · ${s.turns.length - typed} automated · ${formatHours(agent)} agent`,
+    s.turns.length ? `turns in range ${when(s.turns[0].t)} → ${when(s.turns[s.turns.length - 1].t)}` : 'no turn started in range',
+    `${typed} typed · ${s.turns.length - typed} automated · ${formatHours(agent)} agent in range`,
     `${formatCredits(credits)} credits in range`,
     s.via === 'relay' ? 'started by a relayed message' : '',
   ].filter(Boolean).join('\n');
 }
 
 function turnTip(ctx: ViewContext, s: PreparedSession, t: TimelineTurn): string {
-  const waited = (t.w ?? []).reduce((a, w) => a + w.e - w.s, 0);
+  const { workMs, blockedMs } = turnTimes(t);
+  const asks = t.w?.length ?? 0;
   return [
     `${formatWhen(t.t, ctx.view)} · ${SENDER_LABEL[t.k]}`,
     `${ctx.namer.repo(s)} · ${s.harness}`,
-    t.noDuration ? 'Agent time not logged' : `Agent worked ${formatDuration(workMs(t))}`,
-    t.w?.length ? `Waited on you ${formatDuration(waited)} (${t.w.length} ${t.w.length === 1 ? 'question or permission' : 'questions or permissions'})` : '',
-    t.sub ? `${t.sub} sub-agent ${t.sub === 1 ? 'run' : 'runs'}` : '',
+    t.noDuration ? 'Agent time not logged' : `Agent worked ${formatDuration(workMs)} in this turn`,
+    asks ? `Stopped ${formatDuration(blockedMs)} on ${asks} ${asks === 1 ? 'question or permission prompt' : 'questions or permission prompts'}` : '',
+    t.sub ? `${t.sub} sub-agent ${t.sub === 1 ? 'launch' : 'launches'} recorded` : '',
     t.comp ? 'context compacted' : '',
   ].filter(Boolean).join('\n');
 }
 
-function waitTip(w: TimelineWait): string {
-  const what = w.kind === 'idle' ? 'for your next prompt' : w.kind === 'question' ? 'on a question' : 'on a permission prompt';
-  return `Waiting on you ${what}: ${formatDuration(w.end - w.start)}`;
+const WAIT_WHAT: Record<TimelineWait['kind'], string> = {
+  idle: 'for your next prompt', question: 'on a question you answered', relay: 'on a child session’s question it relayed to you',
+  permission: 'on a permission prompt you answered',
+};
+
+function waitTip(ctx: ViewContext, w: TimelineWait, win: Interval): string {
+  const whole = w.end - w.start;
+  const inside = clippedMs(w, win);
+  return `Waiting on you ${WAIT_WHAT[w.kind]}: ${formatDuration(whole)}${inside < whole ? `, ${formatDuration(inside)} of it this ${ctx.view}` : ''}`;
 }
 
-/** Why a child's parent isn't drawn above it: a filter hid it, or it has no turn in this day or week. */
+/** Why a child's parent isn't drawn right above it. */
 function parentNote(ctx: ViewContext, l: TimelineLane): string | null {
-  if (l.s.parent < 0 || l.visibleParent >= 0 || state.group !== 'tree') return null;
-  let at = l.s.parent;
-  for (let guard = 0; at >= 0 && guard < 64; guard++) {
-    if (ctx.inWindow.has(at)) return 'parent hidden by a filter';
-    at = ctx.p.sessions[at].parent;
-  }
-  return `parent not active this ${ctx.view}`;
+  if (l.s.parent < 0 || state.group !== 'tree' || l.visibleParent === l.s.parent) return null;
+  const parent = ctx.p.sessions[l.s.parent];
+  const why = ctx.inWindow.has(parent.index) ? 'parent hidden by a filter'
+    : parent.ctx ? 'parent outside this range or the sidebar selection'
+      : `parent not active this ${ctx.view}`;
+  return l.visibleParent >= 0 ? `${why} · linked to its nearest shown ancestor` : why;
 }
 
 /** `fork of “X”` for a session forked from another (Codex, Claude Code). */
 function forkNote(ctx: ViewContext, s: PreparedSession): string | null {
   if (s.fork === undefined) return null;
-  return s.fork >= 0 ? `fork of “${ctx.namer.name(ctx.p.sessions[s.fork])}”` : 'fork of a session outside this range';
+  const where = s.forkSource === 'missing' ? 'left out' : 'counted in the source';
+  const copied = s.inheritedTurns ? ` · ${formatCount(s.inheritedTurns)} copied ${s.inheritedTurns === 1 ? 'turn' : 'turns'} ${where}` : '';
+  if (s.fork >= 0) return `fork of “${ctx.namer.name(ctx.p.sessions[s.fork])}”${copied}`;
+  return (s.forkSource === 'missing' ? 'fork of a session not in these logs' : 'fork of a session outside this range') + copied;
 }
-
 function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
   const s = l.s;
   const color = laneColor(ctx, l);
@@ -477,21 +528,29 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
     `${l.typed} you · ${l.automated} automated · ${formatDuration(l.agentMs)}`,
   ].filter(Boolean).join(' · ');
   const markKind = (k: TurnSender) => (k === 'you' || k === 'agent' || k === 'autopilot' ? k : 'other');
-  const drawn = [...l.carried, ...l.turns];
-  const width = (a: number, b: number) => Math.max(0.15, pct(ctx, b) - pct(ctx, a));
+  // Everything drawn is clipped to the plotted range first, so a bar is as long as the time it stands for.
+  const plot: Interval = [Math.max(l.win[0], ctx.r0), Math.min(l.win[1], ctx.r1)];
+  const span = ([a, b]: Interval) => `left:${pct(ctx, a)}%;width:${pct(ctx, b) - pct(ctx, a)}%`;
+  const select = () => {
+    update({ selected: s.id });
+    rootEl?.querySelector<HTMLElement>('#tlxLanes')?.focus({ preventScroll: true });
+  };
   return html`
     <div class=${'tlx-lane' + (s.id === state.selected ? ' sel' : '')} data-lane=${s.index} data-session=${s.id}
-      onClick=${() => update({ selected: s.id })}>
+      aria-current=${s.id === state.selected ? 'true' : undefined} onClick=${select}>
       <div class="tlx-lbl" title=${sessionTip(s, ctx.namer, ctx.p)}>
         <span class="tree">${tree}</span><span class="dot" style=${`background:${color}`}></span>
         <div class="t"><b class="nm">${ctx.namer.name(s)}</b><span class="chip">${s.harness}</span><span class="chip">${s.model || '—'}</span><small>${detail}</small></div>
       </div>
       <div class="tlx-trk">
         ${ctx.ticks.map(([x]) => html`<div class="grid" style=${`left:${pct(ctx, x)}%`}></div>`)}
-        ${l.waits.map(w => html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} title=${waitTip(w)} style=${`left:${pct(ctx, w.start)}%;width:${pct(ctx, w.end) - pct(ctx, w.start)}%`}></div>`)}
-        ${drawn.flatMap(workSegments).map(([a, b]) => html`<div class="seg" style=${`left:${pct(ctx, a)}%;width:${width(a, b)}%;background:${color}`}></div>`)}
+        ${l.waits.map(w => {
+          const [part] = clipIntervals([[w.start, w.end]], plot);
+          return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} title=${waitTip(ctx, w, l.win)} style=${span(part)}></div>` : null;
+        })}
+        ${clipIntervals(l.segments, plot).map(part => html`<div class="seg" style=${`${span(part)};background:${color}`}></div>`)}
         ${l.turns.map(t => html`<div class=${'mk ' + markKind(t.k)} data-sender=${t.k} title=${turnTip(ctx, s, t)} style=${`left:${pct(ctx, t.t)}%`}></div>`)}
-        ${l.turns.filter(t => t.sub > 0).map(t => html`<div class="sub" style=${`left:${pct(ctx, t.t + t.d / 2)}%`}>${t.sub}</div>`)}
+        ${l.turns.filter(t => t.sub > 0).map(t => html`<div class="sub" title=${`${t.sub} sub-agent ${t.sub === 1 ? 'launch' : 'launches'} recorded in the turn that started here`} style=${`left:${pct(ctx, t.t)}%`}>${t.sub}</div>`)}
       </div>
     </div>` as VNode;
 }
@@ -508,15 +567,18 @@ function familyHeader(ctx: ViewContext, f: ViewFamily): VNode {
     update({ collapsed: next });
   };
   return html`
-    <div class="tlx-fam" data-family=${top.id} onClick=${toggle} aria-expanded=${multi ? String(!collapsed) : undefined}>
+    <div class="tlx-fam" data-family=${top.id} onClick=${toggle} role=${multi ? 'button' : undefined} tabindex=${multi ? '0' : undefined}
+      onKeyDown=${multi ? onActivate(toggle) : undefined} aria-expanded=${multi ? String(!collapsed) : undefined}>
       <div><span class="caret">${multi ? (collapsed ? '▸' : '▾') : ''}</span><b class="nm">${ctx.namer.name(top)}</b>
-        <span class="muted"> · ${ctx.namer.repo(top)} · ${f.lanes.length} ${f.lanes.length === 1 ? 'session' : 'sessions'}</span>
+        <span class="muted"> · ${ctx.namer.repo(top)} · ${f.lanes.length} ${f.lanes.length === 1 ? 'session' : 'sessions'} shown</span>
         ${f.size > f.lanes.length ? html` <span class="ext">(${f.size} in family)</span>` : null}</div>
       <div class="roll">
         <span><b>${f.typed}</b> you · <b>${f.automated}</b> automated</span>
         <span><b>${formatDuration(f.agentMs)}</b> agent</span>
         <span><b>${formatCredits(f.credits)}</b> cr</span>
-        <span><i class="share" style=${`width:${Math.max(2, f.share * 1.6)}px;background:${familyColor(f)}`}></i><b>${f.share.toFixed(1)}%</b> of credits</span>
+        ${f.credits > 0
+          ? html`<span><i class="share" style=${`width:${f.share * 1.6}px;background:${familyColor(f)}`}></i><b>${f.share.toFixed(1)}%</b> of credits shown</span>`
+          : html`<span>— of credits</span>`}
       </div>
     </div>` as VNode;
 }
@@ -542,14 +604,14 @@ function lanesPanel(ctx: ViewContext): VNode {
       for (const { lane, depth } of f.ordered) addLane(lane, depth);
     }
   }
-  const linkedForks = ctx.p.sessions.filter(s => s.fork !== undefined).length;
+  const linkedForks = ctx.p.sessions.filter(s => !s.ctx && s.fork !== undefined).length;
   const forks = [
     linkedForks > 0
-      ? `${linkedForks} ${linkedForks === 1 ? 'session is a fork' : 'sessions are forks'} of another session (Codex and Claude Code log the source), marked “fork of” on its lane. A fork is your own branch of a conversation, so it isn’t part of a family, and the turns it copied count once, in the source.`
-      : 'Codex and Claude Code forks are marked “fork of” their source on the lane.',
+      ? `${linkedForks} ${linkedForks === 1 ? 'session in range is a fork' : 'sessions in range are forks'} of another session, marked “fork of” on the lane: Codex logs a fork’s source, and Claude Code forks are found from the turns they copied. Copied turns count once, in the source, and a fork isn’t part of a family.`
+      : 'No fork was found in range: Codex logs a fork’s source, and Claude Code forks are found from the turns they copy.',
     ctx.p.forkedSessions > 0
-      ? `${ctx.p.forkedSessions} Copilot ${ctx.p.forkedSessions === 1 ? 'session reports' : 'sessions report'} forks, but Copilot doesn’t log which session a fork came from, so they aren’t linked.`
-      : 'Copilot doesn’t log which session a fork came from, so its forks aren’t linked.',
+      ? `${ctx.p.forkedSessions} Copilot ${ctx.p.forkedSessions === 1 ? 'session reports' : 'sessions report'} forks (fork_count), but their logs name no source session, so they aren’t linked.`
+      : 'Copilot logs only a fork count, with no source session, so Copilot forks aren’t linked.',
   ].join(' ');
   return html`
     <div class=${'tlx-lanes' + (ctx.view === 'week' ? ' wk' : '')} id="tlxLanes" tabindex="0" aria-label="Session lanes: ↑ ↓ change lane, ← → change day or week">
@@ -560,7 +622,7 @@ function lanesPanel(ctx: ViewContext): VNode {
         if (top == null || bottom == null) return null;
         const from = top + 6;
         const color = laneColor(ctx, l);
-        return html`<div class="conn" aria-hidden="true" style=${`left:calc(var(--tl-label) + 12px + (100% - var(--tl-label) - 24px) * ${(pct(ctx, l.first) / 100).toFixed(4)});top:${from}px;height:${Math.max(4, bottom - 7 - from)}px;color:${color};border-color:${color}`}></div>`;
+        return html`<div class="conn" aria-hidden="true" style=${`left:calc(var(--tl-label) + 12px + (100% - var(--tl-label) - 24px) * ${(pct(ctx, Math.max(ctx.r0, l.s.created ?? l.first)) / 100).toFixed(4)});top:${from}px;height:${Math.max(4, bottom - 7 - from)}px;color:${color};border-color:${color}`}></div>`;
       })}
       <div class="tlx-axis">${ctx.ticks.map(([x, label]) => html`<span style=${`left:${pct(ctx, x)}%`}>${label}</span>`)}</div>
       <div class="tlx-fork">${forks}</div>
@@ -568,10 +630,11 @@ function lanesPanel(ctx: ViewContext): VNode {
 }
 
 function impactPanel(ctx: ViewContext, childLanes: number, childShare: number): VNode {
-  const rows = [...ctx.families].sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs);
-  const max = Math.max(0.1, ...rows.map(f => f.share));
+  const rows = [...ctx.families].sort((a, b) => b.credits - a.credits || b.agentMs - a.agentMs || a.root - b.root);
+  const max = Math.max(0, ...rows.map(f => f.share));
+  const anyCredits = rows.some(f => f.credits > 0);
   const select = (f: ViewFamily) => {
-    const top = f.lanes.find(l => l.s.index === f.root) ?? [...f.lanes].sort((a, b) => b.credits - a.credits)[0];
+    const top = f.lanes.find(l => l.s.index === f.root) ?? [...f.lanes].sort((a, b) => b.credits - a.credits || a.s.index - b.s.index)[0];
     const next = new Set(state.collapsed);
     next.delete(ctx.p.sessions[f.root].id);
     scrollToSelected = true;
@@ -580,22 +643,28 @@ function impactPanel(ctx: ViewContext, childLanes: number, childShare: number): 
   return html`
     <div class="tlx-panel" id="tlxImpact">
       <h4>Impact by session family</h4>
-      <p class="note">A coordinator and the sessions it started, ${ctx.view === 'week' ? 'this week' : state.date}. Credits are logged AI credits. Click a row to select it.</p>
+      <p class="note">A coordinator and the sessions it started, ${ctx.view === 'week' ? 'this week' : state.date}. Credits are logged AI credits;
+        bars compare each family with the largest. Click a row to select the coordinator, or the family’s top session shown when the
+        coordinator isn’t.</p>
       <table>
         <thead><tr><th>Family</th><th class="num">You / auto</th><th class="num">Agent time</th><th class="num">Unattended</th><th class="num">Credits</th><th>Share</th></tr></thead>
         <tbody>${rows.map(f => html`
-          <tr class="click" data-family=${ctx.p.sessions[f.root].id} onClick=${() => select(f)}>
+          <tr class="click" data-family=${ctx.p.sessions[f.root].id} tabindex="0" onClick=${() => select(f)} onKeyDown=${onActivate(() => select(f))}>
             <td><span class="fdot" style=${`background:${familyColor(f)}`}></span><b>${ctx.namer.name(ctx.p.sessions[f.root])}</b>
-              <small>${f.lanes.length > 1 ? `${f.lanes.length} sessions · ${f.lanes.filter(l => l.s.parent >= 0).length} started by an agent` : '1 session'}</small></td>
+              <small>${f.lanes.length > 1 ? `${f.lanes.length} sessions · ${f.lanes.filter(l => l.s.parent >= 0).length} with a parent session` : '1 session'}</small></td>
             <td class="num">${f.typed} / ${f.automated}</td>
             <td class="num">${formatDuration(f.agentMs)}</td>
-            <td class="num">${f.unattendedMs >= 60_000 ? formatDuration(f.unattendedMs) : '—'}</td>
+            <td class="num">${f.unattendedMs > 0 ? formatDuration(f.unattendedMs) : '—'}</td>
             <td class="num">${formatCredits(f.credits)}</td>
-            <td><i class="bar" style=${`width:${Math.max(2, f.share / max * 110)}px;background:${familyColor(f)}`}></i>${f.share.toFixed(1)}%</td>
+            <td>${f.credits > 0 && max > 0
+              ? html`<i class="bar" style=${`width:${f.share / max * 110}px;background:${familyColor(f)}`}></i>${f.share.toFixed(1)}%`
+              : '—'}</td>
           </tr>`)}
         </tbody>
       </table>
-      <p class="note tlx-note-end">Child sessions: ${childLanes} of ${ctx.lanes.length} lanes, ${childShare.toFixed(1)}% of the credits. Unattended = longest stretch the family’s agents worked after one of your prompts or answers.</p>
+      <p class="note tlx-note-end">Child sessions: ${childLanes} of ${ctx.lanes.length} lanes${anyCredits ? `, ${childShare.toFixed(1)}% of the credits` : ', no credits logged'}.
+        Unattended = the family’s longest stretch of agent work after one of your prompts or answers, up to your next one anywhere in the
+        family.</p>
     </div>` as VNode;
 }
 
@@ -603,62 +672,78 @@ function goLink(text: string, onGo: () => void, id?: string): VNode {
   return html`<a href="#" id=${id} onClick=${(e: Event) => { e.preventDefault(); onGo(); }}>${text}</a>` as VNode;
 }
 
+/** `7 tokens`, `12k tokens`, `1.3M tokens`. */
+function formatTokens(n: number): string {
+  if (n <= 0) return 'no tokens logged';
+  if (n < 1000) return `${formatCount(n)} ${n === 1 ? 'token' : 'tokens'}`;
+  return n >= 1e5 ? `${(n / 1e6).toFixed(1)}M tokens` : `${Math.round(n / 1000)}k tokens`;
+}
+
 function detailPanel(ctx: ViewContext): VNode {
   const l = ctx.lanes.find(x => x.s.id === state.selected);
-  if (!l) return html`<div class="tlx-panel" id="tlxDetail"></div>` as VNode;
+  if (!l) return html`<div class="tlx-panel" id="tlxDetail"><p class="note">Select a lane to see its turns.</p></div>` as VNode;
   const s = l.s;
   const parent = s.parent >= 0 ? ctx.p.sessions[s.parent] : null;
-  const firstChild = ctx.p.sessions.filter(x => x.parent === s.index).sort((a, b) => (a.turns[0]?.t ?? 0) - (b.turns[0]?.t ?? 0))[0];
+  const firstChild = ctx.p.sessions.filter(x => x.parent === s.index && !x.ctx).sort((a, b) => (a.all[0]?.t ?? 0) - (b.all[0]?.t ?? 0))[0];
   const totalCredits = ctx.lanes.reduce((a, x) => a + x.credits, 0);
   const branch = ctx.namer.branch(s);
-  const role = parent ? `${s.depth === 1 ? 'Child' : 'Grandchild'} of “${ctx.namer.name(parent)}”` : capitalize(roleOf(s));
   const origin = s.via === 'relay' ? ' · started by a relayed message' : s.via === 'harness' ? ' · started by its parent agent' : s.parent >= 0 ? ' · created by its parent' : '';
   const familyHasMany = (ctx.p.familySize.get(s.root) ?? 1) > 1;
-  const tokens = l.tokens >= 1e5 ? `${(l.tokens / 1e6).toFixed(1)}M tokens` : l.tokens > 0 ? `${Math.round(l.tokens / 1000)}k tokens` : 'no tokens logged';
+  const when = (t: number) => new Date(t).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const fork = forkNote(ctx, s);
   return html`
     <div class="tlx-panel" id="tlxDetail" aria-live="polite">
       <div class="dr-head"><div>
         <h4 id="tlxDetailName">${ctx.namer.name(s)}</h4>
-        <p class="note dr-role">${role} · ${ctx.namer.repo(s)}${branch ? ` · branch ${branch}` : ''}</p>
-        <p class="note">${s.harness} · ${s.model || 'model not logged'} · ${formatWhen(l.first, ctx.view)}–${formatWhen(l.last, ctx.view)}${origin}</p>
+        <p class="note dr-role">${roleWithParent(s, ctx.namer, ctx.p)} · ${ctx.namer.repo(s)}${branch ? ` · branch ${branch}` : ''}</p>
+        <p class="note">${s.harness} · ${s.model || 'model not logged'} · ${when(l.first)} – ${when(l.last)}${origin}${fork ? ` · ${fork}` : ''}</p>
       </div><span class="chip chip-sel">selected</span></div>
       <div class="dr-kpis">
         <div><b>${l.typed} / ${l.automated}</b><span>you / automated</span></div>
-        <div><b>${formatDuration(l.agentMs)}</b><span>agent time</span></div>
+        <div><b>${formatDuration(l.agentMs)}</b><span>agent time this ${ctx.view}</span></div>
         <div><b>${formatCredits(l.credits)} cr</b><span>${totalCredits > 0 ? `${(100 * l.credits / totalCredits).toFixed(1)}% of the ${ctx.view}` : 'no credits logged'}</span></div>
-        <div><b>${l.subagents}</b><span>sub-agent runs</span></div>
+        <div><b>${l.subagents}</b><span>sub-agent launches</span></div>
       </div>
-      <div class="dr-turns"><table>
-        <thead><tr><th>Time</th><th>Sent by</th><th class="num">Agent worked</th><th class="num">Waited on you</th><th class="num">Sub-agents</th></tr></thead>
-        <tbody>${l.turns.map(t => html`<tr>
+      ${l.turns.length === 0
+        ? html`<p class="note">No turn started this ${ctx.view}: the lane shows ${l.agentMs > 0 ? 'work' : 'waiting'} carried over from an earlier one.</p>`
+        : html`<div class="dr-turns"><table>
+        <thead><tr><th>Time</th><th>Sent by</th><th class="num">Agent worked</th><th class="num">Stopped for you</th><th class="num">Sub-agents</th></tr></thead>
+        <tbody>${l.turns.map(t => {
+          const times = turnTimes(t);
+          return html`<tr>
           <td>${formatWhen(t.t, ctx.view)}</td>
           <td><span class=${'who-' + (t.k === 'compaction' ? 'other' : t.k)}>${SENDER_SHORT[t.k]}</span>${t.comp ? html` <span class="chip">compaction</span>` : null}</td>
-          <td class="num">${t.noDuration ? '—' : formatDuration(workMs(t))}</td>
-          <td class="num">${t.w?.length ? formatDuration(t.w.reduce((a, w) => a + w.e - w.s, 0)) : ''}</td>
-          <td class="num">${t.sub || ''}</td></tr>`)}
-        </tbody></table></div>
-      <p class="note tlx-note-end">${l.turns.length} ${l.turns.length === 1 ? 'turn' : 'turns'} · ${tokens} · no prompt text is shown</p>
+          <td class="num">${t.noDuration ? '—' : formatDuration(times.workMs)}</td>
+          <td class="num">${t.w?.length ? formatDuration(times.blockedMs) : ''}</td>
+          <td class="num">${t.sub || ''}</td></tr>`;
+        })}
+        </tbody></table></div>`}
+      <p class="note tlx-note-end">${l.turns.length} ${l.turns.length === 1 ? 'turn' : 'turns'} started this ${ctx.view} · ${formatTokens(l.tokens)} ·
+        rows are whole turns, the cards above only this ${ctx.view} · no prompt text is shown</p>
       <div class="dr-links">
-        ${parent ? goLink('Open parent session ›', () => openSession(parent.index), 'tlxOpenParent') : null}
+        ${parent && !parent.ctx ? goLink('Open parent session ›', () => openSession(parent.index), 'tlxOpenParent') : null}
+        ${parent?.ctx ? html`<span class="muted">parent outside this range or the sidebar selection</span>` : null}
         ${s.fork !== undefined && s.fork >= 0 ? goLink('Open fork source ›', () => openSession(s.fork!), 'tlxOpenForkSource') : null}
         ${firstChild ? goLink('Open first child ›', () => openSession(firstChild.index), 'tlxOpenChild') : null}
-        ${familyHasMany ? goLink('Show family in Families ›', () => { scrollToSelected = true; update({ view: 'families', family: ctx.p.sessions[s.root].id, verdict: 'all' }); }, 'tlxShowFamily') : null}
+        ${familyHasMany ? goLink('Show family in Families ›', () => {
+          scrollToSelected = true;
+          update({ view: 'families', family: ctx.p.sessions[s.root].id, verdict: 'all', familyMin: 2, familyQuery: '' });
+        }, 'tlxShowFamily') : null}
         <a href="#" data-page="config-health" data-nav-hint="prompt-cache">Context Health › Prompt Cache ›</a>
         ${FF_TOKEN_REPORTING_ENABLED ? html`<a href="#" data-page="config-health" data-nav-hint="token-types">Token Types ›</a>` : null}
       </div>
     </div>` as VNode;
 }
 
-/** Shows a session on the Day view, on its busiest day when it isn't in the current window. */
-function openSession(index: number): void {
+/** Shows a session on the Day view (or the current Week), on its busiest day when it has no lane in the current window. */
+function openSession(index: number, date?: string): void {
   if (!loaded) return;
   const s = loaded.prepared.sessions[index];
+  if (s.ctx) return;
   const view = state.view === 'week' ? 'week' : 'day';
-  const [start, end] = timelineWindow(view, state.date);
-  if (state.view === 'families' || !s.turns.some(t => t.t >= start && t.t < end)) {
-    state.date = busiestDay(s);
-    if (state.view === 'families') state.view = 'day';
-  }
+  if (date) state.date = date;
+  else if (state.view === 'families' || !activeIn(s, timelineWindow(view, state.date))) state.date = busiestDay(s);
+  if (state.view === 'families') state.view = 'day';
   state.focusId = s.id;
   state.filters = { ...NO_LANE_FILTERS };
   draw();
@@ -679,7 +764,12 @@ function shownFamilies(o: FamiliesOverview, namer: Namer): FamilySummary[] {
     .filter(f => (!q || f.nodes.some(n => namer.repo(n.s).toLowerCase().includes(q) || namer.name(n.s).toLowerCase().includes(q)))
       && f.sessions >= state.familyMin
       && (state.verdict === 'all' || (state.verdict === 'wide' ? f.wide : f.verdict === state.verdict)))
-    .sort((a, b) => (key === 'recent' ? b.to.localeCompare(a.to) || b.credits - a.credits : sortValue(b) - sortValue(a)));
+    .sort((a, b) => (key === 'recent' ? b.to.localeCompare(a.to) || b.credits - a.credits : sortValue(b) - sortValue(a)) || a.rank - b.rank);
+}
+
+/** `12%`, or — when no credits were logged. */
+function shareText(share: number, totalCredits: number, digits = 0): string {
+  return totalCredits > 0 ? `${share.toFixed(digits)}%` : '—';
 }
 
 function familiesView(data: Loaded, namer: Namer): VNode {
@@ -689,39 +779,42 @@ function familiesView(data: Loaded, namer: Namer): VNode {
   if (o.families.length === 0) {
     return html`<div class="howto" id="tlxNoFamilies"><div class="howto-t">No session families in this range</div>
       <p class="howto-l">A family is a coordinator session and the child sessions it started for you, for example with create_session in the
-      Copilot App, or sub-agent threads in Codex and OpenCode. None of the ${t.sessions} sessions in this range started another session.</p></div>` as VNode;
+      Copilot App, or sub-agent threads in Codex and OpenCode. No parent–child link was found among the ${t.sessions} sessions in this range.</p></div>` as VNode;
   }
-  if (state.family == null || !o.families.some(f => f.s.id === state.family)) state.family = o.families[0].s.id;
   const shown = shownFamilies(o, namer);
+  // The selection stays on a family in the list; with an empty list, nothing is selected.
+  if (!shown.some(f => f.s.id === state.family)) state.family = shown[0]?.s.id ?? null;
+  const credits = t.totalCredits;
   const chip = (id: VerdictFilter, label: string, n: number, share: number, color: string) => html`
     <button type="button" class=${'vf' + (state.verdict === id ? ' on' : '')} data-verdict=${id} style=${`--c:${color}`} aria-pressed=${state.verdict === id ? 'true' : 'false'}
-      onClick=${() => update({ verdict: id })}><b>${label}</b><span>${n} ${n === 1 ? 'family' : 'families'} · ${share.toFixed(0)}% of credits</span></button>`;
+      onClick=${() => update({ verdict: id })}><b>${label}</b><span>${n} ${n === 1 ? 'family' : 'families'} · ${shareText(share, credits)} of credits</span></button>`;
   const sorts: [FamilySort, string][] = [['credits', 'Credits'], ['children', 'Child sessions'], ['agentMs', 'Agent time'], ['childTyped', 'Prompts into children'], ['perChild', 'Credits per child'], ['recent', 'Most recent']];
-  const showCumulative = state.familySort === 'credits' && state.verdict === 'all' && !state.familyQuery.trim();
+  const showCumulative = credits > 0 && state.familySort === 'credits' && state.verdict === 'all' && !state.familyQuery.trim() && state.familyMin === 2;
+  const top = Math.min(3, t.families);
   let cumulative = 0;
   return html`
     <div class="howto">
       <div class="howto-t">How to read Families</div>
-      <p class="howto-l">A <b>family</b> is one piece of work you delegated: a <b>coordinator</b> session you talked to, plus the <b>child sessions</b> it started for you.
-        Each row is one family, so you can judge the delegation as a whole instead of ${t.sessionsInFamilies} separate sessions.</p>
+      <p class="howto-l">A <b>family</b> is a <b>coordinator</b> session plus the <b>child sessions</b> it started, directly or through its children,
+        as linked in your logs. Each row is one family, so you can look at a delegation as a whole instead of ${t.sessionsInFamilies} separate sessions.</p>
       <div class="howto-g">
-        <div><b>1 · What did it cost?</b><span>Rows are ranked by AI credits. The bar is the family’s share of all your credits; together these families used ${Math.round(t.creditShare)}%.</span></div>
-        <div><b>2 · Did the agents finish on their own?</b><span>${verdictBadge('alone')} no prompt or answer from you in any child. ${verdictBadge('needed')} you typed into a child, or answered its question or permission prompt: the brief was missing something.</span></div>
-        <div><b>3 · Was splitting the work worth it?</b><span>${verdictBadge('wide')} ${WIDE_FAN_OUT} or more children. Compare credits per child and how many children needed you.</span></div>
+        <div><b>1 · What did it cost?</b><span>Rows are ranked by logged AI credits. The bar compares the family with the top one; the number is its share of all your credits. Together these families used ${shareText(t.creditShare, credits)}.</span></div>
+        <div><b>2 · Did you step in?</b><span>${verdictBadge('alone')} no prompt or answer from you was recorded in any child. ${verdictBadge('needed')} you typed into a child, or answered its question or permission prompt.</span></div>
+        <div><b>3 · How wide was it?</b><span>${verdictBadge('wide')} ${WIDE_FAN_OUT} or more child sessions at any depth, shown on top of the other verdict. Compare credits per child.</span></div>
       </div>
-      <p class="howto-l howto-end">Select a family to see each session by name, the verdict and one habit to try. Click a session to open it on the Timeline.</p>
+      <p class="howto-l howto-end">Select a family to see each session by name, what the logs show about it and one habit to consider. Click a session to open it on the Timeline.</p>
     </div>
     <div class="ctx-cache-tips tlx-insights" id="tlxFamilyInsights" role="note">
-      <div class="ctx-cache-tips-title">What your families tell you</div>
+      <div class="ctx-cache-tips-title">What your families show</div>
       ${familiesInsights(t).map(tip => html`<div class="ctx-cache-tip">• ${tip}</div>`)}
     </div>
     <div class="ctx-comp-kpis tlx-kpis" id="tlxFamilyKpis">
-      ${kpiCard(formatCount(t.families), 'Delegated pieces of work', `${formatCount(t.sessionsInFamilies)} of ${formatCount(t.sessions)} sessions belong to one`, '#3794ff')}
-      ${kpiCard(formatCount(t.children), 'Child sessions', `${formatCount(t.children - t.childrenNeedingYou)} needed no prompt or answer from you`, '#b180d7')}
-      ${kpiCard(`${Math.round(t.creditShare)}%`, 'Of all AI credits', `${Math.round(t.childCreditShare)}% in the child sessions alone`, '#cf222e')}
-      ${kpiCard(`${(t.agentMs / 3.6e6).toFixed(0)} h`, 'Agent time', `${Math.round(t.agentShare)}% of all agent time`, '#f0883e')}
+      ${kpiCard(formatCount(t.families), 'Session families', `${formatCount(t.sessionsInFamilies)} of ${formatCount(t.sessions)} sessions belong to one`, '#3794ff')}
+      ${kpiCard(formatCount(t.children), 'Child sessions', `${formatCount(t.children - t.childrenNeedingYou)} with no prompt or answer from you`, '#b180d7')}
+      ${kpiCard(shareText(t.creditShare, credits), 'Of all AI credits', credits > 0 ? `${Math.round(t.childCreditShare)}% in the child sessions alone` : 'no credits logged: only Copilot logs them', '#cf222e')}
+      ${kpiCard(formatHours(t.agentMs), 'Agent time', `${Math.round(t.agentShare)}% of all agent time`, '#f0883e')}
       ${kpiCard(formatCount(t.childTyped), 'Prompts you typed into children', `out of ${formatCount(t.typed)} you typed in families${t.childAnswered ? `, plus ${formatCount(t.childAnswered)} answers in children` : ''}`, '#d29922')}
-      ${kpiCard(`${t.top3Share.toFixed(0)}%`, 'Credits in the top 3', 'the biggest delegations dominate', '#8b949e')}
+      ${kpiCard(shareText(t.top3Share, credits), `Credits in the top ${top}`, `of ${formatCount(t.families)} ${t.families === 1 ? 'family' : 'families'}, by credits`, '#8b949e')}
     </div>
     <div class="vfs" role="group" aria-label="Filter by verdict">
       ${chip('all', 'All families', t.families, t.creditShare, '#8b949e')}
@@ -738,12 +831,12 @@ function familiesView(data: Loaded, namer: Namer): VNode {
       <label>Min sessions <select id="tlxFamilyMin" onChange=${(e: Event) => update({ familyMin: Number((e.target as HTMLSelectElement).value) })}>
         ${[2, 3, 5, 10].map(n => html`<option value=${n} selected=${state.familyMin === n}>${n}</option>`)}
       </select></label>
-      <span class="tlx-count" id="tlxFamilyCount">${shown.length} of ${o.families.length} families · ${shown.reduce((a, f) => a + f.creditShare, 0).toFixed(1)}% of all credits</span>
+      <span class="tlx-count" id="tlxFamilyCount">${shown.length} of ${o.families.length} families${credits > 0 ? ` · ${shown.reduce((a, f) => a + f.creditShare, 0).toFixed(1)}% of all credits` : ''}</span>
     </div>
     <div class="fx-main">
       <div class="flist" id="tlxFamilyList" role="list">
         ${shown.length === 0 ? html`<div class="tlx-empty">No family matches these filters.</div>` : html`
-          <div class="fam-head"><span></span><span>Delegated work · biggest child sessions</span><span>Verdict</span><span>Agent</span><span>Credits · share of all</span></div>
+          <div class="fam-head"><span></span><span>Family · biggest child sessions</span><span>Verdict</span><span>Agent</span><span>Credits · share of all</span></div>
           ${shown.map(f => { cumulative += f.creditShare; return familyRow(f, namer, o, showCumulative ? cumulative : null); })}`}
       </div>
       ${familyAside(o, namer, data.prepared)}
@@ -751,39 +844,53 @@ function familiesView(data: Loaded, namer: Namer): VNode {
 }
 
 function familyRow(f: FamilySummary, namer: Namer, o: FamiliesOverview, cumulative: number | null): VNode {
-  const kids = f.nodes.filter(n => n.depth > 0);
-  const biggest = [...kids].sort((a, b) => b.credits - a.credits).slice(0, 3);
-  const topShare = o.families[0]?.creditShare || 1;
+  const kids = f.nodes.filter(n => n.depth > 0 && !n.ctx);
+  const biggest = [...kids].sort((a, b) => b.credits - a.credits || a.s.index - b.s.index).slice(0, 3);
+  const topShare = o.families[0]?.creditShare ?? 0;
+  const credits = o.totals.totalCredits;
   const pick = () => update({ family: f.s.id });
   return html`
     <div class=${'frow' + (f.s.id === state.family ? ' sel' : '')} role="listitem" tabindex="0" data-family=${f.s.id}
-      onClick=${pick} onKeyDown=${(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}>
+      aria-current=${f.s.id === state.family ? 'true' : undefined} onClick=${pick} onKeyDown=${onActivate(pick)}>
       <div class="fr-rank">#${f.rank}</div>
       <div class="fr-main">
         <div class="fr-name">${namer.name(f.s)}</div>
         <div class="fr-sub">${namer.repo(f.s)}${f.repos > 1 ? ` + ${f.repos - 1} more ${f.repos > 2 ? 'repositories' : 'repository'}` : ''} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.children} child ${f.children === 1 ? 'session' : 'sessions'}</div>
-        <div class="fr-kids">${biggest.map(n => html`<span class=${neededYou(n) ? 'kt' : ''} title=${neededYou(n) ? 'you typed into or answered this child' : ''}>↳ ${namer.name(n.s)}</span>`)}
+        <div class="fr-kids">${biggest.map(n => html`<span class=${neededYou(n) ? 'kt' : ''} title=${neededYou(n) ? 'you typed into this child or answered its question or permission prompt' : ''}>↳ ${namer.name(n.s)}</span>`)}
           ${kids.length > 3 ? html`<span class="more">+${kids.length - 3} more</span>` : null}</div>
       </div>
       <div class="fr-v">${verdictBadge(f.verdict)}${f.wide ? verdictBadge('wide') : null}
-        <small>${f.steppedInto ? `you stepped into ${f.steppedInto} of ${f.children}` : 'children needed no prompt or answer'}</small></div>
+        <small>${f.steppedInto ? `you stepped into ${f.steppedInto} of ${f.children}` : 'no input in children recorded'}</small></div>
       <div class="fr-n"><b>${formatHours(f.agentMs)}</b><small>agent time</small></div>
-      <div class="fr-c"><div><b>${formatCredits(f.credits)}</b> cr <span>${f.creditShare.toFixed(1)}%</span></div>
-        <i style=${`width:${Math.max(2, f.creditShare / topShare * 100)}%`}></i>
+      <div class="fr-c"><div><b>${formatCredits(f.credits)}</b> cr <span>${shareText(f.creditShare, credits, 1)}</span></div>
+        <i style=${`width:${topShare > 0 ? f.creditShare / topShare * 100 : 0}%`}></i>
         ${cumulative != null ? html`<small>running total ${cumulative.toFixed(0)}%</small>` : null}</div>
     </div>` as VNode;
 }
 
+/** The node's role in its family. */
+function nodeRole(depth: number): string {
+  if (depth === 0) return 'coordinator';
+  if (depth === 1) return 'child';
+  return depth === 2 ? 'grandchild' : `descendant · depth ${depth}`;
+}
+
 function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VNode {
   const f = o.families.find(x => x.s.id === state.family);
-  if (!f) return html`<aside class="fx-aside" id="tlxFamilyDetail"></aside>` as VNode;
+  if (!f) return html`<aside class="fx-aside" id="tlxFamilyDetail"><p class="note">Select a family to see its sessions.</p></aside>` as VNode;
   const branch = namer.branch(f.s);
+  // On the busiest day, the coordinator if it has a lane there, else the family's member with most turns that day.
+  const onBusiest = f.nodes.filter(n => !n.ctx && activeIn(n.s, timelineWindow('day', f.busiest)));
+  const turnsThatDay = (n: (typeof f.nodes)[number]) => n.s.turns.filter(t => toDateStr(t.t) === f.busiest).length;
+  const focus = onBusiest.find(n => n.depth === 0) ?? [...onBusiest].sort((a, b) => turnsThatDay(b) - turnsThatDay(a) || a.s.index - b.s.index)[0];
   const openDay = () => {
+    if (!focus) return;
     const collapsed = new Set(state.collapsed);
     collapsed.delete(f.s.id);
-    update({ view: 'day', date: f.busiest, group: 'tree', focusId: f.s.id, filters: { ...NO_LANE_FILTERS }, collapsed });
+    update({ view: 'day', date: f.busiest, group: 'tree', focusId: focus.s.id, filters: { ...NO_LANE_FILTERS }, collapsed });
   };
   const when = (t: number) => new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const credits = o.totals.totalCredits;
   return html`
     <aside class="fx-aside" id="tlxFamilyDetail" aria-live="polite">
       <div class="fa-rank">#${f.rank} of ${o.families.length} by credits</div>
@@ -792,26 +899,30 @@ function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VN
       <div class="verdict" style=${`--c:${VERDICT_COLORS[f.verdict]}`}>
         ${verdictBadge(f.verdict)}${f.wide ? verdictBadge('wide') : null}
         <p>${verdictText(f)}</p>
-        <p class="habit"><b>Try next time:</b> ${VERDICTS[f.verdict].habit}${f.wide ? ' ' + VERDICTS.wide.habit : ''}</p>
+        <p class="habit"><b>Something to try:</b> ${VERDICTS[f.verdict].habit}${f.wide ? ' ' + VERDICTS.wide.habit : ''}</p>
       </div>
       <div class="dr-kpis">
-        <div><b>${formatCredits(f.credits)}</b><span>credits · ${f.creditShare.toFixed(1)}% of all</span></div>
+        <div><b>${formatCredits(f.credits)}</b><span>credits · ${shareText(f.creditShare, credits, 1)} of all</span></div>
         <div><b>${formatHours(f.agentMs)}</b><span>agent time</span></div>
         <div><b>${formatCount(f.typed)} / ${formatCount(f.automated)}</b><span>you typed / automated</span></div>
-        <div><b>${formatCredits(f.perChild)}</b><span>credits per child · ${Math.round(f.childShare)}% in children</span></div>
+        <div><b>${formatCredits(f.perChild)}</b><span>credits per child · ${f.credits > 0 ? `${Math.round(f.childShare)}% in children` : 'no credits logged'}</span></div>
       </div>
-      <p class="fa-open"><button type="button" class="tlx-btn" id="tlxOpenFamilyDay" onClick=${openDay}>Open on the Timeline, ${shortDate(f.busiest)} ›</button>
-        <span class="muted">its busiest day</span></p>
+      ${f.busiest && focus ? html`<p class="fa-open"><button type="button" class="tlx-btn" id="tlxOpenFamilyDay" onClick=${openDay}>Open on the Timeline, ${shortDate(f.busiest)} ›</button>
+        <span class="muted">the day with most of its turns</span></p>` : null}
       <table class="ftable">
-        <thead><tr><th>Session · ${f.sessions}</th><th class="num">You typed</th><th class="num">Agent</th><th class="num">Credits</th></tr></thead>
-        <tbody>${f.nodes.map(n => html`
-          <tr class="click" data-session=${n.s.id} onClick=${() => openSession(n.s.index)} title=${sessionTip(n.s, namer, p)}>
+        <thead><tr><th>Session · ${f.sessions} in range</th><th class="num">You typed</th><th class="num">Agent</th><th class="num">Credits</th></tr></thead>
+        <tbody>${f.nodes.map(n => {
+          const open = () => openSession(n.s.index);
+          return html`
+          <tr class=${n.ctx ? 'ctx' : 'click'} data-session=${n.s.id} tabindex=${n.ctx ? undefined : '0'} onClick=${n.ctx ? undefined : open}
+            onKeyDown=${n.ctx ? undefined : onActivate(open)} title=${sessionTip(n.s, namer, p)}>
             <td><div class="tn" style=${`padding-left:${n.depth * 16}px`}>${n.depth ? html`<span class="tree">└ </span>` : null}${namer.name(n.s)}</div>
-              <small style=${`padding-left:${n.depth * 16 + (n.depth ? 14 : 0)}px`}>${n.depth === 0 ? 'coordinator' : n.depth === 1 ? 'child' : 'grandchild'}${namer.repo(n.s) !== namer.repo(f.s) ? ' · ' + namer.repo(n.s) : ''}${n.first ? ' · ' + when(n.first) : ''}${n.s.via === 'relay' ? ' · started by relay' : ''}</small></td>
-            <td class="num">${n.depth > 0 && neededYou(n) ? html`<span class="hand" title=${`you typed ${n.typed} ${n.typed === 1 ? 'prompt' : 'prompts'} and answered ${n.answered}`}>✋ ${n.typed}</span>` : n.typed}<small>${n.answered ? `${n.answered} answered · ` : ''}${n.automated} auto</small></td>
+              <small style=${`padding-left:${n.depth * 16 + (n.depth ? 14 : 0)}px`}>${nodeRole(n.depth)}${namer.repo(n.s) !== namer.repo(f.s) ? ' · ' + namer.repo(n.s) : ''}${n.ctx ? ' · not in this range or sidebar selection' : n.first ? ' · ' + when(n.first) : ''}${n.s.via === 'relay' ? ' · started by relay' : ''}</small></td>
+            <td class="num">${n.depth > 0 && neededYou(n) ? html`<span class="hand" title=${`you typed ${n.typed} ${n.typed === 1 ? 'prompt' : 'prompts'} and answered ${n.answered} ${n.answered === 1 ? 'question or permission prompt' : 'questions or permission prompts'}`}>✋ ${n.typed}</span>` : n.typed}<small>${n.answered ? `${n.answered} answered · ` : ''}${n.automated} auto</small></td>
             <td class="num">${formatHours(n.agentMs)}</td>
             <td class="num">${formatCredits(n.credits)}<i class="mbar" style=${`width:${f.credits ? 100 * n.credits / f.credits : 0}%`}></i></td>
-          </tr>`)}
+          </tr>`;
+        })}
         </tbody>
       </table>
       <p class="note">✋ = you typed into this child or answered its question or permission prompt · click a session to open it on the Timeline</p>
@@ -820,13 +931,19 @@ function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VN
 
 /* ---- keyboard: ← → change day or week, ↑ ↓ change lane or family ---- */
 
+/** Keys a focused control uses itself: text fields, lists, buttons, links and editable content. */
+function ownsKeys(el: HTMLElement): boolean {
+  return /^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(el.tagName) || el.isContentEditable;
+}
+
 function onKeyDown(e: KeyboardEvent): void {
   if (!rootEl?.isConnected || !loaded) return;
-  const target = e.target as HTMLElement | null;
-  if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
-  if (e.altKey || e.ctrlKey || e.metaKey) return;
-  // ↑ ↓ only when the timeline has focus: elsewhere they keep scrolling the page.
-  const inTimeline = !!target && rootEl.contains(target);
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const target = e.target instanceof HTMLElement ? e.target : null;
+  if (target && ownsKeys(target)) return;
+  // Only when the Timeline has focus (or nothing does): elsewhere, such as the sidebar, the keys keep their own use.
+  const inTimeline = !target || target === document.body || rootEl.contains(target);
+  if (!inTimeline) return;
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     if (state.view === 'families') return;
     e.preventDefault();
@@ -834,11 +951,14 @@ function onKeyDown(e: KeyboardEvent): void {
     if (next) update({ date: next });
     return;
   }
-  if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !inTimeline) return;
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  // ↑ ↓ move within the lanes or the family list, when one of them has focus; elsewhere they scroll the page.
+  const list = target?.closest<HTMLElement>(state.view === 'families' ? '#tlxFamilyList' : '#tlxLanes');
+  if (!list) return;
   e.preventDefault();
   const dir = e.key === 'ArrowDown' ? 1 : -1;
   if (state.view === 'families') {
-    const rows = [...rootEl.querySelectorAll<HTMLElement>('.frow')];
+    const rows = [...list.querySelectorAll<HTMLElement>('.frow')];
     const at = rows.findIndex(r => r.dataset.family === state.family);
     const next = rows[Math.max(0, Math.min(rows.length - 1, at + dir))];
     if (next) {
@@ -848,7 +968,7 @@ function onKeyDown(e: KeyboardEvent): void {
     }
     return;
   }
-  const lanes = [...rootEl.querySelectorAll<HTMLElement>('.tlx-lane')];
+  const lanes = [...list.querySelectorAll<HTMLElement>('.tlx-lane')];
   const at = lanes.findIndex(l => l.dataset.session === state.selected);
   const next = lanes[Math.max(0, Math.min(lanes.length - 1, at + dir))];
   if (next) {

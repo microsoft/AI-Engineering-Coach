@@ -435,6 +435,22 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     expect(started('mcp_app_open_issue_session', { content: `Session ${KID} is ready.` })).toEqual([KID]);
     expect(started('recreate_session', { content: `Session ${KID} is ready.` })).toBeUndefined();
     expect(started('view', { content: `Session ${KID} is ready.` })).toBeUndefined();
+    // MCP results hold their text in typed content blocks.
+    expect(started('app-create_session', { content: [{ type: 'text', text: `Created session 'x' (id: ${KID}).` }] })).toEqual([KID]);
+    // Another UUID in the result, such as the project's, is no started session.
+    expect(started('create_session', { content: `Project id: ${OTHER}. Done.` })).toBeUndefined();
+    expect(started('create_session', { content: JSON.stringify({ project_id: OTHER }) })).toBeUndefined();
+  });
+
+  it('tells the Copilot CLI from the App by the client that started the session', () => {
+    const file = writeEvents([
+      { type: 'session.start', data: { sessionId: COORD, remoteSteerable: false } },
+      { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'go' } },
+    ]);
+    expect(parseCLIEventsFile(file, 'ws', 'ws')?.harness).toBe('GitHub Copilot App');
+    fs.writeFileSync(path.join(path.dirname(file), 'workspace.yaml'), 'client_name: github/cli\n');
+    const cli = parseCLIEventsFile(file, 'ws', 'ws');
+    expect([cli?.harness, cli?.requests[0].agentName]).toEqual(['GitHub Copilot CLI', 'GitHub Copilot CLI']);
   });
 
   it('records the questions and permission prompts you answered as waits, not policy decisions', () => {
@@ -466,12 +482,15 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
       { type: 'permission.completed', timestamp: at(24), data: { requestId: 'p5', result: { kind: 'denied-interactively-by-user' } } },
     ]), 'ws', 'ws');
     const ms = (iso: string) => Date.parse(iso);
+    // Every request stops the agent; only an answer from you is `answered`. A policy decision isn't a request to you.
     expect(session?.requests[0].userWaits).toEqual([
-      { start: ms(at(1)), end: ms(at(6)), kind: 'question' },
-      { start: ms(at(9)), end: ms(at(12)), kind: 'question' },
-      { start: ms(at(15)), end: ms(at(17)), kind: 'permission' },
-      { start: ms(at(18)), end: ms(at(19)), kind: 'permission' },
-      { start: ms(at(21)), end: ms(at(24)), kind: 'permission' },
+      { start: ms(at(1)), end: ms(at(6)), kind: 'question', answered: true },
+      { start: ms(at(7)), end: ms(at(8)), kind: 'question', answered: false },
+      { start: ms(at(9)), end: ms(at(12)), kind: 'relay', answered: true },
+      { start: ms(at(14)), end: ms(at(14, 2)), kind: 'permission', answered: false },
+      { start: ms(at(15)), end: ms(at(17)), kind: 'permission', answered: true },
+      { start: ms(at(18)), end: ms(at(19)), kind: 'permission', answered: true },
+      { start: ms(at(21)), end: ms(at(24)), kind: 'permission', answered: true },
     ]);
   });
 
@@ -491,8 +510,9 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
       { type: 'assistant.message', timestamp: at(14), data: { content: 'done' } },
     ]), 'ws', 'ws');
     const ms = (iso: string) => Date.parse(iso);
+    // Overlapping requests stay separate: each is its own answer, and the model unions their time.
     expect(session?.requests.map(r => r.userWaits)).toEqual([
-      [{ start: ms(at(1)), end: ms(at(12)), kind: 'permission' }],
+      [{ start: ms(at(1)), end: ms(at(11)), kind: 'permission', answered: true }, { start: ms(at(2)), end: ms(at(12)), kind: 'question', answered: true }],
       undefined,
     ]);
   });

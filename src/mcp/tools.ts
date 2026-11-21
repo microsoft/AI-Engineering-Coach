@@ -189,16 +189,15 @@ const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'aiEngineerCoach_timeline',
-    description: 'Get autonomy and delegation analysis from the Timeline: agent time, turns the user typed versus automated, how long agents worked unattended, how often and how long they waited on the user, peak parallel agents, and session families (a coordinator and the child sessions it started) with credits and verdicts (worked alone, needed you, wide fan-out). Use to coach on delegation and briefs.',
+    description: 'Get autonomy and delegation analysis from the Timeline: agent time, turns the user typed versus automated, how long agents worked unattended, how often and how long they waited on the user, peak parallel sessions, and session families (a coordinator and the child sessions it started) with credits and what the logs show (no input in children, you stepped in, wide fan-out). Session and repository names are always masked. Use to coach on delegation.',
     inputSchema: {
       type: 'object',
       properties: {
         date: { type: 'string', description: 'Day to analyze (YYYY-MM-DD); defaults to the latest active day' },
-        includeNames: { type: 'boolean', description: 'Show session and repository names as logged (scrubbed of paths and the user\'s names). Off by default: names are masked.' },
         ...FILTER_SCHEMA,
       },
     },
-    invoke: (a, input) => textResult(formatTimeline(a, parseFilter(input), typeof input.date === 'string' ? input.date : undefined, input.includeNames === true)),
+    invoke: (a, input) => textResult(formatTimeline(a, parseFilter(input), typeof input.date === 'string' ? input.date : undefined)),
     prepareMessage: 'Reading the timeline…',
   },
 ];

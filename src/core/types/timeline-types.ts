@@ -6,18 +6,20 @@
 /* Timeline dataset: every session in range with its turns, as counts and timings only (no prompt or response text).
  * The analyzer builds it; `timeline-model.ts` derives the Day, Week and Families views from it. */
 
-/** Who sent a turn: you typed it (`you`), another agent or session sent it (`agent`), autopilot continued
- *  (`autopilot`), a compaction request (`compaction`), or the harness (`other`). */
+/** Who sent a turn: no harness marker says it was automated, so it came from you (`you`: typed or scripted by you),
+ *  another agent or session sent it (`agent`), autopilot continued (`autopilot`), a compaction request
+ *  (`compaction`), or the harness (`other`). */
 export type TurnSender = 'you' | 'agent' | 'autopilot' | 'compaction' | 'other';
 
 export interface TimelineTurn {
   /** When the turn's prompt was logged (epoch ms). */
   t: number;
-  /** The turn's span: its `totalElapsed`, from its prompt to the last assistant message (ms); 0 when not logged.
-   *  Agent time is this span minus `w`, the time the turn waited on you. */
+  /** The turn's span: its `totalElapsed`, from its prompt to its last logged agent activity (ms); 0 when not logged.
+   *  Agent time is this span minus `w`, the time the turn was stopped on a question or a permission prompt. */
   d: number;
   k: TurnSender;
-  /** Sub-agent runs the turn launched. */
+  /** Sub-agent launches the turn recorded (Copilot sub-agent runs, Claude Code `Agent`/`Task` and Codex
+   *  `spawn_agent` calls). */
   sub: number;
   /** The context was compacted during the turn. */
   comp: boolean;
@@ -27,15 +29,17 @@ export interface TimelineTurn {
   tok: number;
   /** The harness logged no duration for the turn, so when its work ended is unknown (`d` is 0). */
   noDuration?: boolean;
-  /** When the turn stopped for your answer to a question or a permission prompt: absolute spans in order, not
-   *  overlapping. Each ended with your answer. Usually inside [t, t + d]; one can outlast the turn's last message. */
+  /** When the turn was stopped on a question or a permission prompt (absolute ms, in order; they can overlap, and one
+   *  can outlast the turn's last message). `a`: you answered it, at `e`, which can equal `s`. */
   w?: TimelineTurnWait[];
 }
 
 export interface TimelineTurnWait {
   s: number;
   e: number;
-  k: 'question' | 'permission';
+  /** `relay`: a child session's question the coordinator relayed to you; the child logs the same answer. */
+  k: 'question' | 'relay' | 'permission';
+  a: boolean;
 }
 
 /** How a child session's parent was found: a `create_session`-style tool result (`create`), the relayed first message
@@ -54,26 +58,35 @@ export interface TimelineSessionRecord {
   harness: string;
   /** The model most of the session's turns in range used; empty when none was logged. */
   model: string;
-  /** Index of the parent session in `TimelineDataset.sessions`; -1 when it has none in range. */
+  /** Index of the parent session in `TimelineDataset.sessions`; -1 when no parent is linked. A parent with no activity
+   *  in range, or hidden by the sidebar filters, is still in the dataset, as a context record. */
   parent: number;
   via: TimelineLinkKind | null;
-  /** Index of the session it was forked from (Codex, Claude Code); -1 or absent when it isn't a linked fork or the
-   *  source has no turn in range. Not a family link. */
+  /** When its parent's create_session-style call created it (epoch ms); absent when no call logged it. */
+  created?: number;
+  /** The session is a fork (Codex, Claude Code): the index of its source in the dataset, or -1 when the source has no
+   *  activity in range. `forkSource`: whether the source is in these logs. Not a family link. */
   fork?: number;
-  /** Prompts copied from the fork source, left out of `turns` so they count once. */
-  copiedTurns?: number;
+  forkSource?: 'loaded' | 'missing';
+  /** Turns the fork copied from its source. They count once, in the source, so they aren't in `turns`. */
+  inheritedTurns?: number;
   /** Turns in range, in time order. */
   turns: TimelineTurn[];
-  /** Turns that started before the range: the last one, and any still running at its start. They give the waits and
-   *  agent work that cross into the range; only their part inside the range counts, and they aren't counted as turns. */
+  /** Turns just outside the range that its totals need: those before it back to the last prompt or answer from you,
+   *  any still running into it, and the first turn after it (which ends a wait that started inside). Only their work
+   *  and waits inside the range count; they are never counted as turns. */
   context?: TimelineTurn[];
+  /** A context record: a member of a shown family with no activity in range, or hidden by the sidebar's workspace or
+   *  harness filter. Its turns are all `context`; it gives the family its structure, inputs and work, never a lane. */
+  ctx?: boolean;
 }
 
 export interface TimelineDataset {
   sessions: TimelineSessionRecord[];
   /** Sessions in range whose harness counted a fork without logging its source (Copilot `fork_count`). */
   forkedSessions: number;
-  /** The range (epoch ms, local midnights): its start, and the end of its last day. Absent for an open bound. */
+  /** The range (epoch ms, local midnights): its start, and the end of its last day. Absent for an open bound. Work and
+   *  waits outside it never count. */
   from?: number;
   to?: number;
 }

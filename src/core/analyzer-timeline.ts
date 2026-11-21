@@ -13,7 +13,7 @@ import { toDateStr, isoWeek } from './helpers';
 import { AnalyzerBase } from './analyzer-base';
 import { harnessLabel, scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
 import { localScrubContext } from './session-workspace-meta';
-import { resolveForkLinks, resolveParentLinks, type ForkLink, type ParentLink } from './timeline-links';
+import { resolveParentLinks, type ParentLink } from './timeline-links';
 import { addDays, dayStart } from './timeline-model';
 
 /** The sender marker a turn gets on the Timeline. */
@@ -25,18 +25,28 @@ export function turnSender(kind: NonHumanKind | undefined): TurnSender {
   return 'other';
 }
 
-/** Claude Code's sub-agent tool (`Agent`, `Task` before): each call runs a sub-agent in a sidechain transcript. */
-const CLAUDE_SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
+/** Tools that launch a sub-agent: Claude Code's `Agent` (`Task` before), each running in a sidechain transcript, and
+ *  Codex's `spawn_agent` (a child thread). */
+const SUBAGENT_TOOLS: Readonly<Record<string, ReadonlySet<string>>> = {
+  Claude: new Set(['Agent', 'Task']),
+  Codex: new Set(['spawn_agent']),
+};
+
+function subagentLaunches(r: SessionRequest): number {
+  if (r.subagentRuns) return r.subagentRuns.length;
+  const tools = SUBAGENT_TOOLS[r.agentName];
+  return tools ? r.toolsUsed.filter(t => tools.has(t)).length : 0;
+}
 
 function timelineTurn(r: SessionRequest): TimelineTurn {
   const t = r.timestamp ?? 0;
   const d = Math.max(0, r.totalElapsed ?? 0);
-  const waits = (r.userWaits ?? []).filter(w => w.end > w.start).map(w => ({ s: w.start, e: w.end, k: w.kind }));
+  const waits = (r.userWaits ?? []).filter(w => w.end >= w.start).map(w => ({ s: w.start, e: w.end, k: w.kind, a: w.answered }));
   return {
     t,
     d,
     k: turnSender(r.nonHumanKind),
-    sub: r.subagentRuns?.length ?? (r.agentName === 'Claude' ? r.toolsUsed.filter(t => CLAUDE_SUBAGENT_TOOLS.has(t)).length : 0),
+    sub: subagentLaunches(r),
     comp: Boolean(r.compaction || r.compactions?.length),
     cr: r.aiCredits ?? 0,
     tok: r.loggedTokens ?? Math.max(0, (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
@@ -52,69 +62,118 @@ function mainModel(requests: readonly SessionRequest[]): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
 }
 
-/** A linked fork's source (when it has turns in range) and how many prompts it copied from it. */
-function forkFields(link: ForkLink | undefined, index: ReadonlyMap<string, number>, copied: number): Pick<TimelineSessionRecord, 'fork' | 'copiedTurns'> {
-  if (!link) return {};
-  return { fork: index.get(link.source) ?? -1, ...(copied > 0 ? { copiedTurns: copied } : {}) };
+const turnEnd = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
+/** When the turn last held anything: its work, or a question or permission still open after it. */
+const turnReach = (r: SessionRequest) => Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end));
+/** The turn holds an input from you: you typed it, or you answered a question or a permission in it. */
+const hasInput = (r: SessionRequest, before: number) =>
+  (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => w.answered && w.end < before);
+
+/** A session's turns in time order, split by the range: those in it, and the context its totals need (see
+ *  `TimelineSessionRecord.context`). */
+function splitByRange(s: Session, from: number | undefined, to: number | undefined) {
+  const own = s.requests.filter(r => r.timestamp != null && r.timestamp > 0).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  const inside = own.filter(r => (from === undefined || (r.timestamp ?? 0) >= from) && (to === undefined || (r.timestamp ?? 0) < to));
+  const before = from === undefined ? [] : own.filter(r => (r.timestamp ?? 0) < from);
+  let lastInput = -1;
+  for (let i = before.length - 1; i >= 0 && lastInput < 0; i--) if (hasInput(before[i], from ?? 0)) lastInput = i;
+  // No input from you before the range: all of it, since a stretch that a parent's prompt started can run through it.
+  const context = before.filter((r, i) => i >= lastInput || turnReach(r) > (from ?? 0));
+  const after = to === undefined ? undefined : own.find(r => (r.timestamp ?? 0) >= to);
+  if (after) context.push(after);
+  const reachesIn = before.some(r => turnReach(r) > (from ?? 0));
+  return { all: own, inside, context, active: inside.length > 0 || reachesIn };
 }
 
 export class TimelineAnalyzer extends AnalyzerBase {
   private links?: Map<string, ParentLink>;
-  private forks?: Map<string, ForkLink>;
 
-  /** Every session with a turn in range, with its turns as counts and timings, its family link, and its logged
-   *  name, branch and repository (never a path). No prompt or response text. Turns before the range that it needs for
-   *  the waits and work crossing into it come as `context`, with the range bounds, so every total can be clipped. */
+  /** Every session with activity in range, with its turns as counts and timings, its family link, and its logged
+   *  name, branch and repository (never a path). No prompt or response text. Turns just outside the range that its
+   *  totals need come as `context`, with the range bounds, so every total can be clipped to the range and a range gives
+   *  the same per-day values as its days one at a time. Every other member of a shown family comes as a context
+   *  record, so the family keeps its structure and its inputs whatever the range or the sidebar filters. */
   getTimelineData(f?: DateFilter, labels: ScrubContext = localScrubContext()): TimelineDataset {
-    this.links ??= resolveParentLinks(this.sessions);
-    this.forks ??= resolveForkLinks(this.sessions);
-    const forks = this.forks;
+    const links = (this.links ??= resolveParentLinks(this.sessions));
     const from = f?.fromDate ? dayStart(f.fromDate) : undefined;
     const to = f?.toDate ? addDays(dayStart(f.toDate), 1) : undefined;
-    const end = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
-    const inRange = this.sessions
+    const byId = new Map(this.sessions.map(s => [s.sessionId, s]));
+    const shown = this.sessions
       .filter(s => this.matchesWorkspaceFilter(s, f?.workspaceId) && (!f?.harness || s.harness === f.harness))
-      .map(s => {
-        const copied = forks.get(s.sessionId)?.copied;
-        const own = s.requests
-          .filter(r => r.timestamp != null && r.timestamp > 0 && !(r.userEventId && copied?.has(r.userEventId)))
-          .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
-        const before = from === undefined ? [] : own.filter(r => (r.timestamp ?? 0) < from);
-        return {
-          s,
-          copied: s.requests.filter(r => r.userEventId && copied?.has(r.userEventId)).length,
-          requests: own.filter(r => this.requestInRange(r, f)),
-          context: before.filter((r, i) => i === before.length - 1 || end(r) > (from ?? 0)),
-        };
-      })
-      .filter(({ requests, context }) => requests.length > 0 || context.some(r => end(r) > (from ?? 0)))
-      .sort((a, b) => (a.requests[0]?.timestamp ?? from ?? 0) - (b.requests[0]?.timestamp ?? from ?? 0) || a.s.sessionId.localeCompare(b.s.sessionId));
-    const index = new Map(inRange.map(({ s }, i) => [s.sessionId, i]));
-    const sessions: TimelineSessionRecord[] = inRange.map(({ s, requests, context, copied }) => {
-      const link = this.links?.get(s.sessionId);
+      .map(s => ({ s, ...splitByRange(s, from, to), ctx: false }))
+      .filter(x => x.active);
+    // Whole families of the shown sessions: the other members, hidden by the range or the filters, as context.
+    const children = new Map<string, string[]>();
+    for (const [child, link] of links) {
+      if (!children.has(link.parent)) children.set(link.parent, []);
+      children.get(link.parent)?.push(child);
+    }
+    const root = (id: string) => {
+      const seen = new Set<string>();
+      let at = id;
+      while (links.has(at) && !seen.has(at)) { seen.add(at); at = links.get(at)?.parent ?? at; }
+      return at;
+    };
+    const included = new Set(shown.map(x => x.s.sessionId));
+    const members: typeof shown = [];
+    const visit = (id: string) => {
+      for (const child of children.get(id) ?? []) {
+        if (included.has(child)) { visit(child); continue; }
+        included.add(child);
+        const s = byId.get(child);
+        if (s) members.push({ s, ...splitByRange(s, undefined, undefined), ctx: true });
+        visit(child);
+      }
+    };
+    for (const id of new Set(shown.filter(x => links.has(x.s.sessionId) || children.has(x.s.sessionId)).map(x => root(x.s.sessionId)))) {
+      if (!included.has(id) && byId.has(id)) {
+        included.add(id);
+        const s = byId.get(id);
+        if (s) members.push({ s, ...splitByRange(s, undefined, undefined), ctx: true });
+      }
+      visit(id);
+    }
+    const firstAt = (x: (typeof shown)[number]) => x.inside[0]?.timestamp ?? x.context[0]?.timestamp ?? x.all[0]?.timestamp ?? 0;
+    const order = (a: (typeof shown)[number], b: (typeof shown)[number]) => firstAt(a) - firstAt(b) || a.s.sessionId.localeCompare(b.s.sessionId);
+    const records = [...shown.sort(order), ...members.sort(order)];
+    const index = new Map(records.map((x, i) => [x.s.sessionId, i]));
+    const sessions: TimelineSessionRecord[] = records.map(x => {
+      const { s } = x;
+      const link = links.get(s.sessionId);
       const parent = link ? index.get(link.parent) ?? -1 : -1;
+      const created = parent >= 0 && link?.via === 'create' ? byId.get(link.parent)?.childSessionCreatedAt?.[s.sessionId.toLowerCase()] : undefined;
+      const turns = x.ctx ? [] : x.inside;
+      const context = x.ctx ? x.all : x.context;
+      const source = s.forkedFromId;
+      const sourceAt = source ? index.get(source) : undefined;
       return {
         id: s.sessionId,
         name: s.displayName ? scrubLabel(s.displayName, labels) : '',
         branch: s.branch ? scrubBranch(s.branch, labels) : '',
         repo: scrubRepository(s.repository || s.workspaceName || '', labels),
         harness: harnessLabel(s.harness),
-        model: mainModel(requests.length ? requests : context),
+        model: scrubLabel(mainModel(turns.length ? turns : context), labels),
         parent,
         via: parent >= 0 && link ? link.via : null,
-        ...forkFields(forks.get(s.sessionId), index, copied),
-        turns: requests.map(timelineTurn),
+        ...(created !== undefined ? { created } : {}),
+        // A Claude Code fork whose source isn't in these logs is still a fork: its copied turns were left out.
+        ...(source || s.inheritedTurns ? {
+          fork: sourceAt !== undefined && !records[sourceAt].ctx ? sourceAt : -1,
+          forkSource: source && byId.has(source) ? 'loaded' as const : 'missing' as const,
+        } : {}),
+        ...(s.inheritedTurns ? { inheritedTurns: s.inheritedTurns } : {}),
+        turns: turns.map(timelineTurn),
         ...(context.length ? { context: context.map(timelineTurn) } : {}),
+        ...(x.ctx ? { ctx: true } : {}),
       };
     });
     return {
       sessions,
-      forkedSessions: inRange.filter(({ s }) => (s.forkCount ?? 0) > 0).length,
+      forkedSessions: shown.filter(({ s }) => (s.forkCount ?? 0) > 0).length,
       ...(from !== undefined ? { from } : {}),
       ...(to !== undefined ? { to } : {}),
     };
   }
-
   getSessions(page: number, pageSize: number, f?: DateFilter, search?: string): SessionList {
     let filtered = this.filteredSessions(f);
     if (search) {

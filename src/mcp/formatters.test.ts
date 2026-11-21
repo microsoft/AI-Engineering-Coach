@@ -277,18 +277,21 @@ describe('formatTimeline', () => {
     ];
     const summary = formatTimeline(new Analyzer(sessions, new Map()), undefined);
     expect(summary).toMatchObject({
-      range: { sessions: 2, activeDays: 1 },
-      day: { date: '2026-10-20', turns: 4, typedTurns: 3, peakParallelAgents: 2, childSessions: 1, childCreditSharePct: 75, waitsOnUser: { count: 2, onQuestionOrPermission: 0, minutes: 110, over30Min: 1 } },
-      families: { count: 1, childSessions: 1, childSessionsThatNeededYou: 1, verdicts: { neededYou: { families: 1, creditSharePct: 100 } }, top: [{ name: 'Session 1', repository: 'Repository A', verdict: 'Needed you' }] },
+      requested: { from: null, to: null },
+      observed: { sessions: 2, activeDays: 1, firstActiveDay: '2026-10-20', lastActiveDay: '2026-10-20' },
+      day: { date: '2026-10-20', turns: 4, typedTurns: 3, peakParallelSessions: 2, childSessions: 1, childCreditSharePct: 75, waitsOnUser: { started: 2, onQuestionOrPermission: 0, minutes: 110, atLeast30Min: 1 } },
+      families: { count: 1, childSessions: 1, childSessionsWithYourInput: 1, verdicts: { youSteppedIn: { families: 1, creditSharePct: 100 } }, top: [{ name: 'Session 1', repository: 'Repository A', verdict: 'You stepped in' }] },
     });
+    // Names are always masked, and branches never sent: the result goes to a language model.
     const json = JSON.stringify(summary);
     expect(json).not.toContain('secret');
-    // Names are masked unless asked for; branches are never sent.
     expect(json).not.toContain('Checkout');
-    const named = formatTimeline(new Analyzer(sessions, new Map()), undefined, undefined, true);
-    expect(named.families?.top[0]).toMatchObject({ name: 'Checkout', repository: 'shop' });
-    expect(JSON.stringify(named)).not.toContain('secret');
-    expect(formatTimeline(new Analyzer(sessions, new Map()), undefined, '2026-10-21').day)
+    const analyzer = new Analyzer(sessions, new Map());
+    expect(formatTimeline(analyzer, undefined, '2026-10-21').day)
       .toEqual({ date: '2026-10-21', sessions: 0, note: 'No activity on this day in the selected range.' });
+    expect(formatTimeline(analyzer, { fromDate: '2026-10-21' }, '2026-10-20')).toMatchObject({ requested: { from: '2026-10-21', to: null }, sessions: 0 });
+    expect(formatTimeline(analyzer, { toDate: '2026-10-19' }, '2026-10-20').day).toBeUndefined();
+    expect(formatTimeline(analyzer, undefined, '2026-11-31')).toEqual({ error: 'Not a calendar date: 2026-11-31. Use YYYY-MM-DD.' });
+    expect(formatTimeline(analyzer, { fromDate: '2026-02-30' })).toEqual({ error: 'Not a calendar date: 2026-02-30. Use YYYY-MM-DD.' });
   });
 });

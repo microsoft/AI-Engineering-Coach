@@ -5,9 +5,9 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, filterLanes, formatDuration, hourTicks, NO_LANE_FILTERS,
-  peakParallel, prepareTimeline, sessionWaits, stepDate, timelineKpis, timelineWindow, unattendedMs, verdictText, viewInsights,
-  workMs, workSegments,
+  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filterLanes, formatDuration, hourTicks,
+  NO_LANE_FILTERS, peakParallel, prepareTimeline, sessionWaits, sessionWork, stepDate, timelineKpis, timelineWindow, turnTimes,
+  verdictText, VERDICTS, viewInsights, type PreparedTimeline,
 } from './timeline-model';
 import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TurnSender } from './types/timeline-types';
 
@@ -17,6 +17,8 @@ const turn = (t: number, minutes: number, k: TurnSender = 'you', extra: Partial<
   ({ t, d: minutes * MIN, k, sub: 0, comp: false, cr: 0, tok: 0, ...extra });
 const session = (id: string, turns: TimelineTurn[], extra: Partial<TimelineSessionRecord> = {}): TimelineSessionRecord =>
   ({ id, name: id, branch: '', repo: 'shop', harness: 'Copilot App', model: 'm', parent: -1, via: null, turns, ...extra });
+const DAY = timelineWindow('day', '2024-03-15');
+const unattended = (p: PreparedTimeline, root = 0, win = DAY) => formatDuration(familyUnattendedMs(p, root, win));
 
 /** A coordinator (0) that started two children (1, 2); child 1 started a grandchild (3); a lone session (4). */
 function fixture(): TimelineDataset {
@@ -53,12 +55,16 @@ describe('timeline model', () => {
     expect(waitsOf([turn(at(9), 0, 'you', { noDuration: true }), turn(at(10), 5), turn(at(10, 30), 5)])).toEqual([[at(10, 5), at(10, 30)]]);
   });
 
-  it('measures the longest unattended stretch after one prompt, across the family', () => {
+  it('measures the longest unattended stretch in a family, up to your next input anywhere in it', () => {
     const p = prepareTimeline(fixture());
-    const lanes = buildLanes(p, ...timelineWindow('day', '2024-03-15'));
-    const family = lanes.filter(l => l.s.root === 0);
-    // After the 9:00 prompt, child-b kept working until 11:00, past your next prompt at 10:30.
-    expect(formatDuration(unattendedMs(family))).toBe('2 h 00 m');
+    // From the 9:00 prompt the family kept working, but your prompt into child-a at 10:30 ends that stretch; the next one
+    // runs from 10:30 to 11:10.
+    expect(unattended(p)).toBe('1 h 30 m');
+  });
+
+  it('counts peak parallel work as sessions, not turns', () => {
+    const p = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 30), turn(at(9, 10), 30, 'agent')]), session('b', [turn(at(9, 20), 5)])] });
+    expect(peakParallel(buildLanes(p, ...DAY))).toEqual({ count: 2, at: at(9, 20) });
   });
 
   it('finds the peak of overlapping agent work and when it started', () => {
@@ -79,9 +85,9 @@ describe('timeline model', () => {
       [4, [['lone', 0]]],
     ]);
     const tips = viewInsights(lanes, families, createNamer(p, false), 'day');
-    expect(tips[0]).toContain('Your coordinator “coord” and 3 sessions of its family kept working 2 h 00 m after one of your prompts or answers');
-    expect(tips[1]).toBe('Child sessions used 65.0% of the credits shown. The child “child-b” alone used 30%, with no prompt or answer from you.');
-    expect(tips[2]).toBe('Agents waited on you 2 times after finishing a turn, 1 h 18 m in total; 1 wait was longer than 30 min. Answer from the session list, or let autopilot carry on with routine steps.');
+    expect(tips[0]).toBe('The longest unattended stretch on this day was 1 h 30 m, in the family of your coordinator “coord” (4 of 4 sessions shown): agent work kept running after one of your prompts or answers, with no pause over 2 min and no further prompt or answer from you anywhere in the family.');
+    expect(tips[1]).toBe('Child sessions used 65.0% of the credits shown. The child “child-b” used 30%; no prompt or answer from you was recorded in it on this day.');
+    expect(tips[2]).toBe('Agents waited on you 2 times for your next prompt after their work on this day, 1 h 18 m in total; 1 wait lasted 30 min or more. Answering from the session list, or letting autopilot carry on with routine steps, could shorten such waits.');
   });
 
   it('keeps the tree when a filter hides a parent, under the nearest shown ancestor', () => {
@@ -105,7 +111,7 @@ describe('timeline model', () => {
       ['lone', 'alone', true, 8, 0, 0, 2],
     ]);
     expect(totals).toMatchObject({ families: 2, children: 11, childrenNeedingYou: 1, maxDepth: 2, maxFanOut: 8 });
-    expect(familiesInsights(totals)[1]).toBe('1 of 11 child sessions needed you: you typed 1 prompt into them. Show Needed you and open the ✋ children to see what their brief was missing.');
+    expect(familiesInsights(totals)[1]).toBe('1 of 11 child sessions got input from you: you typed 1 prompt into it. Show “You stepped in” and open the ✋ children to see where.');
   });
 
   it('dates a family from its first to its last activity', () => {
@@ -121,7 +127,7 @@ describe('timeline model', () => {
     expect([masked.name(p.sessions[0]), masked.name(p.sessions[1]), masked.repo(p.sessions[0]), masked.repo(p.sessions[4])])
       .toEqual(['Session 1', 'Child session 2', 'Repository A', 'Repository B']);
     expect(createNamer(prepareTimeline({ forkedSessions: 0, sessions: [session('x', [turn(at(9), 1)], { name: '' })] }), false).name(prepareTimeline({ forkedSessions: 0, sessions: [session('x', [turn(at(9), 1)], { name: '' })] }).sessions[0]))
-      .toMatch(/^Untitled Copilot App session · /);
+      .toMatch(/^Untitled Copilot App session 1 · /);
   });
 
   it('steps between active days and weeks', () => {
@@ -135,12 +141,12 @@ describe('timeline model', () => {
 });
 
 describe('time the agent waited on you inside a turn', () => {
-  const asked = (s: number, e: number, k: 'question' | 'permission' = 'question') => ({ s, e, k });
+  const asked = (s: number, e: number, k: 'question' | 'permission' = 'question', a = true) => ({ s, e, k, a });
 
   it('leaves questions and permission prompts out of agent time and counts them as waiting on you', () => {
     const t = turn(at(10), 60, 'you', { w: [asked(at(10, 10), at(10, 40)), asked(at(10, 50), at(10, 52), 'permission')] });
-    expect(workSegments(t)).toEqual([[at(10), at(10, 10)], [at(10, 40), at(10, 50)], [at(10, 52), at(11)]]);
-    expect(workMs(t)).toBe(28 * MIN);
+    expect(sessionWork([t])).toEqual([[at(10), at(10, 10)], [at(10, 40), at(10, 50)], [at(10, 52), at(11)]]);
+    expect(turnTimes(t)).toEqual({ workMs: 28 * MIN, blockedMs: 32 * MIN });
     expect(sessionWaits([t]).waits.map(w => w.kind)).toEqual(['question', 'permission']);
     const p = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [t])] });
     const lanes = buildLanes(p, ...timelineWindow('day', '2024-03-15'));
@@ -150,7 +156,7 @@ describe('time the agent waited on you inside a turn', () => {
 
   it('keeps a wait that outlasts the turn’s last message, by its own timestamps', () => {
     const t = turn(at(10), 10, 'agent', { w: [asked(at(10, 5), at(10, 40), 'permission')] });
-    expect(workSegments(t)).toEqual([[at(10), at(10, 5)]]);
+    expect(sessionWork([t])).toEqual([[at(10), at(10, 5)]]);
     expect(sessionWaits([t]).waits).toEqual([{ start: at(10, 5), end: at(10, 40), kind: 'permission' }]);
   });
 
@@ -166,12 +172,12 @@ describe('time the agent waited on you inside a turn', () => {
 
   it('restarts the unattended stretch at your answer', () => {
     const p = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 120, 'you', { w: [asked(at(9, 30), at(10))] })])] });
-    expect(formatDuration(unattendedMs(buildLanes(p, ...timelineWindow('day', '2024-03-15'))))).toBe('1 h 00 m');
+    expect(unattended(p)).toBe('1 h 00 m');
   });
 
   it('ends the unattended stretch when no agent is working', () => {
     const p = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 10), turn(at(9, 11), 4, 'agent'), turn(at(9, 40), 10, 'agent')])] });
-    expect(formatDuration(unattendedMs(buildLanes(p, ...timelineWindow('day', '2024-03-15'))))).toBe('15 min');
+    expect(unattended(p)).toBe('15 min');
   });
 
   it('counts an answered question in a child as needing you, and says so', () => {
@@ -183,8 +189,8 @@ describe('time the agent waited on you inside a turn', () => {
     };
     const { families, totals } = buildFamilies(prepareTimeline(data));
     expect(families[0]).toMatchObject({ verdict: 'needed', childTyped: 0, childAnswered: 1, steppedInto: 1 });
-    expect(verdictText(families[0])).toBe('You answered 1 question or permission prompt in 1 of 1 child sessions (marked ✋): they needed more than the coordinator’s brief.');
-    expect(familiesInsights(totals)[1]).toContain('you answered 1 question or permission prompt in them');
+    expect(verdictText(families[0])).toBe('1 of 1 child session (marked ✋) got input from you: you answered 1 question or permission prompt in it. You typed 1 prompt into the coordinator.');
+    expect(familiesInsights(totals)[1]).toContain('you answered 1 question or permission prompt in it');
   });
 });
 
@@ -210,7 +216,7 @@ describe('day and week boundaries', () => {
     expect([p.dayTotals.get('2024-03-15')?.agentMs, p.dayTotals.get('2024-03-16')?.agentMs]).toEqual([40 * MIN, 35 * MIN]);
     // The turn that started on the 15th is drawn on the 16th but counted on the 15th.
     const lane16 = buildLanes(p, ...timelineWindow('day', '2024-03-16')).find(l => l.s.id === 'b')!;
-    expect([lane16.turns.length, lane16.carried.length, lane16.agentMs]).toEqual([0, 1, 30 * MIN]);
+    expect([lane16.turns.length, lane16.segments, lane16.agentMs]).toEqual([0, [[at(0, 0, 16), at(0, 30, 16)]], 30 * MIN]);
   });
 
   describe('on a daylight-saving day', () => {
@@ -233,25 +239,39 @@ describe('conditional coaching sentences', () => {
     const p = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 10), turn(at(13), 5)])] });
     const lanes = buildLanes(p, ...timelineWindow('day', '2024-03-15'));
     expect(viewInsights(lanes, buildViewFamilies(lanes, p), createNamer(p, false), 'day')[2])
-      .toBe('No agent waited 2–120 min for your next prompt or on a question; 1 gap was longer than 2 h, counted as time away rather than waiting.');
+      .toBe('No wait on you was recorded on this day: no gap of 2–120 min before your next prompt, and no question or permission prompt you answered. 1 longer gap before your next prompt counts as time away, not waiting.');
   });
 
   it('names the coordinator when it is not shown, and words the stretch for its children', () => {
     const p = prepareTimeline(fixture());
     const lanes = buildLanes(p, ...timelineWindow('day', '2024-03-15')).filter(l => l.s.id === 'child-a');
     const tip = viewInsights(lanes, buildViewFamilies(lanes, p), createNamer(p, false), 'day', p)[0];
-    expect(tip).toContain('The child session “child-a” of the coordinator “coord” (not shown here) kept working 5 min');
+    expect(tip).toContain('was 1 h 30 m, in the family of “coord”, whose coordinator isn’t shown here (1 of 4 sessions shown)');
   });
 
-  it('says clearer briefs are the biggest lever only when the families that needed you cost more', () => {
-    const lever = (needed: number, alone: number) => familiesInsights({
+  it('states only what the logs show: no causes, no verdict on the brief', () => {
+    const insight = (needed: number, alone: number) => familiesInsights({
       ...buildFamilies(prepareTimeline(fixture())).totals,
       totalCredits: 100, needed: { families: 1, creditShare: needed, avgCredits: needed }, alone: { families: 1, creditShare: alone, avgCredits: alone },
     })[0];
-    expect(lever(60, 20)).toContain('Clearer briefs are the biggest lever.');
-    expect(lever(20, 60)).not.toContain('Clearer briefs');
+    expect(insight(60, 20)).toBe('Families where you stepped into a child used 60% of all credits (1 family, 60 credits on average); the 1 with no input in its children used 20% (20 on average).');
+    const words = /biggest lever|brief that made|missing|finished|dominate|needed more than|clearer briefs/i;
+    for (const text of [insight(60, 20), insight(20, 60), ...Object.values(VERDICTS).map(v => v.habit)]) expect(text).not.toMatch(words);
     const alone = buildFamilies(prepareTimeline({ ...fixture(), sessions: fixture().sessions.map(s => ({ ...s, turns: s.turns.filter(t => s.parent < 0 || t.k !== 'you') })) }));
-    expect(familiesInsights(alone.totals)[0]).toMatch(/^The family worked alone: no child session needed a prompt or answer from you\./);
-    expect(verdictText(alone.families[0])).toMatch(/^All 3 child sessions needed no prompt or answer from you\./);
+    expect(familiesInsights(alone.totals)[0]).toMatch(/^No prompt or answer from you was recorded in a child session of the family\./);
+    expect(verdictText(alone.families[0])).toMatch(/^No prompt or answer from you was recorded in the 3 child sessions in this range\./);
+  });
+
+  it('draws and counts only the part of a turn inside the range', () => {
+    // The range is Wednesday 13 March only: Tuesday's turn ran 10 min into it, Wednesday's last one 5 min to midnight.
+    const data: TimelineDataset = {
+      forkedSessions: 0, from: at(0, 0, 13), to: at(0, 0, 14),
+      sessions: [session('a', [turn(at(23, 55, 13), 15, 'agent')], { context: [turn(at(23, 50, 12), 20)] })],
+    };
+    const p = prepareTimeline(data);
+    const [lane] = buildLanes(p, ...timelineWindow('week', '2024-03-13'));
+    expect(lane.segments).toEqual([[at(0, 0, 13), at(0, 10, 13)], [at(23, 55, 13), at(0, 0, 14)]]);
+    expect(lane.agentMs).toBe(15 * MIN);
+    expect(p.days).toEqual(['2024-03-13']);
   });
 });

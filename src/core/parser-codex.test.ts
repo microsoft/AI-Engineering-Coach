@@ -79,6 +79,33 @@ describe('parseCodexSessions', () => {
       expect(parseCodexSessions(sessionsDir)[0]).toMatchObject({ sessionId: 'fork-thread', forkedFromId: 'source-thread' });
     });
   });
+
+  it('counts only a fork’s own tokens: its first total already holds what the source used', () => {
+    const tokens = (ts: string, total: [number, number], last: [number, number]) => ({ type: 'event_msg', timestamp: ts, payload: { type: 'token_count', info: {
+      total_token_usage: { input_tokens: total[0], output_tokens: total[1], total_tokens: total[0] + total[1] },
+      last_token_usage: { input_tokens: last[0], output_tokens: last[1], total_tokens: last[0] + last[1] },
+    } } });
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      tokens('2025-06-15T09:00:10Z', [100_000, 5000], [2000, 100]),
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+      tokens('2025-06-15T09:00:30Z', [103_000, 5300], [3000, 300]),
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([5000, 400]);
+    });
+  });
+
+  it('leaves a turn’s duration unknown when only the prompt’s acknowledgment was logged', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'failed', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Fix it.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00.010Z', payload: { type: 'item_completed', item: { type: 'UserMessage' } } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBeNull();
+    });
+  });
   it('captures current custom_tool_call apply_patch deltas', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'sess-codex-patch', cwd: '/Users/me/proj' } },

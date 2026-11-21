@@ -29,9 +29,9 @@ test.describe('Timeline', () => {
     await expect(kpi(page, 'Agent time per prompt')).toHaveText('47 min');
     await expect(kpi(page, 'Longest unattended')).toHaveText('1 h 13 m');
     await expect(kpi(page, 'Waiting on you')).toHaveText('1 h 30 m');
-    await expect(page.locator('#tlxKpis')).toContainText('3 waits · 2 over 30 min');
-    await expect(kpi(page, 'Peak parallel agents')).toHaveText('3');
-    await expect(page.locator('#tlxInsights')).toContainText('Your coordinator “Checkout revamp” and 4 sessions of its family kept working 1 h 13 m');
+    await expect(page.locator('#tlxKpis')).toContainText('3 waits started · 2 of 30 min or more');
+    await expect(kpi(page, 'Peak parallel sessions')).toHaveText('3');
+    await expect(page.locator('#tlxInsights')).toContainText('The longest unattended stretch on this day was 1 h 13 m, in the family of your coordinator “Checkout revamp” (5 of 5 sessions shown)');
     await expect(page.locator('#tlxCount')).toHaveText('6 of 6 sessions shown');
     // Tree order: coordinator, child, its grandchild, then the other children; one connector per shown child.
     await expect(page.locator('.tlx-lane .nm')).toHaveText(['Checkout revamp', 'Payment API tests', 'Lint fixes', 'Docs update', 'Perf probe', 'Investigate flaky test']);
@@ -47,7 +47,7 @@ test.describe('Timeline', () => {
   test('shows the selected session’s turns without prompt text, and links its family', async ({ page }) => {
     await expect(page.locator('#tlxDetailName')).toHaveText('Payment API tests');
     await page.locator('.tlx-lane[data-session="tl-lint"]').click();
-    await expect(page.locator('#tlxDetail')).toContainText('Grandchild of “Payment API tests”');
+    await expect(page.locator('#tlxDetail')).toContainText('Grandchild · parent “Payment API tests”');
     await expect(page.locator('#tlxDetail')).toContainText('compaction');
     await page.locator('#tlxOpenParent').click();
     await expect(page.locator('#tlxDetailName')).toHaveText('Payment API tests');
@@ -75,8 +75,15 @@ test.describe('Timeline', () => {
   });
 
   test('changes day with the arrows and the strip, and switches to the week', async ({ page }) => {
+    // ← → belong to the sidebar while it has focus.
+    await page.locator('[data-page="timeline"]').first().focus();
     await page.keyboard.press('ArrowLeft');
-    await expect(page.locator('.tlx-lane .nm')).toHaveText(['Release notes', 'Changelog', /^Untitled Copilot CLI session/]);
+    await expect(page.locator('.tlx-lane .nm').first()).toHaveText('Checkout revamp');
+    await page.locator('#tlxLanes').focus();
+    await page.keyboard.press('Shift+ArrowLeft');
+    await expect(page.locator('.tlx-lane .nm').first()).toHaveText('Checkout revamp');
+    await page.keyboard.press('ArrowLeft');
+    await expect(page.locator('.tlx-lane .nm')).toHaveText(['Release notes', 'Changelog', /^Untitled Copilot CLI session \d+ · /]);
     // A question the agent waited on inside a turn: drawn as a wait, left out of agent time.
     await expect(page.locator('.tlx-lane[data-session="tl-notes"] .wait.ask')).toHaveCount(1);
     await expect(page.locator('#tlxKpis')).toContainText('(1 on a question or permission)');
@@ -91,12 +98,21 @@ test.describe('Timeline', () => {
     await expect(page.locator('.tlx-lanes .conn')).toHaveCount(0);
   });
 
-  test('masks names, branches and repositories', async ({ page }) => {
+  test('masks names, branches, repositories and search text', async ({ page }) => {
+    await page.locator('#tlxQuery').fill('docs-site');
+    await expect(page.locator('.tlx-lane .nm')).toHaveText(['Docs update']);
     await page.locator('#tlxMask').check();
+    await expect(page.locator('#tlxQuery')).toHaveValue('');
+    await expect(page.locator('#tlxCount')).toHaveText('6 of 6 sessions shown');
     await expect(page.locator('.tlx-lane .nm').first()).toHaveText(/^Session \d+$/);
     await expect(page.locator('.tlx-lane[data-session="tl-pay"] .nm')).toHaveText(/^Child session \d+$/);
     const text = await page.locator('#tlx-root').innerText();
     for (const secret of ['Checkout revamp', 'Payment API', 'checkout-revamp', 'shop', 'my-api', 'docs-site']) expect(text).not.toContain(secret);
+    await page.locator('#tlxMask').uncheck();
+    await page.locator('#tlxView [data-value="families"]').click();
+    await page.locator('#tlxFamilyQuery').fill('Checkout');
+    await page.locator('#tlxMask').check();
+    await expect(page.locator('#tlxFamilyQuery')).toHaveValue('');
   });
 
   test('judges each family in the Families view and opens one on its busiest day', async ({ page }) => {
@@ -104,16 +120,29 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxFamilyKpis')).toContainText('2');
     await expect(page.locator('.frow')).toHaveCount(2);
     await expect(page.locator('.frow').first()).toContainText('Checkout revamp');
-    await expect(page.locator('.frow').first()).toContainText('Needed you');
-    await expect(page.locator('#tlxFamilyDetail')).toContainText('You typed 1 prompt into 1 of 4 child sessions (marked ✋)');
+    await expect(page.locator('.frow').first()).toContainText('You stepped in');
+    await expect(page.locator('#tlxFamilyDetail')).toContainText('1 of 4 child sessions (marked ✋) got input from you: you typed 1 prompt into it.');
     await expect(page.locator('#tlxFamilyDetail .hand')).toHaveText('✋ 1');
+    await expect(page.locator('#tlxFamilyKpis')).toContainText('Credits in the top 2');
     await page.locator('[data-verdict="alone"]').click();
     await expect(page.locator('.frow')).toHaveCount(1);
     await expect(page.locator('.frow')).toContainText('Release notes');
-    await page.locator('.frow').click();
+    // The selection follows the filter: the family left in the list is the one shown.
+    await expect(page.locator('#tlxFamilyDetail h2')).toHaveText('Release notes');
     await page.locator('#tlxOpenFamilyDay').click();
     await expect(page.locator('#tlxDetailName')).toHaveText('Release notes');
     await expect(page.locator('#tlxView [data-value="day"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('opens family rows and headers from the keyboard', async ({ page }) => {
+    await page.locator('.tlx-fam[data-family="tl-coord"]').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.tlx-fam[data-family="tl-coord"]')).toHaveAttribute('aria-expanded', 'false');
+    // A collapsed family's lanes are hidden, so the selection moves to a lane you can see.
+    await expect(page.locator('#tlxDetailName')).toHaveText('Investigate flaky test');
+    await page.locator('#tlxImpact tr[data-family="tl-coord"]').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#tlxDetailName')).toHaveText('Checkout revamp');
   });
 
   test('drills down to Context Health › Prompt Cache', async ({ page }) => {

@@ -218,8 +218,8 @@ describe('summary export autonomy', () => {
     };
     const report = buildSummaryExport({ generatedAt: '2026-05-25T10:00:00.000Z', stats, codeProduction, dailyActivity, workLifeBalance: null, flowState, antiPatterns, timeline });
     expect(report.autonomy).toEqual({
-      typedTurns: 2, automatedTurns: 1, agentHours: 2, waitsOnYou: 1, questionsAnswered: 0, waitHours: 0.5, families: 1, childSessions: 1,
-      childSessionsThatNeededYou: 0, familyCreditSharePct: 100, workedAlone: 1, neededYou: 0, wideFanOut: 0,
+      typedTurns: 2, automatedTurns: 1, agentHours: 2, waitsOnYou: 1, waitsOnQuestionOrPermission: 0, questionsAndPermissionsAnswered: 0, waitHours: 0.5,
+      families: 1, childSessions: 1, childSessionsWithYourInput: 0, familyCreditSharePct: 100, noInputInChildren: 1, youSteppedIn: 0, wideFanOut: 0,
     });
     const markdown = renderSummaryMarkdown(report);
     expect(markdown).toContain('## Autonomy and Delegation (Timeline)\n- Turns you typed: 2 of 3 (33% automated)');

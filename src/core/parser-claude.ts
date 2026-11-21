@@ -369,10 +369,11 @@ function applyClaudeToolBlock(
 function collectClaudeToolResults(
   lines: ClaudeLine[],
   startIndex: number,
-): { completed: Set<string>; failed: Set<string>; resultTs: Map<string, number> } {
+): { completed: Set<string>; failed: Set<string>; resultTs: Map<string, number>; withContent: Set<string> } {
   const completed = new Set<string>();
   const failed = new Set<string>();
   const resultTs = new Map<string, number>();
+  const withContent = new Set<string>();
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
     if (line.type === 'user' && userHasText(line)) break;
@@ -383,9 +384,18 @@ function collectClaudeToolResults(
       completed.add(block.tool_use_id);
       if (ts) resultTs.set(block.tool_use_id, ts);
       if (block.is_error === true) failed.add(block.tool_use_id);
+      if (toolResultHasContent(block)) withContent.add(block.tool_use_id);
     }
   }
-  return { completed, failed, resultTs };
+  return { completed, failed, resultTs, withContent };
+}
+
+/** A tool result that says something: text, or a non-empty content block. An empty result is no answer. */
+function toolResultHasContent(block: ClaudeContentBlock): boolean {
+  const content = (block as { content?: unknown }).content;
+  if (typeof content === 'string') return content.trim() !== '';
+  return Array.isArray(content) && content.some(c => typeof c === 'object' && c !== null
+    && (typeof (c as { text?: unknown }).text !== 'string' || (c as { text: string }).text.trim() !== ''));
 }
 
 /** The stream of a line's response: a sub-agent's for a sidechain line, and for any line of a sub-agent's transcript,
@@ -442,9 +452,10 @@ function collectClaudeAssistantData(
           data.assistantTexts.push(block.text);
           continue;
         }
-        if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs && !toolResults.failed.has(block.id)) {
-          const answeredAt = toolResults.resultTs.get(block.id);
-          if (answeredAt && answeredAt > assistantTs) data.userWaits.push({ start: assistantTs, end: answeredAt, kind: 'question' });
+        if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs) {
+          const resolvedAt = toolResults.resultTs.get(block.id);
+          const answered = !toolResults.failed.has(block.id) && toolResults.withContent.has(block.id);
+          if (resolvedAt && resolvedAt >= assistantTs) data.userWaits.push({ start: assistantTs, end: resolvedAt, kind: 'question', answered });
         }
         const incomplete = !!block.id && !toolResults.completed.has(block.id);
         const failed = incomplete || (!!block.id && toolResults.failed.has(block.id));
@@ -906,7 +917,7 @@ export function parseClaudeSessionFile(
     // `isSidechain`, which `claudeNonHumanKind` reads for other files.
     const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
-    if (!subagentFile && userTs && fileStart !== null && userTs < fileStart - 1000) request.copiedHistory = true;
+    if (!subagentFile && userTs && fileStart !== null && userTs < fileStart) request.historyLeadMs = fileStart - userTs;
     requests.push(request);
     i = assistantData.nextIndex;
   }

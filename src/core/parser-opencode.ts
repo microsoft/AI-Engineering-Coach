@@ -231,14 +231,17 @@ function getOpenCodeUserText(msg: OcMessage, partsByMsg: Map<string, OcPart[]>):
   return userTextFromParts || msg.summary?.title || '';
 }
 
-function findAssistantMessages(messages: OcMessage[], startIndex: number): OcMessage[] {
-  const result: OcMessage[] = [];
-  for (let i = startIndex; i < messages.length; i++) {
-    const candidate = messages[i];
-    if (candidate.role === 'user') break;
-    if (candidate.role === 'assistant') result.push(candidate);
+/** The assistant messages answering the user message at `userIndex`: those naming it as their parent (`parentID`),
+ *  and those naming no user message, from it up to the next user message. A late answer to an earlier prompt can
+ *  arrive after a later one, so arrival order alone can give it to the wrong turn. */
+function findAssistantMessages(messages: OcMessage[], userIndex: number, userIds: ReadonlySet<string>): OcMessage[] {
+  const user = messages[userIndex];
+  let next = messages.length;
+  for (let i = userIndex + 1; i < messages.length; i++) {
+    if (messages[i].role === 'user') { next = i; break; }
   }
-  return result;
+  return messages.filter((m, i) => m.role === 'assistant'
+    && (m.parentID && userIds.has(m.parentID) ? m.parentID === user.id : i > userIndex && i < next));
 }
 
 function applyOpenCodePart(
@@ -517,6 +520,7 @@ function buildOpenCodeSession(
   const cacheState = { sawMain: false };
   let firstTs: number | null = null;
   let lastTs: number | null = null;
+  const userIds = new Set(rawMessages.filter(m => m.role === 'user').map(m => m.id));
 
   for (let i = 0; i < rawMessages.length; i++) {
     const msg = rawMessages[i];
@@ -525,7 +529,7 @@ function buildOpenCodeSession(
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
 
-    const assistantMessages = findAssistantMessages(rawMessages, i + 1);
+    const assistantMessages = findAssistantMessages(rawMessages, i, userIds);
     const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
     const request = buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex);

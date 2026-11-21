@@ -117,6 +117,10 @@ interface CodexParseState {
   pendingToolEdits: Map<string, PendingCodexEdit>;
   /** The latest `total_token_usage` logged `cached_input_tokens`; without it the cached count is a default 0. */
   curTotalCachedReported: boolean;
+  /** The thread is a fork (`session_meta.forked_from_id`): its cumulative totals start with its source's. */
+  forked: boolean;
+  /** Tokens the fork's first total inherited from its source; subtracted from every later total. */
+  inherited: { input: number; output: number; cached: number; reasoning: number; total: number };
 }
 
 interface PendingCodexEdit {
@@ -215,6 +219,8 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     editLocIndex,
     pendingToolEdits: new Map(),
     curTotalCachedReported: false,
+    forked: false,
+    inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
   };
 }
 
@@ -538,23 +544,35 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   const info = recordValue(payload.info);
   const totalUsage = recordValue(info?.total_token_usage);
   if (!totalUsage) return;
+  const last = recordValue(info?.last_token_usage);
 
-  const input = tokenCount(totalUsage.input_tokens) ?? 0;
-  const output = tokenCount(totalUsage.output_tokens) ?? 0;
-  const total = tokenCount(totalUsage.total_tokens) ?? input + output;
+  // A fork (`codex fork`) continues its source's thread, so its first cumulative total already holds everything the
+  // source used. That baseline (the first total less its own call) belongs to the source; the fork counts from it.
+  if (state.forked && !state.hasTokenData) {
+    const less = (key: string) => Math.max(0, (tokenCount(totalUsage[key]) ?? 0) - (tokenCount(last?.[key]) ?? 0));
+    state.inherited = {
+      input: less('input_tokens'), output: less('output_tokens'), cached: less('cached_input_tokens'),
+      reasoning: less('reasoning_output_tokens'), total: less('total_tokens'),
+    };
+  }
+  const base = state.inherited;
+  const own = (value: number | null, inherited: number) => (value == null ? null : Math.max(0, value - inherited));
+
+  const input = own(tokenCount(totalUsage.input_tokens), base.input) ?? 0;
+  const output = own(tokenCount(totalUsage.output_tokens), base.output) ?? 0;
+  const total = own(tokenCount(totalUsage.total_tokens), base.total) ?? input + output;
   // Codex repeats a token_count without a new model call (for example after a rate-limit update),
   // so a call is counted only when the cumulative total changes.
   const newCall = total > 0 && total !== state.curTotalTokens;
   state.curTotalInput = input;
   state.curTotalOutput = output;
-  state.curTotalCachedInput = tokenCount(totalUsage.cached_input_tokens) ?? 0;
+  state.curTotalCachedInput = own(tokenCount(totalUsage.cached_input_tokens), base.cached) ?? 0;
   // Reasoning is part of the output, so both totals come from the same snapshot: one that doesn't report reasoning
   // leaves it unknown rather than setting an earlier total against a later output total.
-  state.curTotalReasoning = tokenCount(totalUsage.reasoning_output_tokens);
+  state.curTotalReasoning = own(tokenCount(totalUsage.reasoning_output_tokens), base.reasoning);
   state.curTotalTokens = total;
   state.hasTokenData = true;
 
-  const last = recordValue(info?.last_token_usage);
   const lastInput = tokenCount(last?.input_tokens);
   if (newCall && lastInput != null) {
     state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window), model: state.turnModel || undefined });
@@ -686,6 +704,7 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
 function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSessionMeta): void {
   updateSessionMeta(line, meta);
   state.sessionId = meta.sessionId;
+  state.forked = !!meta.forkedFromId;
   const ts = line.timestamp ? new Date(line.timestamp).getTime() : null;
   updateTimestamps(state, ts);
   if (state.imageScan) {
@@ -719,7 +738,11 @@ function recordTurnEnd(line: CodexLine, state: CodexParseState, ts: number | nul
  *  context (`task_started`, `turn_context`, `world_state`, developer or environment messages). */
 function isTurnWork(line: CodexLine): boolean {
   const payload = line.payload ?? {};
-  if (line.type === 'event_msg') return !CODEX_SETUP_EVENTS.has(stringValue(payload.type));
+  if (line.type === 'event_msg') {
+    // The harness acknowledging the prompt (`item_completed` of the user message) is no agent work.
+    if (stringValue(payload.type) === 'item_completed' && stringValue(recordValue(payload.item)?.type) === 'UserMessage') return false;
+    return !CODEX_SETUP_EVENTS.has(stringValue(payload.type));
+  }
   return line.type === 'response_item' && payload.role !== 'user' && payload.role !== 'developer' && payload.role !== 'system';
 }
 

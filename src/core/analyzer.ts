@@ -5,6 +5,7 @@
 
 /* Analyzer facade and warm-up helpers. */
 
+import { withInheritedTurnsRemoved } from './fork-ownership';
 import {
   Session, SessionRequest, DateFilter, DailyActivity, HourlyDistribution, HeatmapData,
   CodeProductionData, ConsumptionData, BurndownConfig, BurndownData, AiCreditData, AiCreditBurndownData, TokenCoverageData,
@@ -58,7 +59,9 @@ export class Analyzer {
   private readonly requestSessionMap: Map<SessionRequest, Session>;
   private cache = new Map<string, unknown>();
 
-  constructor(sessions: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
+  constructor(input: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
+    // Each turn is counted once, everywhere: a fork's copied history belongs to its source.
+    const sessions = withInheritedTurnsRemoved(input);
     const elIdx = editLocIndex ?? new Map<string, Map<string, EditLoc>>();
     this.sessions = sessions;
     this.editLocIndex = elIdx;

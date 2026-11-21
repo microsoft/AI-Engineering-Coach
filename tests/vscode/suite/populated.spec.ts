@@ -52,7 +52,7 @@ describe('Packaged VSIX with synthetic sessions', () => {
     await dashboard.navigate('timeline', 'Timeline');
     await dashboard.waitForText('#tlxCount', '3 of 3 sessions shown');
     await dashboard.waitForText('#tlxKpis', '9 of 9');
-    await dashboard.waitForText('#tlxKpis', 'Peak parallel agents');
+    await dashboard.waitForText('#tlxKpis', 'Peak parallel sessions');
     await dashboard.expectCount('.tlx-lane', 3);
     await dashboard.click('.tlx-lane');
     await dashboard.waitForText('#tlxDetail', 'no prompt text is shown');

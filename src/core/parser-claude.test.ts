@@ -95,7 +95,7 @@ function withProjectsDir(filename: string, lines: object[], run: (projectsDir: s
 }
 
 describe('parseClaudeSessions', () => {
-  it('flags the prompts a fork copied: older than the transcript’s first line', () => {
+  it('marks how much older than the transcript’s first line a prompt is: a fork’s copied history', () => {
     withProjectsDir('fork.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:10:00Z', sessionId: 'fork-1' },
       makeUser('copied prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'fork-1' }),
@@ -103,21 +103,21 @@ describe('parseClaudeSessions', () => {
       makeUser('new prompt', '2025-06-15T10:10:01Z', { uuid: 'u2', sessionId: 'fork-1' }),
       makeAssistant('new answer', '2025-06-15T10:10:05Z'),
     ], (projectsDir) => {
-      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.copiedHistory)).toEqual([true, undefined]);
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.historyLeadMs)).toEqual([600_000, undefined]);
     });
     withProjectsDir('plain.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'plain-1' },
       makeUser('prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'plain-1' }),
       makeAssistant('answer', '2025-06-15T10:00:05Z'),
     ], (projectsDir) => {
-      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.copiedHistory)).toEqual([undefined]);
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.historyLeadMs)).toEqual([undefined]);
     });
   });
 
-  it('records an answered AskUserQuestion as a wait on you, not a failed one', () => {
-    const answer = (id: string, ts: string, isError = false) => ({
+  it('records every AskUserQuestion as a stop, answered only with a non-empty, successful result', () => {
+    const answer = (id: string, ts: string, isError = false, content = isError ? 'no user' : 'User answered: B') => ({
       type: 'user', timestamp: ts, sessionId: 'sess-1',
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: isError ? 'no user' : 'User answered: B', ...(isError ? { is_error: true } : {}) }] },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }] },
     });
     withProjectsDir('s.jsonl', [
       makeUser('plan it', '2025-06-15T10:00:00Z'),
@@ -125,10 +125,17 @@ describe('parseClaudeSessions', () => {
       answer('q1', '2025-06-15T10:04:05Z'),
       makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:04:10Z', 'q2'),
       answer('q2', '2025-06-15T10:04:11Z', true),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:04:20Z', 'q3'),
+      answer('q3', '2025-06-15T10:04:20Z', false, ''),
       makeAssistant('done', '2025-06-15T10:05:00Z'),
     ], (projectsDir) => {
       const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
-      expect(request.userWaits).toEqual([{ start: Date.parse('2025-06-15T10:00:05Z'), end: Date.parse('2025-06-15T10:04:05Z'), kind: 'question' }]);
+      const ms = Date.parse;
+      expect(request.userWaits).toEqual([
+        { start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:04:05Z'), kind: 'question', answered: true },
+        { start: ms('2025-06-15T10:04:10Z'), end: ms('2025-06-15T10:04:11Z'), kind: 'question', answered: false },
+        { start: ms('2025-06-15T10:04:20Z'), end: ms('2025-06-15T10:04:20Z'), kind: 'question', answered: false },
+      ]);
       expect(request.totalElapsed).toBe(300_000);
     });
   });

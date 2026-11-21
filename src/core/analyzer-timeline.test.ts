@@ -89,30 +89,31 @@ describe('TimelineAnalyzer', () => {
       expect(JSON.stringify(data)).not.toContain('secret prompt');
     });
 
-    it('links children to the session that created them, and drops parents outside the range', () => {
+    it('links children to the session that created them, keeping a parent outside the range as context', () => {
       const coordinator = makeSession({ sessionId: 'c', childSessionIds: ['k1', 'k2'], requests: [makeRequest({ timestamp: at(9) })] });
       const child = makeSession({ sessionId: 'k1', requests: [makeRequest({ timestamp: at(10), nonHumanKind: 'relayed' })] });
       const relayed = makeSession({ sessionId: 'k3', relaySenderId: 'k1', requests: [makeRequest({ timestamp: at(11) })] });
       const old = makeSession({ sessionId: 'p', childSessionIds: ['late'], requests: [makeRequest({ timestamp: new Date(2024, 2, 1).getTime() })] });
       const late = makeSession({ sessionId: 'late', requests: [makeRequest({ timestamp: at(12) })] });
       const data = createAnalyzer([late, relayed, child, coordinator, old]).getTimelineData({ fromDate: '2024-03-15' }, ctx);
-      expect(data.sessions.map(s => [s.id, s.parent, s.via])).toEqual([
-        ['c', -1, null], ['k1', 0, 'create'], ['k3', 1, 'relay'], ['late', -1, null],
+      expect(data.sessions.map(s => [s.id, s.parent, s.via, s.ctx ?? false, s.turns.length])).toEqual([
+        ['c', -1, null, false, 1], ['k1', 0, 'create', false, 1], ['k3', 1, 'relay', false, 1], ['late', 4, 'create', false, 1], ['p', -1, null, true, 0],
       ]);
+      expect(data.sessions[4].context?.map(t => t.t)).toEqual([new Date(2024, 2, 1).getTime()]);
     });
 
     it('scrubs names, and removes a branch prefix only for a signed-in handle', () => {
       const sessions = ['dev2-a', 'dev2-b', 'dev2/c', 'feat/d', 'vscode/e'].map((branch, i) => makeSession({
         sessionId: `s${i}`, branch, displayName: i === 0 ? 'Review dev2/shop at https://example.com' : undefined,
         workspaceName: i === 4 ? 'C:\\Users\\dev2\\dev2' : 'shop',
-        requests: [makeRequest({ timestamp: at(9 + i), userWaits: i === 1 ? [{ start: at(10, 1), end: at(10, 3), kind: 'question' }] : undefined })],
+        requests: [makeRequest({ timestamp: at(9 + i), userWaits: i === 1 ? [{ start: at(10, 1), end: at(10, 3), kind: 'question', answered: true }] : undefined })],
       }));
       const data = createAnalyzer(sessions).getTimelineData(undefined, { ...ctx, names: [...ctx.names, 'dev2', 'vscode'], handles: ['dev2', 'vscode'] });
       expect(data.sessions.map(s => s.branch)).toEqual(['a', 'b', 'c', 'feat/d', 'vscode/e']);
       expect(data.sessions[0].name).toBe('Review shop at [link]');
       // A repository that is only the user's name is shown as such, never as "unknown".
       expect(data.sessions.map(s => s.repo)).toEqual(['shop', 'shop', 'shop', 'shop', 'personal repository']);
-      expect(data.sessions[1].turns[0].w).toEqual([{ s: at(10, 1), e: at(10, 3), k: 'question' }]);
+      expect(data.sessions[1].turns[0].w).toEqual([{ s: at(10, 1), e: at(10, 3), k: 'question', a: true }]);
     });
 
     it('counts sessions whose harness logged forks', () => {
@@ -120,22 +121,34 @@ describe('TimelineAnalyzer', () => {
       expect(data.forkedSessions).toBe(1);
     });
 
-    it('links a fork to its source and leaves the turns it copied to the source', () => {
-      const src = makeSession({ sessionId: 'src', harness: 'Claude', requests: [makeRequest({ timestamp: at(9), userEventId: 'm1' }), makeRequest({ timestamp: at(10), userEventId: 'm2' })] });
-      const fork = makeSession({
-        sessionId: 'fork', harness: 'Claude',
-        requests: [makeRequest({ timestamp: at(9), userEventId: 'm1', copiedHistory: true }), makeRequest({ timestamp: at(11), userEventId: 'm3' })],
-      });
-      const data = createAnalyzer([src, fork]).getTimelineData(undefined, ctx);
+    it('marks a fork with its source, or says the source isn’t in these logs', () => {
+      const src = makeSession({ sessionId: 'src', harness: 'Codex', requests: [makeRequest({ timestamp: at(9) })] });
+      const fork = makeSession({ sessionId: 'fork', harness: 'Codex', forkedFromId: 'src', inheritedTurns: 1, requests: [makeRequest({ timestamp: at(11) })] });
+      const orphan = makeSession({ sessionId: 'orphan', harness: 'Codex', forkedFromId: 'gone', requests: [makeRequest({ timestamp: at(12) })] });
+      const data = createAnalyzer([src, fork, orphan]).getTimelineData(undefined, ctx);
       const byId = new Map(data.sessions.map(s => [s.id, s]));
-      expect(byId.get('fork')).toMatchObject({ fork: data.sessions.indexOf(byId.get('src')!), copiedTurns: 1, parent: -1 });
-      expect(byId.get('fork')?.turns.map(t => t.t)).toEqual([at(11)]);
+      expect(byId.get('fork')).toMatchObject({ fork: data.sessions.indexOf(byId.get('src')!), forkSource: 'loaded', inheritedTurns: 1, parent: -1 });
+      expect(byId.get('orphan')).toMatchObject({ fork: -1, forkSource: 'missing' });
       expect(byId.get('src')?.fork).toBeUndefined();
     });
 
-    it('counts sub-agent calls as sub-agent runs for Claude Code', () => {
-      const session = makeSession({ harness: 'Claude', requests: [makeRequest({ timestamp: at(9), agentName: 'Claude', toolsUsed: ['Agent', 'Read', 'Task'] })] });
-      expect(createAnalyzer([session]).getTimelineData(undefined, ctx).sessions[0].turns[0].sub).toBe(2);
+    it('counts the sub-agent launches each harness records', () => {
+      const claude = makeSession({ harness: 'Claude', requests: [makeRequest({ timestamp: at(9), agentName: 'Claude', toolsUsed: ['Agent', 'Read', 'Task'] })] });
+      const codex = makeSession({ harness: 'Codex', requests: [makeRequest({ timestamp: at(10), agentName: 'Codex', toolsUsed: ['spawn_agent', 'wait_agent', 'shell'] })] });
+      expect(createAnalyzer([claude, codex]).getTimelineData(undefined, ctx).sessions.map(s => s.turns[0].sub)).toEqual([2, 1]);
+    });
+
+    it('keeps every member of a shown family, also one the harness filter hides, as context', () => {
+      const coordinator = makeSession({ sessionId: 'c', harness: 'GitHub Copilot App', childSessionIds: ['k'], childSessionCreatedAt: { k: at(9, 5) }, requests: [makeRequest({ timestamp: at(9) })] });
+      const child = makeSession({ sessionId: 'k', harness: 'Claude', requests: [makeRequest({ timestamp: at(9, 6), nonHumanKind: 'relayed' })] });
+      const data = createAnalyzer([coordinator, child]).getTimelineData({ harness: 'Claude' }, ctx);
+      expect(data.sessions.map(s => [s.id, s.parent, s.ctx ?? false, s.created])).toEqual([['k', 1, false, at(9, 5)], ['c', -1, true, undefined]]);
+    });
+
+    it('adds the first turn after the range as context, so a wait it ends is counted', () => {
+      const s = makeSession({ sessionId: 'a', requests: [makeRequest({ timestamp: at(23, 30), totalElapsed: 60_000 }), makeRequest({ timestamp: new Date(2024, 2, 16, 0, 30).getTime() })] });
+      const data = createAnalyzer([s]).getTimelineData({ fromDate: '2024-03-15', toDate: '2024-03-15' }, ctx);
+      expect([data.sessions[0].turns.length, data.sessions[0].context?.map(t => t.t)]).toEqual([1, [new Date(2024, 2, 16, 0, 30).getTime()]]);
     });
 
     it('keeps the work and waits that cross into the range start, counted only inside it', () => {

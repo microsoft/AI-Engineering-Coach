@@ -89,7 +89,7 @@
 .tlx .chip-sel { color: var(--tl-sel); border-color: var(--tl-sel); }
 .tlx-trk { position: relative; height: 26px; }
 .tlx-trk .grid { position: absolute; top: -7px; bottom: -7px; width: 1px; background: rgba(255, 255, 255, 0.05); }
-.tlx-trk .seg { position: absolute; top: 7px; height: 12px; border-radius: 3px; min-width: 2px; opacity: 0.7; }
+.tlx-trk .seg { position: absolute; top: 7px; height: 12px; border-radius: 3px; min-width: 1px; opacity: 0.7; }
 .tlx-trk .wait { position: absolute; top: 9px; height: 8px; border-radius: 2px; box-sizing: border-box; }
 .tlx .mk { position: absolute; top: 8px; width: 10px; height: 10px; margin-left: -5px; box-sizing: border-box; }
 .tlx .mk.static { position: static; display: inline-block; margin: 0; }
@@ -190,6 +190,8 @@
 .tlx .ftable .tn { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
 .tlx .ftable .tree { color: var(--text-muted); font-weight: 400; }
 .tlx .hand { color: #d29922; font-weight: 600; }
+.tlx .ftable tr.ctx { opacity: 0.6; }
+.tlx-fam:focus-visible, .tlx tr.click:focus-visible { outline: 1px solid var(--focus-border); outline-offset: -1px; }
 .tlx .mbar { display: block; height: 3px; background: var(--accent-blue); border-radius: 2px; margin-top: 3px; margin-left: auto; }
 
 @container (max-width: 1100px) {
@@ -202,3 +204,27 @@
 @container (max-width: 800px) {
   .tlx-lanes { --tl-label: 240px; }
 }
+@container (max-width: 560px) {
+  .tlx-lanes { --tl-label: 160px; }
+  .tlx .fam-head { display: none; }
+  .tlx .frow { grid-template-columns: 30px minmax(0, 1fr); }
+  .tlx .frow .fr-v, .tlx .frow .fr-n, .tlx .frow .fr-c { grid-column: 2; }
+  .tlx-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Light themes: darker marks and text, so work, waits and labels keep their contrast on a white editor. */
+body.vscode-light .tlx { --tl-sel: #9a6700; --tl-auto: #8250df; }
+body.vscode-light .tlx-trk .seg, body.vscode-light .tlx .sw.work { opacity: 1; filter: brightness(0.78); }
+body.vscode-light .tlx .sw.wait, body.vscode-light .tlx-trk .wait {
+  border: 1px dashed rgba(154, 103, 0, 0.9); background: repeating-linear-gradient(45deg, rgba(154, 103, 0, 0.25) 0 3px, transparent 3px 6px);
+}
+body.vscode-light .tlx .sw.wait.ask, body.vscode-light .tlx-trk .wait.ask {
+  border: 1px solid #9a6700; background: repeating-linear-gradient(45deg, rgba(154, 103, 0, 0.42) 0 3px, transparent 3px 6px);
+}
+body.vscode-light .tlx .vb { color: color-mix(in srgb, var(--c) 55%, #000); border-color: color-mix(in srgb, var(--c) 70%, #000); }
+body.vscode-light .tlx .howto-t { color: #0969da; }
+body.vscode-light .tlx .hand { color: #9a6700; }
+body.vscode-light .tlx-fam { background: rgba(0, 0, 0, 0.03); }
+body.vscode-light .tlx .frow { border-bottom-color: rgba(0, 0, 0, 0.08); }
+body.vscode-light .tlx .frow:hover, body.vscode-light .tlx-strip-bars .d:hover { background: rgba(0, 0, 0, 0.04); }
+body.vscode-light .tlx .howto-g div { background: rgba(0, 0, 0, 0.04); }

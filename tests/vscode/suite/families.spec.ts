@@ -44,11 +44,11 @@ describe('Packaged VSIX with a synthetic Copilot App session family', () => {
   it('judges the family and removes the GitHub handle from its branch', async () => {
     await dashboard.click('#tlxView [data-value="families"]');
     await dashboard.expectCount('.frow', 1);
-    await dashboard.waitForText('.frow', 'Needed you');
+    await dashboard.waitForText('.frow', 'You stepped in');
     await dashboard.waitForText('#tlxFamilyDetail', 'branch checkout-revamp');
-    await dashboard.waitForText('#tlxFamilyDetail', 'You typed 1 prompt into and answered 1 question or permission prompt in 2 of 4 child sessions');
+    await dashboard.waitForText('#tlxFamilyDetail', '2 of 4 child sessions (marked ✋) got input from you: you typed 1 prompt into them and answered 1 question or permission prompt in them.');
     await dashboard.expectHealthy();
-    await dashboard.snapshot('02-families', 'Families: one delegation that needed you, with its verdict and habit');
+    await dashboard.snapshot('02-families', 'Families: one delegation you stepped into, with what the logs show and a habit to consider');
   });
 
   it('masks names before a screenshot', async () => {

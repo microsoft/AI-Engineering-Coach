@@ -12,14 +12,27 @@ import * as os from 'os';
 import * as path from 'path';
 import { scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
 
+/** Which client started a Copilot session (`client_name`): `github/cli` for Copilot CLI. */
+export function readCliClient(sessionDir: string): string {
+  try {
+    return yamlScalar(fs.readFileSync(path.join(sessionDir, 'workspace.yaml'), 'utf8'), 'client_name');
+  } catch {
+    return '';
+  }
+}
+
 export interface CliWorkspaceMeta {
+  /** The name you gave the session. Automatic titles (`user_named: false`) are often your first prompt, word for
+   *  word, so they are never kept. */
   displayName?: string;
   branch?: string;
   repository?: string;
   forkCount?: number;
 }
 
-/** One top-level value from `workspace.yaml`: plain (a trailing `# comment` dropped), quoted, or a block (`|`, `>`). */
+/** One top-level value from `workspace.yaml`: plain (a trailing `# comment` dropped), single- or double-quoted (also
+ *  over several lines), or a block (`|`, `>`). A plain `~` or `null` is no value; a quoted one is the text. Not a
+ *  general YAML parser: only the forms Copilot writes. */
 export function yamlScalar(text: string, key: string): string {
   const lines = text.split(/\r?\n/);
   const at = lines.findIndex(line => line.startsWith(`${key}:`));
@@ -27,19 +40,25 @@ export function yamlScalar(text: string, key: string): string {
   const raw = lines[at].slice(key.length + 1).trim();
   const block = /^([|>])[+-]?\d*[+-]?(?:\s+#.*)?$/.exec(raw);
   if (block) return yamlBlock(lines.slice(at + 1), block[1] === '>');
-  let value: string;
-  if (raw.startsWith("'")) {
-    const end = /^'((?:[^']|'')*)'/.exec(raw);
-    value = end ? end[1].replaceAll("''", "'") : raw.slice(1);
-  } else if (raw.startsWith('"')) {
-    const end = /^"((?:[^"\\]|\\.)*)"/.exec(raw);
-    try { value = end ? JSON.parse(`"${end[1]}"`) as string : raw.slice(1); } catch { value = end ? end[1] : raw.slice(1); }
-  } else {
-    value = raw.replace(/(?:^|\s+)#.*$/, '').trim();
-  }
+  if (raw.startsWith("'") || raw.startsWith('"')) return yamlQuoted(raw, lines.slice(at + 1));
+  const value = raw.replace(/(?:^|\s+)#.*$/, '').trim();
   return value === '~' || value === 'null' ? '' : value;
 }
 
+/** A quoted value, continued over the following indented lines until its closing quote; line breaks fold to spaces. */
+function yamlQuoted(first: string, rest: readonly string[]): string {
+  const quote = first[0];
+  const closed = quote === "'" ? /^'((?:[^']|'')*)'/ : /^"((?:[^"\\]|\\.)*)"/;
+  let joined = first;
+  for (let i = 0; !closed.test(joined) && i < rest.length && i < 50; i++) {
+    if (rest[i].trim() && !/^\s/.test(rest[i])) break;
+    joined += ' ' + rest[i].trim();
+  }
+  const match = closed.exec(joined);
+  const body = match ? match[1] : joined.slice(1);
+  if (quote === "'") return body.replaceAll("''", "'");
+  try { return JSON.parse(`"${body}"`) as string; } catch { return body; }
+}
 /** The indented lines of a block value: kept as lines (`|`) or folded into one (`>`). */
 function yamlBlock(lines: readonly string[], folded: boolean): string {
   const body: string[] = [];
@@ -111,7 +130,7 @@ export function localScrubContext(): ScrubContext {
 }
 
 /** Scrubbed name, branch and repository of a Copilot CLI or Copilot App session from its `workspace.yaml`. */
-export function readCliWorkspaceMeta(sessionDir: string, ctx: ScrubContext = localScrubContext()): CliWorkspaceMeta {
+export function readCliWorkspaceMeta(sessionDir: string, ctx: ScrubContext = localScrubContext(), firstPrompt = ''): CliWorkspaceMeta {
   let text: string;
   try {
     text = fs.readFileSync(path.join(sessionDir, 'workspace.yaml'), 'utf8');
@@ -119,8 +138,9 @@ export function readCliWorkspaceMeta(sessionDir: string, ctx: ScrubContext = loc
     return {};
   }
   const meta: CliWorkspaceMeta = {};
-  const name = scrubLabel(yamlScalar(text, 'name'), ctx);
-  if (name) meta.displayName = name;
+  const raw = yamlScalar(text, 'name');
+  const name = scrubLabel(raw, ctx);
+  if (name && yamlScalar(text, 'user_named') !== 'false' && !isPromptText(raw, firstPrompt)) meta.displayName = name;
   const branch = scrubBranch(yamlScalar(text, 'branch'), ctx);
   if (branch) meta.branch = branch;
   const repo = scrubRepository(yamlScalar(text, 'repository') || yamlScalar(text, 'git_root'), ctx);
@@ -128,4 +148,12 @@ export function readCliWorkspaceMeta(sessionDir: string, ctx: ScrubContext = loc
   const forks = Number.parseInt(yamlScalar(text, 'fork_count'), 10);
   if (Number.isFinite(forks) && forks > 0) meta.forkCount = forks;
   return meta;
+}
+
+/** The title is the prompt, or its start: an automatic title made from it. */
+export function isPromptText(title: string, prompt: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replaceAll(/\s+/g, ' ').replace(/[.…]+$/, '').trim();
+  const t = norm(title);
+  const p = norm(prompt);
+  return t.length > 0 && p.length > 0 && (p === t || (t.length >= 12 && p.startsWith(t)));
 }

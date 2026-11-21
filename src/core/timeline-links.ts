@@ -10,12 +10,15 @@
  * 2. `harness`: the harness logged the parent itself (Codex `parent_thread_id`, OpenCode `parentID`).
  * 3. `relay`: otherwise, a session whose FIRST message was relayed from another session was started by it. Relayed
  *    messages later in a session are reports from the sessions it started, so they never count.
- * Links that would make a cycle are dropped, relay links first. Forks are linked separately (`resolveForkLinks`). */
+ * Links that would make a cycle are dropped, relay links first. Forks are not family links (`fork-ownership.ts`). */
 
-import type { Session, SessionRequest } from './types/session-types';
+import type { Session } from './types/session-types';
 import type { TimelineLinkKind } from './types/timeline-types';
 
-export type LinkableSession = Pick<Session, 'sessionId' | 'creationDate' | 'childSessionIds' | 'relaySenderId' | 'parentSessionId'>;
+export type LinkableSession = Pick<Session, 'sessionId' | 'creationDate' | 'childSessionIds' | 'childSessionCreatedAt' | 'relaySenderId' | 'parentSessionId'>;
+
+/** A session that began this long before the call that named it was opened by the call, not created by it. */
+const OPENED_BEFORE_MS = 60_000;
 
 export interface ParentLink {
   parent: string;
@@ -37,7 +40,15 @@ export function resolveParentLinks(sessions: readonly LinkableSession[]): Map<st
   // The earliest session that reports starting a child is its parent.
   const byAge = [...byKey.values()].sort((a, b) => (a.creationDate ?? Infinity) - (b.creationDate ?? Infinity)
     || a.sessionId.localeCompare(b.sessionId));
-  for (const parent of byAge) for (const child of parent.childSessionIds ?? []) link(child, parent, 'create');
+  for (const parent of byAge) {
+    for (const child of parent.childSessionIds ?? []) {
+      const at = parent.childSessionCreatedAt?.[key(child)];
+      const began = byKey.get(key(child))?.creationDate;
+      // An open_pr_session or open_issue_session call can open a session that already existed: that's no birth.
+      if (at != null && began != null && began < at - OPENED_BEFORE_MS) continue;
+      link(child, parent, 'create');
+    }
+  }
   for (const child of byAge) {
     const parent = child.parentSessionId ? byKey.get(key(child.parentSessionId)) : undefined;
     if (parent) link(child.sessionId, parent, 'harness');
@@ -72,40 +83,4 @@ function dropCycles(links: Map<string, ParentLink>, byKey: Map<string, LinkableS
       links.delete(oldest);
     }
   }
-}
-
-/* ---- forks ---- */
-
-export type ForkableSession = Pick<Session, 'sessionId' | 'forkedFromId'> & {
-  requests: readonly Pick<SessionRequest, 'userEventId' | 'copiedHistory'>[];
-};
-
-export interface ForkLink {
-  /** The session it was forked from. */
-  source: string;
-  /** Prompts it copied (their message IDs): each counts once, in the session that first had it. */
-  copied: Set<string>;
-}
-
-/** The source of each forked session, keyed by the fork's ID. A fork is linked only where the log says so:
- *  - Codex writes `forked_from_id` in the fork's `session_meta` (`forkedFromId`).
- *  - A Claude Code fork starts with the source's messages, copied with their message IDs and older times
- *    (`copiedHistory`). Its source is the session where its first copied prompt is not a copy; every copied prompt,
- *    including one a fork of a fork took over from the fork in between, is left to the session where it isn't one.
- *  Copilot CLI and Copilot App log no fork source, so their forks aren't linked. Forks are not family links: a fork is
- *  your own branch of a conversation, not a session an agent started. */
-export function resolveForkLinks(sessions: readonly ForkableSession[]): Map<string, ForkLink> {
-  const byKey = new Map(sessions.map(s => [key(s.sessionId), s]));
-  const owner = new Map<string, ForkableSession>();
-  for (const s of sessions) {
-    for (const r of s.requests) if (r.userEventId && !r.copiedHistory && !owner.has(r.userEventId)) owner.set(r.userEventId, s);
-  }
-  const links = new Map<string, ForkLink>();
-  for (const s of sessions) {
-    const copied = s.requests.filter(r => r.copiedHistory && r.userEventId).map(r => r.userEventId as string);
-    const source = s.forkedFromId ? byKey.get(key(s.forkedFromId)) : copied.length ? owner.get(copied[0]) : undefined;
-    if (!source || source === s) continue;
-    links.set(s.sessionId, { source: source.sessionId, copied: new Set(copied.filter(id => owner.has(id) && owner.get(id) !== s)) });
-  }
-  return links;
 }

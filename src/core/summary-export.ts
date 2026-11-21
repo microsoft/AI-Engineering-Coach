@@ -15,7 +15,7 @@ import type {
 import type { FlowStateData } from './types/context-types';
 import type { DateFilter } from './types/session-types';
 import type { TimelineDataset } from './types/timeline-types';
-import { buildFamilies, buildLanes, buildViewFamilies, prepareTimeline, timelineKpis } from './timeline-model';
+import { buildFamilies, buildLanes, buildViewFamilies, prepareTimeline, timelineKpis, WIDE_FAN_OUT } from './timeline-model';
 
 export interface SummaryExportInput {
   generatedAt?: string | Date;
@@ -91,16 +91,21 @@ export interface SummaryAutonomy {
   typedTurns: number;
   automatedTurns: number;
   agentHours: number;
+  /** Waits on you that started in range. */
   waitsOnYou: number;
-  /** Of those, questions and permission prompts you answered inside a turn. */
-  questionsAnswered: number;
+  /** Of those, the ones on a question or a permission prompt you answered. */
+  waitsOnQuestionOrPermission: number;
+  /** Every question and permission prompt you answered in range, counted when you answered. */
+  questionsAndPermissionsAnswered: number;
   waitHours: number;
   families: number;
   childSessions: number;
-  childSessionsThatNeededYou: number;
-  familyCreditSharePct: number;
-  workedAlone: number;
-  neededYou: number;
+  /** Child sessions you typed into or answered a question or permission prompt in. */
+  childSessionsWithYourInput: number;
+  /** Null when no credits were logged. */
+  familyCreditSharePct: number | null;
+  noInputInChildren: number;
+  youSteppedIn: number;
   wideFanOut: number;
 }
 
@@ -213,7 +218,7 @@ export function buildSummaryExport(input: SummaryExportInput): SummaryExportRepo
 }
 
 function buildAutonomy(data: TimelineDataset): SummaryAutonomy | null {
-  if (data.sessions.length === 0) return null;
+  if (!data.sessions.some(s => !s.ctx)) return null;
   const p = prepareTimeline(data);
   const lanes = buildLanes(p, -Infinity, Infinity);
   const { totals } = buildFamilies(p);
@@ -224,14 +229,15 @@ function buildAutonomy(data: TimelineDataset): SummaryAutonomy | null {
     automatedTurns: lanes.reduce((n, l) => n + l.automated, 0),
     agentHours: hours(kpis.agentMs),
     waitsOnYou: kpis.waits,
-    questionsAnswered: kpis.waits - kpis.idleWaits,
+    waitsOnQuestionOrPermission: kpis.waits - kpis.idleWaits,
+    questionsAndPermissionsAnswered: kpis.answered,
     waitHours: hours(kpis.waitMs),
     families: totals.families,
     childSessions: totals.children,
-    childSessionsThatNeededYou: totals.childrenNeedingYou,
-    familyCreditSharePct: Math.round(totals.creditShare),
-    workedAlone: totals.alone.families,
-    neededYou: totals.needed.families,
+    childSessionsWithYourInput: totals.childrenNeedingYou,
+    familyCreditSharePct: totals.totalCredits > 0 ? Math.round(totals.creditShare) : null,
+    noInputInChildren: totals.alone.families,
+    youSteppedIn: totals.needed.families,
     wideFanOut: totals.wide.families,
   };
 }
@@ -295,11 +301,11 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
     const turns = a.typedTurns + a.automatedTurns;
     lines.push(
       '', '## Autonomy and Delegation (Timeline)',
-      `- Turns you typed: ${formatNumber(a.typedTurns)} of ${formatNumber(turns)} (${formatPercent(turns ? a.automatedTurns / turns : 0)} automated)`,
+      `- Turns you typed: ${formatNumber(a.typedTurns)} of ${formatNumber(turns)}${turns ? ` (${formatPercent(a.automatedTurns / turns)} automated)` : ''}`,
       `- Agent time: ${a.agentHours} h`,
-      `- Agents waited on you: ${formatNumber(a.waitsOnYou)} times (${formatNumber(a.questionsAnswered)} on a question or permission prompt), ${a.waitHours} h in total`,
-      `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsThatNeededYou)} needed a prompt or answer from you; ${a.familyCreditSharePct}% of credits)`,
-      `- Verdicts: ${formatNumber(a.workedAlone)} worked alone, ${formatNumber(a.neededYou)} needed you, ${formatNumber(a.wideFanOut)} wide fan-outs`,
+      `- Agents waited on you: ${formatNumber(a.waitsOnYou)} times (${formatNumber(a.waitsOnQuestionOrPermission)} on a question or permission prompt), ${a.waitHours} h in total; you answered ${formatNumber(a.questionsAndPermissionsAnswered)} questions or permission prompts`,
+      `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsWithYourInput)} with a prompt or answer from you${a.familyCreditSharePct == null ? '' : `; ${a.familyCreditSharePct}% of credits`})`,
+      `- Families: ${formatNumber(a.noInputInChildren)} with no input from you in their children, ${formatNumber(a.youSteppedIn)} where you stepped into a child; ${formatNumber(a.wideFanOut)} of these with ${WIDE_FAN_OUT}+ children`,
     );
   }
 
