@@ -118,6 +118,20 @@ describe('Timeline date picker, picking and closing', () => {
     await settle();
     expect($('#tlxCal')).toBeNull();
     expect($('#tlxDateLabel')!.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement?.id).toBe('tlxDateLabel');
     expect(page.draws).toBe(0);
+  });
+
+  it('leaves focus on what a click outside focused', async () => {
+    const { $ } = mountPage();
+    const other = document.createElement('button');
+    document.body.append(other);
+    $('#tlxDateLabel')!.click();
+    await settle();
+    other.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    other.focus();
+    await settle();
+    expect($('#tlxCal')).toBeNull();
+    expect(document.activeElement).toBe(other);
   });
 });

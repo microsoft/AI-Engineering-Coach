@@ -136,6 +136,19 @@ test.describe('Timeline date picker', () => {
     await expect(page.locator('#tlxCal')).toHaveCount(0);
   });
 
+  test('returns focus to the date after a click outside, unless the click focused something else', async ({ page }) => {
+    await page.locator('#tlxDateLabel').click();
+    await expect(day(page, '2026-05-03')).toBeFocused();
+    await page.locator('.tlx-foot').click();
+    await expect(page.locator('#tlxCal')).toHaveCount(0);
+    await expect(page.locator('#tlxDateLabel')).toBeFocused();
+    await page.locator('#tlxDateLabel').click();
+    const tree = page.locator('#tlxGroup button[data-value="tree"]');
+    await tree.click();
+    await expect(page.locator('#tlxCal')).toHaveCount(0);
+    await expect(tree).toBeFocused();
+  });
+
   test('keeps a picked date without activity when the Timeline loads again', async ({ page }) => {
     type MockWindow = { mockTimelineData: () => { sessions: { turns: { t: number }[] }[] }; mockTimelineDataOverride?: unknown };
     // Activity on 2, 3 and 17 May: 11 May lies between, with none.

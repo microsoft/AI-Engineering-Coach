@@ -297,8 +297,16 @@ function short(date: string): string {
 if (typeof document !== 'undefined') {
   document.addEventListener('pointerdown', e => {
     if (!ui.open || (e.target instanceof Element && e.target.closest('.tlx-picker'))) return;
+    const hadFocus = !!document.activeElement?.closest('.tlx-picker');
     closePicker();
     redraw();
+    // Focus goes back to the date, as after Esc, unless the click focused something else. Checked once the browser
+    // has handled the press, which can move focus.
+    if (hadFocus) {
+      setTimeout(() => {
+        if (!document.activeElement || document.activeElement === document.body) document.getElementById('tlxDateLabel')?.focus();
+      }, 0);
+    }
   });
 }
 
