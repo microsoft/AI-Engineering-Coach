@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { harnessLabel, lastSegment, PERSONAL_REPOSITORY, scrubBranch, scrubLabel, scrubRepository } from './session-labels';
+import { harnessLabel, lastSegment, PERSONAL_REPOSITORY, scrubBranch, scrubLabel, scrubRepository, scrubText } from './session-labels';
 import { isPromptText, readCliClient, readCliWorkspaceMeta, yamlScalar } from './session-workspace-meta';
 
 const ctx = { home: 'C:\\Users\\Dev', names: ['Dev', 'octo-dev', 'me'], handles: ['octo-dev'] };
@@ -85,6 +85,29 @@ describe('session labels with several paths', () => {
     // Ordinary text after a path with an extension stays.
     expect(scrubLabel('C:\\a\\b.txt and the notes', { names: [] })).toBe('[path] and the notes');
     expect(scrubLabel('/srv/a/b.log has the answer', { names: [] })).toBe('[path] has the answer');
+  });
+});
+
+describe('scrubText', () => {
+  const text = { home: 'C:\\Users\\jdoe', names: ['jdoe', 'vscode'], handles: ['octo-dev'] };
+
+  it('keeps the text readable: line breaks and ordinary paths stay, the home folder becomes ~ and names [name]', () => {
+    expect(scrubText('Edit C:\\Users\\jdoe\\repo\\a.ts\nthen D:\\work\\b.ts, asked by jdoe and octo-dev in vscode', text))
+      .toBe('Edit ~\\repo\\a.ts\nthen D:\\work\\b.ts, asked by [name] and [name] in vscode');
+    expect(scrubText('See https://x.io/a?token=1 or mail a@b.io', text)).toBe('See [link] or mail [email]');
+  });
+
+  it('replaces secret-like tokens but keeps hashes and IDs', () => {
+    const secrets = [
+      'ghp_abcdefghijklmnopqrstuvwxyz0123', 'github_pat_11ABCDEFG0123456789_abcdefghij', 'AKIAABCDEFGHIJKLMNOP',
+      'sk-proj-abcdefghijklmnopqrstuvwx', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijklmnop', 'Q2xpZW50U2VjcmV0VmFsdWUxMjM0NTY3OEFC',
+    ];
+    for (const s of secrets) expect(scrubText(`key ${s} end`, text)).toBe('key [secret] end');
+    expect(scrubText('Authorization: Bearer abcdef0123456789xyz', text)).toBe('Authorization: Bearer [secret]');
+    expect(scrubText('set password=hunter2hunter and api_key: "abc123def456"', text)).toBe('set password=[secret] and api_key: "[secret]"');
+    expect(scrubText('-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----', text)).toBe('[secret]');
+    const ids = 'commit 3f2a9c4e1b7d8a6f5e4d3c2b1a0f9e8d7c6b5a49 session 7e470000-0000-4000-8000-000000000001';
+    expect(scrubText(ids, text)).toBe(ids);
   });
 });
 

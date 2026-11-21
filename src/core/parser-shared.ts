@@ -429,7 +429,10 @@ export function stripSingleSession(session: Session): void {
     }
     r.responseText = '';
     if (r.todoSnapshot) r.todoSnapshot = null;
+    // What a question or permission prompt asked, and your answer: read again with the session when it is opened.
+    for (const w of r.userWaits ?? []) delete w.text;
   }
+  for (const w of session.userWaits ?? []) delete w.text;
 }
 const DEVCONTAINER_PATH_RE = /(?:^|[\s=:"'`])\/workspaces\//;
 

@@ -102,3 +102,34 @@ export interface TimelineDataset {
   from?: number;
   to?: number;
 }
+
+/** The text behind one session's turns and stops, for the Timeline detail panel: loaded when a lane is opened, never
+ *  part of the dataset, the chat tool or the export. Scrubbed of links, email addresses, the home directory, the user's
+ *  names and secret-like tokens; long text is cut, with `cut` set. */
+export interface TimelineSessionText {
+  sessionId: string;
+  /** Turns by start time (`t`, as in `TimelineTurn`): the prompt that started each one, and the end of the agent's reply. */
+  turns: TimelineTextTurn[];
+  /** Questions, relayed questions and permission prompts by start time (`s`, as in `TimelineTurnWait`). */
+  waits: TimelineTextWait[];
+}
+
+export interface TimelineTextTurn {
+  t: number;
+  k: TurnSender;
+  /** The message that started the turn. Left out for compaction and system turns. */
+  prompt?: string;
+  /** The end of the agent's reply in the turn. */
+  reply?: string;
+  cut?: boolean;
+}
+
+export interface TimelineTextWait extends TimelineTurnWait {
+  ask?: string;
+  choices?: string[];
+  answer?: string;
+  tool?: string;
+  intention?: string;
+  before?: string;
+  cut?: boolean;
+}
