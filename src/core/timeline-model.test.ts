@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filterLanes, formatDuration, hourTicks,
   NO_LANE_FILTERS, peakParallel, prepareTimeline, sessionWaits, sessionWork, stepDate, timelineKpis, timelineWindow, turnTimes,
-  verdictText, VERDICTS, viewInsights, type PreparedTimeline,
+  textScope, verdictText, VERDICTS, viewInsights, type PreparedTimeline,
   waitInWindow,
 } from './timeline-model';
 import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TurnSender } from './types/timeline-types';
@@ -317,5 +317,12 @@ describe('waitInWindow', () => {
       waitInWindow(w(150, 150), from, to), waitInWindow(w(50, 150), from, to), waitInWindow(w(50, 90, true, 120), from, to),
       waitInWindow(w(50, 100, true, 80), from, to), waitInWindow(w(200, 250), from, to), waitInWindow(w(50, 60, false), from, to),
     ]).toEqual([true, true, true, false, false, false]);
+  });
+});
+
+describe('textScope', () => {
+  it('lists each turn once: a wait’s preceding turn is often one the lane lists', () => {
+    const scope = textScope([at(9), at(18)], [{ t: at(10), id: 'a' }, { t: at(11) }, { t: at(10), id: 'a' }, { t: at(11) }, { t: at(11), id: 'b' }]);
+    expect(scope).toEqual({ from: at(9), to: at(18), turns: [{ t: at(10), id: 'a' }, { t: at(11) }, { t: at(11), id: 'b' }] });
   });
 });

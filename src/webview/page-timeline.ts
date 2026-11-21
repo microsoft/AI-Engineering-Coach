@@ -8,12 +8,12 @@
  * the range once (`getTimelineData`); every view, filter and the name mask are computed here with the shared model. */
 
 import type {
-  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextScope, TimelineTextSuperseded, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
+  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextSuperseded, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
 } from '../core/types';
 import {
   addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
-  formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, neededYou, NO_LANE_FILTERS,
-  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, textTurnFinder, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
+  formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, MAX_TEXT_SCOPE_TURNS, neededYou, NO_LANE_FILTERS,
+  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, textScope, textTurnFinder, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
   viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
   type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
   type TimelineLane, type TimelinePeriod, type TimelineView, type TimelineWait, type ViewFamily,
@@ -84,7 +84,7 @@ let scrollToSelected = false;
 let scrollToText = false;
 
 /** The text behind each opened lane, by session ID: read once per load, on demand. */
-type TextEntry = { status: 'loading' } | { status: 'ready'; text: TimelineSessionText } | { status: 'missing' };
+type TextEntry = { status: 'loading' } | { status: 'ready'; text: TimelineSessionText } | { status: 'missing' } | { status: 'tooMany'; turns: number };
 const texts = new Map<string, TextEntry>();
 /** The read of the lane whose details show now (`sessionId|from|to`). */
 let shownTextKey: string | null = null;
@@ -1006,8 +1006,12 @@ function sessionText(l: TimelineLane): TextEntry {
     texts.delete(key);
     if (shownTextKey === key) draw();
   };
-  const listed = [...l.turns, ...l.waits.flatMap(w => (w.after ? [w.after] : []))];
-  const scope: TimelineTextScope = { from: l.win[0], to: l.win[1], turns: listed.map(t => ({ t: t.t, ...(t.id ? { id: t.id } : {}) })) };
+  const scope = textScope(l.win, [...l.turns, ...l.waits.flatMap(w => (w.after ? [w.after] : []))]);
+  if (scope.turns.length > MAX_TEXT_SCOPE_TURNS) {
+    const tooMany: TextEntry = { status: 'tooMany', turns: scope.turns.length };
+    texts.set(key, tooMany);
+    return tooMany;
+  }
   rpc<TimelineSessionText | TimelineTextSuperseded | null>('getTimelineSessionText', { sessionId: l.s.id, scope })
     .then(text => (text && 'superseded' in text ? superseded() : settle(text ? { status: 'ready', text } : { status: 'missing' })))
     .catch(() => settle({ status: 'missing' }));
@@ -1084,6 +1088,9 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
   const entry = sessionText(l);
   if (entry.status === 'loading') return wrap(html`<p class="note">Reading this session’s log…</p>` as VNode);
   if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);
+  if (entry.status === 'tooMany') {
+    return wrap(html`<p class="note">This lane lists ${formatCount(entry.turns)} turns here, more than the ${formatCount(MAX_TEXT_SCOPE_TURNS)} whose text can be read at once. Pick fewer days to read its prompts and questions.</p>` as VNode);
+  }
   const { text } = entry;
   const [from, to] = l.win;
   const textOf = textTurnFinder(text.turns);

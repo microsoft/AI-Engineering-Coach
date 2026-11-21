@@ -23,7 +23,7 @@
  *   Family             a coordinator session and every session it started, directly or through its children. */
 
 import { toDateStr } from './helpers';
-import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
+import type { TimelineDataset, TimelineSessionRecord, TimelineTextScope, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
 
 export const WAIT_MIN_MS = 2 * 60_000;
 export const WAIT_MAX_MS = 120 * 60_000;
@@ -283,6 +283,23 @@ export function textTurnFinder<T extends { t: number; id?: string }>(turns: read
   const byTime = new Map<number, T | null>();
   for (const t of turns) byTime.set(t.t, byTime.has(t.t) ? null : t);
   return t => (t.id ? byId.get(t.id) : undefined) ?? byTime.get(t.t) ?? undefined;
+}
+
+/** Most turns one lane's text read can list: a Range view of up to 92 days can hold far more than a day or a week. The
+ *  host reads no scope longer than this, and the lane says so instead. */
+export const MAX_TEXT_SCOPE_TURNS = 50_000;
+
+/** A lane's text scope: its window and the turns it lists, each once (a wait's preceding turn is often a listed one). */
+export function textScope(win: Interval, turns: readonly Pick<TimelineTurn, 't' | 'id'>[]): TimelineTextScope {
+  const seen = new Set<string>();
+  const listed: TimelineTextScope['turns'] = [];
+  for (const t of turns) {
+    const key = `${t.t}|${t.id ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    listed.push({ t: t.t, ...(t.id ? { id: t.id } : {}) });
+  }
+  return { from: win[0], to: win[1], turns: listed };
 }
 
 /** A question or permission prompt that belongs to the window [`from`, `to`): asked in it, its measured wait
