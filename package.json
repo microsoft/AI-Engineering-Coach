@@ -82,6 +82,7 @@
         "aiEngineerCoach.showReleaseNotesAfterUpdate": {
           "type": "boolean",
           "default": true,
+          "scope": "application",
           "description": "Show a notification that links to the changelog the first time AI Engineer Coach runs a build with newer dated changes."
         }
       }

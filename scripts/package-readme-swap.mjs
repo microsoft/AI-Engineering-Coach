@@ -14,16 +14,20 @@ const buildInfo = computeBuildInfo();
 // The VSIX ships CHANGELOG.md with the changelog.d fragments merged in under their merge dates.
 const changelog = buildChangelog();
 
+// Each swap is undone in its own finally, so a failure at any step restores both files.
 renameSync("README.md", "README.github.md");
-copyFileSync("README.extension.md", "README.md");
-renameSync("CHANGELOG.md", "CHANGELOG.github.md");
 try {
-  writeFileSync("CHANGELOG.md", changelog);
-  execSync("vsce package --allow-missing-repository --no-dependencies", {
-    stdio: "inherit",
-    env: { ...process.env, [BUILD_INFO_ENV]: JSON.stringify(buildInfo) },
-  });
+  copyFileSync("README.extension.md", "README.md");
+  renameSync("CHANGELOG.md", "CHANGELOG.github.md");
+  try {
+    writeFileSync("CHANGELOG.md", changelog);
+    execSync("vsce package --allow-missing-repository --no-dependencies", {
+      stdio: "inherit",
+      env: { ...process.env, [BUILD_INFO_ENV]: JSON.stringify(buildInfo) },
+    });
+  } finally {
+    renameSync("CHANGELOG.github.md", "CHANGELOG.md");
+  }
 } finally {
   renameSync("README.github.md", "README.md");
-  renameSync("CHANGELOG.github.md", "CHANGELOG.md");
 }
