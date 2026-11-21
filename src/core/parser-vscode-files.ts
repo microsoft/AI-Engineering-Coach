@@ -65,6 +65,17 @@ function emitChunkLines(pending: string, chunk: string, onLine: (line: string) =
   return chunk.slice(start);
 }
 
+/** A cap on the length of a line passed to {@link forEachJsonlLine}'s `onLine`. */
+export interface JsonlLineLimit {
+  /** Longest line, in UTF-16 code units, passed to `onLine`. */
+  maxChars: number;
+  /**
+   * Called once for each longer line, which is dropped while it streams in instead of being joined. `start` is the
+   * part of the line read so far: at least `maxChars` long, and the whole line when it ended within a chunk.
+   */
+  onSkip: (start: string) => void;
+}
+
 /**
  * Invoke `onLine` for each newline-delimited line in a (possibly very large) JSONL file, reading
  * the file in fixed-size chunks rather than loading it whole.
@@ -78,9 +89,18 @@ function emitChunkLines(pending: string, chunk: string, onLine: (line: string) =
  * Lines are emitted WITHOUT their trailing '\n'. A final non-empty line with no trailing newline
  * is emitted too. Multibyte UTF-8 sequences split across chunk boundaries are handled correctly.
  * When `shouldStop` returns true after a line, stop emitting and close the file immediately.
+ * With a `lineLimit`, a line longer than `maxChars` is not emitted: it is dropped as soon as it
+ * passes the limit, so memory stays bounded by the limit plus one chunk, and `onSkip` is called once for it.
  */
-export function forEachJsonlLine(fpath: string, onLine: (line: string) => void, shouldStop?: () => boolean): void {
+export function forEachJsonlLine(fpath: string, onLine: (line: string) => void, shouldStop?: () => boolean, lineLimit?: JsonlLineLimit): void {
   assertTrustedPath(fpath);
+  // Set once a line is dropped part-way while streaming: the next line completed is its tail, not a line of its own.
+  let skipping = false;
+  const emit = (line: string): void => {
+    if (skipping) skipping = false;
+    else if (lineLimit && line.length > lineLimit.maxChars) lineLimit.onSkip(line);
+    else onLine(line);
+  };
   // Small prefetched files are already in memory — iterate them directly without a second read.
   const cached = prefetchCache.get(fpath);
   if (cached !== undefined) {
@@ -88,12 +108,12 @@ export function forEachJsonlLine(fpath: string, onLine: (line: string) => void, 
     let start = 0;
     let nl = cached.indexOf('\n');
     while (nl >= 0) {
-      onLine(cached.slice(start, nl));
+      emit(cached.slice(start, nl));
       if (shouldStop?.()) return;
       start = nl + 1;
       nl = cached.indexOf('\n', start);
     }
-    if (start < cached.length) onLine(cached.slice(start));
+    if (start < cached.length) emit(cached.slice(start));
     return;
   }
 
@@ -104,11 +124,16 @@ export function forEachJsonlLine(fpath: string, onLine: (line: string) => void, 
     let pending = '';
     let bytesRead: number;
     while ((bytesRead = fs.readSync(fd, buf, 0, JSONL_READ_CHUNK, null)) > 0) {
-      pending = emitChunkLines(pending, decoder.write(buf.subarray(0, bytesRead)), onLine, shouldStop);
+      pending = emitChunkLines(pending, decoder.write(buf.subarray(0, bytesRead)), emit, shouldStop);
       if (shouldStop?.()) return;
+      if (lineLimit && (skipping || pending.length > lineLimit.maxChars)) {
+        if (!skipping) lineLimit.onSkip(pending);
+        skipping = true;
+        pending = '';
+      }
     }
     pending += decoder.end();
-    if (pending.length > 0) onLine(pending);
+    if (pending.length > 0) emit(pending);
   } finally {
     fs.closeSync(fd);
   }
