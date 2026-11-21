@@ -161,6 +161,18 @@ test.describe('Timeline', () => {
 });
 
 test.describe('Timeline navigation from Families', () => {
+  test('says 1 session, not 1 sessions, when one session and no family are in range', async ({ page }) => {
+    await page.addInitScript(() => {
+      const t = new Date(2026, 4, 3, 9).getTime();
+      (window as unknown as { mockTimelineDataOverride: unknown }).mockTimelineDataOverride = { forkedSessions: 0, sessions: [
+        { id: 'solo', name: 'Solo', branch: '', repo: 'shop', harness: 'Copilot App', model: 'gpt-5.4', parent: -1, via: null,
+          turns: [{ t, d: 600000, k: 'you', sub: 0, comp: false, cr: 1, tok: 0 }] },
+      ] };
+    });
+    await openTimeline(page);
+    await page.locator('#tlxView [data-value="families"]').click();
+    await expect(page.locator('.tlx')).toContainText('among the 1 session in this range');
+  });
   test('opens a child whose only activity is an answer on the day of that answer, selected (B12)', async ({ page }) => {
     await page.addInitScript(() => {
       const at = (d: number, h: number, m = 0) => new Date(2026, 4, d, h, m).getTime();

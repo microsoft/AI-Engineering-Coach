@@ -111,3 +111,36 @@ describe('eighth review: a paired relay keeps its blocked time in every range (H
     expect(view(an, D18).kpis.answered).toBe(2);
   });
 });
+describe('ninth review: a stop before the first prompt in every range (I1)', () => {
+  const mid = new Date(2026, 10, 18).getTime();
+  const two: DateFilter = { fromDate: D17, toDate: D18 };
+  const ask = (time: number) => ev('permission.requested', time, { requestId: 'p' });
+  const decide = (time: number) => ev('permission.completed', time, { requestId: 'p', decisionSource: 'human_response', result: { kind: 'approved' } });
+  // The permission is asked at `asked`, decided at `decided`, and the session's first prompt only comes after it.
+  const run = (i: number, asked: number, decided: number) =>
+    analyzer(session(i, [ask(asked), decide(decided), prompt(decided + M), reply(decided + 2 * M)], asked - 1000));
+  const sameDay = (an: Analyzer, day: string) => {
+    const fresh = view(an, day, only(day)).kpis;
+    const wide = view(an, day, two).kpis;
+    return [[fresh.waitMs, fresh.waits, fresh.sessions], [wide.waitMs, wide.waits, wide.sessions]];
+  };
+
+  it('counts the part of the wait before midnight on the earlier day, opened fresh or from a wider range, in chat and the export', () => {
+    const an = run(220, mid - 90_000, mid + 30_000);
+    const [fresh, wide] = sameDay(an, D17);
+    expect(fresh).toEqual(wide);
+    expect(fresh).toEqual([90_000, 1, 1]);
+    const chat = formatTimeline(an, only(D17), D17) as { observed?: { sessions?: number }; day?: { sessions?: number } };
+    expect([chat.observed?.sessions, chat.day?.sessions, buildSummaryExportFromAnalyzer(an, only(D17)).autonomy?.waitsOnYou]).toEqual([1, 1, 1]);
+    const p = prepareTimeline(an.getTimelineData(two));
+    const week = buildLanes(p, ...timelineWindow('week', D18));
+    expect(timelineKpis(week, buildViewFamilies(week, p)).waitMs).toBe(view(an, D17, only(D17)).kpis.waitMs + view(an, D18, only(D18)).kpis.waitMs);
+  });
+
+  it('keeps the whole wait on the earlier day when it was decided before midnight, and none when it was asked at midnight', () => {
+    const before = run(221, mid - 3 * M, mid - M);
+    expect(sameDay(before, D17)).toEqual([[2 * M, 1, 1], [2 * M, 1, 1]]);
+    const atMidnight = run(222, mid, mid + M);
+    expect(sameDay(atMidnight, D17)).toEqual([[0, 0, 0], [0, 0, 0]]);
+  });
+});

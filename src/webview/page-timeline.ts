@@ -804,7 +804,7 @@ function familiesView(data: Loaded, namer: Namer): VNode {
   if (o.families.length === 0) {
     return html`<div class="howto" id="tlxNoFamilies"><div class="howto-t">No session families in this range</div>
       <p class="howto-l">A family is a coordinator session and the child sessions it started for you, for example with create_session in the
-      Copilot App, or sub-agent threads in Codex and OpenCode. No parent–child link was found among the ${t.sessions} sessions in this range.</p></div>` as VNode;
+      Copilot App, or sub-agent threads in Codex and OpenCode. No parent–child link was found among the ${t.sessions} ${t.sessions === 1 ? 'session' : 'sessions'} in this range.</p></div>` as VNode;
   }
   const shown = shownFamilies(o, namer);
   // The selection stays on a family in the list; with an empty list, nothing is selected.

@@ -242,7 +242,7 @@ function descendsFrom(d: PreparedSession, s: PreparedSession, sessions: readonly
 /** A relayed answer is also logged by the child that asked, as its own answer to a question. Each relayed answer is
  *  paired, one to one, with such an answer in a session it descends to, and then counts once, in the child. First by
  *  the request both logged (the relay's `request_id`, the child's record of your answer); then, for the rest, nearest
- *  first within 10 s (in real logs, the same second), never with an answer logged for a different request. Unpaired,
+ *  first within 10 s, never with an answer logged for a different request. Unpaired,
  *  the relay is the only record and counts. The relay's target is an app project ID, not a session ID, so without a
  *  request ID the pair is found by family, kind and time, never by time alone. */
 function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {

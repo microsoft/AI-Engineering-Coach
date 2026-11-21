@@ -140,8 +140,10 @@ function splitByRange(s: Session, from: number | undefined, to: number | undefin
   const context = before.filter((r, i) => i >= lastInput || turnReach(r, delivered) >= (from ?? 0));
   const after = to === undefined ? undefined : own.find(r => (r.timestamp ?? 0) >= to);
   if (after) context.push(after);
-  // A turn outside the range that holds your answer inside it (logged before its own prompt, or after a later one).
-  const holders = own.filter(r => !inside.includes(r) && answeredIn(r.userWaits, from ?? -Infinity, to, delivered));
+  // A turn outside the range that holds your answer inside it (logged before its own prompt, or after a later one), or a
+  // measured wait overlapping it (a permission asked before the session's first prompt belongs to that turn). It is kept
+  // as context: its prompt isn't counted, and its answer counts only where it lies.
+  const holders = own.filter(r => !inside.includes(r) && answerIn(r.userWaits, from ?? -Infinity, to, delivered));
   context.push(...holders.filter(r => !context.includes(r)));
   const reachesIn = from !== undefined && before.some(r => worksIn(r, from, to) || answerIn(r.userWaits, from, to, delivered));
   const loose = answerIn(s.userWaits, from ?? -Infinity, to, delivered);
