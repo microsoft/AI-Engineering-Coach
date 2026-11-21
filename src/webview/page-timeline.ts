@@ -26,7 +26,7 @@ import { toDateStr } from '../core/helpers';
 import { rpc, vscode } from './shared';
 import { html, render, type VNode } from './render';
 import { consumeNavHint } from './nav-hint';
-import { closePicker, datePicker, focusPicker, pickerOpen, type PickerActions, type PickerInput } from './timeline-date-picker';
+import { closePicker, datePicker, pickerOpen, type PickerActions, type PickerInput } from './timeline-date-picker';
 
 type Group = 'tree' | 'flat';
 type Color = 'family' | 'harness';
@@ -281,7 +281,6 @@ function activeIn(s: PreparedSession, win: Interval): boolean {
 function draw(): void {
   if (!rootEl?.isConnected || !loaded) return;
   render(page(loaded), rootEl);
-  focusPicker(rootEl);
   saveView();
   if (scrollToSelected) {
     scrollToSelected = false;
@@ -391,7 +390,6 @@ function toolbar(p: PreparedTimeline): VNode {
   const actions: PickerActions = {
     pickDate: date => update({ date, view: state.view === 'range' ? 'day' : state.view }),
     pickRange: (range, capped) => update({ view: 'range', range, date: range.to, rangeCapped: capped }),
-    redraw: draw,
   };
   return html`
     <div class="tlx-bar">

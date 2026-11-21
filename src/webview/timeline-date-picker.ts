@@ -6,9 +6,10 @@
 /* The Timeline's date picker: the toolbar's date is a button that opens a calendar. Pick a day (the Day view, or the
  * week holding it), or two days for a custom range; days with activity carry a dot, and days outside the loaded range
  * can't be picked. Keyboard: arrows move a day or a week, Page Up/Down a month, Home/End to the week's ends, Enter
- * picks, Esc closes; focus stays inside while it's open and returns to the button. No dependency beyond the render
- * helpers. */
+ * picks, Esc closes; focus stays inside while it's open and returns to the button. Moving around the calendar redraws
+ * only the picker, not the page's lanes; picking a day or a range hands it to the page. */
 
+import { Component, createRef } from 'preact';
 import type { TimelinePeriod } from '../core/timeline-model';
 import {
   clampRange, monthCells, monthOf, QUICK_RANGES, quickRange, shiftDate, shiftDateByMonths, shiftMonth, MAX_RANGE_DAYS, type DateRange,
@@ -34,7 +35,6 @@ export interface PickerInput {
 export interface PickerActions {
   pickDate(date: string): void;
   pickRange(range: DateRange, capped: boolean): void;
-  redraw(): void;
 }
 
 type Mode = 'date' | 'range';
@@ -46,7 +46,7 @@ const ui = {
   focus: '',
   /** The first day picked for a range, until the last one is. */
   anchor: null as string | null,
-  /** Move focus after the next draw: to the focused day, or back to the button. */
+  /** Move focus after the picker's next draw: to the focused day, or back to the button. */
   focusDay: false,
   focusButton: false,
 };
@@ -63,24 +63,31 @@ export function closePicker(): void {
 
 const within = (d: string, lo: string, hi: string) => (d < lo ? lo : d > hi ? hi : d);
 
-function open(input: PickerInput, actions: PickerActions): void {
+/** Draws the picker on the page again on its own, while you move around the calendar. */
+let shown: (() => void) | null = null;
+
+function redraw(): void {
+  shown?.();
+}
+
+function open(input: PickerInput): void {
   ui.open = true;
   ui.mode = input.view === 'range' ? 'range' : 'date';
   ui.focus = within(input.view === 'range' && input.range ? input.range.from : input.date, input.lo, input.hi);
   ui.month = monthOf(ui.focus);
   ui.anchor = null;
   ui.focusDay = true;
-  actions.redraw();
+  redraw();
 }
 
-function close(actions: PickerActions): void {
+function close(): void {
   closePicker();
   ui.focusButton = true;
-  actions.redraw();
+  redraw();
 }
 
 /** Keeps the open calendar inside the window: on a narrow panel it moves left, under the date it belongs to. */
-function fitCalendar(root: HTMLElement): void {
+function fitCalendar(root: Element): void {
   const cal = root.querySelector<HTMLElement>('#tlxCal');
   if (!cal) return;
   cal.style.left = '';
@@ -88,8 +95,8 @@ function fitCalendar(root: HTMLElement): void {
   if (over > 0) cal.style.left = `-${Math.min(over, cal.getBoundingClientRect().left - 8)}px`;
 }
 
-/** Moves focus after a draw, and keeps the calendar in view. Call it from the page's draw. */
-export function focusPicker(root: HTMLElement): void {
+/** Moves focus after a draw, and keeps the calendar in view. */
+function afterDraw(root: Element): void {
   fitCalendar(root);
   if (ui.focusDay) {
     ui.focusDay = false;
@@ -112,14 +119,14 @@ function pick(input: PickerInput, actions: PickerActions, day: string): void {
     ui.anchor = day;
     ui.focus = day;
     ui.focusDay = true;
-    actions.redraw();
+    redraw();
     return;
   }
   const picked = clampRange(ui.anchor, day, input.lo, input.hi);
   closePicker();
   ui.focusButton = true;
   if (picked) actions.pickRange(picked.range, picked.capped);
-  else actions.redraw();
+  else redraw();
 }
 
 /** The day the arrow, Page or Home/End key moves focus to, or null for another key. */
@@ -138,11 +145,11 @@ function moved(key: string, from: string): string | null {
   }
 }
 
-function onKeyDown(e: KeyboardEvent, input: PickerInput, actions: PickerActions): void {
+function onKeyDown(e: KeyboardEvent, input: PickerInput): void {
   if (e.key === 'Escape') {
     e.preventDefault();
     e.stopPropagation();
-    close(actions);
+    close();
     return;
   }
   if (e.key === 'Tab') {
@@ -165,7 +172,7 @@ function onKeyDown(e: KeyboardEvent, input: PickerInput, actions: PickerActions)
   ui.focus = within(to, input.lo, input.hi);
   ui.month = monthOf(ui.focus);
   ui.focusDay = true;
-  actions.redraw();
+  redraw();
 }
 
 /** The days to highlight: the shown day, week or range, or the range being picked. */
@@ -209,14 +216,14 @@ function dayCell(c: Cal, day: string): VNode {
 
 /** Pick a day or a range, close; then the month, with ‹ › to the months that hold loaded days. */
 function calHead(c: Cal): VNode {
-  const { input, actions } = c;
+  const { input } = c;
   const setMode = (mode: Mode) => {
     Object.assign(ui, { mode, anchor: null });
-    actions.redraw();
+    redraw();
   };
   const goMonth = (n: number) => {
     ui.month = shiftMonth(ui.month, n);
-    actions.redraw();
+    redraw();
   };
   const monthName = new Date(ui.month + '-01T00:00:00').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   return html`
@@ -225,7 +232,7 @@ function calHead(c: Cal): VNode {
         ${([['date', 'A day'], ['range', 'A range']] as [Mode, string][]).map(([m, text]) => html`<button type="button" data-value=${m}
           class=${ui.mode === m ? 'on' : ''} aria-pressed=${ui.mode === m ? 'true' : 'false'} onClick=${() => setMode(m)}>${text}</button>`)}
       </span>
-      <button type="button" class="tlx-btn tlx-btn-quiet" id="tlxCalClose" aria-label="Close" onClick=${() => close(actions)}>✕</button>
+      <button type="button" class="tlx-btn tlx-btn-quiet" id="tlxCalClose" aria-label="Close" onClick=${close}>✕</button>
     </div>
     <div class="tlx-cal-month">
       <button type="button" id="tlxCalPrev" aria-label="Previous month" disabled=${ui.month <= monthOf(input.lo)} onClick=${() => goMonth(-1)}>‹</button>
@@ -242,7 +249,7 @@ function calQuick(c: Cal): VNode {
   const today = () => {
     if (ui.mode === 'date') return pick(input, actions, input.today);
     Object.assign(ui, { focus: input.today, month: monthOf(input.today), focusDay: true });
-    actions.redraw();
+    redraw();
   };
   return html`
     <div class="tlx-cal-quick">
@@ -272,7 +279,7 @@ function calendar(input: PickerInput, actions: PickerActions): VNode {
     ? (input.view === 'week' ? 'Pick a day: its week opens.' : 'Pick a day.')
     : ui.anchor ? `From ${short(ui.anchor)}: now pick the last day.` : `Pick the first day, then the last (up to ${MAX_RANGE_DAYS} days).`;
   return html`
-    <div class="tlx-cal" id="tlxCal" role="dialog" aria-modal="true" aria-label="Choose dates" onKeyDown=${(e: KeyboardEvent) => onKeyDown(e, input, actions)}>
+    <div class="tlx-cal" id="tlxCal" role="dialog" aria-modal="true" aria-label="Choose dates" onKeyDown=${(e: KeyboardEvent) => onKeyDown(e, input)}>
       ${calHead(c)}
       <table class="tlx-cal-grid" role="grid" aria-labelledby="tlxCalMonth">
         <thead><tr>${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map(d => html`<th scope="col">${d}</th>`)}</tr></thead>
@@ -287,25 +294,55 @@ function short(date: string): string {
   return new Date(date + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
-/** The actions of the calendar drawn last, to close it on a click outside it. */
-let shown: PickerActions | null = null;
-
 if (typeof document !== 'undefined') {
   document.addEventListener('pointerdown', e => {
-    if (!ui.open || !shown || (e.target instanceof Element && e.target.closest('.tlx-picker'))) return;
+    if (!ui.open || (e.target instanceof Element && e.target.closest('.tlx-picker'))) return;
     closePicker();
-    shown.redraw();
+    redraw();
   });
+}
+
+interface PickerProps {
+  input: PickerInput;
+  actions: PickerActions;
+}
+
+/** The toolbar's date button, and the calendar under it while it's open. A component, so the calendar's own changes
+ *  draw it alone. */
+class DatePicker extends Component<PickerProps> {
+  private readonly root = createRef<HTMLSpanElement>();
+  private readonly redraw = () => this.forceUpdate();
+
+  override componentDidMount(): void {
+    shown = this.redraw;
+    this.drawn();
+  }
+
+  override componentDidUpdate(): void {
+    shown = this.redraw;
+    this.drawn();
+  }
+
+  override componentWillUnmount(): void {
+    if (shown === this.redraw) shown = null;
+  }
+
+  private drawn(): void {
+    if (this.root.current) afterDraw(this.root.current);
+  }
+
+  override render({ input, actions }: PickerProps): VNode {
+    return html`
+      <span class="tlx-picker" ref=${this.root}>
+        <button type="button" id="tlxDateLabel" class="tlx-date-btn" aria-haspopup="dialog" aria-expanded=${ui.open ? 'true' : 'false'}
+          aria-controls=${ui.open ? 'tlxCal' : undefined} title="Choose a day, a week or a range of days"
+          onClick=${() => (ui.open ? close() : open(input))}>${input.label} <span class="caret" aria-hidden="true">▾</span></button>
+        ${ui.open ? calendar(input, actions) : null}
+      </span>` as VNode;
+  }
 }
 
 /** The toolbar's date button, and the calendar under it while it's open. */
 export function datePicker(input: PickerInput, actions: PickerActions): VNode {
-  shown = actions;
-  return html`
-    <span class="tlx-picker">
-      <button type="button" id="tlxDateLabel" class="tlx-date-btn" aria-haspopup="dialog" aria-expanded=${ui.open ? 'true' : 'false'}
-        aria-controls=${ui.open ? 'tlxCal' : undefined} title="Choose a day, a week or a range of days"
-        onClick=${() => (ui.open ? close(actions) : open(input, actions))}>${input.label} <span class="caret" aria-hidden="true">▾</span></button>
-      ${ui.open ? calendar(input, actions) : null}
-    </span>` as VNode;
+  return html`<${DatePicker} input=${input} actions=${actions} />` as VNode;
 }
