@@ -13,7 +13,8 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
-import { parseClaudeSessions } from './parser-claude';
+import { extractClaudeImageReferences, parseClaudeSessions } from './parser-claude';
+import { getParseWarningCounts, getParseWarnings, MAX_FILE_SIZE, resetParseWarnings } from './parser-shared';
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -84,13 +85,22 @@ function makeToolAssistant(
   };
 }
 
-function withProjectsDir(filename: string, lines: object[], run: (projectsDir: string) => void): void {
+/** Writes one transcript line per entry: objects as JSON, strings as they are. Written line by line, so a test with
+ *  very long lines does not also hold the whole file in memory. */
+function withProjectsDir(filename: string, lines: Array<object | string>, run: (projectsDir: string) => void): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-parser-test-'));
   const projectsDir = path.join(root, 'projects');
   const projDir = path.join(projectsDir, '-Users-me-proj');
   fs.mkdirSync(projDir, { recursive: true });
-  const file = path.join(projDir, filename);
-  fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+  const fd = fs.openSync(path.join(projDir, filename), 'w');
+  try {
+    for (const [i, line] of lines.entries()) {
+      if (i > 0) fs.writeSync(fd, '\n');
+      fs.writeSync(fd, typeof line === 'string' ? line : JSON.stringify(line), null, 'utf-8');
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
   try { run(projectsDir); } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -713,5 +723,90 @@ describe('parseClaudeSessions', () => {
       expect(session.workspaceRootPath).toBe(cwd);
     });
     fs.rmSync(cwd, { recursive: true, force: true });
+  });
+});
+
+describe('parseClaudeSessions: large transcripts', () => {
+  it('parses a transcript over the size limit by leaving out its API request records', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, () => ({ type: 'api-request', body: blob }));
+    withProjectsDir('s.jsonl', [
+      makeUser('Why?', '2025-06-15T10:00:00Z'),
+      ...apiRequests,
+      makeAssistant('Because.'),
+    ], projectsDir => {
+      const file = path.join(projectsDir, '-Users-me-proj', 's.jsonl');
+      expect(fs.statSync(file).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.responseText])).toEqual([['Why?', 'Because.']]);
+    });
+  });
+
+  it('leaves out API request records whatever the key order, and keeps a prompt that mentions one', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, (_, i) => (
+      { timestamp: '2025-06-15T10:00:01Z', uuid: `req-${i}`, type: 'api-request', body: blob }));
+    const mention = 'Why does {"type":"api-request"} show up?';
+    withProjectsDir('s.jsonl', [
+      makeUser(mention, '2025-06-15T10:00:00Z'),
+      ...apiRequests,
+      makeAssistant('Because.'),
+    ], projectsDir => {
+      const file = path.join(projectsDir, '-Users-me-proj', 's.jsonl');
+      expect(fs.statSync(file).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.responseText])).toEqual([[mention, 'Because.']]);
+    });
+  });
+});
+
+describe('parseClaudeSessions: long lines and inline data', () => {
+  it('leaves out a line over the size limit and keeps the prompts before and after it', { timeout: 60_000 }, () => {
+    const long = 'x'.repeat(MAX_FILE_SIZE + 1);
+    withProjectsDir('s.jsonl', [
+      makeUser('Before', '2025-06-15T10:00:00Z'),
+      makeAssistant('First answer.', '2025-06-15T10:00:01Z'),
+      makeUser(long, '2025-06-15T10:00:02Z'),
+      // An API request record is left out anyway, so dropping one for its length is not reported.
+      { type: 'api-request', body: long },
+      makeUser('After', '2025-06-15T10:00:03Z', {
+        message: { role: 'user', content: [{ type: 'text', text: 'After' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo' } }] },
+      }),
+      makeAssistant('Second answer.', '2025-06-15T10:00:04Z'),
+    ], projectsDir => {
+      resetParseWarnings();
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.responseText])).toEqual([
+        ['Before', 'First answer.'],
+        ['After', 'Second answer.'],
+      ]);
+      expect(getParseWarningCounts()).toEqual({ skippedFiles: 1, skippedLines: 1 });
+      expect(getParseWarnings()).toEqual([expect.objectContaining({ scope: 'parser-claude', reason: 'left out 1 line(s) over 50 MB' })]);
+      // The image lookup skips the same line, so the request's id still finds its image.
+      const file = path.join(projectsDir, '-Users-me-proj', 's.jsonl');
+      expect(extractClaudeImageReferences(file, requests[1].requestId).images.map(image => image.data)).toEqual(['iVBORw0KGgo']);
+    });
+  });
+
+  it('keeps the text and image count of a prompt with inline images after blanking their data', () => {
+    const data = 'iVBORw0KGgo'.repeat(200);
+    const image = (bytes: string): object => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes } });
+    const prompt = makeUser('Look at these', '2025-06-15T10:00:00Z', {
+      message: { role: 'user', content: [{ type: 'text', text: 'Look at these' }, image(data), image(data)] },
+    });
+    // The second image is written with spaces around the colon, as another serializer might.
+    const line = JSON.stringify(prompt).replace(`"data":"${data}"}}]`, `"data" : "${data}"}}]`);
+    expect(line).toContain('"data" : "');
+    withProjectsDir('s.jsonl', [line, makeAssistant('Two screenshots.')], projectsDir => {
+      resetParseWarnings();
+      const [request] = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(request.messageText).toBe('Look at these');
+      expect(request.responseText).toBe('Two screenshots.');
+      expect(request.variableKinds).toEqual({ image: 2 });
+      expect(getParseWarningCounts()).toEqual({ skippedFiles: 0, skippedLines: 0 });
+      // The image viewer reads the file itself, so it still gets the bytes.
+      const file = path.join(projectsDir, '-Users-me-proj', 's.jsonl');
+      expect(extractClaudeImageReferences(file, request.requestId).images.map(image => image.data)).toEqual([data, data]);
+    });
   });
 });

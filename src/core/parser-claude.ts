@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Session, SessionRequest } from './types';
-import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
+import { assertTrustedPath, MAX_FILE_SIZE, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, recordFailedFile, recordSkippedLines } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
@@ -195,12 +195,103 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
   }
 }
 
-function parseClaudeLines(raw: string): ClaudeLine[] {
+/**
+ * Raw API request records: most of a large transcript's bytes, and nothing the parser reads. Matched wherever `type`
+ * sits among the keys. Quotes inside JSON string values are escaped, so a prompt that mentions the text cannot match.
+ */
+const CLAUDE_API_REQUEST_LINE = /"type"\s*:\s*"api-request/;
+
+/** Characters of kept lines, after inline base64 data is blanked, parsed from one transcript. */
+const CLAUDE_MAX_KEPT_CHARS = 200 * 1024 * 1024;
+const INLINE_DATA_KEY = '"data"';
+const MIN_INLINE_DATA_CHARS = 1024;
+
+function isJsonSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+}
+
+function isBase64Char(code: number): boolean {
+  return (code >= 0x41 && code <= 0x5a) // A-Z
+    || (code >= 0x61 && code <= 0x7a) // a-z
+    || (code >= 0x30 && code <= 0x39) // 0-9
+    || code === 0x2b || code === 0x2f || code === 0x3d; // + / =
+}
+
+/**
+ * Blanks long base64 `data` values (inline images and documents): most of an image-heavy transcript, and nothing the
+ * analytics read (image counts come from the block type; image bytes are read from the file on demand). Only a value
+ * made entirely of base64 characters is blanked, so a value with escapes or other text is left as it is and the JSON
+ * stays valid. A scan, not a regex: on multi-MB values V8's regex engine overflows its stack.
+ */
+function stripInlineData(line: string): string {
+  if (!line.includes('"base64"')) return line;
+  let out = '';
+  let copied = 0;
+  let at = line.indexOf(INLINE_DATA_KEY);
+  while (at >= 0) {
+    // Outside strings only: inside a JSON string every quote is escaped, so `"data"` cannot occur there.
+    let i = at + INLINE_DATA_KEY.length;
+    while (isJsonSpace(line.charCodeAt(i))) i++;
+    if (line.charCodeAt(i) === 0x3a /* : */) {
+      i++;
+      while (isJsonSpace(line.charCodeAt(i))) i++;
+      if (line.charCodeAt(i) === 0x22 /* " */) {
+        const start = i + 1;
+        let end = start;
+        while (isBase64Char(line.charCodeAt(end))) end++;
+        if (end - start >= MIN_INLINE_DATA_CHARS && line.charCodeAt(end) === 0x22) {
+          out += line.slice(copied, start);
+          copied = end;
+        }
+        i = end;
+      }
+    }
+    at = line.indexOf(INLINE_DATA_KEY, i);
+  }
+  return copied === 0 ? line : out + line.slice(copied);
+}
+
+/**
+ * Streams a transcript's lines, leaving out raw API request records and inline base64 data. A line over MAX_FILE_SIZE
+ * is skipped while it streams in, and past CLAUDE_MAX_KEPT_CHARS the rest of the transcript is left out; both are
+ * counted as skipped lines and the transcript is reported, so memory stays bounded whatever the file holds and a
+ * transcript that was cut short shows in the dashboard's skipped-history notice.
+ */
+function readClaudeLines(filePath: string): ClaudeLine[] {
   const lines: ClaudeLine[] = [];
-  for (const rawLine of raw.split('\n')) {
-    if (!rawLine.trim()) continue;
-    const parsed = parseClaudeLine(rawLine);
-    if (parsed) lines.push(parsed);
+  let keptChars = 0;
+  let leftOut = 0;
+  let tooLong = 0;
+  forEachJsonlLine(filePath, rawLine => {
+    if (!rawLine.trim() || CLAUDE_API_REQUEST_LINE.test(rawLine)) return;
+    if (leftOut > 0) {
+      leftOut++;
+      return;
+    }
+    const line = stripInlineData(rawLine);
+    keptChars += line.length;
+    if (keptChars > CLAUDE_MAX_KEPT_CHARS) {
+      leftOut = 1;
+      return;
+    }
+    const parsed = parseClaudeLine(line);
+    if (parsed && !parsed.type.startsWith('api-request')) lines.push(parsed);
+  }, undefined, {
+    maxChars: MAX_FILE_SIZE,
+    // An API request record is left out anyway, so dropping one for its length loses nothing.
+    onSkip: start => {
+      if (CLAUDE_API_REQUEST_LINE.test(start)) return;
+      if (leftOut > 0) leftOut++;
+      else tooLong++;
+    },
+  });
+  if (leftOut + tooLong > 0) {
+    const reasons: string[] = [];
+    if (tooLong > 0) reasons.push(`left out ${tooLong} line(s) over ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+    if (leftOut > 0) reasons.push(`parsed the first ${CLAUDE_MAX_KEPT_CHARS / 1024 / 1024} MB of messages and left out the last ${leftOut} line(s)`);
+    // Shown in the dashboard's skipped-history notice and, with the reason, in the output channel.
+    recordSkippedLines(leftOut + tooLong);
+    recordFailedFile('parser-claude', filePath, reasons.join('; '));
   }
   return lines;
 }
@@ -281,6 +372,7 @@ export function extractClaudeImageReferences(
   let images: ImageReference[] = [];
   let found = false;
   let done = false;
+  // The same line limit as readClaudeLines, so request indices match the parsed session's.
   forEachJsonlLine(filePath, raw => {
     if (!firstLine && !raw.includes('"user"')) return;
     const line = parseClaudeLine(raw);
@@ -300,7 +392,7 @@ export function extractClaudeImageReferences(
     }
     const needsRoot = images.some(image => image.path && !path.isAbsolute(image.path) && !/^[a-z][a-z0-9+.-]*:/i.test(image.path));
     done = found && (workspaceRootPath !== undefined || !needsRoot);
-  }, () => done);
+  }, () => done, { maxChars: MAX_FILE_SIZE, onSkip: () => undefined });
   return { images, workspaceRootPath };
 }
 
@@ -850,16 +942,12 @@ export function parseClaudeSessionFile(
   { editLocIndex, subagentFile = false }: { editLocIndex?: EditLocIndex; subagentFile?: boolean } = {},
 ): Session | null {
   assertTrustedPath(filePath);
-  let raw: string;
+  let lines: ClaudeLine[];
   try {
-    const content = readFileSafe(filePath);
-    if (content === null) return null;
-    raw = content;
+    lines = readClaudeLines(filePath);
   } catch {
     return null;
   }
-
-  const lines = parseClaudeLines(raw);
   if (lines.length === 0) return null;
 
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
