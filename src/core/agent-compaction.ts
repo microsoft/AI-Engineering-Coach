@@ -9,7 +9,8 @@
  * (`trigger`, `preTokens`, `postTokens`, `durationMs`).
  * Codex logs no sizes: a compaction shows as a `compacted` line, a `compaction` response item, a
  * `context_compacted` event or a `ContextCompaction` item, often several of them for one compaction. The size
- * before is the prompt of the last model call and the limit its `model_context_window`.
+ * before is the prompt of the last model call and the limit its `model_context_window`. Codex logs no trigger
+ * either: a manual compact runs as a task of its own with no prompt and no other work; any other is automatic.
  * Only numbers and enum values are kept, never the summary. */
 
 import type { CompactionEvent, SessionRequest } from './types';
@@ -30,9 +31,10 @@ export function readClaudeCompaction(metadata: unknown): CompactionEvent {
   });
 }
 
-/** A Codex compaction: the context of the last model call before it, and that call's limit when logged. */
-export function codexCompaction(contextBefore: number, tokenLimit: number | null): CompactionEvent {
-  return readCliCompaction({ contextLengthBefore: contextBefore, ...(tokenLimit ? { tokenLimit } : {}) });
+/** A Codex compaction: the context of the last model call before it, that call's limit when logged, and the
+ *  trigger when the parser could tell (`manual` or `auto`). */
+export function codexCompaction(contextBefore: number, tokenLimit: number | null, trigger?: 'manual' | 'auto'): CompactionEvent {
+  return readCliCompaction({ contextLengthBefore: contextBefore, ...(tokenLimit ? { tokenLimit } : {}), ...(trigger ? { trigger } : {}) });
 }
 
 /** The request fields for a turn's compactions: `compaction` is the first, `compactions` all of them when several. */
