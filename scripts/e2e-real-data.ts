@@ -12,6 +12,7 @@
 
 import { findLogsDirs, parseAllLogs } from '../src/core/parser';
 import { Analyzer } from '../src/core/analyzer';
+import { buildFamilies, buildLanes, buildViewFamilies, prepareTimeline, timelineKpis, timelineWindow } from '../src/core/timeline-model';
 
 let failures = 0;
 let passes = 0;
@@ -171,32 +172,17 @@ for (const sku of ['pro', 'pro-plus', 'business', 'enterprise'] as const) {
 const bdCustom = analyzer.getBurndown({ sku: 'pro', customBudget: 500 });
 assert(bdCustom.budget === 500, `Custom budget: ${bdCustom.budget}`);
 
-// ---- 3i. getDayTimeline ----
-section('getDayTimeline');
-const tl = analyzer.getDayTimeline(); // defaults to latest active day
-assert(typeof tl.date === 'string', `Timeline date: ${tl.date}`);
-assert(tl.sessions.length >= 0, `Timeline sessions: ${tl.sessions.length}`);
-assert(typeof tl.dayStart === 'number', 'dayStart is number');
-assert(typeof tl.dayEnd === 'number', 'dayEnd is number');
-assert(typeof tl.maxConcurrent === 'number', `Max concurrent: ${tl.maxConcurrent}`);
-
-if (tl.sessions.length > 0) {
-  const ts = tl.sessions[0];
-  assert(typeof ts.sessionId === 'string', 'Timeline session has sessionId');
-  assert(typeof ts.workspaceName === 'string', `Timeline session workspace: ${ts.workspaceName}`);
-  assert(ts.requests.length > 0, `Timeline session requests: ${ts.requests.length}`);
-  const tr = ts.requests[0];
-  assert(typeof tr.timestamp === 'number', 'Timeline request has timestamp');
-  assert(typeof tr.preview === 'string', 'Timeline request has preview');
-  assert(typeof tr.workType === 'string', `Work type: ${tr.workType}`);
-}
-
-// Navigate to prev/next
-if (tl.prevDay) {
-  const tlPrev = analyzer.getDayTimeline(tl.prevDay);
-  assert(tlPrev.date === tl.prevDay, `Previous day navigation: ${tlPrev.date}`);
-}
-
+// ---- 3i. getTimelineData ----
+section('getTimelineData');
+const tl = prepareTimeline(analyzer.getTimelineData());
+assert(tl.sessions.length > 0, `Timeline sessions: ${tl.sessions.length}`);
+assert(tl.sessions.every(s => !/[\\/]/.test(s.repo)), 'Timeline repositories are never paths');
+const tlDay = tl.days[tl.days.length - 1];
+const tlLanes = buildLanes(tl, ...timelineWindow('day', tlDay));
+const tlKpis = timelineKpis(tlLanes, buildViewFamilies(tlLanes, tl));
+assert(tlKpis.sessions > 0, `${tlDay}: ${tlKpis.sessions} sessions, ${tlKpis.typed} of ${tlKpis.turns} turns typed, peak ${tlKpis.peak.count}`);
+const tlFamilies = buildFamilies(tl);
+assert(tlFamilies.totals.families >= 0, `Families: ${tlFamilies.totals.families}, children: ${tlFamilies.totals.children}`);
 // ---- 3j. getSessions ----
 section('getSessions');
 const sessList = analyzer.getSessions(1, 20);

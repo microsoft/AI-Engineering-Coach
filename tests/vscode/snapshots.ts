@@ -6,7 +6,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { fixtureDatasetSchema } from './fixtures';
+import { familyDatasetSchema, fixtureDatasetSchema } from './fixtures';
 
 const safeName = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 const snapshotSchema = z.object({ name: safeName, title: z.string().min(1) });
@@ -66,7 +66,15 @@ async function datasetHtml(artifacts: string, scenario: string): Promise<string>
     if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return '';
     throw err;
   }
-  const dataset = fixtureDatasetSchema.parse(JSON.parse(content));
+  const raw: unknown = JSON.parse(content);
+  const family = familyDatasetSchema.safeParse(raw);
+  if (family.success) {
+    const d = family.data;
+    return `<li><strong>${escapeHtml(scenario)}</strong>: ${d.sessions} ${d.harnesses.map(escapeHtml).join(' and ')} sessions, ${d.requests} requests: `
+      + `${d.family.coordinators} coordinator, ${d.family.children} children (${d.family.relayStarted} started by a relayed message) and ${d.family.grandchildren} grandchild.`
+      + `<br>Raw inputs: <code>${escapeHtml(scenario)}/fixtures/initial</code>.</li>`;
+  }
+  const dataset = fixtureDatasetSchema.parse(raw);
   const projects = dataset.projects.map(project =>
     `${escapeHtml(project.name)} (${escapeHtml(project.language)})`).join(', ');
   return `<li><strong>${escapeHtml(scenario)}</strong>: ${dataset.projects.length} projects, ` +

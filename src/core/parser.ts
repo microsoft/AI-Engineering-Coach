@@ -283,7 +283,11 @@ function removeRecollectedSessions(result: ParseResult): void {
   const recollectedWorkspaceIds = new Set<string>();
   for (const session of result.sessions) {
     const isVolatile = VOLATILE_HARNESS_SET.has(session.harness);
-    if (!isVolatile && !EXTERNAL_HARNESS_SET.has(session.harness)) {
+    // A Copilot CLI log beside an editor workspace's chat sessions is read with that workspace, whose directory metadata
+    // keeps it fresh; only the Copilot session-state directories are collected again.
+    const source = result.sessionSourceIndex.get(session.sessionId);
+    const editorSibling = isVolatile && source?.kind === 'cli-events' && !isCopilotSessionStateDir(source.filePath);
+    if (editorSibling || (!isVolatile && !EXTERNAL_HARNESS_SET.has(session.harness))) {
       kept.push(session);
       continue;
     }

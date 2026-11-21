@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { Session, SessionRequest } from './types';
+import { Session, SessionRequest, UserWait } from './types';
 import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
@@ -120,9 +120,9 @@ interface ClaudeAssistantData {
   answerEvidence: 'final' | 'legacy' | 'missing';
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
+  /** `AskUserQuestion` calls: from the question to your answer (the tool result). */
+  userWaits: UserWait[];
 }
-
-/** Session-wide prompt-cache state across Claude requests. */
 interface ClaudeCacheState {
   sawMain: boolean;
   /** The file is a sub-agent's transcript (`isClaudeSubagentFile`): every call in it is sub-agent work, whether or
@@ -385,11 +385,51 @@ function collectClaudeToolResults(
   return { completed, failed };
 }
 
+/** A tool result that says something: text, or a non-empty content block. An empty result is no answer. */
+function toolResultHasContent(block: ClaudeContentBlock): boolean {
+  const content = (block as { content?: unknown }).content;
+  if (typeof content === 'string') return content.trim() !== '';
+  return Array.isArray(content) && content.some(c => typeof c === 'object' && c !== null
+    && (typeof (c as { text?: unknown }).text !== 'string' || (c as { text: string }).text.trim() !== ''));
+}
+
 /** The stream of a line's response: a sub-agent's for a sidechain line, and for any line of a sub-agent's transcript,
  *  marked or not. Read for every line of a request's responses, and for its prompt, so the request's own chain agrees
  *  with their prompt-cache streams. */
 function claudeStream(line: ClaudeLine, cacheState: ClaudeCacheState): 'main' | 'subagent' {
   return cacheState.subagentFile || line.isSidechain ? 'subagent' : 'main';
+}
+
+/** Every `AskUserQuestion` result in the transcript, by its call ID, with when it came and whether it holds an answer.
+ *  A result can come after your next prompt, so the whole transcript is read once, not only the asking turn. */
+interface ClaudeQuestionResults {
+  results: Map<string, { ts: number | null; answered: boolean }>;
+  /** Each line's own timestamp or the next one logged after it: where an unanswered question's stop ends. */
+  nextTs: (number | null)[];
+}
+
+function indexClaudeQuestionResults(lines: ClaudeLine[]): ClaudeQuestionResults {
+  const asked = new Set<string>();
+  for (const line of lines) {
+    if (line.type !== 'assistant') continue;
+    for (const block of toContentArray(line.message?.content)) if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id) asked.add(block.id);
+  }
+  const results = new Map<string, { ts: number | null; answered: boolean }>();
+  const nextTs = new Array<number | null>(lines.length).fill(null);
+  if (asked.size === 0) return { results, nextTs };
+  let next: number | null = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    next = getTimestamp(lines[i].timestamp) ?? next;
+    nextTs[i] = next;
+  }
+  for (const line of lines) {
+    if (line.type !== 'user') continue;
+    for (const block of toContentArray(line.message?.content)) {
+      if (block.type !== 'tool_result' || !block.tool_use_id || !asked.has(block.tool_use_id) || results.has(block.tool_use_id)) continue;
+      results.set(block.tool_use_id, { ts: getTimestamp(line.timestamp), answered: block.is_error !== true && toolResultHasContent(block) });
+    }
+  }
+  return { results, nextTs };
 }
 
 /** Assistant data of the request whose prompt is the user line at `userIndex`. */
@@ -398,6 +438,7 @@ function collectClaudeAssistantData(
   userIndex: number,
   lastTs: number | null,
   cacheState: ClaudeCacheState,
+  questions: ClaudeQuestionResults = { results: new Map(), nextTs: [] },
 ): ClaudeAssistantData {
   const startIndex = userIndex + 1;
   const responses = new ClaudeResponseAccumulator(claudeStream(lines[userIndex], cacheState) === 'subagent');
@@ -415,6 +456,7 @@ function collectClaudeAssistantData(
     answerEvidence: 'missing',
     investigationDelegations: [],
     webDomains: [],
+    userWaits: [],
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);
@@ -437,6 +479,12 @@ function collectClaudeAssistantData(
         if (block.type === 'text' && block.text) {
           data.assistantTexts.push(block.text);
           continue;
+        }
+        if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs) {
+          // Answered or not, the question stopped the agent: until its result, or, with none logged, the next line.
+          const result = questions.results.get(block.id);
+          const end = result?.ts ?? questions.nextTs[i + 1] ?? assistantTs;
+          if (end >= assistantTs) data.userWaits.push({ start: assistantTs, end, kind: 'question', answered: result?.answered ?? false });
         }
         const incomplete = !!block.id && !toolResults.completed.has(block.id);
         const failed = incomplete || (!!block.id && toolResults.failed.has(block.id));
@@ -838,11 +886,23 @@ function buildClaudeRequest(
     ...(usage.callRowsWithoutCacheData ? { callRowsWithoutCacheData: usage.callRowsWithoutCacheData } : {}),
     ...(usage.contextUsage ? { contextUsage: usage.contextUsage } : {}),
   });
+  if (assistantData.userWaits.length) request.userWaits = assistantData.userWaits;
   mergeRequestEditLoc(editLocIndex, requestId, assistantData.editLocs);
   return request;
 }
 
 /** Parse one transcript file. `subagentFile`: the file is a sub-agent's transcript (see `isClaudeSubagentFile`). */
+/** Records Claude Code writes beside a turn as it runs; a fork (`--fork-session`) copies the conversation lines of its
+ *  source, not these. A prompt's queue record comes just before it; its API request, last-prompt and cost records after. */
+const TURN_RECORDS = new Set(['api-request', 'last-prompt', 'cost-state']);
+const CONVERSATION = new Set(['user', 'assistant', 'attachment']);
+
+/** The prompt at `i` (its turn ending at `next`) was logged live: queued just before it, or with its own turn records. */
+function claudeLoggedLive(lines: ClaudeLine[], i: number, next: number): boolean {
+  for (let j = i - 1; j >= 0 && !CONVERSATION.has(lines[j].type); j--) if (lines[j].type === 'queue-operation') return true;
+  return lines.slice(i + 1, next).some(l => TURN_RECORDS.has(l.type));
+}
+
 export function parseClaudeSessionFile(
   filePath: string,
   wsId: string,
@@ -866,10 +926,14 @@ export function parseClaudeSessionFile(
   const transcriptKey = claudeTranscriptKey(filePath);
   const requests: SessionRequest[] = [];
   const cacheState: ClaudeCacheState = { sawMain: false, subagentFile };
+  // A fork (`--fork-session`) starts its transcript with the source's messages, copied with their own, older times:
+  // a prompt older than the transcript's first line was copied.
+  const fileStart = lines.map(l => getTimestamp(l.timestamp)).find((ts): ts is number => !!ts) ?? null;
   let cwd = '';
   let firstTs: number | null = null;
   let lastTs: number | null = null;
   let entrypoint: string | undefined;
+  const questions = indexClaudeQuestionResults(lines);
   let i = 0;
 
   while (i < lines.length) {
@@ -886,7 +950,7 @@ export function parseClaudeSessionFile(
     const userTs = getTimestamp(line.timestamp);
     ({ firstTs, lastTs } = updateClaudeTimestampRange(userTs, firstTs, lastTs));
 
-    const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState);
+    const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState, questions);
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);
@@ -894,6 +958,8 @@ export function parseClaudeSessionFile(
     // `isSidechain`, which `claudeNonHumanKind` reads for other files.
     const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
+    if (!subagentFile && userTs && fileStart !== null && userTs < fileStart) request.historyLeadMs = fileStart - userTs;
+    if (claudeLoggedLive(lines, i, assistantData.nextIndex)) request.loggedLive = true;
     requests.push(request);
     i = assistantData.nextIndex;
   }

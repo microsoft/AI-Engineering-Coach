@@ -256,11 +256,43 @@ export interface SessionRequest {
   compactions?: CompactionEvent[];
   /** Sub-agent runs launched during the turn (Copilot CLI and Copilot App). */
   subagentRuns?: import('./token-usage-types').SubagentRun[];
+  /** When the turn stopped on a question or a permission prompt: Copilot `ask_user`, a question relayed from another
+   *  session, a permission prompt not decided by a policy, or a Claude Code `AskUserQuestion`; answered or not.
+   *  Absolute ms, in order; they can overlap. */
+  userWaits?: UserWait[];
+  /** How much older the prompt is than its transcript's first line (ms). A Claude Code fork (`--fork-session`) starts
+   *  its transcript with the source's messages, copied with their own, older times; see `fork-ownership.ts`. */
+  historyLeadMs?: number;
+  /** Claude Code logged the turn's own bookkeeping (queue, API request, last-prompt or cost records) beside it: the
+   *  transcript was written as the turn ran. A fork copies only the conversation lines, so its copies never have it. */
+  loggedLive?: true;
+  /** AI credits Copilot logged for the turn's model calls, sub-agents included: `session.usage_record`
+   *  `copilotUsage.totalNanoAiu` ÷ 1e9 (Copilot CLI and Copilot App). Absent when none were logged. */
+  aiCredits?: number;
+  /** Input plus output tokens of the same usage records (Copilot CLI and Copilot App). */
+  loggedTokens?: number;
 }
 
 export interface CodeBlock {
   language: string;
   loc: number;
+}
+
+/** A span inside a turn when the agent stopped for a question to you, a question a child session relayed to you, or a
+ *  permission prompt, on the tool's clock: from the request to its result. `answered`: the log shows you answered it (a
+ *  reply, or a permission you decided). A wait can last 0 ms on that clock and still be an answer. */
+export interface UserWait {
+  start: number;
+  end: number;
+  kind: 'question' | 'relay' | 'permission';
+  answered: boolean;
+  /** When the harness recorded your answer (Copilot's `human_response.recorded`), when it logged one. It is a separate
+   *  clock from the result: the result can come seconds or minutes later, and the record can even precede the logged
+   *  request. */
+  answeredAt?: number;
+  /** The request it answered, as logged: a relay's `request_id`, or the `requestId` the record of your answer to a
+   *  question carried. The same request in two sessions is the same answer. */
+  requestId?: string;
 }
 
 /** Session-level disposition. Used to distinguish "missing token data
@@ -321,6 +353,39 @@ export interface Session {
    *  changes. `undefined` for non-Claude sessions and very old Claude versions
    *  that did not record this field. */
   entrypoint?: string;
+  /** Display name the harness logged for the session (Copilot CLI and Copilot App `workspace.yaml` `name`),
+   *  scrubbed of links, paths and the user's names in the parse worker. */
+  displayName?: string;
+  /** Branch the session worked on (`workspace.yaml`), scrubbed, without the user's handle prefix. */
+  branch?: string;
+  /** Repository name without owner or path (`workspace.yaml` `repository`, else `git_root`). */
+  repository?: string;
+  /** Forks the harness counted for the session (Copilot `workspace.yaml` `fork_count`). Copilot logs no fork source. */
+  forkCount?: number;
+  /** The session this one was forked from: as the harness logged it (Codex `session_meta.forked_from_id`), or, for a
+   *  Claude Code fork, the session holding the latest message it copied (`fork-ownership.ts`). */
+  forkedFromId?: string;
+  /** Turns the fork copied from its source's history. They were removed from `requests` (the source counts them),
+   *  even when the source isn't loaded: they are history, not new work. */
+  inheritedTurns?: number;
+  /** A fork whose copied history two or more loaded sessions hold equally (Claude Code): its source can't be told. */
+  forkSourceAmbiguous?: boolean;
+  /** Stops for you that no turn owns: a session whose only logged activity is your answer to a permission prompt or a
+   *  question (Copilot). Such a session has no requests; only the Timeline counts it. */
+  userWaits?: UserWait[];
+  /** Sessions this session started: the session IDs in the results of its `create_session`, `open_pr_session` and
+   *  `open_issue_session` calls (Copilot CLI and Copilot App). */
+  childSessionIds?: string[];
+  /** When the `create_session` call that created each child (by lower-case ID) was requested (epoch ms). */
+  childSessionCreatedAt?: Record<string, number>;
+  /** When an `open_pr_session` or `open_issue_session` call named each child it didn't create first (by lower-case ID):
+   *  such a call can open a session that already existed, which then isn't its child. */
+  childSessionOpenedAt?: Record<string, number>;
+  /** The session that relayed this session's FIRST message (`from_session_id`), which started it. Relayed messages
+   *  later in a session are reports, not parentage (Copilot CLI and Copilot App). */
+  relaySenderId?: string;
+  /** Parent session as the harness logged it: Codex `parent_thread_id`, OpenCode `parentID`. */
+  parentSessionId?: string;
 }
 
 export interface Workspace {

@@ -26,6 +26,110 @@ function withCodexFile(lines: object[], run: (sessionsDir: string, filePath: str
 }
 
 describe('parseCodexSessions', () => {
+  it('ends a turn’s agent time at its last logged work, not at the next prompt', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-codex-elapsed', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Fix the build.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:05:00Z', payload: { type: 'agent_message', message: 'Fixed.' } },
+      { type: 'turn_context', timestamp: '2025-06-15T09:59:59Z', payload: { model: 'gpt-5.3-codex' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'Now add a test.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T10:02:00Z', payload: { type: 'agent_message', message: 'Added.' } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests.map(r => r.totalElapsed)).toEqual([300_000, 120_000]);
+    });
+  });
+
+  it('ends a turn at task_complete or turn_aborted, not at the next turn’s setup lines', () => {
+    // The order codex-cli 0.167 logs: the next turn's settings, task_started, context and developer message arrive
+    // minutes after the previous task_complete, before its user message.
+    const at = (m: number, s = 0) => new Date(Date.UTC(2025, 5, 15, 9, m, s)).toISOString();
+    const user = (text: string) => ({ role: 'user', type: 'message', content: [{ type: 'input_text', text }] });
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'sess-codex-turns', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: at(0), payload: { type: 'task_started' } },
+      { type: 'response_item', timestamp: at(0), payload: { role: 'developer', type: 'message', content: [{ type: 'input_text', text: 'rules' }] } },
+      { type: 'turn_context', timestamp: at(0), payload: { model: 'gpt-5-mini' } },
+      { type: 'response_item', timestamp: at(0, 1), payload: user('Fix the build.') },
+      { type: 'response_item', timestamp: at(1), payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'Fixed.' }] } },
+      { type: 'event_msg', timestamp: at(1, 1), payload: { type: 'token_count' } },
+      { type: 'event_msg', timestamp: at(1, 2), payload: { type: 'task_complete', last_agent_message: 'Fixed.' } },
+      { type: 'event_msg', timestamp: at(9), payload: { type: 'thread_settings_applied' } },
+      { type: 'event_msg', timestamp: at(9), payload: { type: 'task_started' } },
+      { type: 'turn_context', timestamp: at(9), payload: { model: 'gpt-5-mini' } },
+      { type: 'world_state', timestamp: at(9) },
+      { type: 'response_item', timestamp: at(9, 1), payload: { role: 'developer', type: 'message', content: [{ type: 'input_text', text: 'rules' }] } },
+      { type: 'response_item', timestamp: at(9, 2), payload: user('Stop.') },
+      { type: 'response_item', timestamp: at(9, 30), payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'Stopping' }] } },
+      { type: 'event_msg', timestamp: at(9, 31), payload: { type: 'turn_aborted' } },
+      { type: 'event_msg', timestamp: at(20), payload: { type: 'thread_settings_applied' } },
+      { type: 'event_msg', timestamp: at(20), payload: { type: 'task_started' } },
+      { type: 'response_item', timestamp: at(20, 1), payload: user('Go on.') },
+      { type: 'response_item', timestamp: at(21, 1), payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text: 'Done.' }] } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests.map(r => r.totalElapsed)).toEqual([61_000, 29_000, 60_000]);
+    });
+  });
+
+  it('reads the thread a fork came from', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork-thread', forked_from_id: 'source-thread', source: 'exec', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Try the other way.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:01:00Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0]).toMatchObject({ sessionId: 'fork-thread', forkedFromId: 'source-thread' });
+    });
+  });
+
+  it('counts only a fork’s own tokens: its first total already holds what the source used', () => {
+    const tokens = (ts: string, total: [number, number], last: [number, number]) => ({ type: 'event_msg', timestamp: ts, payload: { type: 'token_count', info: {
+      total_token_usage: { input_tokens: total[0], output_tokens: total[1], total_tokens: total[0] + total[1] },
+      last_token_usage: { input_tokens: last[0], output_tokens: last[1], total_tokens: last[0] + last[1] },
+    } } });
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      tokens('2025-06-15T09:00:10Z', [100_000, 5000], [2000, 100]),
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+      tokens('2025-06-15T09:00:30Z', [103_000, 5300], [3000, 300]),
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([5000, 400]);
+    });
+  });
+
+  it('takes a fork’s own first call from its response usage when the snapshot has no last call', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      { type: 'token_usage_record', timestamp: '2025-06-15T09:00:09Z', payload: { usage: { input_tokens: 13_580, output_tokens: 34, total_tokens: 13_614 } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 172_166, output_tokens: 757, total_tokens: 172_923 } } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([13_580, 34]);
+    });
+    // With no record of its own call, the fork's usage is unknown, not zero.
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 172_166, output_tokens: 757, total_tokens: 172_923 } } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([null, null]);
+    });
+  });
+
+
+  it('leaves a turn’s duration unknown when only the prompt’s acknowledgment was logged', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'failed', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Fix it.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00.010Z', payload: { type: 'item_completed', item: { type: 'UserMessage' } } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBeNull();
+    });
+  });
   it('captures current custom_tool_call apply_patch deltas', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'sess-codex-patch', cwd: '/Users/me/proj' } },

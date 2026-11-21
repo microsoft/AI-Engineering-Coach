@@ -52,6 +52,29 @@ function sqlString(value: string): string {
 }
 
 describe('parseOpenCodeSessions', () => {
+  it('ends a turn’s agent time at its last assistant message', () => {
+    withStorage({ id: 'sess-elapsed', directory: '/Users/me/proj', time: { created: 1700000000000 } }, [
+      { id: 'u1', sessionID: 'sess-elapsed', role: 'user', time: { created: 1700000000000 } },
+      { id: 'a1', sessionID: 'sess-elapsed', role: 'assistant', parentID: 'u1', modelID: 'big-pickle', time: { created: 1700000001000, completed: 1700000010000 } },
+      { id: 'a2', sessionID: 'sess-elapsed', role: 'assistant', parentID: 'u1', modelID: 'big-pickle', time: { created: 1700000011000, completed: 1700000300000 } },
+    ], storageDir => {
+      expect(parseOpenCodeSessions(storageDir)[0].requests[0].totalElapsed).toBe(300_000);
+    });
+  });
+
+  it('gives a late answer to the prompt it names, not to the prompt before it', () => {
+    const t = (s: number) => 1700000000000 + s * 1000;
+    withStorage({ id: 'sess-late', directory: '/Users/me/proj', time: { created: t(0) } }, [
+      { id: 'u1', sessionID: 'sess-late', role: 'user', time: { created: t(0) } },
+      { id: 'a1', sessionID: 'sess-late', role: 'assistant', parentID: 'u1', time: { created: t(1), completed: t(2) } },
+      { id: 'u2', sessionID: 'sess-late', role: 'user', time: { created: t(5) } },
+      { id: 'a2', sessionID: 'sess-late', role: 'assistant', parentID: 'u1', time: { created: t(6), completed: t(8) } },
+      { id: 'a3', sessionID: 'sess-late', role: 'assistant', parentID: 'u2', time: { created: t(7), completed: t(8) } },
+    ], storageDir => {
+      expect(parseOpenCodeSessions(storageDir)[0].requests.map(r => r.totalElapsed)).toEqual([8_000, 3_000]);
+    });
+  });
+
   it('parses current opencode.db session, message, and diff data', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-db-test-'));
     const dbPath = path.join(root, 'opencode.db');

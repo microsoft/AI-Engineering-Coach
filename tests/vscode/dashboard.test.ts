@@ -9,6 +9,8 @@ import { Dashboard } from './dashboard';
 
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn<(title: string) => Promise<void>>(),
+  /** What the palette lists for a command it was given (`>` + title), and whether typing into it works. */
+  listed: vi.fn<(text: string) => Promise<string[]>>(),
   defaultContent: vi.fn<() => Promise<void>>(),
   switchToFrame: vi.fn<(timeout: number) => Promise<void>>(),
   documentId: vi.fn<() => Promise<string>>(),
@@ -30,7 +32,18 @@ vi.mock('vscode-extension-tester', async importOriginal => {
       executeScript: mocks.executeScript,
       wait: mocks.wait,
     } } },
-    Workbench: class { executeCommand = mocks.executeCommand; },
+    Workbench: class {
+      openCommandPrompt = () => {
+        let text = '';
+        return Promise.resolve({
+          setText: (value: string) => { text = value; return Promise.resolve(); },
+          getQuickPicks: async () => (await mocks.listed(text)).map(label => ({ getLabel: () => Promise.resolve(label) })),
+          isDisplayed: () => Promise.resolve(true),
+          selectQuickPick: (label: string) => mocks.executeCommand(label),
+          cancel: () => Promise.resolve(),
+        });
+      };
+    },
     WebView: class { switchToFrame = mocks.switchToFrame; },
     until: { ...actual.until, elementLocated: () => mocks.editorReady },
   };
@@ -41,6 +54,7 @@ vi.mock('./snapshots', () => ({ saveSnapshot: mocks.saveSnapshot }));
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.executeCommand.mockResolvedValue();
+  mocks.listed.mockImplementation(text => Promise.resolve([text.replace(/^>/, '')]));
   mocks.defaultContent.mockResolvedValue();
   mocks.switchToFrame.mockResolvedValue();
   mocks.documentId.mockResolvedValue('initial-document');
@@ -59,6 +73,15 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe('desktop webview synchronization', () => {
+  it('runs a command only once the palette lists it, as it may not while the workbench is still starting', async () => {
+    mocks.listed
+      .mockRejectedValueOnce(new error.ElementNotInteractableError('the palette closed under the keystrokes'))
+      .mockResolvedValueOnce([]);
+    await new Dashboard().open();
+    expect(mocks.listed).toHaveBeenCalledTimes(3);
+    expect(mocks.executeCommand).toHaveBeenCalledExactlyOnceWith('AI Engineer Coach: Open Dashboard');
+  });
+
   it('opens the dashboard once and waits for its editor before entering the webview', async () => {
     await new Dashboard().open();
     expect(mocks.executeCommand).toHaveBeenCalledExactlyOnceWith('AI Engineer Coach: Open Dashboard');

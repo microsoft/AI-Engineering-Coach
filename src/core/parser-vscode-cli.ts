@@ -11,6 +11,7 @@
  * We aggregate all events between consecutive user.message events into one SessionRequest.
  */
 
+import * as path from 'path';
 import { Session, SessionRequest, CompactionEvent, ModelUsage, CompactionContextSnapshot, SessionContextComposition, SystemPromptSegment } from './types';
 import { createRequest, createSession, detectDevcontainerFromRequests, recordFailedFile } from './parser-shared';
 import { forEachJsonlLine, forEachJsonlLineAsync } from './parser-vscode-files';
@@ -34,8 +35,10 @@ import {
 } from './edit-tool-diff';
 import { recordedTools, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromAttachments, imageReferencesFromVariables, imageRequestIndex, type ImageReference, type ImageRequestMatch } from './image-data';
-import type { NonHumanKind } from './types';
-import { cliNonHumanKind } from './parser-turn-kinds';
+import type { NonHumanKind, UserWait } from './types';
+import { cliNonHumanKind, cliRelaySenderId } from './parser-turn-kinds';
+import { NANO_AIU_PER_AI_CREDIT } from './github-app-issue-credit-model';
+import { readCliClient, readCliWorkspaceMeta } from './session-workspace-meta';
 
 interface CLIEvent {
   type: string;
@@ -45,8 +48,9 @@ interface CLIEvent {
 }
 
 /* The desktop Copilot app and the terminal Copilot CLI both write
- * ~/.copilot/session-state/<id>/events.jsonl. Only the app emits the
- * remoteSteerable field on session.start, so we use it to tell them apart. */
+ * ~/.copilot/session-state/<id>/events.jsonl. Older CLI builds don't emit the remoteSteerable field on
+ * session.start, so it marks the app; newer CLI builds emit it too, so `workspace.yaml` `client_name: github/cli`
+ * overrides it (`finalizeCliSession`). */
 function harnessName(state: CLIParseState): string {
   return state.isApp ? 'GitHub Copilot App' : 'GitHub Copilot CLI';
 }
@@ -83,6 +87,10 @@ interface TurnState {
   pendingToolEdits: Map<string, PendingToolEdit>;
   /** Main-agent model calls of this turn (from session.usage_record). */
   usage: CliTurnUsage;
+  /** AI credits and tokens of every model call of the turn, sub-agents included (from session.usage_record). */
+  logged: TurnUsageTotals;
+  /** Questions and permission prompts you answered during the turn: when it waited on you. */
+  userWaits: UserWait[];
 }
 
 interface PendingToolEdit {
@@ -121,6 +129,34 @@ interface CLIParseState {
   context: TurnContextAccumulator;
   /** Main-agent calls logged so far: the index of the next call in the call timeline. */
   mainCalls: number;
+  /** Session-starting tool calls (`create_session`, `open_pr_session`, `open_issue_session`) awaiting their result. */
+  /** Session tool calls in progress: when each was requested, and whether it creates (`create_session`) or opens. */
+  sessionToolCalls: Map<string, { at: number | null; creates: boolean }>;
+  /** Session IDs in the results of those calls: the sessions this one started. */
+  childSessionIds: Set<string>;
+  /** When the call that named each child started. */
+  childSessionCreatedAt: Record<string, number>;
+  childSessionOpenedAt: Record<string, number>;
+  /** Sender of the session's first message, when that message was relayed from another session. */
+  relaySenderId?: string;
+  /** Credits and tokens of usage records logged before the first prompt; the first turn takes them. */
+  pendingUsage: TurnUsageTotals;
+  /** Questions and permission prompts awaiting a decision, by tool call ID or `permission:<request ID>`. */
+  openWaits: Map<string, OpenUserWait>;
+  /** Resolved ones, by key: a `human_response.recorded` event logged after the result still marks them answered, at its
+   *  own time. */
+  closedWaits: Map<string, UserWait>;
+  /** The request ID each `human_response.recorded` event for a question carried, by tool call. */
+  humanRequestIds: Map<string, string>;
+  /** Keys with a `human_response.recorded` event. */
+  humanResponses: Map<string, number | null>;
+  /** Waits answered before the first turn; the first turn takes them. */
+  earlyWaits: UserWait[];
+}
+
+interface TurnUsageTotals {
+  credits: number;
+  tokens: number;
 }
 
 function freshTurn(userMsg: string, userTs: string | null, agentMode: string, reasoningEffort: 'max' | 'high' | 'medium' | 'low' | null): TurnState {
@@ -149,7 +185,28 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     editLocs: new Map(),
     pendingToolEdits: new Map(),
     usage: { calls: 0, inputTokens: 0, toolTokens: 0, availableTools: 0 },
+    logged: { credits: 0, tokens: 0 },
+    userWaits: [],
   };
+}
+
+/** Tools that start another session and return its ID. */
+const SESSION_TOOLS = ['create_session', 'open_pr_session', 'open_issue_session'];
+/** Tools that stop the turn until you answer: a question to you, or a child session's question relayed to you. */
+const QUESTION_TOOLS = ['ask_user', 'relay_session_input'];
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+/** Where a session-starting tool's result names the new session: its link, or a labelled ID. */
+const STARTED_SESSION_PATTERNS = [
+  new RegExp(String.raw`ghapp://sessions/(${UUID})`, 'i'),
+  new RegExp(String.raw`\b(?:session_id|sessionId)\s*[:=]\s*["']?(${UUID})`, 'i'),
+  // `id:` alone only in the result of a creation: `Created session 'Name' (id: …)`.
+  new RegExp(String.raw`\bCreated (?:session|child chat)\b[^()]*\(id:\s*(${UUID})\)`, 'i'),
+  new RegExp(String.raw`\bSession (${UUID}) is ready`, 'i'),
+];
+
+/** Whether `name` is one of `tools`, bare or behind an MCP server prefix (`server-tool`, `mcp_server_tool`). */
+function isToolNamed(name: string, tools: readonly string[]): boolean {
+  return tools.some(tool => name === tool || (name.endsWith(tool) && /[-_./]/.test(name[name.length - tool.length - 1])));
 }
 
 const FILE_REF_TOOLS = new Set(['view', 'grep', 'glob', 'rg', 'show_file']);
@@ -248,6 +305,11 @@ function flushTurn(state: CLIParseState): void {
   });
   state.requests.push(request);
   if (turn.compactions.length > 1) request.compactions = turn.compactions;
+  if (turn.logged.credits > 0) request.aiCredits = turn.logged.credits;
+  if (turn.logged.tokens > 0) request.loggedTokens = turn.logged.tokens;
+  if (turn.userWaits.length || (state.requests.length === 1 && state.earlyWaits.length)) {
+    request.userWaits = [...turn.userWaits, ...(state.requests.length === 1 ? state.earlyWaits : [])].sort((a, b) => a.start - b.start);
+  }
   attachTurnUsage(state, turn, request);
   mergeRequestEditLoc(state.editLocIndex, requestId, turn.editLocs);
 }
@@ -289,9 +351,111 @@ function eventTime(ev: CLIEvent): number | null {
   return Number.isFinite(ts) ? ts : null;
 }
 
+interface OpenUserWait {
+  start: number;
+  kind: UserWait['kind'];
+  /** The turn that asked: its index in `requests` (the turn in progress gets the next one), -1 before the first. */
+  owner: number;
+  /** When the next event after it was logged: where it ends if no result ever comes. */
+  nextTs?: number;
+  /** The relayed request's ID (`relay_session_input`'s `request_id`). */
+  requestId?: string;
+}
+
+function openUserWait(state: CLIParseState, key: string, start: number | null, wait: Pick<OpenUserWait, 'kind' | 'requestId'>): void {
+  if (start !== null && key && !key.endsWith(':')) {
+    state.openWaits.set(key, { start, kind: wait.kind, owner: state.turn ? state.requests.length : -1, ...(wait.requestId ? { requestId: wait.requestId } : {}) });
+  }
+}
+
+/** The request ID that identifies the wait across sessions: a relay's own, else the one the record of your answer
+ *  carried. */
+function waitRequestId(state: CLIParseState, key: string, open: OpenUserWait): Partial<UserWait> {
+  const requestId = open.requestId ?? (open.kind === 'question' ? state.humanRequestIds.get(key) : undefined);
+  return requestId ? { requestId } : {};
+}
+
+/** The question or permission prompt `key` was resolved at `end`. The turn was stopped on it either way, so it is
+ *  kept, even at zero duration; it is `answered` with evidence that you answered (the result, or a
+ *  `human_response.recorded` event for it, which can come before or after). A decision a policy made (`automatic`)
+ *  stopped nothing a person was asked about and is dropped. */
+function closeUserWait(state: CLIParseState, key: string, end: number | null, answered: boolean, automatic = false): void {
+  const open = key ? state.openWaits.get(key) : undefined;
+  if (!open) return;
+  state.openWaits.delete(key);
+  if (end === null || end < open.start || automatic) return;
+  const answeredAt = state.humanResponses.get(key);
+  const wait: UserWait = {
+    start: open.start, end, kind: open.kind, answered: answered || state.humanResponses.has(key), ...(answeredAt != null ? { answeredAt } : {}),
+    ...waitRequestId(state, key, open),
+  };
+  state.closedWaits.set(key, wait);
+  attachUserWait(state, wait, open.owner);
+}
+
+function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
+  for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
+    if (!key) continue;
+    if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
+    const requestId = key === str(data.toolCallId) ? str(data.requestId) : '';
+    if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
+    const wait = state.closedWaits.get(key);
+    if (wait) {
+      wait.answered = true;
+      if (wait.answeredAt === undefined && at !== null) wait.answeredAt = at;
+      if (requestId && wait.kind === 'question') wait.requestId ??= requestId;
+    }
+  }
+}
+
+/** A wait goes to the turn that asked, with its own timestamps: it can end after that turn's last message, or during a
+ *  later turn. One asked before the first turn goes to the first turn. */
+function attachUserWait(state: CLIParseState, wait: UserWait, owner: number): void {
+  if (owner >= 0 && owner === state.requests.length && state.turn) {
+    state.turn.userWaits.push(wait);
+  } else if (owner >= 0 && owner < state.requests.length) {
+    const request = state.requests[owner];
+    request.userWaits = [...(request.userWaits ?? []), wait].sort((a, b) => a.start - b.start);
+  } else if (state.requests.length > 0) {
+    const first = state.requests[0];
+    first.userWaits = [...(first.userWaits ?? []), wait].sort((a, b) => a.start - b.start);
+  } else if (state.turn) {
+    state.turn.userWaits.push(wait);
+  } else {
+    state.earlyWaits.push(wait);
+  }
+}
+
+/** A question tool's result says you answered it: Copilot's `User selected:`/`User responded:`, or a relayed question
+ *  answered in the child session or here. An interrupted or failed call is not an answer. */
+function questionAnswered(data: Record<string, unknown>): boolean {
+  if (data.success === false) return false;
+  const result = recordValue(data.result);
+  const content = str(result?.content ?? data.result).trim();
+  if (/^User (selected|responded)\b/.test(content)) return true;
+  if (!content.startsWith('{')) return false;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return isRecord(parsed) && /^answered/.test(str(parsed.outcome));
+  } catch {
+    return false;
+  }
+}
+
+/** You decided the permission: the log says so (`human_response`), or you denied it interactively. Older builds that
+ *  don't log who decided aren't counted as your answer. */
+function permissionDecidedByYou(data: Record<string, unknown>): boolean {
+  return str(data.decisionSource) === 'human_response' || str(recordValue(data.result)?.kind) === 'denied-interactively-by-user';
+}
+
+/** A policy decided the permission without asking anyone (`host_policy`, `unattended_fallback`). */
+function permissionDecidedByPolicy(data: Record<string, unknown>): boolean {
+  return ['host_policy', 'unattended_fallback'].includes(str(data.decisionSource));
+}
 /** One model call: read it once, then feed the call timeline, the prompt-cache tracker, the turn's context
  *  and the turn's composition. Records logged before the first prompt are taken by the first turn. */
 function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
+  addLoggedUsage(ev.data, state);
   const call = readCliModelCall(ev.data || {}, eventTime(ev), state.currentModelId);
   if (!call) return;
   // The limit the turn's context rule gives the call, so the timeline's limit agrees with the turn's.
@@ -314,6 +478,18 @@ function handleUsageRecord(ev: CLIEvent, state: CLIParseState): void {
   if (callIndex != null) state.mainCalls = callIndex + 1;
   state.cache.onCall(call, callIndex, state.requests.length);
   addCompositionUsage(state.turn, call);
+}
+
+/** AI credits (`copilotUsage.totalNanoAiu`) and tokens of any model call, sub-agents included, for the turn. */
+function addLoggedUsage(data: Record<string, unknown> | undefined, state: CLIParseState): void {
+  const usage = recordValue(data?.usage);
+  if (!usage) return;
+  const target = state.turn ? state.turn.logged : state.pendingUsage;
+  const nano = finiteNumber(recordValue(usage.copilotUsage)?.totalNanoAiu);
+  if (nano != null && nano > 0) target.credits += nano / NANO_AIU_PER_AI_CREDIT;
+  const input = finiteNumber(usage.inputTokens);
+  const output = finiteNumber(usage.outputTokens);
+  target.tokens += Math.max(0, input ?? 0) + Math.max(0, output ?? 0);
 }
 
 /** Main-thread calls build the main context; sub-agent calls have their own. */
@@ -409,6 +585,7 @@ function handleModelChange(data: Record<string, unknown>, state: CLIParseState):
 }
 
 function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
+  const isFirst = state.turn === null && state.requests.length === 0;
   flushTurn(state);
   state.turn = freshTurn(
     str(ev.data?.content),
@@ -419,6 +596,10 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
   state.turn.nonHumanKind = cliNonHumanKind(ev.data);
   state.turn.nonUser = state.turn.nonHumanKind !== undefined;
   state.turn.userEventId = ev.id;
+  // Only the first message says who started the session: coordinators also receive relayed reports.
+  if (isFirst && state.turn.nonHumanKind === 'relayed') state.relaySenderId = cliRelaySenderId(ev.data);
+  state.turn.logged = state.pendingUsage;
+  state.pendingUsage = { credits: 0, tokens: 0 };
   addAttachmentReferences(state.turn, ev.data?.attachments);
   const images = [
     ...imageReferencesFromAttachments(ev.data?.attachments),
@@ -428,11 +609,16 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
 }
 
 function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
+  const data = ev.data || {};
+  const toolName = str(data.toolName);
+  noteSessionToolCall(state, data, eventTime(ev));
+  if (isToolNamed(toolName, QUESTION_TOOLS)) {
+    const relay = isToolNamed(toolName, ['relay_session_input']);
+    openUserWait(state, str(data.toolCallId), eventTime(ev), { kind: relay ? 'relay' : 'question', requestId: relay ? str(recordValue(data.arguments)?.request_id) : '' });
+  }
   const turn = state.turn;
   if (!turn) return;
 
-  const data = ev.data || {};
-  const toolName = str(data.toolName);
   const rawArgs = data.arguments;
   const args = recordValue(rawArgs) || {};
   const ts = ev.timestamp ? new Date(ev.timestamp).getTime() : null;
@@ -491,10 +677,84 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   if (toolName === 'skill' && typeof args.skill === 'string') turn.skillsUsed.add(args.skill);
 }
 
-function handleToolExecutionComplete(data: Record<string, unknown>, state: CLIParseState): void {
+/** A `create_session`-style call. The parent logs it twice, as the call's `tool.execution_start` and as the app's
+ *  `external_tool.requested`, in either order (usually the call first) and sometimes only when the call completes; the
+ *  earlier of the two is when the parent requested it. The child's own log begins later, by up to a minute. */
+function noteSessionToolCall(state: CLIParseState, data: Record<string, unknown>, at: number | null): void {
+  const toolName = str(data.toolName);
+  const id = str(data.toolCallId);
+  if (!id || !isToolNamed(toolName, SESSION_TOOLS)) return;
+  const known = state.sessionToolCalls.get(id);
+  if (known) {
+    if (at !== null && (known.at === null || at < known.at)) known.at = at;
+    return;
+  }
+  state.sessionToolCalls.set(id, { at, creates: isToolNamed(toolName, ['create_session']) });
+}
+
+/** A session-starting tool call finished: the session its result names is one this one started. */
+function recordStartedSessions(data: Record<string, unknown>, state: CLIParseState): void {
+  const toolCallId = str(data.toolCallId);
+  if (!toolCallId || !state.sessionToolCalls.has(toolCallId)) return;
+  const call = state.sessionToolCalls.get(toolCallId);
+  const at = call?.at ?? null;
+  state.sessionToolCalls.delete(toolCallId);
+  if (data.success === false) return;
+  const id = startedSessionId(data.result, 0)?.toLowerCase();
+  if (!id || id === state.sessionId.toLowerCase()) return;
+  state.childSessionIds.add(id);
+  if (at === null || id in state.childSessionCreatedAt) return;
+  // create_session made it; an open_pr_session or open_issue_session call may have opened one that already existed.
+  if (call?.creates) state.childSessionCreatedAt[id] = at;
+  else if (!(id in state.childSessionOpenedAt)) state.childSessionOpenedAt[id] = at;
+}
+
+/** The started session's ID: a `session_id`/`sessionId` field, else the link or labelled ID in the result text. Any
+ *  other UUID in the result (a project, the session name) is ignored. */
+function startedSessionId(value: unknown, depth: number): string | undefined {
+  const uuid = new RegExp(`^${UUID}$`, 'i');
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text.startsWith('{') && depth < 3) {
+      try {
+        const id = startedSessionId(JSON.parse(text), depth + 1);
+        if (id) return id;
+      } catch { /* plain text */ }
+    }
+    // Session names are quoted; never read an ID out of one.
+    const unquoted = text.replaceAll(/'[^'\n]*'|"[^"\n]*"/g, "''");
+    for (const pattern of STARTED_SESSION_PATTERNS) {
+      const match = pattern.exec(unquoted);
+      if (match) return match[1];
+    }
+    return undefined;
+  }
+  // MCP results can hold their text in typed content blocks: `[{ type: 'text', text }]`.
+  if (Array.isArray(value) && depth <= 3) {
+    for (const item of value.slice(0, 20)) {
+      const id = startedSessionId(item, depth + 1);
+      if (id) return id;
+    }
+    return undefined;
+  }
+  if (!isRecord(value) || depth > 3) return undefined;
+  for (const key of ['session_id', 'sessionId']) {
+    if (typeof value[key] === 'string' && uuid.test(value[key])) return value[key];
+  }
+  for (const key of ['content', 'text', 'result']) {
+    const id = startedSessionId(value[key], depth + 1);
+    if (id) return id;
+  }
+  return undefined;
+}
+
+function handleToolExecutionComplete(ev: CLIEvent, state: CLIParseState): void {
+  const data = ev.data || {};
+  recordStartedSessions(data, state);
+  const toolCallId = str(data.toolCallId);
+  closeUserWait(state, toolCallId, eventTime(ev), questionAnswered(data));
   const turn = state.turn;
   if (!turn) return;
-  const toolCallId = str(data.toolCallId);
   const pending = toolCallId ? turn.pendingToolEdits.get(toolCallId) : undefined;
   if (pending) {
     if (data.success !== false) commitToolEdit(turn, pending);
@@ -640,6 +900,7 @@ const CONTEXT_EVENT_HANDLERS = new Map<string, (ev: CLIEvent, state: CLIParseSta
 ]);
 
 function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void {
+  noteNextEvent(state, eventTime(ev));
   const contextHandler = CONTEXT_EVENT_HANDLERS.get(ev.type);
   if (contextHandler) {
     contextHandler(ev, state);
@@ -659,7 +920,19 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       handleToolExecutionStart(ev, state);
       return;
     case 'tool.execution_complete':
-      handleToolExecutionComplete(ev.data || {}, state);
+      handleToolExecutionComplete(ev, state);
+      return;
+    case 'permission.requested':
+      openUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), { kind: 'permission' });
+      return;
+    case 'permission.completed':
+      closeUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), permissionDecidedByYou(ev.data || {}), permissionDecidedByPolicy(ev.data || {}));
+      return;
+    case 'external_tool.requested':
+      noteSessionToolCall(state, ev.data || {}, eventTime(ev));
+      return;
+    case 'human_response.recorded':
+      recordHumanResponse(ev.data || {}, state, eventTime(ev));
       return;
     case 'assistant.message':
       handleAssistantMessage(ev, state);
@@ -712,27 +985,85 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     subagents: new SubagentRunTracker(),
     context: new TurnContextAccumulator(),
     mainCalls: 0,
+    sessionToolCalls: new Map(),
+    childSessionCreatedAt: {},
+    childSessionOpenedAt: {},
+    childSessionIds: new Set(),
+    pendingUsage: { credits: 0, tokens: 0 },
+    openWaits: new Map(),
+    closedWaits: new Map(),
+    humanRequestIds: new Map(),
+    humanResponses: new Map(),
+    earlyWaits: [],
   };
 }
 
+/** The first event after a question or permission prompt was asked: where it ends if no result is ever logged. */
+function noteNextEvent(state: CLIParseState, ts: number | null): void {
+  if (ts === null) return;
+  for (const open of state.openWaits.values()) if (open.nextTs === undefined && ts >= open.start) open.nextTs = ts;
+}
+
+/** A question or permission prompt with no result stopped the agent until the next event in the log, unanswered; or,
+ *  when a `human_response.recorded` event says you answered it, until that answer. */
+function closeUnresolvedWaits(state: CLIParseState): void {
+  for (const [key, open] of [...state.openWaits]) {
+    state.openWaits.delete(key);
+    const answeredAt = state.humanResponses.get(key);
+    const attested = answeredAt != null && answeredAt >= open.start;
+    attachUserWait(state, {
+      start: open.start, end: attested ? answeredAt : open.nextTs ?? open.start, kind: open.kind, answered: state.humanResponses.has(key),
+      ...(answeredAt != null ? { answeredAt } : {}), ...waitRequestId(state, key, open),
+    }, open.owner);
+  }
+}
+
+/** A session with no turn that still holds your answer to a permission prompt or question (its turn was never logged):
+ *  kept for the Timeline with those stops, and no invented turn. Without any, there is nothing to show. */
+function inputOnlySession(state: CLIParseState, wsId: string, wsName: string, sessionDir?: string): Session | null {
+  if (!state.earlyWaits.some(w => w.answered)) return null;
+  const waits = [...state.earlyWaits].sort((a, b) => a.start - b.start);
+  return createSession({
+    sessionId: state.sessionId,
+    workspaceId: wsId,
+    workspaceName: wsName,
+    location: 'cli',
+    harness: harnessName(state),
+    requests: [],
+    creationDate: waits[0].start,
+    lastMessageDate: Math.max(...waits.map(w => w.end)),
+    userWaits: waits,
+    endReason: state.sawShutdown ? 'shutdown' : 'active',
+    workspaceRootPath: state.workspaceRootPath,
+    ...(sessionDir ? readCliWorkspaceMeta(sessionDir) : {}),
+  });
+}
 function finalizeCliSession(
   state: CLIParseState,
   wsId: string,
   wsName: string,
   customInstructionsBytes?: number,
+  sessionDir?: string,
 ): Session | null {
+  closeUnresolvedWaits(state);
   flushTurn(state);
   // No system-prompt size was ever recorded: keep the non-tool remainder unattributed.
   for (const pending of state.pendingCompositions) attachComposition(pending.request, pending.usage, null);
   state.pendingCompositions = [];
   state.subagents.attach(state.requests);
 
-  if (state.requests.length === 0) return null;
+  // `remoteSteerable` is logged by both clients; `workspace.yaml` names the one that started the session.
+  if (sessionDir && state.isApp && readCliClient(sessionDir) === 'github/cli') {
+    state.isApp = false;
+    for (const r of state.requests) r.agentName = harnessName(state);
+  }
+  if (state.requests.length === 0) return inputOnlySession(state, wsId, wsName, sessionDir);
 
   const creationDate = state.startTime ? new Date(state.startTime).getTime() : null;
   const contextComposition = buildSessionComposition(state);
   const callTimeline = state.timeline.build();
   const promptCache = state.cache.finish();
+  const firstPrompt = state.requests.find(r => !r.nonHumanKind)?.messageText ?? state.requests[0]?.messageText ?? '';
   return createSession({
     sessionId: state.sessionId,
     workspaceId: wsId,
@@ -749,6 +1080,12 @@ function finalizeCliSession(
     customInstructionsBytes,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests),
     workspaceRootPath: state.workspaceRootPath,
+    ...(sessionDir ? readCliWorkspaceMeta(sessionDir, undefined, firstPrompt) : {}),
+    ...(state.childSessionIds.size > 0 ? {
+      childSessionIds: [...state.childSessionIds], childSessionCreatedAt: state.childSessionCreatedAt,
+      ...(Object.keys(state.childSessionOpenedAt).length ? { childSessionOpenedAt: state.childSessionOpenedAt } : {}),
+    } : {}),
+    ...(state.relaySenderId && state.relaySenderId !== state.sessionId.toLowerCase() ? { relaySenderId: state.relaySenderId } : {}),
   });
 }
 
@@ -781,7 +1118,7 @@ export function parseCLIEventsFile(
 
   if (!sawAnyEvent) return null;
 
-  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes);
+  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes, path.dirname(eventsPath));
 }
 
 export function extractCLIImageReferences(
@@ -855,5 +1192,5 @@ export async function parseCLIEventsFileAsync(
 
   if (!sawAnyEvent) return null;
 
-  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes);
+  return finalizeCliSession(state, wsId, wsName, customInstructionsBytes, path.dirname(eventsPath));
 }

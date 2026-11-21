@@ -11,6 +11,9 @@
 
 import { exportedOriginName } from '../core/prompt-cache-causes';
 import type { Analyzer } from '../core/analyzer';
+import {
+  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, prepareTimeline, timelineKpis, timelineWindow, VERDICTS, viewInsights,
+} from '../core/timeline-model';
 import type { AntiPatternData, ContextCompositionData, DateFilter, PromptCacheData, TokenTypesData, TurnBasis } from '../core/types';
 
 /** What a time-based measure counts: the prompts the user typed, not the turns agents or the harness sent. */
@@ -475,6 +478,102 @@ export function formatSessions(
       firstMessage: s.firstMessage?.slice(0, 120) ?? '',
     })),
   };
+}
+
+/** A real calendar date, `YYYY-MM-DD` (not 2026-11-31). */
+function isCivilDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const [y, m, d] = date.split('-').map(Number);
+  const at = new Date(y, m - 1, d);
+  return at.getFullYear() === y && at.getMonth() === m - 1 && at.getDate() === d;
+}
+
+/** Autonomy and delegation: how much agents worked on their own, where they waited on the user, and the session
+ *  families (a coordinator and the sessions it started) with what the logs show about them. No prompt text. Sessions
+ *  and repositories are always masked (Session 12, Repository A), with no branches: this result goes to a language
+ *  model. `date` picks the day (default: the latest active day). */
+export function formatTimeline(analyzer: Analyzer, f?: DateFilter, date?: string) {
+  if (date !== undefined && !isCivilDate(date)) return { error: `Not a calendar date: ${date}. Use YYYY-MM-DD.` };
+  for (const bound of [f?.fromDate, f?.toDate]) {
+    if (bound && !isCivilDate(bound)) return { error: `Not a calendar date: ${bound}. Use YYYY-MM-DD.` };
+  }
+  const p = prepareTimeline(analyzer.getTimelineData(f));
+  const requested = { from: f?.fromDate ?? null, to: f?.toDate ?? null };
+  const active = p.sessions.filter(s => !s.ctx);
+  if (active.length === 0) return { requested, sessions: 0, note: 'No sessions in this range.' };
+  const day = date ?? p.days[p.days.length - 1];
+  const outside = (requested.from && day < requested.from) || (requested.to && day > requested.to);
+  const lanes = outside ? [] : buildLanes(p, ...timelineWindow('day', day));
+  const families = buildViewFamilies(lanes, p);
+  const kpis = timelineKpis(lanes, families);
+  const namer = createNamer(p, true);
+  const overview = buildFamilies(p);
+  const totals = overview.totals;
+  const minutes = (ms: number) => Math.round(ms / 60_000);
+  const turns = sum(p.days, d => { const x = p.dayTotals.get(d); return x ? x.typed + x.automated : 0; });
+  const credits = totals.totalCredits > 0;
+  const share = (value: number) => (credits ? Math.round(value) : null);
+  return {
+    requested,
+    observed: { firstActiveDay: p.days[0], lastActiveDay: p.days[p.days.length - 1], activeDays: p.days.length, sessions: active.length },
+    automatedTurnPct: turns > 0 ? pct(sum(p.days, d => p.dayTotals.get(d)?.automated ?? 0), turns) : null,
+    day: lanes.length === 0 ? { date: day, sessions: 0, note: outside ? 'This day is outside the requested range.' : 'No activity on this day in the selected range.' } : {
+      date: day,
+      sessions: kpis.sessions,
+      turns: kpis.turns,
+      typedTurns: kpis.typed,
+      agentHours: Math.round(kpis.agentMs / 360_000) / 10,
+      agentMinutesPerTypedPrompt: kpis.agentMsPerPrompt == null ? null : minutes(kpis.agentMsPerPrompt),
+      longestUnattendedMinutes: minutes(kpis.unattendedMs),
+      waitsOnUser: { started: kpis.waits, onQuestionOrPermission: kpis.waits - kpis.idleWaits, minutes: minutes(kpis.waitMs), atLeast30Min: kpis.longWaits },
+      questionsAndPermissionsAnswered: kpis.answered,
+      peakParallelSessions: kpis.peak.count,
+      childSessions: kpis.childLanes,
+      childCreditSharePct: kpis.credits > 0 ? Math.round(kpis.childCreditShare * 10) / 10 : null,
+      insights: viewInsights(lanes, families, namer, 'day', p),
+    },
+    families: {
+      count: totals.families,
+      sessionsInFamilies: totals.sessionsInFamilies,
+      childSessions: totals.children,
+      childSessionsWithYourInput: totals.childrenNeedingYou,
+      promptsTypedIntoChildren: totals.childTyped,
+      answersInChildren: totals.childAnswered,
+      creditSharePct: share(totals.creditShare),
+      childCreditSharePct: share(totals.childCreditShare),
+      verdicts: {
+        noInputInChildren: { families: totals.alone.families, creditSharePct: share(totals.alone.creditShare) },
+        youSteppedIn: { families: totals.needed.families, creditSharePct: share(totals.needed.creditShare) },
+        wideFanOut: { families: totals.wide.families, creditSharePct: share(totals.wide.creditShare) },
+      },
+      insights: familiesInsights(totals),
+      top: overview.families.slice(0, 5).map(fam => ({
+        name: namer.name(fam.s),
+        repository: namer.repo(fam.repoSession),
+        repositories: fam.repos,
+        sessions: fam.sessions,
+        children: fam.children,
+        verdict: VERDICTS[fam.verdict].label,
+        wideFanOut: fam.wide,
+        promptsTypedIntoChildren: fam.childTyped,
+        answersInChildren: fam.childAnswered,
+        agentHours: Math.round(fam.agentMs / 360_000) / 10,
+        creditSharePct: credits ? Math.round(fam.creditShare * 10) / 10 : null,
+        habitToConsider: fam.wide ? `${VERDICTS[fam.verdict].habit} ${VERDICTS.wide.habit}` : VERDICTS[fam.verdict].habit,
+      })),
+    },
+    notes: [
+      'Agent time: per turn, the time from its prompt to its last logged agent activity, minus the time that turn was stopped on a question or a permission prompt; then merged per session, so overlapping turns count once.',
+      'Waits on the user: per session, gaps of 2 to 120 min (both included) from the end of its work to the next typed prompt, plus answered questions and user-decided permission prompts from request to result (none when the answer was recorded before the request was logged), counted once where they overlap, then summed over sessions (session-minutes: a coordinator and its child waiting on one question both count). "started" counts waits that began on the day. An answer is dated by Copilot\'s own record of it when logged, else by the result.',
+      'Unattended: per family, from one of the user\'s prompts or answers (a relayed answer paired with the child\'s record of it is one answer), for as long as the family\'s agent work kept running (pauses of at most 2 min don\'t end it), up to the user\'s next prompt or answer anywhere in the family.',
+      'A child session has the user\'s input when the user typed into it or answered one of its questions or permission prompts. This is what the logs show, not a judgment of the brief.',
+      'Session and repository names are always masked here; the Timeline page shows them locally.',
+      'Credits are logged only by Copilot CLI and Copilot App; credit shares are null when none were logged.',
+    ],
+  };
+}
+function sum<T>(items: readonly T[], value: (item: T) => number): number {
+  return items.reduce((total, item) => total + value(item), 0);
 }
 
 /** What fills the prompt, per harness — shares in percent of the prompt. */

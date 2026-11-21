@@ -22,6 +22,7 @@ import { stripSingleSession } from './parser-shared';
 import { getCacheDir } from './cache-paths';
 import { isCacheWriteWorkerResult, removeStaleTempFiles, writeCacheFiles, type CacheWritePayload } from './cache-write';
 import { runtimeDebug } from './runtime-debug';
+import { cliFingerprint, cliFingerprintAsync, dirFingerprint, dirFingerprintAsync } from './cache-fingerprint';
 
 export interface ParseResult {
   workspaces: Map<string, Workspace>;
@@ -50,75 +51,12 @@ export interface DirMeta {
   chatMaxMtime: number;
   editCount: number;
   editMaxMtime: number;
+  /** The Copilot CLI log beside the workspace's chats (`events.jsonl`) and its `workspace.yaml`: size and times, or
+   *  empty when there is none. Absent from caches written before it was kept, which then read as stale once. */
+  cli?: string;
 }
 
 export type DirMetas = Record<string, DirMeta>;
-
-/**
- * Fast directory fingerprint.
- * Uses directory mtime (changes on add/remove) + count of relevant entries.
- * Only counts .json/.jsonl files for chatSessions, directories for editingSessions.
- */
-function dirFingerprint(dirPath: string, countDirs = false): { count: number; mtime: number } {
-  try {
-    const st = fs.statSync(dirPath);
-    if (!st.isDirectory()) return { count: 0, mtime: 0 };
-    if (!countDirs) {
-      const entries = fs.readdirSync(dirPath);
-      return {
-        count: entries.filter(name => name.endsWith('.json') || name.endsWith('.jsonl')).length,
-        mtime: st.mtimeMs,
-      };
-    }
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true })
-      .filter(entry => entry.isDirectory());
-    let mtime = st.mtimeMs;
-    for (const entry of entries) {
-      try {
-        mtime = Math.max(mtime, fs.statSync(path.join(dirPath, entry.name, 'state.json')).mtimeMs);
-      } catch {
-        // A partially written editing-session directory may not have state.json yet.
-      }
-    }
-    return { count: entries.length, mtime };
-  } catch {
-    return { count: 0, mtime: 0 };
-  }
-}
-
-/**
- * Fast async directory fingerprint.
- * Uses directory mtime (changes on add/remove) + count of relevant entries.
- */
-async function dirFingerprintAsync(dirPath: string, countDirs = false): Promise<{ count: number; mtime: number }> {
-  try {
-    const st = await fs.promises.stat(dirPath);
-    if (!st.isDirectory()) return { count: 0, mtime: 0 };
-    if (!countDirs) {
-      const entries = await fs.promises.readdir(dirPath);
-      return {
-        count: entries.filter(name => name.endsWith('.json') || name.endsWith('.jsonl')).length,
-        mtime: st.mtimeMs,
-      };
-    }
-    const entries = (await fs.promises.readdir(dirPath, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory());
-    let mtime = st.mtimeMs;
-    const BATCH_SIZE = 128;
-    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-      const stats = await Promise.allSettled(
-        entries.slice(i, i + BATCH_SIZE)
-          .map(entry => fs.promises.stat(path.join(dirPath, entry.name, 'state.json'))),
-      );
-      for (const result of stats) {
-        if (result.status === 'fulfilled') mtime = Math.max(mtime, result.value.mtimeMs);
-      }
-    }
-    return { count: entries.length, mtime };
-  } catch {
-    return { count: 0, mtime: 0 };
-  }
-}
 
 export interface CacheData {
   result: ParseResult;
@@ -130,7 +68,10 @@ export interface CacheData {
 const cacheFilePath = (): string => path.join(getCacheDir(), 'parsed.json');
 const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');
 
-const CACHE_VERSION = 31;
+/** Bump when a parser change alters what a cached session holds. 32: Copilot waits keep the time of your answer's own
+ *  record and the request it answered (`answeredAt`, `requestId`); sessions from Copilot logs beside editor chats are
+ *  cached with their workspace, and an older entry would date their answers by the result. */
+const CACHE_VERSION = 32;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */
@@ -213,6 +154,7 @@ export function computeDirMetas(logsDirs: string[]): DirMetas {
           chatMaxMtime: chat.mtime,
           editCount: edit.count,
           editMaxMtime: edit.mtime,
+          cli: cliFingerprint(wsPath),
         };
       }
     } catch { /* cannot read logsDir */ }
@@ -248,11 +190,12 @@ export async function computeDirMetasAsync(logsDirs: string[]): Promise<DirMetas
     const batch = wsPaths.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(
       batch.map(async wsPath => {
-        const [chat, edit] = await Promise.all([
+        const [chat, edit, cli] = await Promise.all([
           dirFingerprintAsync(path.join(wsPath, 'chatSessions')),
           dirFingerprintAsync(path.join(wsPath, 'chatEditingSessions'), true),
+          cliFingerprintAsync(wsPath),
         ]);
-        return { wsPath, chat, edit };
+        return { wsPath, chat, edit, cli };
       })
     );
     for (const r of results) {
@@ -262,6 +205,7 @@ export async function computeDirMetasAsync(logsDirs: string[]): Promise<DirMetas
           chatMaxMtime: r.value.chat.mtime,
           editCount: r.value.edit.count,
           editMaxMtime: r.value.edit.mtime,
+          cli: r.value.cli,
         };
       }
     }
@@ -275,7 +219,8 @@ function dirMetaMatches(a: DirMeta, b: DirMeta): boolean {
   return a.chatCount === b.chatCount &&
     a.chatMaxMtime === b.chatMaxMtime &&
     a.editCount === b.editCount &&
-    a.editMaxMtime === b.editMaxMtime;
+    a.editMaxMtime === b.editMaxMtime &&
+    a.cli === b.cli;
 }
 
 export function findStaleDirs(
