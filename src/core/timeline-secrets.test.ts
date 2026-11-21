@@ -82,6 +82,9 @@ function corpus(): Case[] {
     ].join('\n'), mixed(20), phrase(), mixed(20), mixed(12), mixed(14), mixed(12), mixed(12), b64(88), mixed(12)),
     c('random-looking strings next to a secret word', ([a, b, d]) => `my password is ${a}\nthe api key ${b}\ntoken for CI: ${d}`,
       rand(LOWER, 10) + rand(DIGITS, 6), mixed(32), rand(LOWER + DIGITS, 14) + '7q'),
+    c('oversized values', ([a, b, d, e, f, g]) => [
+      `{"password": "${a}"}`, `login --password "${b}"`, `login --password "${d}`, `DB_PASSWORD=${e}`, `Authorization: Bearer ${f}`, `push ${g}`,
+    ].join('\n'), rand(LOWER, 2100), rand(LOWER, 2500), rand(LOWER, 3000), rand(LOWER, 2600), mixed(3000), 'ghp_' + mixed(400)),
   ];
 }
 
@@ -118,7 +121,8 @@ describe('scrubText against the secret corpus', () => {
 
   it('stays linear on long runs that look like the start of a secret', () => {
     const t = Date.now();
-    for (const s of ['a_'.repeat(50_000), '--a-'.repeat(25_000), 'token '.repeat(20_000), `password: "${'x'.repeat(100_000)}`]) scrubText(s, labels);
+    for (const s of ['a_'.repeat(50_000), '--a-'.repeat(25_000), 'token '.repeat(20_000), `password: "${'x'.repeat(100_000)}`,
+      `--password "${'x'.repeat(100_000)}`, `Authorization: "${'x '.repeat(50_000)}`, 'password: "a" '.repeat(10_000)]) scrubText(s, labels);
     expect(Date.now() - t).toBeLessThan(2000);
   });
 });
