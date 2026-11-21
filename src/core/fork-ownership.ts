@@ -21,6 +21,9 @@ function isCandidate(r: SessionRequest): boolean {
 
 const byTime = (s: Session) => [...s.requests].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 
+/** The coordinator's own turns, in order: sub-agent turns merged into a transcript are left out of prefix matching. */
+const mainTurns = (s: Session) => byTime(s).filter(r => r.nonHumanKind !== 'subagent');
+
 /** How many of their first prompts two transcripts share, in the same order (same message IDs and times). */
 function sharedPrefix(a: readonly SessionRequest[], b: readonly SessionRequest[]): number {
   let k = 0;
@@ -28,33 +31,55 @@ function sharedPrefix(a: readonly SessionRequest[], b: readonly SessionRequest[]
   return k;
 }
 
+type PrefixFork = { copies: Set<SessionRequest>; source: Session };
+
+/** The session `s` copied its opening prompts from: the one it shares most with, among those it went on before. */
+function prefixSource(s: Session, group: readonly Session[]): { source: Session; k: number } | undefined {
+  const mine = mainTurns(s);
+  let best: { source: Session; k: number } | undefined;
+  for (const other of group) {
+    if (other === s) continue;
+    const theirs = mainTurns(other);
+    const k = sharedPrefix(mine, theirs);
+    const myNext = mine[k]?.timestamp;
+    const theirNext = theirs[k]?.timestamp;
+    const forked = k > 0 && myNext != null && (theirNext == null || myNext < theirNext);
+    if (forked && (!best || k > best.k)) best = { source: other, k };
+  }
+  return best;
+}
+
+/** The copied coordinator prompts, plus the sub-agent turns up to the last of them that the source holds too. */
+function prefixCopySet(s: Session, source: Session, k: number): Set<SessionRequest> {
+  const mine = mainTurns(s);
+  const copies = new Set(mine.slice(0, k));
+  const key = (r: SessionRequest) => `${r.userEventId}@${r.timestamp}`;
+  const theirSubs = new Set(source.requests.filter(r => r.nonHumanKind === 'subagent').map(key));
+  const lastCopy = mine[k - 1].timestamp ?? 0;
+  for (const r of s.requests) {
+    if (r.nonHumanKind === 'subagent' && r.userEventId && (r.timestamp ?? 0) <= lastCopy && theirSubs.has(key(r))) copies.add(r);
+  }
+  return copies;
+}
+
 /** Claude Code forks whose copies show no clock lead (the fork's opening lines are missing): a transcript that begins
  *  with the same prompts, in the same order, as another one, and went on first after them, copied them. The source is
  *  the one it shares most with (the direct source of a fork of a fork). When both went on at the same moment, or
- *  neither did, nothing tells them apart, and both keep their turns. */
-function prefixCopies(sessions: readonly Session[]): Map<Session, { copies: Set<SessionRequest>; source: Session }> {
-  const out = new Map<Session, { copies: Set<SessionRequest>; source: Session }>();
-  const claude = sessions.filter(s => s.harness === 'Claude' && s.requests.length > 0 && !s.requests.some(isCandidate));
+ *  neither did, nothing tells them apart, and both keep their turns. Only coordinator turns are compared; a sub-agent
+ *  turn is a copy only when the source holds the same message. */
+function prefixCopies(sessions: readonly Session[]): Map<Session, PrefixFork> {
+  const out = new Map<Session, PrefixFork>();
+  const claude = sessions.filter(s => s.harness === 'Claude' && mainTurns(s).length > 0 && !s.requests.some(isCandidate));
   const holdersOf = new Map<string, Session[]>();
   for (const s of claude) {
-    const first = byTime(s)[0].userEventId;
+    const first = mainTurns(s)[0].userEventId;
     if (first) holdersOf.set(first, [...(holdersOf.get(first) ?? []), s]);
   }
   for (const group of holdersOf.values()) {
     if (group.length < 2) continue;
     for (const s of group) {
-      const mine = byTime(s);
-      let best: { source: Session; k: number } | undefined;
-      for (const other of group) {
-        if (other === s) continue;
-        const theirs = byTime(other);
-        const k = sharedPrefix(mine, theirs);
-        const myNext = mine[k]?.timestamp;
-        const theirNext = theirs[k]?.timestamp;
-        const forked = k > 0 && myNext != null && (theirNext == null || myNext < theirNext);
-        if (forked && (!best || k > best.k)) best = { source: other, k };
-      }
-      if (best) out.set(s, { copies: new Set(mine.slice(0, best.k)), source: best.source });
+      const best = prefixSource(s, group);
+      if (best) out.set(s, { copies: prefixCopySet(s, best.source, best.k), source: best.source });
     }
   }
   return out;

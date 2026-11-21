@@ -109,6 +109,9 @@ describe('stops for you', () => {
     expect(permissionOnly?.requests).toEqual([]);
     const v = view(analyzer(permissionOnly), D18);
     expect([v.lanes.length, v.kpis.waits, v.kpis.answered, v.kpis.waitMs]).toEqual([1, 1, 1, 2_241]);
+    // Only the Timeline shows it: the Sessions list stays as it was.
+    const an = analyzer(permissionOnly, session(14, [prompt(at(18, 10)), reply(at(18, 10, 1))]));
+    expect([an.getSessions(1, 50).total, an.getSessionDetail(sid(13))?.requests]).toEqual([1, []]);
   });
 });
 

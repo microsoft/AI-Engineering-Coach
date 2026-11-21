@@ -11,6 +11,7 @@ import {
 } from './types';
 import { toDateStr, isoWeek } from './helpers';
 import { AnalyzerBase } from './analyzer-base';
+import type { EditLocIndex } from './edit-loc-diff';
 import { harnessLabel, scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
 import { localScrubContext } from './session-workspace-meta';
 import { resolveParentLinks, type ParentLink } from './timeline-links';
@@ -104,17 +105,24 @@ function splitByRange(s: Session, from: number | undefined, to: number | undefin
 export class TimelineAnalyzer extends AnalyzerBase {
   private links?: Map<string, ParentLink>;
 
+  /** `timelineSessions`: every session the Timeline draws, also those holding only your answers to stops (no turn);
+   *  the Sessions list and the work-life view keep to `sessions`, the sessions with turns. */
+  constructor(sessions: Session[], editLocIndex: EditLocIndex, sharedMap?: Map<SessionRequest, Session>,
+    private readonly timelineSessions: Session[] = sessions) {
+    super(sessions, editLocIndex, sharedMap);
+  }
+
   /** Every session with activity in range, with its turns as counts and timings, its family link, and its logged
    *  name, branch and repository (never a path). No prompt or response text. Turns just outside the range that its
    *  totals need come as `context`, with the range bounds, so every total can be clipped to the range and a range gives
    *  the same per-day values as its days one at a time. Every other member of a shown family comes as a context
    *  record, so the family keeps its structure and its inputs whatever the range or the sidebar filters. */
   getTimelineData(f?: DateFilter, labels: ScrubContext = localScrubContext()): TimelineDataset {
-    const links = (this.links ??= resolveParentLinks(this.sessions));
+    const links = (this.links ??= resolveParentLinks(this.timelineSessions));
     const from = f?.fromDate ? dayStart(f.fromDate) : undefined;
     const to = f?.toDate ? addDays(dayStart(f.toDate), 1) : undefined;
-    const byId = new Map(this.sessions.map(s => [s.sessionId, s]));
-    const shown = this.sessions
+    const byId = new Map(this.timelineSessions.map(s => [s.sessionId, s]));
+    const shown = this.timelineSessions
       .filter(s => this.matchesWorkspaceFilter(s, f?.workspaceId) && (!f?.harness || s.harness === f.harness))
       .map(s => ({ s, ...splitByRange(s, from, to), ctx: false }))
       .filter(x => x.active);
@@ -219,7 +227,7 @@ export class TimelineAnalyzer extends AnalyzerBase {
   }
 
   getSessionDetail(sessionId: string): Session | null {
-    return this.sessions.find(s => s.sessionId === sessionId) || null;
+    return this.timelineSessions.find(s => s.sessionId === sessionId) || null;
   }
 
   /** The user's working hours, days and streaks, from the turns they typed (automated turns are left out). */

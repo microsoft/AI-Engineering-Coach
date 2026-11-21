@@ -62,6 +62,25 @@ describe('withInheritedTurnsRemoved', () => {
     const [a, b] = withInheritedTurnsRemoved([session('a', [request(0, 'm1'), request(20, 'x')]), session('b', [request(0, 'm1'), request(20, 'y')])]);
     expect([a.requests.length, b.requests.length]).toEqual([2, 2]);
   });
+});
+
+describe('withInheritedTurnsRemoved with sub-agent turns', () => {
+  it('compares only coordinator turns when the source has a sub-agent turn between the copied prompts', () => {
+    const sub = { ...request(3, 'sub1'), nonHumanKind: 'subagent' as const };
+    const source = session('src', [request(0, 'm1'), sub, request(5, 'm2'), request(40, 'm5')]);
+    const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(20, 'm4')]);
+    const [s, f] = withInheritedTurnsRemoved([source, fork]);
+    // The sub-agent's work stays in the session that ran it.
+    expect([s.requests.map(r => r.userEventId), f.requests.map(r => r.userEventId), f.inheritedTurns, f.forkedFromId])
+      .toEqual([['m1', 'sub1', 'm2', 'm5'], ['m4'], 2, 'src']);
+    // A sub-agent turn the fork copied (same message and time) is a copy too; one it ran itself is its own.
+    const own = { ...request(25, 'sub2'), nonHumanKind: 'subagent' as const };
+    const [, f2] = withInheritedTurnsRemoved([source, session('fork', [request(0, 'm1'), { ...sub }, request(5, 'm2'), request(20, 'm4'), own])]);
+    expect([f2.requests.map(r => r.userEventId), f2.inheritedTurns]).toEqual([['m4', 'sub2'], 3]);
+  });
+});
+
+describe('withInheritedTurnsRemoved for forks of forks', () => {
   it('links a fork of a fork to its direct source', () => {
     const a = session('a', [request(0, 'm1')]);
     const b = session('b', [request(0, 'm1', 30_000), request(10, 'm2')]);

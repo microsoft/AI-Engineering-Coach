@@ -74,7 +74,7 @@ export class Analyzer {
     this.dashboard = new DashboardAnalyzer(sessions, elIdx, sharedMap);
     this.production = new ProductionAnalyzer(sessions, elIdx, sharedMap);
     this.consumption = new ConsumptionAnalyzer(sessions, elIdx, sharedMap);
-    this.timeline = new TimelineAnalyzer(all, elIdx, sharedMap);
+    this.timeline = new TimelineAnalyzer(sessions, elIdx, sharedMap, all);
     this.patterns = new PatternsAnalyzer(sessions, elIdx, sharedMap);
     this.workflows = new WorkflowAnalyzer(sessions, elIdx, sharedMap);
     this.config = new ConfigAnalyzer(sessions, elIdx, this.workspaces, sharedMap);
