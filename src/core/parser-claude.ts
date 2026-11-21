@@ -750,16 +750,29 @@ function discoveryKey(dirName: string, sessionName: string): string {
   return `${dirName}\0${sessionName}`;
 }
 
-/** The first `cwd` a transcript records. */
-function readClaudeCwd(filePath: string): string | undefined {
-  let cwd: string | undefined;
+/** Hands a transcript's first 200 lines to `onLine` until it returns true. A file too large to parse is not read,
+ *  and a file that can't be read is left to the parse. */
+function readClaudeHead(filePath: string, size: bigint, onLine: (raw: string) => boolean): void {
+  if (size > BigInt(MAX_FILE_SIZE)) return;
   let read = 0;
-  forEachJsonlLine(filePath, raw => {
-    read++;
-    if (!raw.includes('"cwd"')) return;
-    const line = parseClaudeLine(raw);
-    if (line?.cwd) cwd = line.cwd;
-  }, () => cwd !== undefined || read >= 200);
+  let done = false;
+  try {
+    forEachJsonlLine(filePath, raw => {
+      read++;
+      done = onLine(raw);
+    }, () => done || read >= 200);
+  } catch {
+    // Left to parseClaudeSessionFile, which reads the file again.
+  }
+}
+
+/** The first `cwd` a transcript records. */
+function readClaudeCwd(filePath: string, size: bigint): string | undefined {
+  let cwd: string | undefined;
+  readClaudeHead(filePath, size, raw => {
+    if (raw.includes('"cwd"')) cwd = parseClaudeLine(raw)?.cwd || undefined;
+    return cwd !== undefined;
+  });
   return cwd;
 }
 
@@ -771,8 +784,8 @@ function readClaudeCwd(filePath: string): string | undefined {
  */
 function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
   const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map() };
-  const transcripts: string[] = [];
-  const byFile = new Map<string, { dirName: string; filePath: string }[]>();
+  const transcripts: { filePath: string; size: bigint }[] = [];
+  const byFile = new Map<string, { dirName: string; filePath: string; size: bigint }[]>();
   for (const dirName of [...dirNames].sort()) {
     let entries: fs.Dirent[];
     try {
@@ -783,23 +796,24 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
       const filePath = path.join(projectsDir, dirName, entry.name);
-      transcripts.push(filePath);
+      let stat: fs.BigIntStats;
       let key: string;
       try {
-        const stat = fs.statSync(filePath, { bigint: true });
+        stat = fs.statSync(filePath, { bigint: true });
+        transcripts.push({ filePath, size: stat.size });
         if (stat.nlink < 2n) continue;
         key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
       } catch {
         continue;
       }
       const copies = byFile.get(key) ?? [];
-      copies.push({ dirName, filePath });
+      copies.push({ dirName, filePath, size: stat.size });
       byFile.set(key, copies);
     }
   }
   for (const copies of byFile.values()) {
     if (copies.length < 2) continue;
-    const cwd = readClaudeCwd(copies[0].filePath);
+    const cwd = readClaudeCwd(copies[0].filePath, copies[0].size);
     const kept = copies.find(copy => cwd !== undefined && cwdMatchesProjectDir(cwd, copy.dirName)) ?? copies[0];
     for (const copy of copies) {
       if (copy === kept) continue;
@@ -813,8 +827,8 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
   }
   // Oldest first, so a turn stays with the transcript it was typed in, whichever folder its copies are in.
   const ordered = transcripts
-    .filter(filePath => !discovery.skipFiles.has(filePath))
-    .map(filePath => ({ filePath, start: transcriptStart(filePath) }))
+    .filter(({ filePath }) => !discovery.skipFiles.has(filePath))
+    .map(({ filePath, size }) => ({ filePath, start: transcriptStart(filePath, size) }))
     .sort((a, b) => a.start - b.start || path.basename(a.filePath).localeCompare(path.basename(b.filePath))
       || a.filePath.localeCompare(b.filePath));
   for (const [rank, { filePath }] of ordered.entries()) discovery.transcriptRanks.set(filePath, rank);
@@ -823,12 +837,13 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
 
 /** When a transcript was started: its first line's timestamp. A fork or resume replays older turns, but its own
  *  first line is written when it starts. */
-function transcriptStart(filePath: string): number {
+function transcriptStart(filePath: string, size: bigint): number {
   let start = Number.POSITIVE_INFINITY;
-  forEachJsonlLine(filePath, raw => {
-    const ts = parseClaudeLine(raw)?.timestamp;
+  readClaudeHead(filePath, size, raw => {
+    const ts = raw.includes('"timestamp"') ? parseClaudeLine(raw)?.timestamp : undefined;
     if (ts) start = Date.parse(ts);
-  }, () => Number.isFinite(start));
+    return Number.isFinite(start);
+  });
   return Number.isFinite(start) ? start : Number.POSITIVE_INFINITY;
 }
 

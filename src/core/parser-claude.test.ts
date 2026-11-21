@@ -11,12 +11,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import type { SessionSource } from './cache';
 import { extractClaudeImageReferences, parseClaudeSessions } from './parser-claude';
 import { getParseWarningCounts, getParseWarnings, MAX_FILE_SIZE, resetParseWarnings } from './parser-shared';
 import { loadSourceSession } from './session-images';
+
+vi.mock('fs', async importOriginal => ({ ...await importOriginal<typeof import('fs')>() }));
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -931,6 +933,23 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
       expect(sessions.map(session => [session.workspaceId, session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
         ['claude--Users-me-a', 'copy', ['u2']], ['claude--Users-me-proj', 'original', ['u1']],
       ]);
+    });
+  });
+
+  it('parses a transcript whose first lines could not be read for ordering', () => {
+    withProjects({
+      '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
+    }, projectsDir => {
+      // Only the first open fails: the read that orders the transcript, not the parse that follows.
+      const openSync = vi.spyOn(fs, 'openSync').mockImplementationOnce(() => {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      });
+      try {
+        const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+        expect(sessions.map(session => session.sessionId)).toEqual(['a']);
+      } finally {
+        openSync.mockRestore();
+      }
     });
   });
 
