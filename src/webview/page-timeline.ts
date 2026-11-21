@@ -577,13 +577,15 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
         ${l.waits.map(w => {
           const [part] = clipIntervals([[w.start, w.end]], plot);
           const key = w.kind === 'idle' ? `i:${w.start}` : `w:${w.kind}:${w.start}`;
-          const open = (e: Event) => {
-            e.stopPropagation();
+          const open = (e?: Event) => {
+            e?.stopPropagation();
             scrollToText = true;
             update({ selected: s.id, textFocus: key });
           };
+          const tip = waitTip(ctx, w, l.win);
           return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} data-wait-at=${key}
-            title=${waitTip(ctx, w, l.win) + (state.showText && !state.masked ? '\nClick to read it in the details' : '')} style=${span(part)} onClick=${open}></div>` : null;
+            role="button" tabindex="0" aria-label=${tip} title=${tip + (state.showText && !state.masked ? '\nClick to read it in the details' : '')}
+            style=${span(part)} onClick=${open} onKeyDown=${onActivate(open)}></div>` : null;
         })}
         ${clipIntervals(l.segments, plot).map(part => html`<div class="seg" title=${`Agent working ${formatDuration(part[1] - part[0])} (bars are at least 1 px wide, so a very short one can look longer)`} style=${`${span(part)};background:${color}`}></div>`)}
         ${l.turns.map(t => html`<div class=${'mk ' + markKind(t.k)} data-sender=${t.k} title=${turnTip(ctx, s, t)} style=${`left:${pct(ctx, t.t)}%`}></div>`)}

@@ -135,6 +135,7 @@
 .tlx .dr-links a { color: var(--accent-blue); text-decoration: none; cursor: pointer; }
 .tlx .dr-links a:hover { text-decoration: underline; }
 .tlx-trk .wait { cursor: pointer; }
+.tlx-trk .wait:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 1px; z-index: 2; }
 .tlx-text { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .tlx-text-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
 .tlx-text .tx-list { display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow: auto; margin-top: 6px; }
@@ -149,7 +150,8 @@
 .tlx-text .tx-answer b { margin-right: 6px; }
 .tlx-text .tx-choices { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
 .tlx-text .tx-more { margin: 4px 0; font-size: 12px; }
-.tlx-text .tx-more summary { cursor: pointer; color: var(--text-muted); font-size: 11px; }.tlx .who-you { color: var(--text); }
+.tlx-text .tx-more summary { cursor: pointer; color: var(--text-muted); font-size: 11px; }
+.tlx .who-you { color: var(--text); }
 .tlx .who-agent { color: var(--tl-auto); }
 .tlx .who-autopilot { color: var(--accent-orange); }
 .tlx .who-other { color: var(--text-muted); }

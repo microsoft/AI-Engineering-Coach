@@ -81,6 +81,15 @@ test.describe('Timeline', () => {
     await page.locator('.tlx-lane[data-session="tl-flaky"] .wait').click();
     await expect(page.locator('#tlxDetailName')).toHaveText('Investigate flaky test');
     await expect(text.locator('.tx-item.focus')).toContainText('Waited 35 min');
+    // From the keyboard too: a wait is a button, and Enter on it does the same.
+    await page.locator('.tlx-lane[data-session="tl-coord"] .tlx-lbl').click();
+    const wait = page.locator('.tlx-lane[data-session="tl-flaky"] .wait');
+    await expect(wait).toHaveAttribute('role', 'button');
+    await expect(wait).toHaveAttribute('aria-label', /^Waiting on you .*: 35 min/);
+    await wait.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#tlxDetailName')).toHaveText('Investigate flaky test');
+    await expect(text.locator('.tx-item.focus')).toContainText('Waited 35 min');
     // A question: what the agent said before it, the question, its choices and your answer.
     await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
     await page.locator('.tlx-lane[data-session="tl-notes"] .tlx-lbl').click();

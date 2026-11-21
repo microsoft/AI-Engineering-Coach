@@ -109,6 +109,17 @@ describe('scrubText', () => {
     const ids = 'commit 3f2a9c4e1b7d8a6f5e4d3c2b1a0f9e8d7c6b5a49 session 7e470000-0000-4000-8000-000000000001';
     expect(scrubText(ids, text)).toBe(ids);
   });
+
+  it('replaces the value of a prefixed secret variable and of a secret flag followed by a space', () => {
+    expect(scrubText('DB_PASSWORD=hunter2hunter SERVICE_API_KEY=0123456789abcdef0123456789abcdef npm start', text))
+      .toBe('DB_PASSWORD=[secret] SERVICE_API_KEY=[secret] npm start');
+    expect(scrubText('$env:STORAGE_ACCOUNT_KEY = "abc123def456"', text)).toBe('$env:STORAGE_ACCOUNT_KEY = "[secret]"');
+    expect(scrubText('login --password hunter2hunter --client-secret abc123def456 --token=abc123def456', text))
+      .toBe('login --password [secret] --client-secret [secret] --token=[secret]');
+    // Words that only contain a key's name, and flags that name a file or a count, stay.
+    const plain = 'design=wide max_tokens=4096 --token-file cfg.json --max-tokens 4096 --password-stdin';
+    expect(scrubText(plain, text)).toBe(plain);
+  });
 });
 
 describe('Copilot workspace.yaml', () => {
