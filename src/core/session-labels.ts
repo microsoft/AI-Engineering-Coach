@@ -6,6 +6,8 @@
 /* Session names and branches as a harness logged them, made safe to display: links, email addresses, drive and
  * home paths, and the user's own names (OS account, GitHub handles) are removed. Browser-safe: no Node imports. */
 
+import { scrubSecrets } from './secret-scrub';
+
 /** What to remove from a label: the user's home directory and the names that identify them. */
 export interface ScrubContext {
   /** Home directory, replaced by `~` (after drive paths are replaced). */
@@ -130,35 +132,11 @@ export function scrubBranch(value: string, ctx: ScrubContext): string {
   return scrubLabel(out, ctx, MAX_BRANCH, '[name]');
 }
 
-// cspell:ignore abposr apikey
-/** Credentials that look like one: key blocks, well-known token formats, `Bearer …`, `password=…` style pairs (also
- *  as the end of a longer name, such as `DB_PASSWORD=…` or `accessToken: …`) and `--password …` style flags. A match
- *  starts only where a name starts, so the scan stays linear. */
-const SECRET_PATTERNS: [RegExp, string][] = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[secret]'],
-  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[abposr]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})/g, '[secret]'],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[secret]'],
-  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 [secret]'],
-  [/(?<![A-Za-z0-9_-])([A-Za-z0-9_-]*?(?:api[_-]?key|secret|token|password|passwd|pwd|account[_-]?key|access[_-]?key|private[_-]?key|shared[_-]?access[_-]?key|sig)["']?\s*[:=]\s*["']?)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
-  [/(?<![A-Za-z0-9_-])(--?[A-Za-z0-9-]*?(?:api-?key|secret|token|password|passwd|account-?key)\s+["']?)(?!-)[^\s"'`,;&]{6,}/gi, '$1[secret]'],
-  // curl -u user:password, docker login -u user -p password.
-  [/((?:^|\s)(?:-u|--user)\s+[^\s:"'`]+:)[^\s"'`]+/g, '$1[secret]'],
-  [/((?:^|\s)-u\s+[^\s"'`]+\s+-p\s+)(?!-)[^\s"'`]+/g, '$1[secret]'],
-];
-
-/** A long run of letters and digits in both cases, as random keys are: hashes in lower-case hex and IDs with dashes
- *  aren't caught. */
-function looksRandom(value: string): boolean {
-  return value.length >= 32 && /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
-}
-
 /** Free text (a prompt, a question, your answer, an agent's message) made safe to show on this machine: links, email
- *  addresses and secret-like tokens are replaced, the home directory becomes `~` and the user's names become `[name]`.
- *  Line breaks and other paths stay, so the text reads as written. */
+ *  addresses and credentials (see `scrubSecrets`) are replaced, the home directory becomes `~` and the user's names
+ *  become `[name]`. Line breaks and other paths stay, so the text reads as written. */
 export function scrubText(value: string, ctx: ScrubContext): string {
-  let out = value.replaceAll(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[link]').replaceAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]');
-  for (const [pattern, mark] of SECRET_PATTERNS) out = out.replaceAll(pattern, mark);
-  out = out.replaceAll(/[A-Za-z0-9+/_-]{32,}={0,2}/g, m => (looksRandom(m) ? '[secret]' : m));
+  let out = scrubSecrets(value.replaceAll(/[a-z][a-z0-9+.-]{0,30}:\/\/\S+/gi, '[link]').replaceAll(/[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){1,10}/g, '[email]'));
   if (ctx.home && ctx.home.length > 1) {
     const home = ctx.home.replace(/[\\/]+$/, '');
     const variants = new Set([home, home.replaceAll('\\', '/'), home.replaceAll('/', '\\')]);

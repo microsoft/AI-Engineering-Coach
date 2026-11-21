@@ -98,12 +98,15 @@ describe('scrubText', () => {
   });
 
   it('replaces secret-like tokens but keeps hashes and IDs', () => {
+    // Built at run time, so no token-shaped literal sits in the repository.
+    const letters = 'abcdefghijklmnopqrstuvwxyz';
     const secrets = [
-      'ghp_abcdefghijklmnopqrstuvwxyz0123', 'github_pat_11ABCDEFG0123456789_abcdefghij', 'AKIAABCDEFGHIJKLMNOP',
-      'sk-proj-abcdefghijklmnopqrstuvwx', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijklmnop', 'Q2xpZW50U2VjcmV0VmFsdWUxMjM0NTY3OEFC',
+      'ghp_' + letters + '0123', 'github_pat_' + '11ABCDEFG0123456789_' + letters.slice(0, 10), 'AKIA' + letters.slice(0, 16).toUpperCase(),
+      'sk-' + 'proj-' + letters.slice(0, 24), ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0In0', letters.slice(0, 16)].join('.'), 'Q2xpZW50U2VjcmV0VmFsdWUxMjM0NTY3OEFC',
     ];
     for (const s of secrets) expect(scrubText(`key ${s} end`, text)).toBe('key [secret] end');
-    expect(scrubText('Authorization: Bearer abcdef0123456789xyz', text)).toBe('Authorization: Bearer [secret]');
+    // A header's whole value goes, its scheme too.
+    expect(scrubText('Authorization: Bearer abcdef0123456789xyz', text)).toBe('Authorization: [secret]');
     expect(scrubText('set password=hunter2hunter and api_key: "abc123def456"', text)).toBe('set password=[secret] and api_key: "[secret]"');
     expect(scrubText('-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----', text)).toBe('[secret]');
     const ids = 'commit 3f2a9c4e1b7d8a6f5e4d3c2b1a0f9e8d7c6b5a49 session 7e470000-0000-4000-8000-000000000001';

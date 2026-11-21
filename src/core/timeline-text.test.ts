@@ -36,7 +36,7 @@ function parse(events: Record<string, unknown>[]): Session {
 }
 
 const fixture = () => parse([
-  { type: 'user.message', timestamp: at(0), data: { content: 'Benchmark the cache in /home/jdoe/lab, token ghp_abcdefghijklmnopqrstuvwxyz0123' } },
+  { type: 'user.message', timestamp: at(0), data: { content: `Benchmark the cache in /home/jdoe/lab, token ${'ghp_' + 'abcdefghijklmnopqrstuvwxyz0123'}` } },
   { type: 'assistant.message', timestamp: at(1), data: { content: 'Two cache sizes fit.' } },
   { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Which size, jdoe?', choices: ['64 MB', '256 MB'] } } },
   { type: 'tool.execution_complete', timestamp: at(5), data: { toolCallId: 'q1', success: true, result: { content: 'User selected: 256 MB' } } },

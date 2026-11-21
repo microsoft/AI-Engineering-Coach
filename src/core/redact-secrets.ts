@@ -29,8 +29,9 @@ const CONTEXT7_KEY = /\bctx7sk-[A-Za-z0-9_-]{10,250}\b/g;
 const SK_API_KEY = /\bsk-[A-Za-z0-9_-]{20,250}\b/g;
 // Stripe / underscore-prefixed keys (sk_live_, sk_test_, rk_live_, pk_live_, …).
 const STRIPE_KEY = /\b[srp]k_(?:live|test)_[0-9A-Za-z]{10,255}\b/g;
-// Credentials embedded in a connection-string URI (scheme://user:pass@host).
-const CONNECTION_STRING_CREDS = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s@/]+@/gi;
+// Credentials embedded in a connection-string URI (scheme://user:pass@host). The scheme is bounded, so a long run of
+// letters and dashes is scanned once, not from each of its letters.
+const CONNECTION_STRING_CREDS = /\b([a-z][a-z0-9+.-]{0,30}:\/\/)[^\s:@/]+:[^\s@/]+@/gi;
 // The key name may follow `_` or `-` (client_secret, refresh_token) but not a letter or digit.
 // Quotes may be backslash-escaped, as in raw JSON files and JSON.stringify output.
 const SECRET_KEY_NAME = String.raw`(?<![A-Za-z0-9])(api[_-]?key|access[_-]?key|secret|token|password|passwd|credentials?)`;
