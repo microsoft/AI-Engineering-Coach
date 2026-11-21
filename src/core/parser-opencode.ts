@@ -101,6 +101,8 @@ interface OcPart {
 
 interface OpenCodeAssistantData {
   responseText: string;
+  /** The assistant's own text parts, without the code its write tools wrote (which `responseText` also holds). */
+  replyText: string;
   toolsUsed: string[];
   editedFiles: string[];
   referencedFiles: string[];
@@ -351,6 +353,7 @@ function collectAssistantData(
 ): OpenCodeAssistantData {
   const data: OpenCodeAssistantData = {
     responseText: '',
+    replyText: '',
     toolsUsed: [],
     editedFiles: [],
     referencedFiles: [],
@@ -384,6 +387,7 @@ function collectAssistantData(
     for (const part of parts) applyOpenCodePart(part, data, textParts);
   }
   data.responseText = textParts.join('\n');
+  data.replyText = assistantMessages.flatMap(message => (partsByMsg.get(message.id) || []).filter(part => part.type === 'text' && part.text).map(part => part.text!)).join('\n');
 
   return data;
 }
@@ -437,6 +441,7 @@ function buildOpenCodeRequest(
     messageText: getOpenCodeUserText(msg, partsByMsg),
     variableKinds: imageCount > 0 ? { image: imageCount } : {},
     responseText: assistantData.responseText,
+    replyText: assistantData.replyText,
     agentName: msg.agent || 'OpenCode',
     agentMode: msg.agent || 'build',
     modelId: assistantData.modelId,

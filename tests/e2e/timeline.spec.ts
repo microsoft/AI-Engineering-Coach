@@ -109,6 +109,27 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxShowText')).not.toBeChecked();
   });
 
+  test('ignores a read of a lane’s text that the Timeline reloaded under', async ({ page }) => {
+    type HookWindow = { mockTimelineTextHook?: (id: string) => unknown; releaseText?: () => void };
+    const prompts = page.locator('#tlxText [data-text-at^="t:"] > .tx-body');
+    await page.evaluate(() => {
+      const w = window as unknown as HookWindow;
+      const gate = new Promise<void>(resolve => { w.releaseText = resolve; });
+      w.mockTimelineTextHook = id => gate.then(() => ({ sessionId: id, waits: [], turns: [{ t: new Date(2026, 4, 3, 14).getTime(), k: 'you', prompt: 'Stale prompt' }] }));
+    });
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(page.locator('#tlxText')).toContainText('Reading this session’s log');
+    // The Timeline reloads while that read is pending, and reads the lane again.
+    await page.evaluate(() => { (window as unknown as HookWindow).mockTimelineTextHook = undefined; });
+    await page.locator('[data-page="dashboard"]').first().click();
+    await page.locator('[data-page="timeline"]').first().click();
+    await expect(prompts.first()).toHaveText('Why is the checkout test flaky?');
+    await page.evaluate(() => (window as unknown as HookWindow).releaseText?.());
+    await page.locator('#tlxMask').check();
+    await page.locator('#tlxMask').uncheck();
+    await expect(prompts.first()).toHaveText('Why is the checkout test flaky?');
+  });
+
   test('filters recompute the KPIs, and Clear restores every session', async ({ page }) => {
     await page.locator('#tlxYouTyped').check();
     await expect(page.locator('#tlxCount')).toContainText('3 of 6 sessions shown · KPIs, callouts and the impact table use the shown sessions');

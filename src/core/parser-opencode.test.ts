@@ -194,6 +194,23 @@ describe('parseOpenCodeSessions', () => {
     );
   });
 
+  it('keeps the agent’s own text as its reply, apart from the code a write tool wrote', () => {
+    const user = { id: 'u1', sessionID: 's-reply', role: 'user', time: { created: 1700000000000 }, summary: { title: 'write it' } };
+    const assistant = (id: string) => ({ id, sessionID: 's-reply', role: 'assistant', parentID: 'u1', time: { created: 1700000001000, completed: 1700000002000 }, modelID: 'm' });
+    const write = (messageID: string) => ({ id: 'w-' + messageID, sessionID: 's-reply', messageID, type: 'tool', tool: 'write', state: { status: 'completed', input: { filePath: '/p/a.ts', content: 'export const x = 1;' } } });
+    const replyOf = (parts: (Record<string, unknown> & { id: string; messageID: string })[], ids: string[]) => {
+      let out: [boolean, string | undefined] = [false, undefined];
+      withStorage({ id: 's-reply', directory: '/p', time: { created: 1700000000000 } }, [user, ...ids.map(assistant)], (storageDir) => {
+        const request = parseOpenCodeSessions(storageDir)[0].requests[0];
+        out = [request.responseText.includes('export const x = 1;'), request.replyText];
+      }, parts);
+      return out;
+    };
+    expect(replyOf([{ id: 't1', sessionID: 's-reply', messageID: 'a1', type: 'text', text: 'Writing it.' }, write('a1')], ['a1'])).toEqual([true, 'Writing it.']);
+    // A turn that only wrote a file has no reply of its own.
+    expect(replyOf([write('a1')], ['a1'])).toEqual([true, '']);
+  });
+
   it('uses a present empty summary diff as authoritative zero edits', () => {
     withStorage(
       { id: 'sess-reverted', directory: '/Users/me/proj', time: { created: 1700000000000 } },

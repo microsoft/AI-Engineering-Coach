@@ -815,10 +815,15 @@ function sessionText(id: string): TextEntry {
   if (known) return known;
   const entry: TextEntry = { status: 'loading' };
   texts.set(id, entry);
+  // A read the Timeline reloaded under (the map was cleared, and the lane read again) is dropped.
+  const settle = (next: TextEntry) => {
+    if (texts.get(id) !== entry) return;
+    texts.set(id, next);
+    draw();
+  };
   rpc<TimelineSessionText | null>('getTimelineSessionText', { sessionId: id })
-    .then(text => texts.set(id, text ? { status: 'ready', text } : { status: 'missing' }))
-    .catch(() => texts.set(id, { status: 'missing' }))
-    .finally(draw);
+    .then(text => settle(text ? { status: 'ready', text } : { status: 'missing' }))
+    .catch(() => settle({ status: 'missing' }));
   return entry;
 }
 
