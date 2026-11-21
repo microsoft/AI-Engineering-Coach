@@ -746,11 +746,6 @@ function discoveryKey(dirName: string, sessionName: string): string {
   return `${dirName}\0${sessionName}`;
 }
 
-/** The project folder name Claude Code uses for a working folder: every character but a letter or digit becomes `-`. */
-function encodeClaudeProjectDir(cwd: string): string {
-  return cwd.replaceAll(/[^A-Za-z0-9]/g, '-');
-}
-
 /** The first `cwd` a transcript records. */
 function readClaudeCwd(filePath: string): string | undefined {
   let cwd: string | undefined;
@@ -799,7 +794,7 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
   for (const copies of byFile.values()) {
     if (copies.length < 2) continue;
     const cwd = readClaudeCwd(copies[0].filePath);
-    const kept = copies.find(copy => cwd !== undefined && copy.dirName === encodeClaudeProjectDir(cwd)) ?? copies[0];
+    const kept = copies.find(copy => cwd !== undefined && cwdMatchesProjectDir(cwd, copy.dirName)) ?? copies[0];
     for (const copy of copies) {
       if (copy === kept) continue;
       discovery.skipFiles.add(copy.filePath);
