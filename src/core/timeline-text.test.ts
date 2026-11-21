@@ -15,6 +15,7 @@ import { Analyzer } from './analyzer';
 import { parseCLIEventsFile } from './parser-vscode-cli';
 import { buildSummaryExportFromAnalyzer } from './summary-export';
 import { MAX_TEXT, timelineSessionText } from './timeline-text';
+import { textTurnFinder } from './timeline-model';
 import type { Session } from './types';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-timeline-text-'));
@@ -115,6 +116,22 @@ describe('timelineSessionText replies of live and file-writing turns', () => {
     const analyzed = new Analyzer([parse(start)], new Map()).getTimelineData().sessions[0].turns;
     const text = timelineSessionText(parse([...start, { type: 'assistant.message', timestamp: at(2), id: 'a2', data: { content: 'And more' } }]), labels);
     expect(analyzed.map(t => text.turns.find(x => x.id === t.id)?.prompt)).toEqual(['First']);
+  });
+
+  it('finds a live turn’s text when its prompt logged no ID and the turn gained another message', () => {
+    const start = [
+      { type: 'user.message', timestamp: at(0), data: { content: 'First' } },
+      { type: 'assistant.message', timestamp: at(1), id: 'a1', data: { content: 'One' } },
+      { type: 'user.message', timestamp: at(5), data: { content: 'Second' } },
+      { type: 'assistant.message', timestamp: at(6), id: 'b1', data: { content: 'Two' } },
+    ];
+    const analyzed = new Analyzer([parse(start)], new Map()).getTimelineData().sessions[0].turns;
+    const text = timelineSessionText(parse([...start, { type: 'assistant.message', timestamp: at(7), id: 'b2', data: { content: 'And more' } }]), labels);
+    const find = textTurnFinder(text.turns);
+    expect(analyzed.map(t => find(t)?.prompt)).toEqual(['First', 'Second']);
+    // Two turns at one time are told apart by identity alone.
+    const same = text.turns.map(t => ({ ...t, t: 0 }));
+    expect(['a1', 'b2', 'b1'].map(id => textTurnFinder(same)({ t: 0, id })?.prompt)).toEqual(['First', 'Second', undefined]);
   });
 });
 

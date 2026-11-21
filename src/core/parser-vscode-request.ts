@@ -70,6 +70,7 @@ interface ToolCallResult {
 }
 
 interface ResponsePart {
+  kind?: string;
   value?: string | { value?: string };
 }
 
@@ -95,12 +96,14 @@ function extractMessageText(msg: RawRequest['message']): string {
   return '';
 }
 
-function extractResponseText(resp: unknown[] | undefined): string {
+/** The response's text parts; `reply` leaves out the model's thinking, keeping only what it said. */
+function extractResponseText(resp: unknown[] | undefined, reply = false): string {
   if (!Array.isArray(resp)) return '';
   const parts: string[] = [];
   for (const part of resp) {
     const p = part as ResponsePart;
     if (p && typeof p === 'object' && p.value != null) {
+      if (reply && p.kind === 'thinking') continue;
       const v = p.value;
       if (typeof v === 'object' && v !== null && 'value' in (v as object)) {
         const inner = (v as Record<string, unknown>).value;
@@ -431,12 +434,14 @@ function extractRequestText(req: RawRequest): {
   msgText: string;
   resp: RawRequest['response'];
   respText: string;
+  replyText: string;
 } {
   const resp = req.response;
   return {
     msgText: extractMessageText(req.message),
     resp,
     respText: extractResponseText(resp),
+    replyText: extractResponseText(resp, true),
   };
 }
 
@@ -571,7 +576,7 @@ function extractCompaction(meta: ParsedResultMetadata['meta']): import('./types'
 }
 
 export function parseRawRequest(req: RawRequest): SessionRequest {
-  const { msgText, resp, respText } = extractRequestText(req);
+  const { msgText, resp, respText, replyText } = extractRequestText(req);
   const result = req.result || {};
   const { firstProgress, totalElapsed, agentName, agentMode, slashCommand } = extractRequestMetadata(req, result);
   const {
@@ -637,6 +642,7 @@ export function parseRawRequest(req: RawRequest): SessionRequest {
     messageText: msgText,
     nonHumanKind: vscodeNonHumanKind(req),
     responseText: respText,
+    replyText,
     isCanceled: req.isCanceled || false,
     agentName, agentMode,
     modelId: req.modelId || '',

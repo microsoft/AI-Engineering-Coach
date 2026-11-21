@@ -85,6 +85,8 @@ interface CodexParseState {
   hasUserMessageEvent: boolean;
   imageScan?: CodexImageScan;
   currentAssistantTexts: string[];
+  /** The agent's own messages this turn, without its reasoning: the reply the Timeline shows. */
+  currentReplyTexts: string[];
   currentToolsUsed: string[];
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
@@ -205,6 +207,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     hasUserResponseItem: false,
     hasUserMessageEvent: false,
     currentAssistantTexts: [],
+    currentReplyTexts: [],
     currentToolsUsed: [],
     investigationDelegations: [],
     webDomains: [],
@@ -329,6 +332,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     timestamp: state.turnStartTs,
     messageText: state.currentUserMessage,
     responseText,
+    replyText: state.currentReplyTexts.join('\n'),
     answerEvidence: state.answerEvidence,
     isCanceled: state.turnCanceled,
     agentName: 'Codex',
@@ -402,6 +406,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.hasUserResponseItem = false;
   state.hasUserMessageEvent = false;
   state.currentAssistantTexts = [];
+  state.currentReplyTexts = [];
   state.currentToolsUsed = [];
   state.investigationDelegations = [];
   state.webDomains = [];
@@ -594,6 +599,7 @@ function handleAssistantMessageEvent(payload: Record<string, unknown>, state: Co
   const content = payload.content;
   if (typeof content === 'string') {
     state.currentAssistantTexts.push(content);
+    state.currentReplyTexts.push(content);
     if (content.trim()) state.answerEvidence = payload.phase === 'final' ? 'final' : payload.phase == null ? 'legacy' : 'missing';
   }
 }
@@ -721,6 +727,7 @@ function handleAssistantResponseItem(payload: Record<string, unknown>, state: Co
   for (const item of extractContentItems(payload.content)) {
     if (item.type === 'output_text' && item.text) {
       state.currentAssistantTexts.push(item.text);
+      state.currentReplyTexts.push(item.text);
       if (item.text.trim()) state.answerEvidence = payload.phase === 'final' || payload.channel === 'final' ? 'final'
         : payload.phase == null && payload.channel == null ? 'legacy' : 'missing';
     }

@@ -377,6 +377,19 @@ describe('parseCodexSessions extra coverage', () => {
       expect(session.requests[0].responseText).toBe('just reasoning');
     });
 
+    it('keeps its reasoning out of the reply the Timeline shows', () => {
+      const session = parseSingleSession([
+        { type: 'session_meta', payload: { id: 'sess-reply-text', cwd: '/Users/me/project' } },
+        { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'user_message', message: 'explain' } },
+        { type: 'event_msg', timestamp: '2025-06-15T10:00:01Z', payload: { type: 'agent_reasoning', text: 'thinking' } },
+        { type: 'response_item', timestamp: '2025-06-15T10:00:02Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] } },
+        { type: 'event_msg', timestamp: '2025-06-15T10:00:10Z', payload: { type: 'user_message', message: 'again' } },
+        { type: 'event_msg', timestamp: '2025-06-15T10:00:11Z', payload: { type: 'agent_reasoning', text: 'just reasoning' } },
+      ]);
+
+      expect(session.requests.map(r => [r.responseText, r.replyText])).toEqual([['thinking\nanswer', 'answer'], ['just reasoning', '']]);
+    });
+
     it('leaves endReason as unknown when any request has a response', () => {
       const session = parseSingleSession([
         { type: 'session_meta', payload: { id: 'sess-end-reason-response', cwd: '/Users/me/project' } },

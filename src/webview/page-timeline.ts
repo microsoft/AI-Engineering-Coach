@@ -13,7 +13,7 @@ import type {
 import {
   addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
   formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, neededYou, NO_LANE_FILTERS,
-  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
+  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, textTurnFinder, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
   viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
   type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
   type TimelineLane, type TimelineView, type TimelineWait, type ViewFamily,
@@ -891,10 +891,7 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
   if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);
   const { text } = entry;
   const [from, to] = l.win;
-  // Each turn's text by its request's ID (two turns, a sub-agent's for one, can share a time), else by its time.
-  const byId = new Map(text.turns.filter(t => t.id).map(t => [t.id, t]));
-  const byTime = new Map(text.turns.filter(t => !t.id).map(t => [t.t, t]));
-  const textOf = (t: TimelineTurn) => (t.id ? byId.get(t.id) : undefined) ?? byTime.get(t.t);
+  const textOf = textTurnFinder(text.turns);
   const asks = text.waits.filter(w => waitInWindow(w, from, to));
   const items: [number, VNode][] = [
     ...l.turns.map(t => [t.t, turnItem(ctx, t, textOf(t))] as [number, VNode]),
