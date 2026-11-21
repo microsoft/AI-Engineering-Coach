@@ -96,6 +96,21 @@ function withProjectsDir(filename: string, lines: object[], run: (projectsDir: s
 }
 
 describe('parseClaudeSessions', () => {
+  it('reads a transcript whose path is longer than Windows’ classic 260-character limit', () => {
+    // Claude Code names a project folder after its whole working directory, so deep repositories give long paths.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-long-path-'));
+    try {
+      const projDir = path.join(root, 'projects', '-C-' + 'very-deep-working-directory-'.repeat(7) + 'repo');
+      fs.mkdirSync(projDir, { recursive: true });
+      const file = path.join(projDir, '0f0e0d0c-0000-4000-8000-000000000288.jsonl');
+      fs.writeFileSync(file, [makeUser('prompt', '2025-06-15T10:00:00Z'), makeAssistant('answer', '2025-06-15T10:00:05Z')].map(l => JSON.stringify(l)).join('\n'));
+      expect(file.length).toBeGreaterThan(288);
+      expect(parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions).map(s => s.requests.length)).toEqual([1]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('marks how much older than the transcript’s first line a prompt is: a fork’s copied history', () => {
     withProjectsDir('fork.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:10:00Z', sessionId: 'fork-1' },

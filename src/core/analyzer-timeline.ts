@@ -40,7 +40,11 @@ function subagentLaunches(r: SessionRequest): number {
 }
 
 function timelineWaits(waits: readonly UserWait[] | undefined): TimelineTurnWait[] {
-  return (waits ?? []).filter(w => w.end >= w.start).map(w => ({ s: w.start, e: w.end, k: w.kind, a: w.answered }));
+  return (waits ?? []).filter(w => w.end >= w.start).map(w => ({
+    s: w.start, e: w.end, k: w.kind, a: w.answered,
+    ...(w.answered && w.answeredAt !== undefined && w.answeredAt !== w.end ? { at: w.answeredAt } : {}),
+    ...(w.answered && w.requestId ? { rid: w.requestId } : {}),
+  }));
 }
 
 function timelineTurn(r: SessionRequest): TimelineTurn {
@@ -77,10 +81,12 @@ function repositoryOf(s: Session): string {
 const turnEnd = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
 /** When the turn last held anything: its work, or a question or permission still open after it. */
 const turnReach = (r: SessionRequest) => Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end));
+/** When you answered: the harness's record of your answer, else the result. */
+const answerPoint = (w: UserWait) => w.answeredAt ?? w.end;
 /** An answer of yours at or after `from` (and before `to`), or an answered wait still running at `from`: activity in the
  *  range even when no turn is. An unanswered stop alone is not activity. */
 const answerIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
-  (waits ?? []).some(w => w.answered && w.end >= from && (to === undefined || w.start < to));
+  (waits ?? []).some(w => w.answered && Math.max(w.end, answerPoint(w)) >= from && (to === undefined || Math.min(w.start, answerPoint(w)) < to));
 /** The turn did measured work after `from` (and before `to`): its span less every stop for you in it, the way agent
  *  time is measured. A turn that only lies open across the range, stopped on a question, isn't activity in it. */
 function worksIn(r: SessionRequest, from: number, to: number | undefined): boolean {
@@ -94,7 +100,7 @@ function worksIn(r: SessionRequest, from: number, to: number | undefined): boole
 }
 /** The turn holds an input from you: you typed it, or you answered a question or a permission in it. */
 const hasInput = (r: SessionRequest, before: number) =>
-  (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => w.answered && w.end < before);
+  (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => w.answered && answerPoint(w) < before);
 
 /** A session's turns in time order, split by the range: those in it, and the context its totals need (see
  *  `TimelineSessionRecord.context`). */

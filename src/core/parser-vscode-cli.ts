@@ -143,8 +143,11 @@ interface CLIParseState {
   pendingUsage: TurnUsageTotals;
   /** Questions and permission prompts awaiting a decision, by tool call ID or `permission:<request ID>`. */
   openWaits: Map<string, OpenUserWait>;
-  /** Resolved ones without evidence yet that you answered, awaiting a `human_response.recorded` event. */
-  unconfirmedWaits: Map<string, UserWait>;
+  /** Resolved ones, by key: a `human_response.recorded` event logged after the result still marks them answered, at its
+   *  own time. */
+  closedWaits: Map<string, UserWait>;
+  /** The request ID each `human_response.recorded` event for a question carried, by tool call. */
+  humanRequestIds: Map<string, string>;
   /** Keys with a `human_response.recorded` event. */
   humanResponses: Map<string, number | null>;
   /** Waits answered before the first turn; the first turn takes them. */
@@ -355,10 +358,21 @@ interface OpenUserWait {
   owner: number;
   /** When the next event after it was logged: where it ends if no result ever comes. */
   nextTs?: number;
+  /** The relayed request's ID (`relay_session_input`'s `request_id`). */
+  requestId?: string;
 }
 
-function openUserWait(state: CLIParseState, key: string, start: number | null, kind: UserWait['kind']): void {
-  if (start !== null && key && !key.endsWith(':')) state.openWaits.set(key, { start, kind, owner: state.turn ? state.requests.length : -1 });
+function openUserWait(state: CLIParseState, key: string, start: number | null, wait: Pick<OpenUserWait, 'kind' | 'requestId'>): void {
+  if (start !== null && key && !key.endsWith(':')) {
+    state.openWaits.set(key, { start, kind: wait.kind, owner: state.turn ? state.requests.length : -1, ...(wait.requestId ? { requestId: wait.requestId } : {}) });
+  }
+}
+
+/** The request ID that identifies the wait across sessions: a relay's own, else the one the record of your answer
+ *  carried. */
+function waitRequestId(state: CLIParseState, key: string, open: OpenUserWait): Partial<UserWait> {
+  const requestId = open.requestId ?? (open.kind === 'question' ? state.humanRequestIds.get(key) : undefined);
+  return requestId ? { requestId } : {};
 }
 
 /** The question or permission prompt `key` was resolved at `end`. The turn was stopped on it either way, so it is
@@ -370,8 +384,12 @@ function closeUserWait(state: CLIParseState, key: string, end: number | null, an
   if (!open) return;
   state.openWaits.delete(key);
   if (end === null || end < open.start || automatic) return;
-  const wait: UserWait = { start: open.start, end, kind: open.kind, answered: answered || state.humanResponses.has(key) };
-  if (!wait.answered) state.unconfirmedWaits.set(key, wait);
+  const answeredAt = state.humanResponses.get(key);
+  const wait: UserWait = {
+    start: open.start, end, kind: open.kind, answered: answered || state.humanResponses.has(key), ...(answeredAt != null ? { answeredAt } : {}),
+    ...waitRequestId(state, key, open),
+  };
+  state.closedWaits.set(key, wait);
   attachUserWait(state, wait, open.owner);
 }
 
@@ -379,10 +397,13 @@ function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState
   for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
     if (!key) continue;
     if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
-    const wait = state.unconfirmedWaits.get(key);
+    const requestId = key === str(data.toolCallId) ? str(data.requestId) : '';
+    if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
+    const wait = state.closedWaits.get(key);
     if (wait) {
-      state.unconfirmedWaits.delete(key);
       wait.answered = true;
+      if (wait.answeredAt === undefined && at !== null) wait.answeredAt = at;
+      if (requestId && wait.kind === 'question') wait.requestId ??= requestId;
     }
   }
 }
@@ -591,7 +612,10 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
   const toolName = str(data.toolName);
   noteSessionToolCall(state, data, eventTime(ev));
-  if (isToolNamed(toolName, QUESTION_TOOLS)) openUserWait(state, str(data.toolCallId), eventTime(ev), isToolNamed(toolName, ['relay_session_input']) ? 'relay' : 'question');
+  if (isToolNamed(toolName, QUESTION_TOOLS)) {
+    const relay = isToolNamed(toolName, ['relay_session_input']);
+    openUserWait(state, str(data.toolCallId), eventTime(ev), { kind: relay ? 'relay' : 'question', requestId: relay ? str(recordValue(data.arguments)?.request_id) : '' });
+  }
   const turn = state.turn;
   if (!turn) return;
 
@@ -653,12 +677,18 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   if (toolName === 'skill' && typeof args.skill === 'string') turn.skillsUsed.add(args.skill);
 }
 
-/** A `create_session`-style call: the app logs `external_tool.requested` when it receives the call, and the call's
- *  `tool.execution_start` only when it completes, so the earlier record is when it was asked. */
+/** A `create_session`-style call. The parent logs it twice, as the call's `tool.execution_start` and as the app's
+ *  `external_tool.requested`, in either order (usually the call first) and sometimes only when the call completes; the
+ *  earlier of the two is when the parent requested it. The child's own log begins later, by up to a minute. */
 function noteSessionToolCall(state: CLIParseState, data: Record<string, unknown>, at: number | null): void {
   const toolName = str(data.toolName);
   const id = str(data.toolCallId);
-  if (!id || !isToolNamed(toolName, SESSION_TOOLS) || state.sessionToolCalls.has(id)) return;
+  if (!id || !isToolNamed(toolName, SESSION_TOOLS)) return;
+  const known = state.sessionToolCalls.get(id);
+  if (known) {
+    if (at !== null && (known.at === null || at < known.at)) known.at = at;
+    return;
+  }
   state.sessionToolCalls.set(id, { at, creates: isToolNamed(toolName, ['create_session']) });
 }
 
@@ -893,7 +923,7 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       handleToolExecutionComplete(ev, state);
       return;
     case 'permission.requested':
-      openUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), 'permission');
+      openUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), { kind: 'permission' });
       return;
     case 'permission.completed':
       closeUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), permissionDecidedByYou(ev.data || {}), permissionDecidedByPolicy(ev.data || {}));
@@ -961,7 +991,8 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     childSessionIds: new Set(),
     pendingUsage: { credits: 0, tokens: 0 },
     openWaits: new Map(),
-    unconfirmedWaits: new Map(),
+    closedWaits: new Map(),
+    humanRequestIds: new Map(),
     humanResponses: new Map(),
     earlyWaits: [],
   };
@@ -982,6 +1013,7 @@ function closeUnresolvedWaits(state: CLIParseState): void {
     const attested = answeredAt != null && answeredAt >= open.start;
     attachUserWait(state, {
       start: open.start, end: attested ? answeredAt : open.nextTs ?? open.start, kind: open.kind, answered: state.humanResponses.has(key),
+      ...(answeredAt != null ? { answeredAt } : {}), ...waitRequestId(state, key, open),
     }, open.owner);
   }
 }

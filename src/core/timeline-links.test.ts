@@ -53,4 +53,12 @@ describe('resolveParentLinks', () => {
     const loop = resolveParentLinks([s('a', 1, { childSessionIds: ['b'] }), s('b', 2, { childSessionIds: ['a'] })]);
     expect([...loop.keys()]).toEqual(['b']);
   });
-});
+  it('prefers the session whose create_session made a child over an older one that opened it near its birth (C6)', () => {
+    const t = 1_000_000;
+    const links = resolveParentLinks([
+      s('child', t + 100),
+      s('opener', t - 120_000, { childSessionIds: ['child'], childSessionOpenedAt: { child: t + 2000 } }),
+      s('creator', t - 60_000, { childSessionIds: ['child'], childSessionCreatedAt: { child: t } }),
+    ]);
+    expect(links.get('child')).toEqual({ parent: 'creator', via: 'create' });
+  });});

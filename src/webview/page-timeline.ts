@@ -198,12 +198,12 @@ function page(data: Loaded): VNode {
     <p class="tlx-foot">Agent time is, for each turn, the time from its prompt to its last logged agent activity, less the time that
           turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
           gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
-          answered, once per session where they overlap; permissions a policy
-      decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
+          answered (from the request to its result), once per session where they overlap; an answer is dated by Copilot’s record of it when
+          logged; permissions a policy decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
       Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
       create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
       session that relayed its first message. The Timeline shows counts, timings, model, harness and repository names and the session names
-      you gave (never prompt text, and never automatic titles, which repeat it). Mask names hides names, branches, repositories and search
+      you gave (never automatic titles, nor a name that repeats your first prompt); no prompt or response body, though a name you gave can hold the same words. Mask names hides names, branches, repositories and search
       text on this page only, not the sidebar.</p>` as VNode;
 }
 
@@ -443,7 +443,7 @@ function legend(view: 'day' | 'week'): VNode {
       <span><i class="mk autopilot static"></i>autopilot</span>
       <span><i class="mk other static"></i>system / compaction</span>
       <span><b class="sub static">n</b>sub-agent launches in the turn</span>
-      <span><i class="conn-sw"></i>linked child session (drawn from its creation when logged, else its first activity shown)</span>
+      <span><i class="conn-sw"></i>linked child session (drawn from when its parent requested it, when logged, else its first activity shown)</span>
       <span class="tlx-lg-end">click a lane for details · click a family header to collapse · ← → change ${view} · ↑ ↓ change lane (lanes focused)</span>
     </div>` as VNode;
 }
@@ -743,7 +743,7 @@ function detailPanel(ctx: ViewContext): VNode {
         })}
         </tbody></table></div>`}
       <p class="note tlx-note-end">${l.turns.length} ${l.turns.length === 1 ? 'turn' : 'turns'} started this ${ctx.view} · ${formatTokens(l.tokens)} ·
-        rows are whole turns, the cards above only this ${ctx.view} · no prompt text is shown</p>
+        rows are whole turns, the cards above only this ${ctx.view} · no prompt or response body is shown</p>
       <div class="dr-links">
         ${parent && !parent.ctx ? goLink('Open parent session ›', () => openSession(parent.index), 'tlxOpenParent') : null}
         ${parent?.ctx ? html`<span class="muted">parent outside this range or the sidebar selection</span>` : null}
@@ -880,7 +880,7 @@ function familyRow(f: FamilySummary, namer: Namer, o: FamiliesOverview, cumulati
       <div class="fr-rank">#${f.rank}</div>
       <div class="fr-main">
         <div class="fr-name">${namer.name(f.s)}</div>
-        <div class="fr-sub">${namer.repo(f.repoSession)}${f.repos > 1 ? ` + ${f.repos - 1} more ${f.repos > 2 ? 'repositories' : 'repository'}` : ''} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.children} child ${f.children === 1 ? 'session' : 'sessions'}</div>
+        <div class="fr-sub">${familyRepos(f, namer)} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.children} child ${f.children === 1 ? 'session' : 'sessions'}</div>
         <div class="fr-kids">${biggest.map(n => html`<span class=${neededYou(n) ? 'kt' : ''} title=${neededYou(n) ? 'you typed into this child or answered its question or permission prompt' : ''}>↳ ${namer.name(n.s)}</span>`)}
           ${kids.length > 3 ? html`<span class="more">+${kids.length - 3} more</span>` : null}</div>
       </div>
@@ -891,6 +891,12 @@ function familyRow(f: FamilySummary, namer: Namer, o: FamiliesOverview, cumulati
         <i style=${`width:${topShare > 0 ? f.creditShare / topShare * 100 : 0}%`}></i>
         ${cumulative != null ? html`<small>running total ${cumulative.toFixed(0)}%</small>` : null}</div>
     </div>` as VNode;
+}
+
+/** The family's repositories, on one basis everywhere (row, detail and chat): those its members active in range used,
+ *  the coordinator's first when it is one of them. */
+function familyRepos(f: FamilySummary, namer: Namer): string {
+  return `${namer.repo(f.repoSession)}${f.repos > 1 ? ` + ${f.repos - 1} more ${f.repos > 2 ? 'repositories' : 'repository'}` : ''}`;
 }
 
 /** The node's role in its family. */
@@ -920,7 +926,7 @@ function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VN
     <aside class="fx-aside" id="tlxFamilyDetail" aria-live="polite">
       <div class="fa-rank">#${f.rank} of ${o.families.length} by credits</div>
       <h2>${namer.name(f.s)}</h2>
-      <p class="meta">${namer.repo(f.s)}${branch ? ` · branch ${branch}` : ''} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.harnesses.join(', ')}</p>
+      <p class="meta">${familyRepos(f, namer)}${branch && f.repoSession === f.s ? ` · branch ${branch}` : ''} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.harnesses.join(', ')}</p>
       <div class="verdict" style=${`--c:${VERDICT_COLORS[f.verdict]}`}>
         ${verdictBadge(f.verdict)}${f.wide ? verdictBadge('wide') : null}
         <p>${verdictText(f)}</p>
@@ -942,7 +948,7 @@ function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VN
           <tr class=${n.ctx ? 'ctx' : 'click'} data-session=${n.s.id} tabindex=${n.ctx ? undefined : '0'} onClick=${n.ctx ? undefined : open}
             onKeyDown=${n.ctx ? undefined : onActivate(open)} title=${sessionTip(n.s, namer, p)}>
             <td><div class="tn" style=${`padding-left:${n.depth * 16}px`}>${n.depth ? html`<span class="tree">└ </span>` : null}${namer.name(n.s)}</div>
-              <small style=${`padding-left:${n.depth * 16 + (n.depth ? 14 : 0)}px`}>${nodeRole(n.depth)}${namer.repo(n.s) !== namer.repo(f.s) ? ' · ' + namer.repo(n.s) : ''}${n.ctx ? ' · not in this range or sidebar selection' : n.first ? ' · ' + when(n.first) : ''}${n.s.via === 'relay' ? ' · started by relay' : ''}</small></td>
+              <small style=${`padding-left:${n.depth * 16 + (n.depth ? 14 : 0)}px`}>${nodeRole(n.depth)}${namer.repo(n.s) !== namer.repo(f.repoSession) ? ' · ' + namer.repo(n.s) : ''}${n.ctx ? ' · not in this range or sidebar selection' : n.first ? ' · ' + when(n.first) : ''}${n.s.via === 'relay' ? ' · started by relay' : ''}</small></td>
             <td class="num">${n.depth > 0 && neededYou(n) ? html`<span class="hand" title=${`you typed ${n.typed} ${n.typed === 1 ? 'prompt' : 'prompts'} and answered ${n.answered} ${n.answered === 1 ? 'question or permission prompt' : 'questions or permission prompts'}`}>✋ ${n.typed}</span>` : n.typed}<small>${n.answered ? `${n.answered} answered · ` : ''}${n.automated} auto</small></td>
             <td class="num">${formatHours(n.agentMs)}</td>
             <td class="num">${formatCredits(n.credits)}<i class="mbar" style=${`width:${f.credits ? 100 * n.credits / f.credits : 0}%`}></i></td>

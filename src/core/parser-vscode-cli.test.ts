@@ -489,7 +489,8 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
       { start: ms(at(9)), end: ms(at(12)), kind: 'relay', answered: true },
       { start: ms(at(14)), end: ms(at(14, 2)), kind: 'permission', answered: false },
       { start: ms(at(15)), end: ms(at(17)), kind: 'permission', answered: true },
-      { start: ms(at(18)), end: ms(at(19)), kind: 'permission', answered: true },
+      // The record of your answer dates it, apart from the result.
+      { start: ms(at(18)), end: ms(at(19)), kind: 'permission', answered: true, answeredAt: ms(at(19)) },
       { start: ms(at(21)), end: ms(at(24)), kind: 'permission', answered: true },
     ]);
   });
@@ -512,7 +513,7 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     const ms = (iso: string) => Date.parse(iso);
     // Overlapping requests stay separate: each is its own answer, and the model unions their time.
     expect(session?.requests.map(r => r.userWaits)).toEqual([
-      [{ start: ms(at(1)), end: ms(at(11)), kind: 'permission', answered: true }, { start: ms(at(2)), end: ms(at(12)), kind: 'question', answered: true }],
+      [{ start: ms(at(1)), end: ms(at(11)), kind: 'permission', answered: true, answeredAt: ms(at(13)) }, { start: ms(at(2)), end: ms(at(12)), kind: 'question', answered: true }],
       undefined,
     ]);
   });

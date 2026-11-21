@@ -111,6 +111,9 @@ export class Dashboard {
     this.currentWebview = undefined;
   }
 
+  /** Waits for the text, entering the webview again after each poll that doesn't find it. The extension can replace the
+   *  whole page (its no-data and error pages do, once the dashboard page reported `ready`), and VS Code then swaps the
+   *  inner iframe: a driver that entered the old one keeps polling a frame with no document, which finds nothing. */
   async waitForText(selector: string, expected: string, exact = false): Promise<void> {
     await VSBrowser.instance.driver.wait(async () => {
       try {
@@ -120,12 +123,25 @@ export class Dashboard {
           const target = expected.toLowerCase();
           if (exact ? text === target : text.includes(target)) return true;
         }
+        await this.reenter();
         return false;
       } catch (err: unknown) {
-        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError) return false;
+        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError || err instanceof error.NoSuchFrameError
+          || (err instanceof Error && err.message.startsWith('WebviewMixin.switchToFrame: outer iframe became stale during frame switch.'))) {
+          return false;
+        }
         throw err;
       }
     }, READY_TIMEOUT, `Expected ${selector} to ${exact ? 'equal' : 'contain'} ${JSON.stringify(expected)}`);
+  }
+
+  /** Enters the webview's current inner frame. */
+  private async reenter(): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const webview = new WebView();
+    await webview.switchToFrame(READY_TIMEOUT);
+    this.currentWebview = webview;
   }
 
   async expectCount(selector: string, expected: number): Promise<void> {

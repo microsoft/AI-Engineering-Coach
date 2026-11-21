@@ -30,7 +30,8 @@ export interface TimelineTurn {
   /** The harness logged no duration for the turn, so when its work ended is unknown (`d` is 0). */
   noDuration?: boolean;
   /** When the turn was stopped on a question or a permission prompt (absolute ms, in order; they can overlap, and one
-   *  can outlast the turn's last message). `a`: you answered it, at `e`, which can equal `s`. */
+   *  can outlast the turn's last message). `a`: you answered it: at `at` when the harness recorded your answer,
+   *  otherwise at `e` (which can equal `s`). */
   w?: TimelineTurnWait[];
 }
 
@@ -40,6 +41,10 @@ export interface TimelineTurnWait {
   /** `relay`: a child session's question the coordinator relayed to you; the child logs the same answer. */
   k: 'question' | 'relay' | 'permission';
   a: boolean;
+  /** When the harness recorded your answer, when that differs from `e`. It can precede `s`. */
+  at?: number;
+  /** The request it answered (see `UserWait.requestId`): pairs a relay with the child's own answer. */
+  rid?: string;
 }
 
 /** How a child session's parent was found: a `create_session`-style tool result (`create`), the relayed first message
@@ -62,7 +67,8 @@ export interface TimelineSessionRecord {
    *  in range, or hidden by the sidebar filters, is still in the dataset, as a context record. */
   parent: number;
   via: TimelineLinkKind | null;
-  /** When its parent's create_session-style call created it (epoch ms); absent when no call logged it. */
+  /** When its parent requested it: the earlier of the parent's two records of its `create_session` call (epoch ms).
+   *  Not when the child began, which its own log records later. Absent when no such call logged it. */
   created?: number;
   /** The session is a fork (Codex, Claude Code): the index of its source in the dataset, or -1 when the source has no
    *  activity in range. `forkSource`: whether the source is in these logs. Not a family link. */

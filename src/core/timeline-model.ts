@@ -54,6 +54,8 @@ export interface TimelineAnswer {
   kind: TimelineTurnWait['k'];
   /** Counted as an answer: false for a relayed answer the child also logged as its own (one answer, counted there). */
   counted: boolean;
+  /** The request it answered, when logged (see `TimelineTurnWait.rid`). */
+  rid?: string;
 }
 
 export interface PreparedSession extends TimelineSessionRecord {
@@ -171,12 +173,16 @@ export function turnTimes(t: TimelineTurn): { workMs: number; blockedMs: number 
   return { workMs: intervalsMs(sessionWork([t])), blockedMs: intervalsMs(mergeIntervals((t.w ?? []).map(w => [w.s, w.e]))) };
 }
 
+/** A question or permission prompt you answered that waited on you, from its request to its result (the tool's clock).
+ *  One whose answer the harness recorded before the request was even logged has no measurable start: no wait. */
+const waitedOnYou = (w: TimelineTurnWait) => w.a && w.e > w.s && (w.at === undefined || w.at >= w.s);
+
 /** A session's waits on you: the gaps from the end of its work (or of a question still open after it) to your next
  *  typed prompt (2–120 min; longer gaps are time away), and the questions and permission prompts you answered. After a
  *  turn without a logged duration, when the work ended is unknown, so no gap is counted until the next timed turn. */
 export function sessionWaits(turns: readonly TimelineTurn[], stops: readonly TimelineTurnWait[] = []): { waits: TimelineWait[]; away: Interval[] } {
   const waits: TimelineWait[] = [];
-  for (const w of stops) if (w.a && w.e > w.s) waits.push({ start: w.s, end: w.e, kind: w.k });
+  for (const w of stops) if (waitedOnYou(w)) waits.push({ start: w.s, end: w.e, kind: w.k });
   const away: Interval[] = [];
   let busyUntil = -1;
   for (const t of [...turns].sort((a, b) => a.t - b.t)) {
@@ -185,7 +191,7 @@ export function sessionWaits(turns: readonly TimelineTurn[], stops: readonly Tim
       if (gap >= WAIT_MIN_MS && gap <= WAIT_MAX_MS) waits.push({ start: busyUntil, end: t.t, kind: 'idle' });
       else if (gap > WAIT_MAX_MS) away.push([busyUntil, t.t]);
     }
-    for (const w of t.w ?? []) if (w.a && w.e > w.s) waits.push({ start: w.s, end: w.e, kind: w.k });
+    for (const w of t.w ?? []) if (waitedOnYou(w)) waits.push({ start: w.s, end: w.e, kind: w.k });
     busyUntil = t.noDuration ? -1 : Math.max(busyUntil, t.t + t.d, ...(t.w ?? []).map(w => w.e));
   }
   return { waits: waits.sort((a, b) => a.start - b.start), away };
@@ -223,22 +229,40 @@ function descendsFrom(d: PreparedSession, s: PreparedSession, sessions: readonly
   return false;
 }
 
-/** A relayed answer is also logged by the child that asked: as its own answer to a question, within 10 s (in real logs,
- *  the same second). Each relayed answer is paired, one to one and nearest first, with such an answer in a session it
- *  descends to; it then counts once, in the child. Unpaired, the relay is the only record and counts. The relay's target
- *  is an app project ID, not a session ID, so the pair is found by family, kind and time, never by time alone. */
+/** A relayed answer is also logged by the child that asked, as its own answer to a question. Each relayed answer is
+ *  paired, one to one, with such an answer in a session it descends to, and then counts once, in the child. First by
+ *  the request both logged (the relay's `request_id`, the child's record of your answer); then, for the rest, nearest
+ *  first within 10 s (in real logs, the same second), never with an answer logged for a different request. Unpaired,
+ *  the relay is the only record and counts. The relay's target is an app project ID, not a session ID, so without a
+ *  request ID the pair is found by family, kind and time, never by time alone. */
 function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
   const claimed = new Set<TimelineAnswer>();
-  for (const s of sessions) {
-    for (const a of s.answers.filter(x => x.kind === 'relay')) {
-      const match = sessions.filter(d => d !== s && d.root === s.root && descendsFrom(d, s, sessions))
-        .flatMap(d => d.answers.filter(x => x.kind === 'question' && !claimed.has(x) && Math.abs(x.at - a.at) <= RELAY_MATCH_MS))
-        .sort((x, y) => Math.abs(x.at - a.at) - Math.abs(y.at - a.at))[0];
-      a.counted = !match;
-      if (match) claimed.add(match);
-    }
+  const relays = sessions.flatMap(s => s.answers.filter(x => x.kind === 'relay').map(a => ({ s, a })));
+  const candidates = (s: PreparedSession) => sessions.filter(d => d !== s && d.root === s.root && descendsFrom(d, s, sessions))
+    .flatMap(d => d.answers.filter(x => x.kind === 'question' && !claimed.has(x)));
+  const pair = (a: TimelineAnswer, match: TimelineAnswer | undefined) => {
+    if (!match) return false;
+    a.counted = false;
+    claimed.add(match);
+    return true;
+  };
+  const relayIds = new Set(relays.map(r => r.a.rid).filter(Boolean));
+  // An answer known to be for another request: the relay's own ID differs, or another relay logged its ID.
+  const otherRequest = (x: TimelineAnswer, a: TimelineAnswer) => !!x.rid && x.rid !== a.rid && (!!a.rid || relayIds.has(x.rid));
+  const unpaired = relays.filter(({ s, a }) => !(a.rid && pair(a, candidates(s).find(x => x.rid === a.rid))));
+  for (const { s, a } of unpaired) {
+    pair(a, candidates(s)
+      .filter(x => Math.abs(x.at - a.at) <= RELAY_MATCH_MS && !otherRequest(x, a))
+      .sort((x, y) => Math.abs(x.at - a.at) - Math.abs(y.at - a.at))[0]);
   }
 }
+/** Your answer to a question or permission prompt: when the harness recorded it, else when its result came. Asked at
+ *  the request, or at the answer when the answer was recorded first. */
+function answerOf(w: TimelineTurnWait): TimelineAnswer {
+  const at = w.at ?? w.e;
+  return { at, start: Math.min(w.s, at), kind: w.k, counted: true, ...(w.rid ? { rid: w.rid } : {}) };
+}
+
 /** Links each session to its family, derives its work, waits and inputs, and counts turns, agent time and waiting
  *  per day. */
 export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
@@ -255,7 +279,7 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
       waits,
       waiting: mergeIntervals(waits.map(w => [w.start, w.end])),
       answers: [...all.flatMap(t => t.w ?? []), ...stops].filter(w => w.a)
-        .map((w): TimelineAnswer => ({ at: w.e, start: w.s, kind: w.k, counted: true })).sort((a, b) => a.at - b.at),
+        .map((w): TimelineAnswer => answerOf(w)).sort((a, b) => a.at - b.at),
       away,
     };
   });

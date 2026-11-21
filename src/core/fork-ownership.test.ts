@@ -65,9 +65,13 @@ describe('withInheritedTurnsRemoved', () => {
     // With no such records on either side, both went on, and nothing says which copied: both keep their turns.
     const [a3, b3] = withInheritedTurnsRemoved([session('a', [request(0, 'm1'), request(19, 'x')]), session('b', [request(0, 'm1'), request(20, 'y')])]);
     expect([a3.requests.length, b3.requests.length, a3.forkedFromId, b3.forkedFromId]).toEqual([2, 2, undefined, undefined]);
-    // A transcript holding only the shared prompts is the source.
+    // Without them, which one went on is no proof of direction either way: a source can go on after a fork that held only
+    // the copies, or the other way round. Neither is a fork, and both keep the shared prompts (C5).
     const [s2, f2] = withInheritedTurnsRemoved([session('src', [request(0, 'm1')]), session('fork', [request(0, 'm1'), request(20, 'm4')])]);
-    expect([s2.requests.length, f2.requests.length]).toEqual([1, 1]);
+    expect([s2.requests.length, f2.requests.length, s2.forkedFromId, f2.forkedFromId]).toEqual([1, 2, undefined, undefined]);
+    const shared = () => [request(0, 'm1'), request(5, 'm2'), request(9, 'm3')];
+    const [s4, f4] = withInheritedTurnsRemoved([session('src', [...shared(), request(30, 'm4'), request(35, 'm5')]), session('fork', shared())]);
+    expect([s4.requests.length, f4.requests.length, s4.forkedFromId, f4.forkedFromId]).toEqual([5, 3, undefined, undefined]);
     // Two transcripts that went on at the same moment: no way to tell, so both keep their turns.
     const [a, b] = withInheritedTurnsRemoved([session('a', [request(0, 'm1'), request(20, 'x')]), session('b', [request(0, 'm1'), request(20, 'y')])]);
     expect([a.requests.length, b.requests.length]).toEqual([2, 2]);

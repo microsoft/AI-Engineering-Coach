@@ -231,3 +231,119 @@ describe('fourth review: wording and links', () => {
     expect(view(an, D18).kpis.childLanes).toBe(1);
   });
 });
+
+describe('fifth review: your answer’s own clock (C1)', () => {
+  const human = (t: number, id = 'q') => ev('human_response.recorded', t, { toolCallId: id, requestId: 'u', response: { answer: 'Yes' } });
+  const mid = at(18);
+  const answeredOn = (an: Analyzer) => [view(an, D17, only(D17)).kpis.answered, view(an, D18, only(D18)).kpis.answered];
+
+  it('dates an answer by the human record, not by the result logged after midnight', () => {
+    const an = analyzer(session(60, [prompt(mid - 65 * M), start(mid - 60 * M), human(mid - 1000), end(mid + 1000), reply(mid + 6000)]));
+    expect(answeredOn(an)).toEqual([1, 0]);
+  });
+
+  it('dates an answer recorded before its request was even logged by the record', () => {
+    const an = analyzer(session(61, [prompt(mid - 65 * M), human(mid - 1000), start(mid + 1000), end(mid + 1000), reply(mid + 6000)]));
+    expect(answeredOn(an)).toEqual([1, 0]);
+  });
+
+  it('ends an unattended stretch at the recorded answer, not at a later zero-length result', () => {
+    const t = at(18, 1);
+    const an = analyzer(session(62, [prompt(t), human(t + 5 * M), start(t + 10 * M), end(t + 10 * M), reply(t + 20 * M)]));
+    expect(view(an, D18).kpis.unattendedMs).toBe(15 * M);
+  });
+
+  it('does not count as waiting a question whose answer was recorded before it was asked, and still counts the answer', () => {
+    const t = at(18, 9);
+    const an = analyzer(session(63, [prompt(t), human(t + M), start(t + 2 * M), end(t + 5 * M), reply(t + 6 * M)]));
+    const v = view(an, D18);
+    expect([v.kpis.answered, v.kpis.waits, v.kpis.waitMs]).toEqual([1, 0, 0]);
+    // The stop still isn't agent work.
+    expect(v.kpis.agentMs).toBe(3 * M);
+  });
+
+  it('keeps a measured wait on the tool’s clock when the answer falls inside it', () => {
+    const t = at(18, 9);
+    const an = analyzer(session(64, [prompt(t), start(t + M), human(t + 4 * M), end(t + 4 * M + 500), reply(t + 6 * M)]));
+    expect([view(an, D18).kpis.waits, view(an, D18).kpis.waitMs]).toEqual([1, 3 * M + 500]);
+  });
+
+  it('puts a child’s answer, its family’s verdict, the chat tool and the export on the date of the human record', () => {
+    const parent = session(65, [prompt(mid - 80 * M), reply(mid - 79 * M)]);
+    const child = session(66, [prompt(mid - 65 * M, 65), start(mid - M), human(mid - 1000), end(mid + 1000), reply(mid + 1500)]);
+    const surfaces = (day: string) => {
+      const an = analyzer(parent, child);
+      const f = buildFamilies(prepareTimeline(an.getTimelineData(only(day)))).totals;
+      const chat = formatTimeline(an, only(day), day) as { day?: { questionsAndPermissionsAnswered?: number } };
+      const exported = buildSummaryExportFromAnalyzer(an, only(day)).autonomy;
+      return [f.childAnswered, f.needed.families, chat.day?.questionsAndPermissionsAnswered ?? 0,
+        exported?.questionsAndPermissionsAnswered ?? 0, exported?.childSessionsWithYourInput ?? 0];
+    };
+    expect([surfaces(D17), surfaces(D18)]).toEqual([[1, 1, 1, 1, 1], [0, 0, 0, 0, 0]]);
+  });
+});
+describe('fifth review: relays paired by request (C7)', () => {
+  const relay = (t: number, id: string, requestId: string) => [
+    ev('tool.execution_start', t - 1000, { toolName: 'relay_session_input', toolCallId: id, arguments: { request_id: requestId } }),
+    end(t, id, '{"outcome":"answered_in_session"}'),
+  ];
+  const human = (t: number, id: string, requestId: string) => ev('human_response.recorded', t, { toolCallId: id, requestId, response: { answer: 'Yes' } });
+
+  it('pairs each relay with the child answer for the same request before trying the nearest one', () => {
+    const t = at(18, 10);
+    const an = analyzer(
+      session(70, [prompt(t - 2 * M), ...relay(t, 'r1', 'one'), ...relay(t + 9000, 'r2', 'two'), reply(t + 10_000)]),
+      session(71, [prompt(t - M, 70), start(t - 10_000, 'a'), human(t - 9000, 'a', 'one'), end(t - 9000, 'a'), reply(t - 8900)]),
+      session(72, [prompt(t - M + 1, 70), start(t - 500, 'b'), human(t, 'b', 'two'), end(t, 'b'), reply(t + 100)]),
+    );
+    expect(view(an, D18).kpis.answered).toBe(2);
+  });
+
+  it('still pairs a relay that logged no request ID by time', () => {
+    const t = at(18, 11);
+    const an = analyzer(
+      session(73, [prompt(t - 2 * M), start(t - 1000, 'r', 'relay_session_input'), end(t, 'r', '{"outcome":"answered_in_session"}'), reply(t + 1000)]),
+      session(74, [prompt(t - M, 73), start(t - 500, 'a'), end(t, 'a'), reply(t + 100)]),
+    );
+    expect(view(an, D18).kpis.answered).toBe(1);
+  });
+
+  it('does not pair a relay with a child answer logged for a different request', () => {
+    const t = at(18, 12);
+    const an = analyzer(
+      session(75, [prompt(t - 2 * M), ...relay(t, 'r', 'one'), reply(t + 1000)]),
+      session(76, [prompt(t - M, 75), start(t - 500, 'a'), human(t, 'a', 'other'), end(t, 'a'), reply(t + 100)]),
+    );
+    expect(view(an, D18).kpis.answered).toBe(2);
+  });
+});
+describe('fifth review: when a parent requested its child (C2)', () => {
+  it('draws the connector from the earlier of the parent’s two records, whichever order they are logged in', () => {
+    const asked = at(18, 15);
+    const child = sid(78);
+    const an = analyzer(
+      session(77, [prompt(asked - M), start(asked, 'c', 'create_session'),
+        ev('external_tool.requested', asked + 31_000, { toolName: 'create_session', toolCallId: 'c' }),
+        end(asked + 31_001, 'c', `Created session 'X' (id: ${child})`), reply(asked + 32_000)]),
+      session(78, [prompt(asked + 32_000), reply(asked + 60_000)]),
+    );
+    const s = an.getTimelineData().sessions.find(x => x.id === child);
+    expect([s?.via, s?.created]).toEqual(['create', asked]);
+  });
+});
+describe('fifth review: one repository basis (C8)', () => {
+  it('names the same repository in the Families row and the chat tool when the coordinator is outside the range', () => {
+    const repo = (s: Session | null, name: string) => (s ? { ...s, repository: name } : null);
+    const an = analyzer(
+      repo(session(80, [prompt(at(16, 9)), reply(at(16, 9, 5))]), 'coordinator-repo'),
+      repo(session(81, [prompt(at(18, 9), 80), reply(at(18, 9, 30))]), 'first-child-repo'),
+      repo(session(82, [prompt(at(18, 10), 80), reply(at(18, 10, 5))]), 'second-child-repo'),
+    );
+    const p = prepareTimeline(an.getTimelineData(only(D18)));
+    const family = buildFamilies(p).families[0];
+    const namer = createNamer(p, true);
+    const chat = formatTimeline(an, only(D18)) as { families?: { top?: { repository: string; repositories: number }[] } };
+    expect(chat.families?.top?.[0]).toMatchObject({ repository: namer.repo(family.repoSession), repositories: 2 });
+    expect(namer.repo(family.repoSession)).not.toBe(namer.repo(family.s));
+  });
+});

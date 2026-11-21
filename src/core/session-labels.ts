@@ -58,12 +58,23 @@ function tidy(value: string): string {
   return value.replaceAll(/\s+/g, ' ').replaceAll(/^[\s/_\-:·,]+|[\s/_\-:·,]+$/g, '').trim();
 }
 
-/** An unquoted drive or network path, spaces and all: it runs to its first word with a file extension, else to the end
- *  of the clause, so no part of it is left behind. */
+/** An unquoted drive or network path to the end of its clause. */
+const DRIVE_PATH = /(?:\b[A-Za-z]:[\\/]|\\\\)[^,;)"'`\n]*/g;
+/** A word that starts a drive or network path. */
+const DRIVE_START = /^[("'`]?(?:[A-Za-z]:[\\/]|\\\\)/;
+
+/** An unquoted drive or network path, spaces and all, like `posixPaths`: it runs to its first word with a file
+ *  extension; else, when another path follows in the clause, to its last word with a separator before that one; else to
+ *  the end of the clause. What follows is scrubbed again, so a second path in the clause goes too. */
 function unquotedPath(match: string): string {
   const words = match.split(' ');
-  const last = words.findIndex(w => /\.[A-Za-z0-9]{1,5}$/.test(w));
-  return last < 0 ? '[path]' : ['[path]', ...words.slice(last + 1)].join(' ');
+  const next = words.findIndex((w, i) => i > 0 && DRIVE_START.test(w));
+  const ext = words.findIndex((w, i) => /\.[A-Za-z0-9]{1,5}$/.test(w) && (next < 0 || i < next));
+  const last = ext >= 0 ? ext
+    : next > 0 ? Math.max(0, ...words.slice(0, next).map((w, i) => (/[\\/]/.test(w) ? i : 0)))
+      : words.length - 1;
+  const rest = words.slice(last + 1).join(' ');
+  return '[path]' + (rest ? ' ' + rest.replaceAll(DRIVE_PATH, unquotedPath) : '');
 }
 
 /** Unquoted absolute POSIX paths of two or more segments, spaces and all, like `unquotedPath`: a path runs to its first
@@ -90,7 +101,7 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME, nam
     .replaceAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]')
     // A quoted path is one path, spaces and all; an unquoted one goes on through later words that carry a separator.
     .replaceAll(/(["'`])(?:[A-Za-z]:[\\/]|\\\\)[^"'`\n]*\1/g, '[path]')
-    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^,;)"'`\n]*/g, unquotedPath)
+    .replaceAll(DRIVE_PATH, unquotedPath)
     .replaceAll(/(["'`])\/[^"'`\n/]+\/[^"'`\n]*\1/g, '[path]');
   if (ctx.home && ctx.home.length > 1) {
     const home = ctx.home.replace(/[\\/]+$/, '');

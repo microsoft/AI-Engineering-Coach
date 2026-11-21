@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
+import { Analyzer } from './analyzer';
 import { parseCodexSessions } from './parser-codex';
 
 function withCodexFile(lines: object[], run: (sessionsDir: string) => void): void {
@@ -46,5 +47,57 @@ describe('Codex fork usage', () => {  it('counts a fork’s own responses by the
       .toEqual([13_580, 34]);
     // The source's response records, copied with the history, aren't the fork's.
     expect(parse([{ ...own, payload: { ...own.payload, thread_id: 'src', response_id: 'r-src' } }, own, own])).toEqual([13_580, 34]);
+  });
+});
+
+describe('Codex fork usage over several turns (C3)', () => {
+  // The fork's source used 101,000 tokens. Its first turn uses 13,614, its second 3,137 (1,000 of them cached).
+  const inherited = { input: 100_000, output: 1_000 };
+  const usage = [{ input_tokens: 13_580, output_tokens: 34, total_tokens: 13_614 }, { input_tokens: 3_021, cached_input_tokens: 1_000, output_tokens: 116, total_tokens: 3_137 }];
+  const ts = (s: number) => `2025-06-15T09:00:${String(s).padStart(2, '0')}Z`;
+  const record = (i: number, s: number) => ({ type: 'token_usage_record', timestamp: ts(s), payload: { thread_id: 'fork', turn_id: `t${i}`, response_id: `r${i}`, usage: usage[i] } });
+  const snapshot = (i: number, s: number) => {
+    const input = inherited.input + usage.slice(0, i + 1).reduce((a, u) => a + u.input_tokens, 0);
+    const output = inherited.output + usage.slice(0, i + 1).reduce((a, u) => a + u.output_tokens, 0);
+    return { type: 'event_msg', timestamp: ts(s), payload: { type: 'token_count', info: {
+      total_token_usage: { input_tokens: input, cached_input_tokens: 1_000, output_tokens: output, total_tokens: input + output },
+      last_token_usage: usage[i],
+    } } };
+  };
+  const turn = (i: number, s: number, withRecord: boolean) => [
+    { type: 'event_msg', timestamp: ts(s), payload: { type: 'task_started', turn_id: `t${i}` } },
+    { type: 'turn_context', timestamp: ts(s), payload: { turn_id: `t${i}`, model: 'gpt-5-mini' } },
+    { type: 'event_msg', timestamp: ts(s + 1), payload: { type: 'user_message', message: `Step ${i + 1}.` } },
+    ...(withRecord ? [record(i, s + 2)] : []),
+    snapshot(i, s + 3),
+    { type: 'event_msg', timestamp: ts(s + 4), payload: { type: 'agent_message', message: 'Done.' } },
+    { type: 'event_msg', timestamp: ts(s + 5), payload: { type: 'task_complete', turn_id: `t${i}` } },
+  ];
+  function totals(lines: object[]) {
+    let out: { turns: number[]; session: number; coverage: number } = { turns: [], session: 0, coverage: 0 };
+    withCodexFile([{ type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } }, ...lines], (dir) => {
+      const sessions = parseCodexSessions(dir);
+      const usages = Object.values(sessions[0].modelUsage ?? {});
+      const coverage = new Analyzer(sessions, new Map()).getTokenCoverage();
+      out = {
+        turns: sessions[0].requests.map(r => (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
+        session: usages.reduce((a, u) => a + u.inputTokens + u.cacheReadTokens + u.outputTokens, 0),
+        coverage: Math.round(coverage.totalInputTokens + coverage.totalOutputTokens),
+      };
+    });
+    return out;
+  }
+  const truth = { turns: [13_614, 3_137], session: 16_751, coverage: 16_751 };
+
+  it('agrees with both records, with none, and with either one alone', () => {
+    expect(totals([...turn(0, 0, true), ...turn(1, 10, true)])).toEqual(truth);
+    expect(totals([...turn(0, 0, false), ...turn(1, 10, false)])).toEqual(truth);
+    expect(totals([...turn(0, 0, true), ...turn(1, 10, false)])).toEqual(truth);
+    expect(totals([...turn(0, 0, false), ...turn(1, 10, true)])).toEqual(truth);
+  });
+
+  it('puts a record logged late into the turn it names', () => {
+    const second = turn(1, 10, true);
+    expect(totals([...turn(0, 0, false), ...second.slice(0, 3), record(0, 12), ...second.slice(3)])).toEqual(truth);
   });
 });

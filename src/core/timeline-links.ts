@@ -38,19 +38,9 @@ export function resolveParentLinks(sessions: readonly LinkableSession[]): Map<st
     if (!c || c === parent || links.has(c.sessionId)) return;
     links.set(c.sessionId, { parent: parent.sessionId, via });
   };
-  // The earliest session that reports starting a child is its parent.
   const byAge = [...byKey.values()].sort((a, b) => (a.creationDate ?? Infinity) - (b.creationDate ?? Infinity)
     || a.sessionId.localeCompare(b.sessionId));
-  for (const parent of byAge) {
-    for (const child of parent.childSessionIds ?? []) {
-      // create_session always makes a new session. An open_pr_session or open_issue_session call can open a session
-      // that already existed: that's no birth.
-      const opened = parent.childSessionCreatedAt?.[key(child)] === undefined ? parent.childSessionOpenedAt?.[key(child)] : undefined;
-      const began = byKey.get(key(child))?.creationDate;
-      if (opened != null && began != null && began < opened - OPENED_BEFORE_MS) continue;
-      link(child, parent, 'create');
-    }
-  }
+  linkStartedSessions(byAge, byKey, link);
   for (const child of byAge) {
     const parent = child.parentSessionId ? byKey.get(key(child.parentSessionId)) : undefined;
     if (parent) link(child.sessionId, parent, 'harness');
@@ -61,6 +51,24 @@ export function resolveParentLinks(sessions: readonly LinkableSession[]): Map<st
   }
   dropCycles(links, byKey);
   return links;
+}
+
+/** `create` links. A create_session result is proof of birth, so it wins over any other session's call, whatever their
+ *  ages. Otherwise the earliest session that reports starting a child is its parent; an open_pr_session or
+ *  open_issue_session call can open a session that already existed, and that's no birth. */
+function linkStartedSessions(byAge: readonly LinkableSession[], byKey: Map<string, LinkableSession>,
+  link: (child: string, parent: LinkableSession, via: TimelineLinkKind) => void): void {
+  for (const parent of byAge) {
+    for (const child of parent.childSessionIds ?? []) if (parent.childSessionCreatedAt?.[key(child)] !== undefined) link(child, parent, 'create');
+  }
+  for (const parent of byAge) {
+    for (const child of parent.childSessionIds ?? []) {
+      const opened = parent.childSessionOpenedAt?.[key(child)];
+      const began = byKey.get(key(child))?.creationDate;
+      if (opened != null && began != null && began < opened - OPENED_BEFORE_MS) continue;
+      link(child, parent, 'create');
+    }
+  }
 }
 
 /** Breaks every cycle: drops its relay links, or, with none, the link of its oldest session. */

@@ -279,13 +279,20 @@ export interface CodeBlock {
 }
 
 /** A span inside a turn when the agent stopped for a question to you, a question a child session relayed to you, or a
- *  permission prompt. `answered`: the log shows you answered it (a reply, or a permission you decided). A wait can last
- *  0 ms on the log's clock and still be an answer. */
+ *  permission prompt, on the tool's clock: from the request to its result. `answered`: the log shows you answered it (a
+ *  reply, or a permission you decided). A wait can last 0 ms on that clock and still be an answer. */
 export interface UserWait {
   start: number;
   end: number;
   kind: 'question' | 'relay' | 'permission';
   answered: boolean;
+  /** When the harness recorded your answer (Copilot's `human_response.recorded`), when it logged one. It is a separate
+   *  clock from the result: the result can come seconds or minutes later, and the record can even precede the logged
+   *  request. */
+  answeredAt?: number;
+  /** The request it answered, as logged: a relay's `request_id`, or the `requestId` the record of your answer to a
+   *  question carried. The same request in two sessions is the same answer. */
+  requestId?: string;
 }
 
 /** Session-level disposition. Used to distinguish "missing token data

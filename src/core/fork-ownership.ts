@@ -34,14 +34,13 @@ function sharedPrefix(a: readonly SessionRequest[], b: readonly SessionRequest[]
 type PrefixFork = { copies: Set<SessionRequest>; source: Session };
 
 /** Whether `mine` copied the first `k` prompts it shares with `theirs`. A copy carries only the conversation lines:
- *  when one side logged those turns live and the other didn't, the other copied them. Without that witness, a
- *  transcript that went on copied from one that holds only those prompts; when both went on, nothing says which
- *  copied, and neither is taken for a fork. */
+ *  when one side logged those turns live and the other didn't, the other copied them. Without that witness nothing
+ *  says which side copied: which one went on, or is longer, is no proof (a source can go on after a fork that stopped).
+ *  Then neither is taken for a fork, and both keep the shared turns. */
 function copiedFrom(mine: readonly SessionRequest[], theirs: readonly SessionRequest[], k: number): boolean {
   const liveMine = mine.slice(0, k).some(r => r.loggedLive);
   const liveTheirs = theirs.slice(0, k).some(r => r.loggedLive);
-  if (liveMine !== liveTheirs) return liveTheirs;
-  return mine.length > k && theirs.length === k;
+  return !liveMine && liveTheirs;
 }
 
 /** The session `s` copied its opening prompts from: the one it shares most with, among those it copied from. */

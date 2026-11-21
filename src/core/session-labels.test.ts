@@ -66,6 +66,17 @@ describe('session labels', () => {
   });
 });
 
+describe('session labels with several paths', () => {
+  it('removes every path in a clause, not only the first (C4)', () => {
+    expect(scrubLabel('C:\\models\\a.bin and D:\\private\\jane\\b.bin', { names: [] })).toBe('[path] and [path]');
+    expect(scrubLabel('Copy C:\\a\\b.txt to D:\\Jane Doe\\c.txt and E:\\x\\y.md', { names: [] })).toBe('Copy [path] to [path] and [path]');
+    expect(scrubLabel('From C:\\Program Files\\App to D:\\Secret Project\\Plans', { names: [] })).toBe('From [path] to [path]');
+    expect(scrubLabel('Logs C:\\a\\b.log and \\\\server\\share\\c.log done', { names: [] })).toBe('Logs [path] and [path] done');
+    expect(scrubLabel('/opt/a/b.bin and /home/Jane Doe/c.bin', { names: [] })).toBe('[path] and [path]');
+    expect(scrubLabel('C:\\a\\b.bin and /srv/jane/c.bin', { names: [] })).toBe('[path] and [path]');
+  });
+});
+
 describe('Copilot workspace.yaml', () => {
   let dir = '';
   afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
