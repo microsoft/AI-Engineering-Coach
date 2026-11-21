@@ -48,7 +48,7 @@ describe('resolveParentLinks', () => {
 describe('resolveForkLinks', () => {
   /** `ids` are the session's prompts; a `*` marks one it copied from its source. */
   const fork = (sessionId: string, ids: string[], extra: Partial<ForkableSession> = {}): ForkableSession =>
-    ({ sessionId, requests: ids.map(id => ({ userEventId: id.replace('*', ''), ...(id.startsWith('*') ? { copiedHistory: true } : {}) })), ...extra });
+    ({ sessionId, requests: ids.map(id => (id.startsWith('*') ? { userEventId: id.slice(1), copiedHistory: true } : { userEventId: id })), ...extra });
 
   it('links a Codex fork by its logged source, and a Claude Code fork by the prompts it copied', () => {
     const links = resolveForkLinks([
