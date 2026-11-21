@@ -936,6 +936,27 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
     });
   });
 
+  it('keeps a turn in the older file when a copy starts at the same time and sorts first by name', ({ skip }) => {
+    withProjects({
+      '-Users-me-proj/z-original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'z-original' }), makeAssistant('Done.')],
+    }, projectsDir => {
+      const original = path.join(projectsDir, '-Users-me-proj', 'z-original.jsonl');
+      const copy = path.join(projectsDir, '-Users-me-proj', 'a-copy.jsonl');
+      // Made later, and its first line keeps the original's timestamp.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      fs.writeFileSync(copy, [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-copy' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-copy' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ].map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+      const birth = (file: string) => fs.statSync(file, { bigint: true }).birthtimeNs;
+      if (!birth(original) || birth(copy) <= birth(original)) skip('this file system does not record distinct birth times');
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-copy', ['u2']], ['z-original', ['u1']],
+      ]);
+    });
+  });
+
   it('parses a transcript whose first lines could not be read for ordering', () => {
     withProjects({
       '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],

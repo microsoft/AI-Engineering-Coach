@@ -746,6 +746,9 @@ interface ClaudeDiscovery {
 
 type ClaudeProjectResult = { sessions: Session[]; workspaceId: string; workspaceName: string };
 
+/** Sorts after any real birth time, in nanoseconds since 1970. */
+const UNKNOWN_BIRTH = 2n ** 63n;
+
 function discoveryKey(dirName: string, sessionName: string): string {
   return `${dirName}\0${sessionName}`;
 }
@@ -784,7 +787,7 @@ function readClaudeCwd(filePath: string, size: bigint): string | undefined {
  */
 function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
   const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map() };
-  const transcripts: { filePath: string; size: bigint }[] = [];
+  const transcripts: { filePath: string; size: bigint; birth: bigint }[] = [];
   const byFile = new Map<string, { dirName: string; filePath: string; size: bigint }[]>();
   for (const dirName of [...dirNames].sort()) {
     let entries: fs.Dirent[];
@@ -800,7 +803,9 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
       let key: string;
       try {
         stat = fs.statSync(filePath, { bigint: true });
-        transcripts.push({ filePath, size: stat.size });
+        // A file system that doesn't record birth times reports 0: order those files after the rest. Where statx isn't
+        // available, libuv reports the change time instead, which moves on append; it only decides equal starts.
+        transcripts.push({ filePath, size: stat.size, birth: stat.birthtimeNs || UNKNOWN_BIRTH });
         if (stat.nlink < 2n) continue;
         key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
       } catch {
@@ -825,12 +830,13 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
       discovery.extraSubagentDirs.set(key, dirs);
     }
   }
-  // Oldest first, so a turn stays with the transcript it was typed in, whichever folder its copies are in.
+  // Oldest first, so a turn stays with the transcript it was typed in, whichever folder its copies are in. A copy's
+  // first line can carry the original's timestamp, so equal starts go by when the file was created, then by name.
   const ordered = transcripts
     .filter(({ filePath }) => !discovery.skipFiles.has(filePath))
-    .map(({ filePath, size }) => ({ filePath, start: transcriptStart(filePath, size) }))
-    .sort((a, b) => a.start - b.start || path.basename(a.filePath).localeCompare(path.basename(b.filePath))
-      || a.filePath.localeCompare(b.filePath));
+    .map(({ filePath, size, birth }) => ({ filePath, birth, start: transcriptStart(filePath, size) }))
+    .sort((a, b) => a.start - b.start || Number(a.birth - b.birth)
+      || path.basename(a.filePath).localeCompare(path.basename(b.filePath)) || a.filePath.localeCompare(b.filePath));
   for (const [rank, { filePath }] of ordered.entries()) discovery.transcriptRanks.set(filePath, rank);
   return discovery;
 }
