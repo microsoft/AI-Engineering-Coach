@@ -163,6 +163,10 @@ export interface SessionRequest {
   timestamp: number | null;
   messageText: string;
   responseText: string;
+  /** The agent's own messages in the turn, without the code it wrote to files (which `responseText` also holds for code
+   *  analysis). Kept only when one session is re-read for its detail view; stripped like `responseText`. Absent for
+   *  harnesses that don't tell them apart. */
+  replyText?: string;
   isCanceled: boolean;
   agentName: string;
   agentMode: string;

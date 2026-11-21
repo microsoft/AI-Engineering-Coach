@@ -158,6 +158,19 @@ describe('parseClaudeSessions', () => {
     });
   });
 
+  it('keeps the agent’s own text apart from the file contents its write tools wrote', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('write it'),
+      makeAssistant('I will write the file.', '2025-06-15T10:00:01Z'),
+      makeToolAssistant('Write', { file_path: '/p/a.ts', content: 'export const x = 1;' }, '2025-06-15T10:00:02Z', 't1'),
+      { type: 'user', timestamp: '2025-06-15T10:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      expect(request.responseText).toContain('export const x = 1;');
+      expect(request.replyText).toBe('I will write the file.');
+    });
+  });
+
   it('marks a turn logged with its own queue or API records as logged live, and a fork’s copied turn not', () => {
     withProjectsDir('s.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'sess-1', operation: 'enqueue' },

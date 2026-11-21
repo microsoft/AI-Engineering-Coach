@@ -71,6 +71,34 @@ describe('timelineSessionText', () => {
     expect(text.waits.map(w => [w.s, w.e, w.at, w.answer, 'rid' in w])).toEqual([[Date.parse(at(2)), Date.parse(at(9)), Date.parse(at(4)), 'yes', false]]);
   });
 
+});
+
+describe('timelineSessionText replies and turns', () => {
+  it('shows the agent’s own messages as its reply, never the code it wrote to a file', () => {
+    const text = timelineSessionText(parse([
+      { type: 'user.message', timestamp: at(0), data: { content: 'Add the config' } },
+      { type: 'assistant.message', timestamp: at(1), data: { content: 'Writing the config.' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'create', toolCallId: 'c1', arguments: { path: 'cfg.json', file_text: '{ "port": 1 }' } } },
+      { type: 'tool.execution_complete', timestamp: at(3), data: { toolCallId: 'c1', success: true, result: { content: 'Created' } } },
+      { type: 'tool.execution_start', timestamp: at(4), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Keep it?' } } },
+      { type: 'tool.execution_complete', timestamp: at(5), data: { toolCallId: 'q1', success: true, result: { content: 'User selected: yes' } } },
+    ]), labels);
+    expect([text.turns[0].reply, text.waits[0].before]).toEqual(['Writing the config.', 'Writing the config.']);
+  });
+
+  it('joins each turn’s text by its request, not its time, so two turns at the same moment keep their own', () => {
+    const s = parse([
+      { type: 'user.message', timestamp: at(0), data: { content: 'First' } },
+      { type: 'assistant.message', timestamp: at(1), id: 'a1', data: { content: 'One' } },
+      { type: 'user.message', timestamp: at(2), data: { content: 'Second' } },
+      { type: 'assistant.message', timestamp: at(3), id: 'a2', data: { content: 'Two' } },
+    ]);
+    s.requests[1].timestamp = s.requests[0].timestamp;
+    const text = timelineSessionText(s, labels);
+    const turns = new Analyzer([s], new Map()).getTimelineData().sessions[0].turns;
+    expect(turns.map(t => [t.t, text.turns.find(x => x.id === t.id)?.prompt])).toEqual([[turns[0].t, 'First'], [turns[0].t, 'Second']]);
+  });
+
   it('shows no text for compaction or system turns', () => {
     const s = fixture();
     s.requests[0].nonHumanKind = 'compaction';

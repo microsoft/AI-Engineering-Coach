@@ -108,6 +108,8 @@ interface ClaudeAssistantData {
   nextIndex: number;
   lastTs: number | null;
   assistantTexts: string[];
+  /** The agent's own text blocks, without the code its write tools wrote (`assistantTexts` holds both). */
+  replyTexts: string[];
   toolsUsed: string[];
   editedFiles: string[];
   referencedFiles: string[];
@@ -468,6 +470,7 @@ function collectClaudeAssistantData(
     nextIndex: startIndex,
     lastTs,
     assistantTexts: [],
+    replyTexts: [],
     toolsUsed: [],
     editedFiles: [],
     referencedFiles: [],
@@ -500,6 +503,7 @@ function collectClaudeAssistantData(
       for (const block of toContentArray(next.message?.content)) {
         if (block.type === 'text' && block.text) {
           data.assistantTexts.push(block.text);
+          data.replyTexts.push(block.text);
           continue;
         }
         if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.id && assistantTs) {
@@ -507,7 +511,7 @@ function collectClaudeAssistantData(
           const result = questions.results.get(block.id);
           const end = result?.ts ?? questions.nextTs[i + 1] ?? assistantTs;
           if (end >= assistantTs) {
-            const text = askUserQuestionText(block.input, result?.text, data.assistantTexts[data.assistantTexts.length - 1]);
+            const text = askUserQuestionText(block.input, result?.text, data.replyTexts[data.replyTexts.length - 1]);
             data.userWaits.push({ start: assistantTs, end, kind: 'question', answered: result?.answered ?? false, ...(text ? { text } : {}) });
           }
         }
@@ -889,6 +893,7 @@ function buildClaudeRequest(
     timestamp: userTs,
     messageText: getClaudeUserText(line),
     responseText: assistantData.assistantTexts.join('\n'),
+    ...(assistantData.replyTexts.length ? { replyText: assistantData.replyTexts.join('\n') } : {}),
     agentName: 'Claude',
     agentMode: 'agent',
     modelId: assistantData.model,

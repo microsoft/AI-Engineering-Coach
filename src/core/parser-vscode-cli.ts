@@ -66,6 +66,8 @@ interface TurnState {
   userTs: string | null;
   agentMode: string;
   responseChunks: string[];
+  /** The agent's own messages, without the code that edits wrote (which `responseChunks` also holds). */
+  agentMessages: string[];
   toolNames: Set<string>;
   investigationDelegations: Set<'research' | 'explore'>;
   webDomains: Set<string>;
@@ -168,6 +170,7 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     userTs,
     agentMode,
     responseChunks: [],
+    agentMessages: [],
     toolNames: new Set(),
     investigationDelegations: new Set(),
     webDomains: new Set(),
@@ -271,6 +274,7 @@ function flushTurn(state: CLIParseState): void {
   const respTs = turn.lastAssistantTs ? new Date(turn.lastAssistantTs).getTime() : null;
   const firstProgress = turn.firstToolTs && msgTs ? turn.firstToolTs - msgTs : null;
   const responseText = turn.responseChunks.filter(Boolean).join('\n\n');
+  const replyText = turn.agentMessages.filter(Boolean).join('\n\n');
 
   const requestId = turn.lastAssistantId || `${state.sessionId}:cli:${state.requests.length}`;
   const request = createRequest({
@@ -280,6 +284,7 @@ function flushTurn(state: CLIParseState): void {
     timestamp: msgTs,
     messageText: turn.userMsg,
     responseText,
+    ...(replyText ? { replyText } : {}),
     agentName: harnessName(state),
     agentMode: turn.agentMode || 'agent',
     modelId: turn.modelId || state.currentModelId,
@@ -390,7 +395,7 @@ function textField<K extends keyof UserWaitText>(key: K, value: UserWaitText[K] 
 
 /** The agent's last message in the turn in progress: what it said before it stopped. */
 function lastAgentMessage(state: CLIParseState): string | undefined {
-  const chunks = state.turn?.responseChunks.filter(c => c.trim());
+  const chunks = state.turn?.agentMessages.filter(c => c.trim());
   return chunks?.length ? chunks[chunks.length - 1] : undefined;
 }
 
@@ -862,7 +867,10 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
     }
     else if (turn.answerEvidence === 'legacy') turn.answerEvidence = 'missing';
   }
-  if (content) turn.responseChunks.push(content);
+  if (content) {
+    turn.responseChunks.push(content);
+    turn.agentMessages.push(content);
+  }
   turn.lastAssistantTs = ev.timestamp || turn.lastAssistantTs;
   turn.lastAssistantId = str(ev.id) || turn.lastAssistantId;
 
