@@ -50,6 +50,8 @@ export interface TimelineWait {
 export interface TimelineAnswer {
   at: number;
   kind: TimelineTurnWait['k'];
+  /** Counted as an answer: false for a relayed answer the child also logged as its own (one answer, counted there). */
+  counted: boolean;
 }
 
 export interface PreparedSession extends TimelineSessionRecord {
@@ -154,12 +156,12 @@ export function clippedMs(w: TimelineWait, win: Interval): number {
 
 /* ---- sessions ---- */
 
-/** When a session's agent was working: its turns' spans minus every question and permission prompt they were stopped
- *  on, answered or not. Turns without a logged duration add nothing. */
+/** When a session's agent was working: the union of its turns' spans, each less the questions and permission prompts
+ *  that turn was stopped on, answered or not. Another turn of the same session can keep working meanwhile. Turns without
+ *  a logged duration add nothing. */
 export function sessionWork(turns: readonly TimelineTurn[]): Interval[] {
-  const spans = mergeIntervals(turns.filter(t => t.d > 0).map(t => [t.t, t.t + t.d]));
-  const blocked = mergeIntervals(turns.flatMap(t => (t.w ?? []).map(w => [w.s, w.e] as Interval)));
-  return subtract(spans, blocked);
+  return mergeIntervals(turns.filter(t => t.d > 0)
+    .flatMap(t => subtract([[t.t, t.t + t.d]], mergeIntervals((t.w ?? []).map(w => [w.s, w.e] as Interval)))));
 }
 
 /** A turn's own agent time and the time it was stopped on a question or a permission prompt (whole turn, not clipped). */
@@ -170,8 +172,9 @@ export function turnTimes(t: TimelineTurn): { workMs: number; blockedMs: number 
 /** A session's waits on you: the gaps from the end of its work (or of a question still open after it) to your next
  *  typed prompt (2–120 min; longer gaps are time away), and the questions and permission prompts you answered. After a
  *  turn without a logged duration, when the work ended is unknown, so no gap is counted until the next timed turn. */
-export function sessionWaits(turns: readonly TimelineTurn[]): { waits: TimelineWait[]; away: Interval[] } {
+export function sessionWaits(turns: readonly TimelineTurn[], stops: readonly TimelineTurnWait[] = []): { waits: TimelineWait[]; away: Interval[] } {
   const waits: TimelineWait[] = [];
+  for (const w of stops) if (w.a && w.e > w.s) waits.push({ start: w.s, end: w.e, kind: w.k });
   const away: Interval[] = [];
   let busyUntil = -1;
   for (const t of [...turns].sort((a, b) => a.t - b.t)) {
@@ -209,6 +212,20 @@ export function unattendedStretches(inputs: readonly number[], work: readonly In
   return out;
 }
 
+/** How far apart a relayed answer and the child's own answer can be logged and still be the same answer. */
+const RELAY_MATCH_MS = 10_000;
+
+/** A relayed answer is the child's answer too when another session logged its own answer to a question within 10 s of
+ *  it (in real logs, the same second): then it counts once, there. Otherwise the relay is the only record, and counts.
+ *  The relay's target is an app project ID, not a session ID, so the pair is found by time. */
+function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
+  const direct = sessions.flatMap(s => s.answers.filter(a => a.kind !== 'relay').map(a => ({ s, at: a.at })));
+  for (const s of sessions) {
+    for (const a of s.answers) {
+      if (a.kind === 'relay') a.counted = !direct.some(d => d.s !== s && Math.abs(d.at - a.at) <= RELAY_MATCH_MS);
+    }
+  }
+}
 /** Links each session to its family, derives its work, waits and inputs, and counts turns, agent time and waiting
  *  per day. */
 export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
@@ -217,16 +234,19 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
   const sessions: PreparedSession[] = records.map((s, index) => {
     const context = s.context ?? [];
     const all = [...context, ...s.turns].sort((a, b) => a.t - b.t);
-    const { waits, away } = sessionWaits(all);
+    const stops = s.stops ?? [];
+    const { waits, away } = sessionWaits(all, stops);
     return {
       ...s, index, root: index, depth: 0, children: 0, context, all,
       work: sessionWork(all),
       waits,
       waiting: mergeIntervals(waits.map(w => [w.start, w.end])),
-      answers: all.flatMap(t => (t.w ?? []).filter(w => w.a).map(w => ({ at: w.e, kind: w.k }))).sort((a, b) => a.at - b.at),
+      answers: [...all.flatMap(t => t.w ?? []), ...stops].filter(w => w.a)
+        .map((w): TimelineAnswer => ({ at: w.e, kind: w.k, counted: true })).sort((a, b) => a.at - b.at),
       away,
     };
   });
+  countRelayedAnswersOnce(sessions);
   for (const s of sessions) {
     let at = s.index;
     let depth = 0;
@@ -265,6 +285,8 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
     }
     for (const [a, b] of clipIntervals(s.work, bounds)) forEachDay(a, b, (day, ms) => { totalsOf(day).agentMs += ms; });
     for (const [a, b] of clipIntervals(s.waiting, bounds)) forEachDay(a, b, (day, ms) => { totalsOf(day).waitMs += ms; });
+    // An answer is a point in time: its day is active even when nothing else happened on it.
+    for (const a of s.answers) if (a.at >= bounds[0] && a.at < bounds[1]) totalsOf(toDateStr(a.at));
   }
   return {
     sessions,
@@ -406,7 +428,7 @@ export function buildLanes(p: PreparedTimeline, from: number, to: number): Timel
       segments,
       typed,
       automated: turns.length - typed,
-      answered: answers.filter(a => a.kind !== 'relay').length,
+      answered: answers.filter(a => a.counted).length,
       agentMs: intervalsMs(segments),
       waitMs: intervalsMs(waiting),
       credits: sum(turns, t => t.cr),
@@ -628,11 +650,17 @@ export interface Namer {
   name(s: PreparedSession): string;
   repo(s: PreparedSession): string;
   branch(s: PreparedSession): string;
+  /** The model; with `masked`, a name that isn't a common public model ID becomes a letter (custom names can identify
+   *  you). */
+  model(s: PreparedSession): string;
 }
 
 function letters(n: number): string {
   return (n >= 26 ? letters(Math.floor(n / 26) - 1) : '') + String.fromCharCode(65 + (n % 26));
 }
+
+/** A common public model ID (`gpt-5.4`, `claude-opus-4.7`, `gemini-2.5-pro`…): safe to show when names are masked. */
+const PUBLIC_MODEL = /^(?:gpt|o\d|claude|gemini|grok|codex|llama|mistral|deepseek|qwen|phi|mai|big-pickle)[\w.:-]{0,40}$/i;
 
 /** Shown for a session that logged no repository or folder. */
 export const NO_REPOSITORY = 'no repository';
@@ -642,6 +670,7 @@ export function createNamer(p: PreparedTimeline, masked: boolean): Namer {
   for (const s of p.sessions) repoCredits.set(s.repo, (repoCredits.get(s.repo) ?? 0) + sum(s.turns, t => t.cr));
   const repoMask = new Map<string, string>();
   for (const [i, [repo]] of [...repoCredits.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).entries()) repoMask.set(repo, `Repository ${letters(i)}`);
+  const modelMask = new Map([...new Set(p.sessions.map(s => s.model).filter(m => m && !PUBLIC_MODEL.test(m)))].sort().map((m, i) => [m, `Model ${letters(i)}`]));
   return {
     name: s => {
       if (masked) return `${s.parent < 0 ? 'Session' : 'Child session'} ${s.index + 1}`;
@@ -652,6 +681,7 @@ export function createNamer(p: PreparedTimeline, masked: boolean): Namer {
     },
     repo: s => (masked ? repoMask.get(s.repo) ?? 'Repository' : s.repo || NO_REPOSITORY),
     branch: s => (masked ? '' : s.branch),
+    model: s => (masked && s.model && !PUBLIC_MODEL.test(s.model) ? modelMask.get(s.model) ?? 'Model' : s.model),
   };
 }
 
@@ -728,7 +758,9 @@ export function viewInsights(
 function unattendedInsight(families: readonly ViewFamily[], namer: Namer, when: string, p?: PreparedTimeline): string {
   const top = [...families].sort((a, b) => b.unattendedMs - a.unattendedMs)[0];
   if (!top || top.unattendedMs < UNATTENDED_CALLOUT_MS) {
-    return `No agent work kept running more than 5 min after one of your prompts or answers ${when} before it paused or you gave the next one.`;
+    const unknown = sum(families, f => sum(f.lanes, l => l.turns.filter(t => t.noDuration).length));
+    return `No measured stretch of agent work ran more than 5 min after one of your prompts or answers ${when} before it paused or met your next input.`
+      + (unknown > 0 ? ` ${plural(unknown, 'turn has', 'turns have')} no logged duration, so ${unknown === 1 ? 'its' : 'their'} work isn’t measured.` : '');
   }
   const rootLane = top.lanes.find(l => l.s.index === top.root);
   const shown = `${formatCount(top.lanes.length)} of ${plural(top.size, 'session', 'sessions')} shown`;
@@ -737,9 +769,8 @@ function unattendedInsight(families: readonly ViewFamily[], namer: Namer, when: 
   else if (rootLane) who = `the family of your coordinator “${namer.name(rootLane.s)}” (${shown})`;
   else if (p) who = `the family of “${namer.name(p.sessions[top.root])}”, whose coordinator isn’t shown here (${shown})`;
   else who = `a family whose coordinator isn’t shown here (${shown})`;
-  return `The longest unattended stretch ${when} was ${formatDuration(top.unattendedMs)}, in ${who}: agent work kept running after one of your prompts or answers, with no pause over 2 min and no further prompt or answer from you anywhere in the family.`;
+  return `The longest unattended stretch ${when} was ${formatDuration(top.unattendedMs)}, in ${who}: agent work kept running after one of your prompts or answers, with no pause over 2 min, until it stopped or you gave your next prompt or answer anywhere in the family.`;
 }
-
 function creditsInsight(lanes: readonly TimelineLane[], namer: Namer, when: string): string {
   const credits = sum(lanes, l => l.credits);
   const children = lanes.filter(l => l.s.parent >= 0);
@@ -759,22 +790,26 @@ function waitsInsight(lanes: readonly TimelineLane[], when: string): string {
   const started = startedWaits(lanes);
   const total = sum(lanes, l => l.waitMs);
   const away = sum(lanes, l => l.away);
+  const answered = sum(lanes, l => l.answered);
+  const answers = plural(answered, 'question or permission prompt', 'questions or permission prompts');
   if (total <= 0) {
-    const none = `No wait on you was recorded ${when}: no gap of 2–120 min before your next prompt, and no question or permission prompt you answered.`;
+    const none = `No time waiting on you was measured ${when}: no gap of 2–120 min before your next prompt`
+      + (answered > 0 ? `, and the ${answers} you answered took no measurable time.` : ', and no question or permission prompt you answered.');
     return away > 0 ? `${none} ${plural(away, 'longer gap', 'longer gaps')} before your next prompt ${away === 1 ? 'counts' : 'count'} as time away, not waiting.` : none;
   }
-  if (started.length === 0) return `Only waits that started earlier ran into this period: ${formatDuration(total)} of waiting on you.`;
+  const answeredHere = answered > 0 ? ` You answered ${answers} ${when}.` : '';
+  if (started.length === 0) return `Only waits that started earlier ran into this period: ${formatDuration(total)} of waiting on you.${answeredHere}`;
   const idle = started.filter(w => w.kind === 'idle').length;
   const asked = started.length - idle;
   const long = started.filter(w => w.end - w.start >= LONG_WAIT_MS).length;
-  const parts = [idle > 0 ? `${plural(idle, 'time', 'times')} for your next prompt after their work` : '',
-    asked > 0 ? `${plural(asked, 'time', 'times')} on a question or permission prompt you answered` : ''].filter(Boolean).join(' and ');
-  return `Agents waited on you ${parts} ${when}, ${formatDuration(total)} in total`
+  const parts = [idle > 0 ? `${plural(idle, 'gap', 'gaps')} of 2–120 min before your next prompt (inferred waits)` : '',
+    asked > 0 ? `${plural(asked, 'stop', 'stops')} on a question or permission prompt you answered` : ''].filter(Boolean).join(' and ');
+  return `Waiting on you ${when}: ${parts}, ${formatDuration(total)} in total`
     + (long > 0
       ? `; ${plural(long, 'wait', 'waits')} lasted 30 min or more. Answering from the session list, or letting autopilot carry on with routine steps, could shorten such waits.`
-      : '.');
+      : '.')
+    + (answered !== asked ? answeredHere : '');
 }
-
 /* ---- families over the whole range ---- */
 
 export type FamilyVerdict = 'alone' | 'needed';
@@ -818,6 +853,8 @@ export interface FamilySummary {
   s: PreparedSession;
   /** Every session of the family in tree order, the coordinator first; context records included (`ctx`). */
   nodes: FamilyNode[];
+  /** Sessions in the family, with or without activity in range: what the minimum-size filter counts. */
+  members: number;
   /** Counts below are of the sessions with activity in range. */
   sessions: number;
   children: number;
@@ -887,19 +924,24 @@ export interface FamiliesOverview {
 function familyNode(s: PreparedSession, depth: number, bounds: Interval): FamilyNode {
   const typed = s.turns.filter(t => t.k === 'you').length;
   const work = clipIntervals(s.work, bounds);
-  const activity = [...s.turns.map(t => t.t), ...work.flat(), ...clipIntervals(s.waiting, bounds).flat()];
+  const answers = s.answers.filter(a => a.counted && a.at >= bounds[0] && a.at < bounds[1]);
+  const intervals = [...work, ...clipIntervals(s.waiting, bounds)];
+  // Points (turn starts, answers) are dated as they are; an interval ends just before its exclusive end.
+  const points = [...s.turns.map(t => t.t), ...answers.map(a => a.at)];
+  const starts = [...points, ...intervals.map(([a]) => a)];
+  const ends = [...points, ...intervals.map(([a, b]) => Math.max(a, b - 1))];
   return {
     s,
     depth,
     ctx: Boolean(s.ctx),
     typed,
     automated: s.turns.length - typed,
-    answered: s.answers.filter(a => a.kind !== 'relay' && a.at >= bounds[0] && a.at < bounds[1]).length,
+    answered: answers.length,
     agentMs: intervalsMs(work),
     credits: sum(s.turns, t => t.cr),
     tokens: sum(s.turns, t => t.tok),
-    first: activity.length ? Math.min(...activity) : 0,
-    last: activity.length ? Math.max(...activity) : 0,
+    first: starts.length ? Math.min(...starts) : 0,
+    last: ends.length ? Math.max(...ends) : 0,
     subagents: sum(s.turns, t => t.sub),
   };
 }
@@ -955,6 +997,7 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     root: root.index,
     s: root,
     nodes,
+    members: nodes.length,
     sessions: counted.length,
     children: kids.length,
     depth: Math.max(0, ...counted.map(n => n.depth)),
@@ -978,9 +1021,8 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     verdict: steppedInto > 0 ? 'needed' : 'alone',
     wide: kids.length >= WIDE_FAN_OUT,
     from: firsts.length > 0 ? toDateStr(Math.min(...firsts)) : '',
-    // An activity ending exactly at midnight belongs to the day before.
-    to: lasts.length > 0 ? toDateStr(Math.max(...lasts) - 1) : '',
-    busiest: busiestDayOf(counted),
+    to: lasts.length > 0 ? toDateStr(Math.max(...lasts)) : '',
+    busiest: busiestDayOf(counted) || (firsts.length > 0 ? toDateStr(Math.min(...firsts)) : ''),
     rank: 0,
   };
 }
@@ -1071,7 +1113,7 @@ export function familiesInsights(t: FamiliesTotals): string[] {
     ? `${formatCount(t.childrenNeedingYou)} of ${plural(t.children, 'child session', 'child sessions')} got input from you: you ${inputWords(t.childTyped, t.childAnswered, them(t.childrenNeedingYou), them(t.childrenNeedingYou))}. Show “${VERDICTS.needed.label}” and open the ✋ children to see where.`
     : t.children === 1 ? 'No prompt or answer from you was recorded in the child session.' : `No prompt or answer from you was recorded in any of the ${formatCount(t.children)} child sessions.`);
   tips.push(t.wide.families > 0
-    ? `${plural(t.wide.families, 'family', 'families')} started ${WIDE_FAN_OUT} or more children (wide fan-out) and used ${t.wide.creditShare.toFixed(0)}% of all credits.`
+    ? `${plural(t.wide.families, 'family', 'families')} started ${WIDE_FAN_OUT} or more child sessions at any depth (wide fan-out)${t.totalCredits > 0 ? ` and used ${t.wide.creditShare.toFixed(0)}% of all credits` : ''}.`
     : `No family started ${WIDE_FAN_OUT} or more children.`);
   return tips;
 }

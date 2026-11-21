@@ -351,6 +351,8 @@ interface OpenUserWait {
   kind: UserWait['kind'];
   /** The turn that asked: its index in `requests` (the turn in progress gets the next one), -1 before the first. */
   owner: number;
+  /** When the next event after it was logged: where it ends if no result ever comes. */
+  nextTs?: number;
 }
 
 function openUserWait(state: CLIParseState, key: string, start: number | null, kind: UserWait['kind']): void {
@@ -659,7 +661,8 @@ function recordStartedSessions(data: Record<string, unknown>, state: CLIParseSta
   const id = startedSessionId(data.result, 0)?.toLowerCase();
   if (!id || id === state.sessionId.toLowerCase()) return;
   state.childSessionIds.add(id);
-  if (at !== null) state.childSessionCreatedAt[id] = at;
+  // The first call that named the session created it; a later open_pr_session or open_issue_session reopens it.
+  if (at !== null && !(id in state.childSessionCreatedAt)) state.childSessionCreatedAt[id] = at;
 }
 
 /** The started session's ID: a `session_id`/`sessionId` field, else the link or labelled ID in the result text. Any
@@ -853,6 +856,7 @@ const CONTEXT_EVENT_HANDLERS = new Map<string, (ev: CLIEvent, state: CLIParseSta
 ]);
 
 function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void {
+  noteNextEvent(state, eventTime(ev));
   const contextHandler = CONTEXT_EVENT_HANDLERS.get(ev.type);
   if (contextHandler) {
     contextHandler(ev, state);
@@ -945,6 +949,39 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
   };
 }
 
+/** The first event after a question or permission prompt was asked: where it ends if no result is ever logged. */
+function noteNextEvent(state: CLIParseState, ts: number | null): void {
+  if (ts === null) return;
+  for (const open of state.openWaits.values()) if (open.nextTs === undefined && ts >= open.start) open.nextTs = ts;
+}
+
+/** A question or permission prompt with no result stopped the agent until the next event in the log, unanswered. */
+function closeUnresolvedWaits(state: CLIParseState): void {
+  for (const [key, open] of [...state.openWaits]) {
+    state.openWaits.delete(key);
+    attachUserWait(state, { start: open.start, end: open.nextTs ?? open.start, kind: open.kind, answered: state.humanResponses.has(key) }, open.owner);
+  }
+}
+
+/** A session with no turn that still holds your answer to a permission prompt or question (its turn was never logged):
+ *  kept for the Timeline with those stops, and no invented turn. Without any, there is nothing to show. */
+function inputOnlySession(state: CLIParseState, wsId: string, wsName: string): Session | null {
+  if (!state.earlyWaits.some(w => w.answered)) return null;
+  const waits = [...state.earlyWaits].sort((a, b) => a.start - b.start);
+  return createSession({
+    sessionId: state.sessionId,
+    workspaceId: wsId,
+    workspaceName: wsName,
+    location: 'cli',
+    harness: harnessName(state),
+    requests: [],
+    creationDate: waits[0].start,
+    lastMessageDate: Math.max(...waits.map(w => w.end)),
+    userWaits: waits,
+    endReason: state.sawShutdown ? 'shutdown' : 'active',
+    workspaceRootPath: state.workspaceRootPath,
+  });
+}
 function finalizeCliSession(
   state: CLIParseState,
   wsId: string,
@@ -952,13 +989,14 @@ function finalizeCliSession(
   customInstructionsBytes?: number,
   sessionDir?: string,
 ): Session | null {
+  closeUnresolvedWaits(state);
   flushTurn(state);
   // No system-prompt size was ever recorded: keep the non-tool remainder unattributed.
   for (const pending of state.pendingCompositions) attachComposition(pending.request, pending.usage, null);
   state.pendingCompositions = [];
   state.subagents.attach(state.requests);
 
-  if (state.requests.length === 0) return null;
+  if (state.requests.length === 0) return inputOnlySession(state, wsId, wsName);
 
   const creationDate = state.startTime ? new Date(state.startTime).getTime() : null;
   const contextComposition = buildSessionComposition(state);

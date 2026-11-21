@@ -42,6 +42,8 @@ test.describe('Timeline', () => {
     await expect(page.locator('.tlx-lane[data-session="tl-docs"] .mk.autopilot')).toHaveCount(1);
     await expect(page.locator('.tlx-lane[data-session="tl-coord"] .mk.agent')).toHaveCount(1);
     await expect(page.locator('#tlxImpact tbody tr')).toHaveCount(2);
+    // A family with no credits beside one with credits has a known 0.0% share, not an unknown one.
+    await expect(page.locator('#tlxImpact tr[data-family="tl-flaky"] td').last()).toHaveText('0.0%');
   });
 
   test('shows the selected session’s turns without prompt text, and links its family', async ({ page }) => {
@@ -103,6 +105,8 @@ test.describe('Timeline', () => {
     await expect(page.locator('.tlx-lane .nm')).toHaveText(['Docs update']);
     await page.locator('#tlxMask').check();
     await expect(page.locator('#tlxQuery')).toHaveValue('');
+    // Typing a name again can't show it: search is off while names are masked.
+    await expect(page.locator('#tlxQuery')).toBeDisabled();
     await expect(page.locator('#tlxCount')).toHaveText('6 of 6 sessions shown');
     await expect(page.locator('.tlx-lane .nm').first()).toHaveText(/^Session \d+$/);
     await expect(page.locator('.tlx-lane[data-session="tl-pay"] .nm')).toHaveText(/^Child session \d+$/);
@@ -113,6 +117,7 @@ test.describe('Timeline', () => {
     await page.locator('#tlxFamilyQuery').fill('Checkout');
     await page.locator('#tlxMask').check();
     await expect(page.locator('#tlxFamilyQuery')).toHaveValue('');
+    await expect(page.locator('#tlxFamilyQuery')).toBeDisabled();
   });
 
   test('judges each family in the Families view and opens one on its busiest day', async ({ page }) => {

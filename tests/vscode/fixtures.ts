@@ -143,7 +143,7 @@ export function familyFixtureFiles(root: string, timestamp: number): Map<string,
   const session = (id: string, name: string, branch: string, events: object[]) => {
     files.set(path.join(cliLogs, id, 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
     files.set(path.join(cliLogs, id, 'workspace.yaml'), [`id: ${id}`, `cwd: ${path.join(home, 'workspaces', 'shop')}`,
-      ...(name ? [`name: ${name}`] : []), `branch: ${branch}`, `repository: ${FAMILY.handle}/shop`, 'fork_count: 0'].join('\n') + '\n');
+      ...(name ? [`name: ${name}`, 'user_named: true'] : []), `branch: ${branch}`, `repository: ${FAMILY.handle}/shop`, 'fork_count: 0'].join('\n') + '\n');
   };
   session(FAMILY.coordinator, 'Checkout revamp', `${FAMILY.handle}/checkout-revamp`, [
     start(FAMILY.coordinator), { type: 'user.message', timestamp: at(10), data: { content: 'Split the checkout work into sessions.' } },

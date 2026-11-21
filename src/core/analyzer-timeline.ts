@@ -7,7 +7,7 @@
 
 import {
   Session, SessionRequest, DateFilter, SessionList, SessionListItem, WorkLifeBalanceResult,
-  NonHumanKind, TimelineDataset, TimelineSessionRecord, TimelineTurn, TurnSender,
+  NonHumanKind, TimelineDataset, TimelineSessionRecord, TimelineTurn, TimelineTurnWait, TurnSender, UserWait,
 } from './types';
 import { toDateStr, isoWeek } from './helpers';
 import { AnalyzerBase } from './analyzer-base';
@@ -38,10 +38,14 @@ function subagentLaunches(r: SessionRequest): number {
   return tools ? r.toolsUsed.filter(t => tools.has(t)).length : 0;
 }
 
+function timelineWaits(waits: readonly UserWait[] | undefined): TimelineTurnWait[] {
+  return (waits ?? []).filter(w => w.end >= w.start).map(w => ({ s: w.start, e: w.end, k: w.kind, a: w.answered }));
+}
+
 function timelineTurn(r: SessionRequest): TimelineTurn {
   const t = r.timestamp ?? 0;
   const d = Math.max(0, r.totalElapsed ?? 0);
-  const waits = (r.userWaits ?? []).filter(w => w.end >= w.start).map(w => ({ s: w.start, e: w.end, k: w.kind, a: w.answered }));
+  const waits = timelineWaits(r.userWaits);
   return {
     t,
     d,
@@ -72,6 +76,10 @@ function repositoryOf(s: Session): string {
 const turnEnd = (r: SessionRequest) => (r.timestamp ?? 0) + Math.max(0, r.totalElapsed ?? 0);
 /** When the turn last held anything: its work, or a question or permission still open after it. */
 const turnReach = (r: SessionRequest) => Math.max(turnEnd(r), ...(r.userWaits ?? []).map(w => w.end));
+/** An answer of yours at or after `from` (and before `to`), or an answered wait still running at `from`: activity in the
+ *  range even when no turn is. An unanswered stop alone is not activity. */
+const answerIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
+  (waits ?? []).some(w => w.answered && w.end >= from && (to === undefined || w.start < to));
 /** The turn holds an input from you: you typed it, or you answered a question or a permission in it. */
 const hasInput = (r: SessionRequest, before: number) =>
   (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => w.answered && w.end < before);
@@ -85,11 +93,12 @@ function splitByRange(s: Session, from: number | undefined, to: number | undefin
   let lastInput = -1;
   for (let i = before.length - 1; i >= 0 && lastInput < 0; i--) if (hasInput(before[i], from ?? 0)) lastInput = i;
   // No input from you before the range: all of it, since a stretch that a parent's prompt started can run through it.
-  const context = before.filter((r, i) => i >= lastInput || turnReach(r) > (from ?? 0));
+  const context = before.filter((r, i) => i >= lastInput || turnReach(r) >= (from ?? 0));
   const after = to === undefined ? undefined : own.find(r => (r.timestamp ?? 0) >= to);
   if (after) context.push(after);
-  const reachesIn = before.some(r => turnReach(r) > (from ?? 0));
-  return { all: own, inside, context, active: inside.length > 0 || reachesIn };
+  const reachesIn = from !== undefined && before.some(r => turnEnd(r) > from || answerIn(r.userWaits, from, to));
+  const loose = answerIn(s.userWaits, from ?? -Infinity, to);
+  return { all: own, inside, context, active: inside.length > 0 || reachesIn || loose };
 }
 
 export class TimelineAnalyzer extends AnalyzerBase {
@@ -170,6 +179,7 @@ export class TimelineAnalyzer extends AnalyzerBase {
         } : {}),
         ...(s.inheritedTurns ? { inheritedTurns: s.inheritedTurns } : {}),
         turns: turns.map(timelineTurn),
+        ...(s.userWaits?.length ? { stops: timelineWaits(s.userWaits) } : {}),
         ...(context.length ? { context: context.map(timelineTurn) } : {}),
         ...(x.ctx ? { ctx: true } : {}),
       };

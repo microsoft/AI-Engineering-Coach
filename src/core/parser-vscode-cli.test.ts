@@ -535,7 +535,7 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
       { type: 'session.start', data: { sessionId: 'named' } },
       { type: 'user.message', timestamp: '2026-10-01T10:00:00Z', data: { content: 'hi' } },
     ]);
-    fs.writeFileSync(path.join(path.dirname(file), 'workspace.yaml'), 'name: Timeline revamp\nbranch: main\nrepository: octo/shop\n');
+    fs.writeFileSync(path.join(path.dirname(file), 'workspace.yaml'), 'name: Timeline revamp\nuser_named: true\nbranch: main\nrepository: octo/shop\n');
     expect(parseCLIEventsFile(file, 'ws', 'ws')).toMatchObject({ displayName: 'Timeline revamp', branch: 'main', repository: 'shop' });
   });
 });

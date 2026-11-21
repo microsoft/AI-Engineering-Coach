@@ -97,6 +97,29 @@ describe('parseCodexSessions', () => {
     });
   });
 
+  it('takes a fork’s own first call from its response usage when the snapshot has no last call', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      { type: 'token_usage_record', timestamp: '2025-06-15T09:00:09Z', payload: { usage: { input_tokens: 13_580, output_tokens: 34, total_tokens: 13_614 } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 172_166, output_tokens: 757, total_tokens: 172_923 } } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([13_580, 34]);
+    });
+    // With no record of its own call, the fork's usage is unknown, not zero.
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 172_166, output_tokens: 757, total_tokens: 172_923 } } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([null, null]);
+    });
+  });
+
   it('leaves a turn’s duration unknown when only the prompt’s acknowledgment was logged', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'failed', cwd: '/Users/me/proj' } },

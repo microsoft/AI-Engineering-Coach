@@ -85,9 +85,9 @@ describe('timeline model', () => {
       [4, [['lone', 0]]],
     ]);
     const tips = viewInsights(lanes, families, createNamer(p, false), 'day');
-    expect(tips[0]).toBe('The longest unattended stretch on this day was 1 h 30 m, in the family of your coordinator “coord” (4 of 4 sessions shown): agent work kept running after one of your prompts or answers, with no pause over 2 min and no further prompt or answer from you anywhere in the family.');
+    expect(tips[0]).toBe('The longest unattended stretch on this day was 1 h 30 m, in the family of your coordinator “coord” (4 of 4 sessions shown): agent work kept running after one of your prompts or answers, with no pause over 2 min, until it stopped or you gave your next prompt or answer anywhere in the family.');
     expect(tips[1]).toBe('Child sessions used 65.0% of the credits shown. The child “child-b” used 30%; no prompt or answer from you was recorded in it on this day.');
-    expect(tips[2]).toBe('Agents waited on you 2 times for your next prompt after their work on this day, 1 h 18 m in total; 1 wait lasted 30 min or more. Answering from the session list, or letting autopilot carry on with routine steps, could shorten such waits.');
+    expect(tips[2]).toBe('Waiting on you on this day: 2 gaps of 2–120 min before your next prompt (inferred waits), 1 h 18 m in total; 1 wait lasted 30 min or more. Answering from the session list, or letting autopilot carry on with routine steps, could shorten such waits.');
   });
 
   it('keeps the tree when a filter hides a parent, under the nearest shown ancestor', () => {
@@ -126,6 +126,10 @@ describe('timeline model', () => {
     const masked = createNamer(p, true);
     expect([masked.name(p.sessions[0]), masked.name(p.sessions[1]), masked.repo(p.sessions[0]), masked.repo(p.sessions[4])])
       .toEqual(['Session 1', 'Child session 2', 'Repository A', 'Repository B']);
+    // Custom model names can identify you: masked as letters; common public model IDs stay.
+    const models = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 1)], { model: 'acme-internal/jane-ft' }), session('b', [turn(at(9), 1)], { model: 'gpt-5.4' })] });
+    expect(models.sessions.map(s => createNamer(models, true).model(s))).toEqual(['Model A', 'gpt-5.4']);
+    expect(models.sessions.map(s => createNamer(models, false).model(s))).toEqual(['acme-internal/jane-ft', 'gpt-5.4']);
     expect(createNamer(prepareTimeline({ forkedSessions: 0, sessions: [session('x', [turn(at(9), 1)], { name: '' })] }), false).name(prepareTimeline({ forkedSessions: 0, sessions: [session('x', [turn(at(9), 1)], { name: '' })] }).sessions[0]))
       .toMatch(/^Untitled Copilot App session 1 · /);
   });
@@ -239,7 +243,7 @@ describe('conditional coaching sentences', () => {
     const p = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 10), turn(at(13), 5)])] });
     const lanes = buildLanes(p, ...timelineWindow('day', '2024-03-15'));
     expect(viewInsights(lanes, buildViewFamilies(lanes, p), createNamer(p, false), 'day')[2])
-      .toBe('No wait on you was recorded on this day: no gap of 2–120 min before your next prompt, and no question or permission prompt you answered. 1 longer gap before your next prompt counts as time away, not waiting.');
+      .toBe('No time waiting on you was measured on this day: no gap of 2–120 min before your next prompt, and no question or permission prompt you answered. 1 longer gap before your next prompt counts as time away, not waiting.');
   });
 
   it('names the coordinator when it is not shown, and words the stretch for its children', () => {

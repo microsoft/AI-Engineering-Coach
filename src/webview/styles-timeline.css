@@ -12,7 +12,7 @@
 .tlx-seg button { border-radius: 0; margin-left: -1px; }
 .tlx-seg button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
 .tlx-seg button:last-child { border-radius: 0 4px 4px 0; }
-.tlx-seg button.on { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+.tlx-seg button.on { background: color-mix(in srgb, var(--accent-blue) 72%, #000); color: #fff; border-color: color-mix(in srgb, var(--accent-blue) 72%, #000); }
 .tlx-seg button:focus-visible, .tlx-date button:focus-visible, .tlx-strip-bars .d:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 1px; }
 .tlx-seg.disabled, .tlx-seg-l.disabled { opacity: 0.4; }
 .tlx-seg-l { color: var(--text-muted); font-size: 12px; margin-right: -6px; }
@@ -89,7 +89,8 @@
 .tlx .chip-sel { color: var(--tl-sel); border-color: var(--tl-sel); }
 .tlx-trk { position: relative; height: 26px; }
 .tlx-trk .grid { position: absolute; top: -7px; bottom: -7px; width: 1px; background: rgba(255, 255, 255, 0.05); }
-.tlx-trk .seg { position: absolute; top: 7px; height: 12px; border-radius: 3px; min-width: 1px; opacity: 0.7; }
+.tlx-trk .seg { position: absolute; top: 7px; height: 12px; border-radius: 3px; min-width: 1px; opacity: 0.85; }
+.tlx-lane.sel .tlx-trk .seg { opacity: 1; }
 .tlx-trk .wait { position: absolute; top: 9px; height: 8px; border-radius: 2px; box-sizing: border-box; }
 .tlx .mk { position: absolute; top: 8px; width: 10px; height: 10px; margin-left: -5px; box-sizing: border-box; }
 .tlx .mk.static { position: static; display: inline-block; margin: 0; }
@@ -148,7 +149,7 @@
 .tlx .howto-g b { display: block; margin-bottom: 4px; }
 .tlx .howto-g span { font-size: 12px; line-height: 1.6; }
 .tlx .vb {
-  display: inline-block; font-size: 11px; font-weight: 600; color: var(--c); border: 1px solid var(--c);
+  display: inline-block; font-size: 11px; font-weight: 600; color: color-mix(in srgb, var(--c) 72%, #fff); border: 1px solid var(--c);
   background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 9px; padding: 0 7px; line-height: 17px; margin-right: 4px; white-space: nowrap;
 }
 .tlx .vfs { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
@@ -221,6 +222,7 @@ body.vscode-light .tlx .sw.wait, body.vscode-light .tlx-trk .wait {
 body.vscode-light .tlx .sw.wait.ask, body.vscode-light .tlx-trk .wait.ask {
   border: 1px solid #9a6700; background: repeating-linear-gradient(45deg, rgba(154, 103, 0, 0.42) 0 3px, transparent 3px 6px);
 }
+body.vscode-light .tlx .chip-sel { color: #6f4a00; border-color: #6f4a00; }
 body.vscode-light .tlx .vb { color: color-mix(in srgb, var(--c) 55%, #000); border-color: color-mix(in srgb, var(--c) 70%, #000); }
 body.vscode-light .tlx .howto-t { color: #0969da; }
 body.vscode-light .tlx .hand { color: #9a6700; }

@@ -103,13 +103,22 @@ describe('Timeline windows', () => {
     }
   });
 
-  it('has 23 and 25 hours on daylight-saving days', () => {
-    for (const [date, hours] of [['2026-03-29', 23], ['2026-10-25', 25]] as const) {
-      const [a, b] = timelineWindow('day', date);
-      const expected = new Date(2026, 0, 1).getTimezoneOffset() === new Date(2026, 6, 1).getTimezoneOffset() ? 24 : hours;
-      expect([(b - a) / 3_600_000, hourTicks(a, b, 1).length]).toEqual([expected, expected]);
-    }
-  });
+  // Each zone with its own transitions, whatever the machine's zone; the next day has 24 hours again.
+  for (const [zone, spring, autumn] of [['Europe/Berlin', '2026-03-29', '2026-10-25'], ['America/New_York', '2026-03-08', '2026-11-01']] as const) {
+    it(`has 23 and 25 hours on daylight-saving days in ${zone}`, () => {
+      const saved = process.env.TZ;
+      process.env.TZ = zone;
+      try {
+        for (const [date, hours] of [[spring, 23], [autumn, 25], ['2026-07-01', 24]] as const) {
+          const [a, b] = timelineWindow('day', date);
+          expect([date, (b - a) / 3_600_000, hourTicks(a, b, 1).length]).toEqual([date, hours, hours]);
+        }
+      } finally {
+        if (saved === undefined) delete process.env.TZ;
+        else process.env.TZ = saved;
+      }
+    });
+  }
 });
 
 describe('Timeline inputs and blocking', () => {

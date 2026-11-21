@@ -121,6 +121,8 @@ interface CodexParseState {
   forked: boolean;
   /** Tokens the fork's first total inherited from its source; subtracted from every later total. */
   inherited: { input: number; output: number; cached: number; reasoning: number; total: number };
+  /** The usage Codex logged for its latest response (`token_usage_record`, codex-cli 0.167+): owned by this thread. */
+  lastResponseUsage?: Record<string, unknown>;
 }
 
 interface PendingCodexEdit {
@@ -547,9 +549,11 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   const last = recordValue(info?.last_token_usage);
 
   // A fork (`codex fork`) continues its source's thread, so its first cumulative total already holds everything the
-  // source used. That baseline (the first total less its own call) belongs to the source; the fork counts from it.
+  // source used. That baseline (the first total less its own call) belongs to the source; the fork counts from it. Its
+  // own call is the usage logged for its response, else the snapshot's last call; with neither, its usage is unknown.
   if (state.forked && !state.hasTokenData) {
-    const less = (key: string) => Math.max(0, (tokenCount(totalUsage[key]) ?? 0) - (tokenCount(last?.[key]) ?? 0));
+    const ownCall = state.lastResponseUsage ?? last;
+    const less = (key: string) => Math.max(0, (tokenCount(totalUsage[key]) ?? 0) - (tokenCount(ownCall?.[key]) ?? 0));
     state.inherited = {
       input: less('input_tokens'), output: less('output_tokens'), cached: less('cached_input_tokens'),
       reasoning: less('reasoning_output_tokens'), total: less('total_tokens'),
@@ -718,6 +722,8 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
     handleTurnContext(line.payload || {}, state);
   } else if (line.type === 'response_item') {
     handleResponseItem(line.payload || {}, state, ts, meta.model);
+  } else if (line.type === 'token_usage_record') {
+    state.lastResponseUsage = recordValue(line.payload?.usage) ?? state.lastResponseUsage;
   }
   recordTurnEnd(line, state, ts);
 }

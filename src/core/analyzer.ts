@@ -61,7 +61,10 @@ export class Analyzer {
 
   constructor(input: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
     // Each turn is counted once, everywhere: a fork's copied history belongs to its source.
-    const sessions = withInheritedTurnsRemoved(input);
+    const all = withInheritedTurnsRemoved(input);
+    // A session with no turn only holds your answers to stops (Copilot permission-only sessions): only the Timeline
+    // shows those, so every other view sees the sessions it always did.
+    const sessions = all.filter(s => s.requests.length > 0);
     const elIdx = editLocIndex ?? new Map<string, Map<string, EditLoc>>();
     this.sessions = sessions;
     this.editLocIndex = elIdx;
@@ -71,7 +74,7 @@ export class Analyzer {
     this.dashboard = new DashboardAnalyzer(sessions, elIdx, sharedMap);
     this.production = new ProductionAnalyzer(sessions, elIdx, sharedMap);
     this.consumption = new ConsumptionAnalyzer(sessions, elIdx, sharedMap);
-    this.timeline = new TimelineAnalyzer(sessions, elIdx, sharedMap);
+    this.timeline = new TimelineAnalyzer(all, elIdx, sharedMap);
     this.patterns = new PatternsAnalyzer(sessions, elIdx, sharedMap);
     this.workflows = new WorkflowAnalyzer(sessions, elIdx, sharedMap);
     this.config = new ConfigAnalyzer(sessions, elIdx, this.workspaces, sharedMap);

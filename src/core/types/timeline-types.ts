@@ -76,6 +76,8 @@ export interface TimelineSessionRecord {
    *  any still running into it, and the first turn after it (which ends a wait that started inside). Only their work
    *  and waits inside the range count; they are never counted as turns. */
   context?: TimelineTurn[];
+  /** Stops for you that no turn owns: the session logged only your answer to a permission prompt or a question. */
+  stops?: TimelineTurnWait[];
   /** A context record: a member of a shown family with no activity in range, or hidden by the sidebar's workspace or
    *  harness filter. Its turns are all `context`; it gives the family its structure, inputs and work, never a lane. */
   ctx?: boolean;

@@ -358,6 +358,9 @@ export interface Session {
   /** Turns the fork copied from its source's history. They were removed from `requests` (the source counts them),
    *  even when the source isn't loaded: they are history, not new work. */
   inheritedTurns?: number;
+  /** Stops for you that no turn owns: a session whose only logged activity is your answer to a permission prompt or a
+   *  question (Copilot). Such a session has no requests; only the Timeline counts it. */
+  userWaits?: UserWait[];
   /** Sessions this session started: the session IDs in the results of its `create_session`, `open_pr_session` and
    *  `open_issue_session` calls (Copilot CLI and Copilot App). */
   childSessionIds?: string[];

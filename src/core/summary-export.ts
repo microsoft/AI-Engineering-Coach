@@ -303,7 +303,8 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
       '', '## Autonomy and Delegation (Timeline)',
       `- Turns you typed: ${formatNumber(a.typedTurns)} of ${formatNumber(turns)}${turns ? ` (${formatPercent(a.automatedTurns / turns)} automated)` : ''}`,
       `- Agent time: ${a.agentHours} h`,
-      `- Agents waited on you: ${formatNumber(a.waitsOnYou)} times (${formatNumber(a.waitsOnQuestionOrPermission)} on a question or permission prompt), ${a.waitHours} h in total; you answered ${formatNumber(a.questionsAndPermissionsAnswered)} questions or permission prompts`,
+      `- Waits on you that started in range: ${formatNumber(a.waitsOnYou)} (${formatNumber(a.waitsOnQuestionOrPermission)} on a question or permission prompt); time waiting on you in range: ${a.waitHours} h, including waits that began earlier`,
+      `- Questions and permission prompts you answered: ${formatNumber(a.questionsAndPermissionsAnswered)}`,
       `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsWithYourInput)} with a prompt or answer from you${a.familyCreditSharePct == null ? '' : `; ${a.familyCreditSharePct}% of credits`})`,
       `- Families: ${formatNumber(a.noInputInChildren)} with no input from you in their children, ${formatNumber(a.youSteppedIn)} where you stepped into a child; ${formatNumber(a.wideFanOut)} of these with ${WIDE_FAN_OUT}+ children`,
     );

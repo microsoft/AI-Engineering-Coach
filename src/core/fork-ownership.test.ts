@@ -48,6 +48,20 @@ describe('withInheritedTurnsRemoved', () => {
     expect([f.requests.length, f.inheritedTurns, f.forkedFromId]).toEqual([1, 1, undefined]);
   });
 
+  it('finds a fork without a clock lead by the ordered history it shares with its source', () => {
+    // The fork's preamble is missing, so its copies look like its own: the source holds the same prompts in the same
+    // order, and the fork went on first after them.
+    const source = session('src', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), request(40, 'm5')]);
+    const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), request(20, 'm4')]);
+    const [s, f] = withInheritedTurnsRemoved([source, fork]);
+    expect([s.requests.length, f.requests.map(r => r.userEventId), f.inheritedTurns, f.forkedFromId]).toEqual([4, ['m4'], 3, 'src']);
+    // A transcript holding only the shared prompts is the source.
+    const [s2, f2] = withInheritedTurnsRemoved([session('src', [request(0, 'm1')]), session('fork', [request(0, 'm1'), request(20, 'm4')])]);
+    expect([s2.requests.length, f2.requests.length]).toEqual([1, 1]);
+    // Two transcripts that went on at the same moment: no way to tell, so both keep their turns.
+    const [a, b] = withInheritedTurnsRemoved([session('a', [request(0, 'm1'), request(20, 'x')]), session('b', [request(0, 'm1'), request(20, 'y')])]);
+    expect([a.requests.length, b.requests.length]).toEqual([2, 2]);
+  });
   it('links a fork of a fork to its direct source', () => {
     const a = session('a', [request(0, 'm1')]);
     const b = session('b', [request(0, 'm1', 30_000), request(10, 'm2')]);

@@ -24,14 +24,18 @@ describe('session labels', () => {
     // A path with spaces goes whole: quoted, or as long as the following words still carry a separator.
     expect(scrubLabel('See "C:\\Program Files\\My App\\log.txt" now', ctx)).toBe('See [path] now');
     expect(scrubLabel('See C:\\My Docs\\notes.md now', ctx)).toBe('See [path] now');
+    expect(scrubLabel('See C:\\Users\\jane\\My Docs\\file name.txt now', ctx)).toBe('See [path] now');
+    expect(scrubLabel('model "/Users/jane doe/models/x" here', { names: [] })).toBe('model [path] here');
+    expect(scrubLabel('weights=/opt/jane/w.bin', { names: [] })).toBe('weights=[path]');
   });
 
   it('drops only a signed-in handle as a branch prefix', () => {
     expect(scrubBranch('octo-dev/timeline-revamp', ctx)).toBe('timeline-revamp');
     expect(scrubBranch('octo-dev-timeline', ctx)).toBe('timeline');
     expect(scrubBranch('feat/timeline', ctx)).toBe('feat/timeline');
-    // The OS account name is no handle: it goes as a word, but a branch named after it keeps its topic.
-    expect(scrubBranch('zed9-cache', { names: ['zed9'], handles: [] })).toBe('cache');
+    // The OS account name is no handle: it is marked where it stands, so the branch doesn't pass for its topic alone.
+    expect(scrubBranch('zed9-cache', { names: ['zed9'], handles: [] })).toBe('[name]-cache');
+    expect(scrubBranch('zed9/cache', { names: ['zed9'], handles: [] })).toBe('[name]/cache');
     expect(scrubBranch('release-zed9', ctx)).toBe('release-zed9');
     // A signed-in handle is known exactly, so even a short one goes as the branch's first word.
     expect(scrubBranch('ab/fix', { names: [], handles: ['ab'] })).toBe('fix');
@@ -63,7 +67,7 @@ describe('Copilot workspace.yaml', () => {
   it('reads the scrubbed name, branch, repository and fork count', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-ws-'));
     fs.writeFileSync(path.join(dir, 'workspace.yaml'), [
-      'id: 1', "name: 'Ship it: Dev''s fix'", 'branch: octo-dev/fix-cache', 'repository: octo-dev/shop',
+      'id: 1', "name: 'Ship it: Dev''s fix'", 'user_named: true', 'branch: octo-dev/fix-cache', 'repository: octo-dev/shop',
       'git_root: C:\\Users\\Dev\\shop', 'fork_count: 2', 'cwd: C:\\Users\\Dev\\shop',
     ].join('\n'));
     expect(readCliWorkspaceMeta(dir, ctx)).toEqual({ displayName: "Ship it: 's fix", branch: 'fix-cache', repository: 'shop', forkCount: 2 });
@@ -94,9 +98,10 @@ describe('automatic Copilot titles', () => {
   it('never shows a title you didn’t give: an automatic one often repeats your first prompt', () => {
     expect(readCliWorkspaceMeta(write(['name: Fix the flaky cache test', 'user_named: false']), ctx).displayName).toBeUndefined();
     expect(readCliWorkspaceMeta(write(['name: Fix the flaky cache test', 'user_named: true']), ctx).displayName).toBe('Fix the flaky cache test');
-    // Older files have no user_named: a title that is the first prompt, or its start, is that prompt.
-    expect(readCliWorkspaceMeta(write(['name: Please fix the flaky cache test…']), ctx, 'please fix the flaky cache test in ci and push').displayName).toBeUndefined();
-    expect(readCliWorkspaceMeta(write(['name: Cache work']), ctx, 'please fix the flaky cache test').displayName).toBe('Cache work');
+    // Where the file doesn't say who named it, the title may still be prompt text: not shown.
+    expect(readCliWorkspaceMeta(write(['name: Cache work']), ctx, 'please fix the flaky cache test').displayName).toBeUndefined();
+    // A name you gave that repeats your first prompt is prompt text too.
+    expect(readCliWorkspaceMeta(write(['name: Please fix the flaky cache test…', 'user_named: true']), ctx, 'please fix the flaky cache test in ci and push').displayName).toBeUndefined();
   });
 
   it('matches a title to the prompt it was made from, ignoring case, spacing and a trailing ellipsis', () => {

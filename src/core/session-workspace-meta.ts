@@ -22,7 +22,7 @@ export function readCliClient(sessionDir: string): string {
 }
 
 export interface CliWorkspaceMeta {
-  /** The name you gave the session. Automatic titles (`user_named: false`) are often your first prompt, word for
+  /** The name you gave the session (`user_named: true`). Automatic titles are often your first prompt, word for
    *  word, so they are never kept. */
   displayName?: string;
   branch?: string;
@@ -140,7 +140,8 @@ export function readCliWorkspaceMeta(sessionDir: string, ctx: ScrubContext = loc
   const meta: CliWorkspaceMeta = {};
   const raw = yamlScalar(text, 'name');
   const name = scrubLabel(raw, ctx);
-  if (name && yamlScalar(text, 'user_named') !== 'false' && !isPromptText(raw, firstPrompt)) meta.displayName = name;
+  // Only a name you gave: an automatic title, or one whose origin isn't logged, can repeat your first prompt.
+  if (name && yamlScalar(text, 'user_named') === 'true' && !isPromptText(raw, firstPrompt)) meta.displayName = name;
   const branch = scrubBranch(yamlScalar(text, 'branch'), ctx);
   if (branch) meta.branch = branch;
   const repo = scrubRepository(yamlScalar(text, 'repository') || yamlScalar(text, 'git_root'), ctx);

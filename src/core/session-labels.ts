@@ -37,10 +37,15 @@ function usableNames(names: readonly string[]): string[] {
     .sort((a, b) => b.length - a.length);
 }
 
-function removeNames(value: string, names: string[]): string {
+/** The names removed, or with `mark` replaced where they stand (in a branch, so `name/topic` doesn't pass for `topic`). */
+function removeNames(value: string, names: string[], mark = ''): string {
   let out = value;
   for (const name of names) {
     const n = escapeRegExp(name);
+    if (mark) {
+      out = out.replace(new RegExp(`(^|[^A-Za-z0-9_])${n}(?![A-Za-z0-9_])`, 'gi'), `$1${mark}`);
+      continue;
+    }
     // `handle/repo`, `handle-topic` and `handle_topic` keep what follows; a standalone name goes.
     out = out.replace(new RegExp(`(^|[^A-Za-z0-9_])${n}[/_-](?=[A-Za-z0-9])`, 'gi'), '$1');
     out = out.replace(new RegExp(`(^|[^A-Za-z0-9_])${n}(?![A-Za-z0-9_])`, 'gi'), '$1');
@@ -53,13 +58,14 @@ function tidy(value: string): string {
 }
 
 /** A label without links, email addresses, drive or UNC paths, the home directory or the user's names. */
-export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME): string {
+export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME, nameMark = ''): string {
   let out = value
     .replaceAll(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[link]')
     .replaceAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]')
     // A quoted path is one path, spaces and all; an unquoted one goes on through later words that carry a separator.
     .replaceAll(/(["'`])(?:[A-Za-z]:[\\/]|\\\\)[^"'`\n]*\1/g, '[path]')
-    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s,;)"'`]*(?: [^\s,;)"'`]*[\\/][^\s,;)"'`]*)*/g, '[path]');
+    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s,;)"'`]*(?: [^\s,;)"'`]*[\\/][^\s,;)"'`]*)*(?: [^\s\\/,;)"'`]+\.[A-Za-z0-9]{1,5}(?=$|[\s,;)]))?/g, '[path]')
+    .replaceAll(/(["'`])\/[^"'`\n/]+\/[^"'`\n]*\1/g, '[path]');
   if (ctx.home && ctx.home.length > 1) {
     const home = ctx.home.replace(/[\\/]+$/, '');
     const variants = new Set([home, home.replaceAll('\\', '/'), home.replaceAll('/', '\\')]);
@@ -67,13 +73,14 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME): st
   }
   // Any absolute path of two or more segments (`/mnt/c/Users/…`, `/workspaces/…`); a single `/word`, such as a slash
   // command, stays.
-  out = out.replaceAll(/(^|[\s("'`])\/[^\s/,;)"'`]+\/[^\s,;)"'`]*/g, '$1[path]');
-  out = tidy(removeNames(out, usableNames(ctx.names)));
+  out = out.replaceAll(/(^|[\s("'`:=])\/[^\s/,;)"'`]+\/[^\s,;)"'`]*/g, '$1[path]');
+  out = tidy(removeNames(out, usableNames(ctx.names), nameMark));
   return out.length > max ? out.slice(0, max - 1).trimEnd() + '…' : out;
 }
 
 /** A branch without a GitHub handle prefix (`handle/topic`, `handle-topic`), scrubbed like a label. Only signed-in
- *  handles are removed as prefixes: `vscode/fix` or `feature-x` keep theirs. */
+ *  handles are removed as prefixes: `vscode/fix` or `feature-x` keep theirs, and another of your names (the OS account)
+ *  becomes `[name]` where it stands. */
 export function scrubBranch(value: string, ctx: ScrubContext): string {
   let out = value.trim();
   // Handles are known exactly, so even a short one is removed when it is the branch's first word.
@@ -81,7 +88,7 @@ export function scrubBranch(value: string, ctx: ScrubContext): string {
   for (const name of handles.sort((a, b) => b.length - a.length)) {
     out = out.replace(new RegExp(`^${escapeRegExp(name)}[/_-]`, 'i'), '');
   }
-  return scrubLabel(out, ctx, MAX_BRANCH);
+  return scrubLabel(out, ctx, MAX_BRANCH, '[name]');
 }
 
 /** Shown when a repository or folder name is nothing but the user's name, so scrubbing left nothing. */

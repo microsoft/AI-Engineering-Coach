@@ -6,7 +6,7 @@
 /* One owner per conversation turn. A Claude Code fork (`--fork-session`) starts its transcript with its source's
  * messages, copied with their message IDs and their original, older times. Counting them in both sessions would count
  * the same work twice on every tab, so they are removed from the fork before analysis: the session where a message
- * isn't a copy owns it. Browser-safe: no Node imports. */
+ * isn't a copy owns it. A copy shows as a prompt older than the fork's first line or, when those lines are missing, as\n * the ordered history the fork shares with its source. Browser-safe: no Node imports. */
 
 import type { Session, SessionRequest } from './types/session-types';
 
@@ -19,28 +19,73 @@ function isCandidate(r: SessionRequest): boolean {
   return (r.historyLeadMs ?? 0) > 0;
 }
 
+const byTime = (s: Session) => [...s.requests].sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+
+/** How many of their first prompts two transcripts share, in the same order (same message IDs and times). */
+function sharedPrefix(a: readonly SessionRequest[], b: readonly SessionRequest[]): number {
+  let k = 0;
+  while (k < a.length && k < b.length && a[k].userEventId && a[k].userEventId === b[k].userEventId && a[k].timestamp === b[k].timestamp) k++;
+  return k;
+}
+
+/** Claude Code forks whose copies show no clock lead (the fork's opening lines are missing): a transcript that begins
+ *  with the same prompts, in the same order, as another one, and went on first after them, copied them. The source is
+ *  the one it shares most with (the direct source of a fork of a fork). When both went on at the same moment, or
+ *  neither did, nothing tells them apart, and both keep their turns. */
+function prefixCopies(sessions: readonly Session[]): Map<Session, { copies: Set<SessionRequest>; source: Session }> {
+  const out = new Map<Session, { copies: Set<SessionRequest>; source: Session }>();
+  const claude = sessions.filter(s => s.harness === 'Claude' && s.requests.length > 0 && !s.requests.some(isCandidate));
+  const holdersOf = new Map<string, Session[]>();
+  for (const s of claude) {
+    const first = byTime(s)[0].userEventId;
+    if (first) holdersOf.set(first, [...(holdersOf.get(first) ?? []), s]);
+  }
+  for (const group of holdersOf.values()) {
+    if (group.length < 2) continue;
+    for (const s of group) {
+      const mine = byTime(s);
+      let best: { source: Session; k: number } | undefined;
+      for (const other of group) {
+        if (other === s) continue;
+        const theirs = byTime(other);
+        const k = sharedPrefix(mine, theirs);
+        const myNext = mine[k]?.timestamp;
+        const theirNext = theirs[k]?.timestamp;
+        const forked = k > 0 && myNext != null && (theirNext == null || myNext < theirNext);
+        if (forked && (!best || k > best.k)) best = { source: other, k };
+      }
+      if (best) out.set(s, { copies: new Set(mine.slice(0, best.k)), source: best.source });
+    }
+  }
+  return out;
+}
+
 /** Sessions with the turns they copied from a fork source removed, `inheritedTurns` set and `forkedFromId` set to the
  *  session holding the latest copied message (the direct source, for a fork of a fork). Other sessions are returned as
  *  they are. */
 export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session[] {
-  if (!sessions.some(s => s.requests.some(isCandidate))) return [...sessions];
+  const byPrefix = prefixCopies(sessions);
+  if (byPrefix.size === 0 && !sessions.some(s => s.requests.some(isCandidate))) return [...sessions];
   // Where each message is not a copy: its owner.
   const owner = new Map<string, Session>();
   const holders = new Map<string, number>();
   for (const s of sessions) {
+    const copies = byPrefix.get(s)?.copies;
     for (const r of s.requests) {
       if (!r.userEventId) continue;
       holders.set(r.userEventId, (holders.get(r.userEventId) ?? 0) + 1);
-      if (!isCandidate(r) && !owner.has(r.userEventId)) owner.set(r.userEventId, s);
+      if (!isCandidate(r) && !copies?.has(r) && !owner.has(r.userEventId)) owner.set(r.userEventId, s);
     }
   }
   return sessions.map(s => {
-    const inherited = s.requests.filter(r => isCandidate(r) && (
-      (r.userEventId !== undefined && (holders.get(r.userEventId) ?? 0) > 1) || (r.historyLeadMs ?? 0) > COPY_LEAD_MS));
+    const prefix = byPrefix.get(s);
+    const inherited = s.requests.filter(r => prefix?.copies.has(r) || (isCandidate(r) && (
+      (r.userEventId !== undefined && (holders.get(r.userEventId) ?? 0) > 1) || (r.historyLeadMs ?? 0) > COPY_LEAD_MS)));
     if (inherited.length === 0) return s;
     const removed = new Set(inherited);
     const requests = s.requests.filter(r => !removed.has(r));
-    const source = [...inherited].reverse().map(r => (r.userEventId ? owner.get(r.userEventId) : undefined)).find(x => x && x !== s);
+    const source = prefix?.source
+      ?? [...inherited].reverse().map(r => (r.userEventId ? owner.get(r.userEventId) : undefined)).find(x => x && x !== s);
     const starts = requests.map(r => r.timestamp ?? 0).filter(t => t > 0);
     return {
       ...s,
@@ -52,7 +97,6 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
     };
   });
 }
-
 /** A session re-read in full (for its detail view) with the same turns the analysis kept: a fork's copied turns stay
  *  counted once, in their source. `analyzed` is the session as the analyzer holds it. */
 export function withAnalyzedTurns(full: Session, analyzed: Session | null): Session {
