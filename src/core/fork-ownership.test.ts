@@ -21,6 +21,9 @@ function request(minute: number, id: string, historyLeadMs?: number): SessionReq
   };
 }
 
+/** A turn the transcript logged as it ran (its queue, API request or cost records): never a fork's copy. */
+const live = (r: SessionRequest): SessionRequest => ({ ...r, loggedLive: true });
+
 function session(id: string, requests: SessionRequest[]): Session {
   return {
     sessionId: id, workspaceId: 'ws', workspaceName: 'shop', location: '', harness: 'Claude', creationDate: requests[0]?.timestamp ?? null,
@@ -48,13 +51,20 @@ describe('withInheritedTurnsRemoved', () => {
     expect([f.requests.length, f.inheritedTurns, f.forkedFromId]).toEqual([1, 1, undefined]);
   });
 
-  it('finds a fork without a clock lead by the ordered history it shares with its source', () => {
+  it('finds a fork without a clock lead by the ordered history it shares with its source, which logged it live', () => {
     // The fork's preamble is missing, so its copies look like its own: the source holds the same prompts in the same
-    // order, and the fork went on first after them.
-    const source = session('src', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), request(40, 'm5')]);
-    const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), request(20, 'm4')]);
+    // order, logged as they ran; the fork holds only the conversation lines.
+    const source = session('src', [live(request(0, 'm1')), live(request(5, 'm2')), live(request(9, 'm3')), live(request(40, 'm5'))]);
+    const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(9, 'm3'), live(request(20, 'm4'))]);
     const [s, f] = withInheritedTurnsRemoved([source, fork]);
     expect([s.requests.length, f.requests.map(r => r.userEventId), f.inheritedTurns, f.forkedFromId]).toEqual([4, ['m4'], 3, 'src']);
+    // The source went on first after the shared history: the live records, not the order, say which is the fork (B7).
+    const early = session('src', [live(request(0, 'm1')), live(request(5, 'm2')), live(request(9, 'm3')), live(request(19, 'm5'))]);
+    const [s3, f3] = withInheritedTurnsRemoved([early, fork]);
+    expect([s3.requests.map(r => r.userEventId), f3.requests.map(r => r.userEventId), f3.forkedFromId]).toEqual([['m1', 'm2', 'm3', 'm5'], ['m4'], 'src']);
+    // With no such records on either side, both went on, and nothing says which copied: both keep their turns.
+    const [a3, b3] = withInheritedTurnsRemoved([session('a', [request(0, 'm1'), request(19, 'x')]), session('b', [request(0, 'm1'), request(20, 'y')])]);
+    expect([a3.requests.length, b3.requests.length, a3.forkedFromId, b3.forkedFromId]).toEqual([2, 2, undefined, undefined]);
     // A transcript holding only the shared prompts is the source.
     const [s2, f2] = withInheritedTurnsRemoved([session('src', [request(0, 'm1')]), session('fork', [request(0, 'm1'), request(20, 'm4')])]);
     expect([s2.requests.length, f2.requests.length]).toEqual([1, 1]);
@@ -67,7 +77,7 @@ describe('withInheritedTurnsRemoved', () => {
 describe('withInheritedTurnsRemoved with sub-agent turns', () => {
   it('compares only coordinator turns when the source has a sub-agent turn between the copied prompts', () => {
     const sub = { ...request(3, 'sub1'), nonHumanKind: 'subagent' as const };
-    const source = session('src', [request(0, 'm1'), sub, request(5, 'm2'), request(40, 'm5')]);
+    const source = session('src', [live(request(0, 'm1')), sub, live(request(5, 'm2')), live(request(40, 'm5'))]);
     const fork = session('fork', [request(0, 'm1'), request(5, 'm2'), request(20, 'm4')]);
     const [s, f] = withInheritedTurnsRemoved([source, fork]);
     // The sub-agent's work stays in the session that ran it.
@@ -95,6 +105,11 @@ describe('withInheritedTurnsRemoved for forks of forks', () => {
     const autonomy = report.autonomy;
     expect(report.totals.requests).toBe(3);
     expect((autonomy?.typedTurns ?? 0) + (autonomy?.automatedTurns ?? 0)).toBe(3);
+  });
+
+  it('keeps a fork that holds only copied turns in the Sessions list (B11)', () => {
+    const analyzer = new Analyzer([session('src', [request(0, 'm1')]), session('fork', [request(0, 'm1', 500)])], new Map());
+    expect(analyzer.getSessions(1, 50).sessions.map(s => [s.sessionId, s.requestCount])).toEqual([['src', 1], ['fork', 0]]);
   });
 
   it('keeps a fork’s detail view, read again from disk, to the turns the analysis kept', () => {

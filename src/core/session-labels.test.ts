@@ -24,6 +24,9 @@ describe('session labels', () => {
     // A path with spaces goes whole: quoted, or as long as the following words still carry a separator.
     expect(scrubLabel('See "C:\\Program Files\\My App\\log.txt" now', ctx)).toBe('See [path] now');
     expect(scrubLabel('See C:\\My Docs\\notes.md now', ctx)).toBe('See [path] now');
+    // Unquoted, a path runs on to a word with a file extension, or to the end: no tail of it is left.
+    expect(scrubLabel('See C:\\Users\\Jane Doe\\notes final draft.txt now', ctx)).toBe('See [path] now');
+    expect(scrubLabel('Fix C:\\Users\\Jane Doe\\Secret Project', ctx)).toBe('Fix [path]');
     expect(scrubLabel('See C:\\Users\\jane\\My Docs\\file name.txt now', ctx)).toBe('See [path] now');
     expect(scrubLabel('model "/Users/jane doe/models/x" here', { names: [] })).toBe('model [path] here');
     expect(scrubLabel('weights=/opt/jane/w.bin', { names: [] })).toBe('weights=[path]');
@@ -36,6 +39,7 @@ describe('session labels', () => {
     // The OS account name is no handle: it is marked where it stands, so the branch doesn't pass for its topic alone.
     expect(scrubBranch('zed9-cache', { names: ['zed9'], handles: [] })).toBe('[name]-cache');
     expect(scrubBranch('zed9/cache', { names: ['zed9'], handles: [] })).toBe('[name]/cache');
+    expect(scrubBranch('zed9_cache', { names: ['zed9'], handles: [] })).toBe('[name]_cache');
     expect(scrubBranch('release-zed9', ctx)).toBe('release-zed9');
     // A signed-in handle is known exactly, so even a short one goes as the branch's first word.
     expect(scrubBranch('ab/fix', { names: [], handles: ['ab'] })).toBe('fix');
@@ -106,7 +110,9 @@ describe('automatic Copilot titles', () => {
 
   it('matches a title to the prompt it was made from, ignoring case, spacing and a trailing ellipsis', () => {
     expect(isPromptText('Fix  the BUILD...', 'fix the build')).toBe(true);
-    expect(isPromptText('Fix the', 'Fix the build now')).toBe(false);
+    // A short title that is the prompt's first words is prompt text too (B17); part of a word isn't.
+    expect(isPromptText('Fix the', 'Fix the build now')).toBe(true);
+    expect(isPromptText('Fix th', 'Fix the build now')).toBe(false);
     expect(isPromptText('Refactor', '')).toBe(false);
   });
 

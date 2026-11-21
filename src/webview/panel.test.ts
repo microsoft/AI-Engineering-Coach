@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   disposed: () => {},
   modelsChanged: () => {},
   html: '',
+  dirs: ['test-logs'],
   post: vi.fn<(message: unknown) => Promise<boolean>>().mockResolvedValue(true),
   parse: vi.fn<() => Promise<ParseResult>>(),
   clearCache: vi.fn<() => void>(),
@@ -49,7 +50,7 @@ vi.mock('vscode', () => ({
 }));
 vi.mock('../core/analyzer', () => ({ Analyzer: class { warmUp = mocks.warmUp; } }));
 vi.mock('../core/parser', () => ({
-  clearCache: mocks.clearCache, findLogsDirs: () => ['test-logs'], parseAllLogsViaWorker: mocks.parse,
+  clearCache: mocks.clearCache, findLogsDirs: () => mocks.dirs, parseAllLogsViaWorker: mocks.parse,
 }));
 vi.mock('../core/parser-harnesses', () => ({ hasExternalHarnessSources: () => false }));
 vi.mock('../core/cache', () => ({ saveSidebarStats: () => {} }));
@@ -81,6 +82,7 @@ beforeEach(() => {
   mocks.parse.mockResolvedValue(result);
   mocks.warmUp.mockResolvedValue(undefined);
   mocks.probe.mockResolvedValue(true);
+  mocks.dirs = ['test-logs'];
 });
 
 afterEach(() => {
@@ -89,6 +91,17 @@ afterEach(() => {
 });
 
 describe('dashboard startup', () => {
+  it('shows the no-logs page only once the dashboard page has loaded, so the dashboard can’t replace it', async () => {
+    mocks.dirs = [];
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(DashboardPanel.current).toBeDefined());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // Replacing a page that is still loading can be undone by that page finishing its load.
+    expect(mocks.html).toBe('<html></html>');
+    mocks.receive({ type: 'ready' });
+    expect(mocks.html).toContain('No AI coding session logs found');
+  });
+
   it('keeps all requests behind the progress screen until analytics finish', async () => {
     let finish = () => {};
     mocks.warmUp.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
@@ -190,6 +203,7 @@ describe('dashboard startup', () => {
     mocks.warmUp.mockReturnValue(new Promise<void>((_resolve, reject) => { fail = reject; }));
     DashboardPanel.createOrShow(context.extensionUri, context);
     await vi.waitFor(() => expect(mocks.warmUp).toHaveBeenCalled());
+    mocks.receive({ type: 'ready' });
     mocks.receive({ type: 'request', id: 'patterns', method: 'getAntiPatterns' });
     fail(new Error('Worker unavailable'));
     await vi.waitFor(() => expect(mocks.html).toContain('Worker unavailable'));
@@ -201,6 +215,9 @@ describe('dashboard startup', () => {
   it('reports a failed cached job and removes it from the cache', async () => {
     panelCache.store(result, new Analyzer([]), Promise.reject(new Error('Cached worker failed')));
     DashboardPanel.createOrShow(context.extensionUri, context);
+    // The page loaded only after the failure: the error replaces it then.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    mocks.receive({ type: 'ready' });
     await vi.waitFor(() => expect(mocks.html).toContain('Cached worker failed'));
     expect(mocks.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' }));
     expect(panelCache.result).toBeUndefined();

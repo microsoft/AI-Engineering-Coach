@@ -61,7 +61,11 @@ test.describe('Timeline', () => {
     await page.keyboard.press('ArrowDown');
     await expect(page.locator('#tlxDetailName')).toHaveText('Lint fixes');
     await page.locator('#tlxShowFamily').click();
+    // The family the lane belongs to is the one selected: its root row and its detail, every member listed.
+    await expect(page.locator('.frow.sel')).toHaveAttribute('data-family', 'tl-coord');
     await expect(page.locator('#tlxFamilyDetail h2')).toHaveText('Checkout revamp');
+    await expect(page.locator('#tlxFamilyDetail tr[data-session]')).toHaveCount(5);
+    await expect(page.locator('#tlxFamilyDetail tr[data-session="tl-lint"]')).toBeVisible();
   });
 
   test('filters recompute the KPIs, and Clear restores every session', async ({ page }) => {
@@ -153,5 +157,48 @@ test.describe('Timeline', () => {
   test('drills down to Context Health › Prompt Cache', async ({ page }) => {
     await page.locator('#tlxDetail a', { hasText: 'Prompt Cache' }).click();
     await expect(page.locator('#ctxSubTabCache')).toHaveCSS('font-weight', '600');
+  });
+});
+
+test.describe('Timeline navigation from Families', () => {
+  test('opens a child whose only activity is an answer on the day of that answer, selected (B12)', async ({ page }) => {
+    await page.addInitScript(() => {
+      const at = (d: number, h: number, m = 0) => new Date(2026, 4, d, h, m).getTime();
+      const turn = (t: number, min: number, cr: number) => ({ t, d: min * 60000, k: 'you', sub: 0, comp: false, cr, tok: 0 });
+      const s = (id: string, name: string, turns: unknown[], extra = {}) => ({ id, name, branch: '', repo: 'shop', harness: 'Copilot App', model: 'gpt-5.4', parent: -1, via: null, turns, ...extra });
+      (window as unknown as { mockTimelineDataOverride: unknown }).mockTimelineDataOverride = { forkedSessions: 0, sessions: [
+        s('p', 'Parent', [turn(at(2, 22), 10, 1)]),
+        s('c', 'Answer child', [], { parent: 0, via: 'create', stops: [{ s: at(3, 0), e: at(3, 0), k: 'question', a: true }] }),
+        s('u', 'Unrelated', [turn(at(2, 9), 30, 50)]),
+      ] };
+    });
+    await openTimeline(page);
+    // Coming from the parent's day, where an unrelated session has more credits.
+    await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
+    await page.locator('#tlxView [data-value="families"]').click();
+    await page.locator('.frow[data-family="p"]').click();
+    await expect(page.locator('.frow.sel')).toHaveAttribute('data-family', 'p');
+    await page.locator('#tlxFamilyDetail tr[data-session="c"]').click();
+    await expect(page.locator('#tlxDetailName')).toHaveText('Answer child');
+    await expect(page.locator('.tlx-lane.sel')).toHaveAttribute('data-session', 'c');
+    await expect(page.locator('#tlxDateLabel')).toContainText('3');
+  });
+
+  test('describes a lane with no turn by what it holds, and a family with no agent time as 0% (B13, B14)', async ({ page }) => {
+    await page.addInitScript(() => {
+      const at = (d: number, h: number, m = 0) => new Date(2026, 4, d, h, m).getTime();
+      const s = (id: string, name: string, turns: unknown[], extra = {}) => ({ id, name, branch: '', repo: 'shop', harness: 'Copilot App', model: 'gpt-5.4', parent: -1, via: null, turns, ...extra });
+      (window as unknown as { mockTimelineDataOverride: unknown }).mockTimelineDataOverride = { forkedSessions: 0, sessions: [
+        s('p', 'Parent', [{ t: at(3, 9), d: 0, k: 'you', sub: 0, comp: false, cr: 0, tok: 0 }]),
+        s('c', 'Permission only', [], { parent: 0, via: 'create', stops: [{ s: at(3, 10), e: at(3, 10, 2), k: 'permission', a: true }] }),
+        s('u', 'Lone session', [{ t: at(3, 11), d: 30 * 60000, k: 'you', sub: 0, comp: false, cr: 0, tok: 0 }]),
+      ] };
+    });
+    await openTimeline(page);
+    await page.locator('.tlx-lane[data-session="c"] .tlx-lbl').click();
+    await expect(page.locator('#tlxDetail')).toContainText('This session logged no turn, only stops for you: the lane shows 2 min of waiting on you and 1 question or permission prompt you answered.');
+    await expect(page.locator('#tlxDetail')).not.toContainText('carried over');
+    await page.locator('#tlxView [data-value="families"]').click();
+    await expect(page.locator('#tlx-root')).toContainText('0% of all agent time');
   });
 });

@@ -81,6 +81,17 @@ const turnReach = (r: SessionRequest) => Math.max(turnEnd(r), ...(r.userWaits ??
  *  range even when no turn is. An unanswered stop alone is not activity. */
 const answerIn = (waits: readonly UserWait[] | undefined, from: number, to: number | undefined) =>
   (waits ?? []).some(w => w.answered && w.end >= from && (to === undefined || w.start < to));
+/** The turn did measured work after `from` (and before `to`): its span less every stop for you in it, the way agent
+ *  time is measured. A turn that only lies open across the range, stopped on a question, isn't activity in it. */
+function worksIn(r: SessionRequest, from: number, to: number | undefined): boolean {
+  let parts: [number, number][] = [[Math.max(r.timestamp ?? 0, from), Math.min(turnEnd(r), to ?? Infinity)]];
+  if (parts[0][1] <= parts[0][0]) return false;
+  for (const w of r.userWaits ?? []) {
+    parts = parts.flatMap(([a, b]): [number, number][] => (w.end <= a || w.start >= b ? [[a, b]]
+      : [...(w.start > a ? [[a, w.start] as [number, number]] : []), ...(w.end < b ? [[w.end, b] as [number, number]] : [])]));
+  }
+  return parts.length > 0;
+}
 /** The turn holds an input from you: you typed it, or you answered a question or a permission in it. */
 const hasInput = (r: SessionRequest, before: number) =>
   (!r.nonHumanKind && (r.timestamp ?? 0) < before) || (r.userWaits ?? []).some(w => w.answered && w.end < before);
@@ -97,7 +108,7 @@ function splitByRange(s: Session, from: number | undefined, to: number | undefin
   const context = before.filter((r, i) => i >= lastInput || turnReach(r) >= (from ?? 0));
   const after = to === undefined ? undefined : own.find(r => (r.timestamp ?? 0) >= to);
   if (after) context.push(after);
-  const reachesIn = from !== undefined && before.some(r => turnEnd(r) > from || answerIn(r.userWaits, from, to));
+  const reachesIn = from !== undefined && before.some(r => worksIn(r, from, to) || answerIn(r.userWaits, from, to));
   const loose = answerIn(s.userWaits, from ?? -Infinity, to);
   return { all: own, inside, context, active: inside.length > 0 || reachesIn || loose };
 }

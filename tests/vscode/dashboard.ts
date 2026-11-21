@@ -21,10 +21,37 @@ export class Dashboard {
       ? await driver.findElement(By.css('html')).getId()
       : undefined;
     await driver.switchTo().defaultContent();
-    await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
+    await this.runCommand(`AI Engineer Coach: ${title}`);
     // Page-object constructors resolve immediately; wait until the editor exists first.
     await driver.wait(until.elementLocated(By.css('.editor-instance')), READY_TIMEOUT);
     await this.waitForWebview(previousDocumentId);
+  }
+
+  /** Runs a command from the palette once the palette lists it and stays open. On a cold start the workbench can still
+   *  be activating its startup extensions: the palette then closes under the keystrokes, or doesn't list the command
+   *  yet, and typing into it fails (`ElementNotInteractable`). The command runs only in a state where selecting it is
+   *  possible; until then the palette is closed and opened again. */
+  private async runCommand(command: string): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.wait(async () => {
+      try {
+        const prompt = await new Workbench().openCommandPrompt();
+        await prompt.setText(`>${command}`);
+        const labels = await Promise.all((await prompt.getQuickPicks()).map(item => item.getLabel()));
+        if (labels.includes(command) && await prompt.isDisplayed()) {
+          await prompt.selectQuickPick(command);
+          return true;
+        }
+        await prompt.cancel().catch(() => undefined);
+        return false;
+      } catch (err: unknown) {
+        if (err instanceof error.ElementNotInteractableError || err instanceof error.StaleElementReferenceError
+          || err instanceof error.NoSuchElementError) {
+          return false;
+        }
+        throw err;
+      }
+    }, READY_TIMEOUT, `Waiting for the command palette to list "${command}"`);
   }
 
   private async waitForWebview(previousDocumentId?: string): Promise<void> {

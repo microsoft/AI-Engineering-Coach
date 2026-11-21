@@ -563,8 +563,8 @@ export function formatTimeline(analyzer: Analyzer, f?: DateFilter, date?: string
     },
     notes: [
       'Agent time: per turn, the time from its prompt to its last logged agent activity, minus the time that turn was stopped on a question or a permission prompt; then merged per session, so overlapping turns count once.',
-      'Waits on the user: per session, gaps of 2-120 min from the end of its work to the next typed prompt, plus answered questions and user-decided permission prompts, counted once where they overlap. "started" counts waits that began on the day.',
-      'Unattended: per family, from one of the user\'s prompts or answers, for as long as the family\'s agent work kept running (pauses under 2 min don\'t end it), up to the user\'s next prompt or answer anywhere in the family.',
+      'Waits on the user: per session, gaps of 2 to 120 min (both included) from the end of its work to the next typed prompt, plus answered questions and user-decided permission prompts, counted once where they overlap. "started" counts waits that began on the day.',
+      'Unattended: per family, from one of the user\'s prompts or answers, for as long as the family\'s agent work kept running (pauses of at most 2 min don\'t end it), up to the user\'s next prompt or answer anywhere in the family.',
       'A child session has the user\'s input when the user typed into it or answered one of its questions or permission prompts. This is what the logs show, not a judgment of the brief.',
       'Session and repository names are always masked here; the Timeline page shows them locally.',
       'Credits are logged only by Copilot CLI and Copilot App; credit shares are null when none were logged.',

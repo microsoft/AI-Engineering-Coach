@@ -126,10 +126,11 @@ describe('timeline model', () => {
     const masked = createNamer(p, true);
     expect([masked.name(p.sessions[0]), masked.name(p.sessions[1]), masked.repo(p.sessions[0]), masked.repo(p.sessions[4])])
       .toEqual(['Session 1', 'Child session 2', 'Repository A', 'Repository B']);
-    // Custom model names can identify you: masked as letters; common public model IDs stay.
-    const models = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 1)], { model: 'acme-internal/jane-ft' }), session('b', [turn(at(9), 1)], { model: 'gpt-5.4' })] });
-    expect(models.sessions.map(s => createNamer(models, true).model(s))).toEqual(['Model A', 'gpt-5.4']);
-    expect(models.sessions.map(s => createNamer(models, false).model(s))).toEqual(['acme-internal/jane-ft', 'gpt-5.4']);
+    // A model name can be a deployment you named, even with a provider's prefix: every one is masked as a letter.
+    const models = prepareTimeline({ forkedSessions: 0, sessions: [session('a', [turn(at(9), 1)], { model: 'acme-internal/jane-ft' }),
+      session('b', [turn(at(9), 1)], { model: 'gpt-5.4' }), session('c', [turn(at(9), 1)], { model: 'gpt-private-project' })] });
+    expect(models.sessions.map(s => createNamer(models, true).model(s))).toEqual(['Model A', 'Model B', 'Model C']);
+    expect(models.sessions.map(s => createNamer(models, false).model(s))).toEqual(['acme-internal/jane-ft', 'gpt-5.4', 'gpt-private-project']);
     expect(createNamer(prepareTimeline({ forkedSessions: 0, sessions: [session('x', [turn(at(9), 1)], { name: '' })] }), false).name(prepareTimeline({ forkedSessions: 0, sessions: [session('x', [turn(at(9), 1)], { name: '' })] }).sessions[0]))
       .toMatch(/^Untitled Copilot App session 1 · /);
   });
@@ -235,6 +236,26 @@ describe('day and week boundaries', () => {
       expect(hours.slice(0, 4)).toEqual([0, 1, 3, 4]);
       expect(hours).toHaveLength(23);
     });
+  });
+});
+
+describe('family totals and captions', () => {
+  it('names a family by a repository it has activity in, and counts the others (B18)', () => {
+    const p = prepareTimeline({ forkedSessions: 0, sessions: [
+      session('root', [turn(at(9), 5)], { repo: 'a', ctx: true }),
+      session('kid', [turn(at(10), 5)], { repo: 'b', parent: 0, via: 'create' }),
+    ] });
+    const [f] = buildFamilies(p).families;
+    expect([f.repoSession.repo, f.repos]).toEqual(['b', 1]);
+  });
+
+  it('keeps a real 0% share of agent time when only other sessions worked (B14)', () => {
+    const p = prepareTimeline({ forkedSessions: 0, sessions: [
+      session('root', [turn(at(9), 0)]), session('kid', [], { parent: 0, via: 'create', stops: [{ s: at(9, 1), e: at(9, 2), k: 'question', a: true }] }),
+      session('other', [turn(at(11), 10)]),
+    ] });
+    const { totals } = buildFamilies(p);
+    expect([totals.agentShare, totals.totalAgentMs]).toEqual([0, 10 * MIN]);
   });
 });
 

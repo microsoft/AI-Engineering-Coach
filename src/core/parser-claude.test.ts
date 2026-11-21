@@ -140,6 +140,20 @@ describe('parseClaudeSessions', () => {
     });
   });
 
+  it('marks a turn logged with its own queue or API records as logged live, and a fork’s copied turn not', () => {
+    withProjectsDir('s.jsonl', [
+      { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'sess-1', operation: 'enqueue' },
+      makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }),
+      { type: 'api-request', timestamp: '2025-06-15T10:00:01Z', sessionId: 'sess-1' },
+      makeAssistant('one', '2025-06-15T10:00:02Z'),
+      // Copied from another transcript: conversation lines only.
+      makeUser('second', '2025-06-15T10:01:00Z', { uuid: 'u2' }),
+      makeAssistant('two', '2025-06-15T10:01:02Z'),
+    ], (projectsDir) => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.loggedLive)).toEqual([true, undefined]);
+    });
+  });
+
   it('keeps an unanswered AskUserQuestion until the next line, and pairs an answer that comes after your next prompt', () => {
     const ms = Date.parse;
     withProjectsDir('s.jsonl', [

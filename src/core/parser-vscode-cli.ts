@@ -130,11 +130,13 @@ interface CLIParseState {
   /** Main-agent calls logged so far: the index of the next call in the call timeline. */
   mainCalls: number;
   /** Session-starting tool calls (`create_session`, `open_pr_session`, `open_issue_session`) awaiting their result. */
-  sessionToolCalls: Map<string, number | null>;
+  /** Session tool calls in progress: when each was requested, and whether it creates (`create_session`) or opens. */
+  sessionToolCalls: Map<string, { at: number | null; creates: boolean }>;
   /** Session IDs in the results of those calls: the sessions this one started. */
   childSessionIds: Set<string>;
   /** When the call that named each child started. */
   childSessionCreatedAt: Record<string, number>;
+  childSessionOpenedAt: Record<string, number>;
   /** Sender of the session's first message, when that message was relayed from another session. */
   relaySenderId?: string;
   /** Credits and tokens of usage records logged before the first prompt; the first turn takes them. */
@@ -144,7 +146,7 @@ interface CLIParseState {
   /** Resolved ones without evidence yet that you answered, awaiting a `human_response.recorded` event. */
   unconfirmedWaits: Map<string, UserWait>;
   /** Keys with a `human_response.recorded` event. */
-  humanResponses: Set<string>;
+  humanResponses: Map<string, number | null>;
   /** Waits answered before the first turn; the first turn takes them. */
   earlyWaits: UserWait[];
 }
@@ -373,10 +375,10 @@ function closeUserWait(state: CLIParseState, key: string, end: number | null, an
   attachUserWait(state, wait, open.owner);
 }
 
-function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState): void {
+function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
   for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
     if (!key) continue;
-    state.humanResponses.add(key);
+    if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
     const wait = state.unconfirmedWaits.get(key);
     if (wait) {
       state.unconfirmedWaits.delete(key);
@@ -588,7 +590,7 @@ function handleUserMessage(ev: CLIEvent, state: CLIParseState): void {
 function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
   const toolName = str(data.toolName);
-  if (isToolNamed(toolName, SESSION_TOOLS) && str(data.toolCallId)) state.sessionToolCalls.set(str(data.toolCallId), eventTime(ev));
+  noteSessionToolCall(state, data, eventTime(ev));
   if (isToolNamed(toolName, QUESTION_TOOLS)) openUserWait(state, str(data.toolCallId), eventTime(ev), isToolNamed(toolName, ['relay_session_input']) ? 'relay' : 'question');
   const turn = state.turn;
   if (!turn) return;
@@ -651,18 +653,30 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   if (toolName === 'skill' && typeof args.skill === 'string') turn.skillsUsed.add(args.skill);
 }
 
+/** A `create_session`-style call: the app logs `external_tool.requested` when it receives the call, and the call's
+ *  `tool.execution_start` only when it completes, so the earlier record is when it was asked. */
+function noteSessionToolCall(state: CLIParseState, data: Record<string, unknown>, at: number | null): void {
+  const toolName = str(data.toolName);
+  const id = str(data.toolCallId);
+  if (!id || !isToolNamed(toolName, SESSION_TOOLS) || state.sessionToolCalls.has(id)) return;
+  state.sessionToolCalls.set(id, { at, creates: isToolNamed(toolName, ['create_session']) });
+}
+
 /** A session-starting tool call finished: the session its result names is one this one started. */
 function recordStartedSessions(data: Record<string, unknown>, state: CLIParseState): void {
   const toolCallId = str(data.toolCallId);
   if (!toolCallId || !state.sessionToolCalls.has(toolCallId)) return;
-  const at = state.sessionToolCalls.get(toolCallId) ?? null;
+  const call = state.sessionToolCalls.get(toolCallId);
+  const at = call?.at ?? null;
   state.sessionToolCalls.delete(toolCallId);
   if (data.success === false) return;
   const id = startedSessionId(data.result, 0)?.toLowerCase();
   if (!id || id === state.sessionId.toLowerCase()) return;
   state.childSessionIds.add(id);
-  // The first call that named the session created it; a later open_pr_session or open_issue_session reopens it.
-  if (at !== null && !(id in state.childSessionCreatedAt)) state.childSessionCreatedAt[id] = at;
+  if (at === null || id in state.childSessionCreatedAt) return;
+  // create_session made it; an open_pr_session or open_issue_session call may have opened one that already existed.
+  if (call?.creates) state.childSessionCreatedAt[id] = at;
+  else if (!(id in state.childSessionOpenedAt)) state.childSessionOpenedAt[id] = at;
 }
 
 /** The started session's ID: a `session_id`/`sessionId` field, else the link or labelled ID in the result text. Any
@@ -884,8 +898,11 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
     case 'permission.completed':
       closeUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), permissionDecidedByYou(ev.data || {}), permissionDecidedByPolicy(ev.data || {}));
       return;
+    case 'external_tool.requested':
+      noteSessionToolCall(state, ev.data || {}, eventTime(ev));
+      return;
     case 'human_response.recorded':
-      recordHumanResponse(ev.data || {}, state);
+      recordHumanResponse(ev.data || {}, state, eventTime(ev));
       return;
     case 'assistant.message':
       handleAssistantMessage(ev, state);
@@ -940,11 +957,12 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     mainCalls: 0,
     sessionToolCalls: new Map(),
     childSessionCreatedAt: {},
+    childSessionOpenedAt: {},
     childSessionIds: new Set(),
     pendingUsage: { credits: 0, tokens: 0 },
     openWaits: new Map(),
     unconfirmedWaits: new Map(),
-    humanResponses: new Set(),
+    humanResponses: new Map(),
     earlyWaits: [],
   };
 }
@@ -955,17 +973,22 @@ function noteNextEvent(state: CLIParseState, ts: number | null): void {
   for (const open of state.openWaits.values()) if (open.nextTs === undefined && ts >= open.start) open.nextTs = ts;
 }
 
-/** A question or permission prompt with no result stopped the agent until the next event in the log, unanswered. */
+/** A question or permission prompt with no result stopped the agent until the next event in the log, unanswered; or,
+ *  when a `human_response.recorded` event says you answered it, until that answer. */
 function closeUnresolvedWaits(state: CLIParseState): void {
   for (const [key, open] of [...state.openWaits]) {
     state.openWaits.delete(key);
-    attachUserWait(state, { start: open.start, end: open.nextTs ?? open.start, kind: open.kind, answered: state.humanResponses.has(key) }, open.owner);
+    const answeredAt = state.humanResponses.get(key);
+    const attested = answeredAt != null && answeredAt >= open.start;
+    attachUserWait(state, {
+      start: open.start, end: attested ? answeredAt : open.nextTs ?? open.start, kind: open.kind, answered: state.humanResponses.has(key),
+    }, open.owner);
   }
 }
 
 /** A session with no turn that still holds your answer to a permission prompt or question (its turn was never logged):
  *  kept for the Timeline with those stops, and no invented turn. Without any, there is nothing to show. */
-function inputOnlySession(state: CLIParseState, wsId: string, wsName: string): Session | null {
+function inputOnlySession(state: CLIParseState, wsId: string, wsName: string, sessionDir?: string): Session | null {
   if (!state.earlyWaits.some(w => w.answered)) return null;
   const waits = [...state.earlyWaits].sort((a, b) => a.start - b.start);
   return createSession({
@@ -980,6 +1003,7 @@ function inputOnlySession(state: CLIParseState, wsId: string, wsName: string): S
     userWaits: waits,
     endReason: state.sawShutdown ? 'shutdown' : 'active',
     workspaceRootPath: state.workspaceRootPath,
+    ...(sessionDir ? readCliWorkspaceMeta(sessionDir) : {}),
   });
 }
 function finalizeCliSession(
@@ -996,17 +1020,17 @@ function finalizeCliSession(
   state.pendingCompositions = [];
   state.subagents.attach(state.requests);
 
-  if (state.requests.length === 0) return inputOnlySession(state, wsId, wsName);
-
-  const creationDate = state.startTime ? new Date(state.startTime).getTime() : null;
-  const contextComposition = buildSessionComposition(state);
-  const callTimeline = state.timeline.build();
-  const promptCache = state.cache.finish();
   // `remoteSteerable` is logged by both clients; `workspace.yaml` names the one that started the session.
   if (sessionDir && state.isApp && readCliClient(sessionDir) === 'github/cli') {
     state.isApp = false;
     for (const r of state.requests) r.agentName = harnessName(state);
   }
+  if (state.requests.length === 0) return inputOnlySession(state, wsId, wsName, sessionDir);
+
+  const creationDate = state.startTime ? new Date(state.startTime).getTime() : null;
+  const contextComposition = buildSessionComposition(state);
+  const callTimeline = state.timeline.build();
+  const promptCache = state.cache.finish();
   const firstPrompt = state.requests.find(r => !r.nonHumanKind)?.messageText ?? state.requests[0]?.messageText ?? '';
   return createSession({
     sessionId: state.sessionId,
@@ -1025,7 +1049,10 @@ function finalizeCliSession(
     hasDevcontainer: detectDevcontainerFromRequests(state.requests),
     workspaceRootPath: state.workspaceRootPath,
     ...(sessionDir ? readCliWorkspaceMeta(sessionDir, undefined, firstPrompt) : {}),
-    ...(state.childSessionIds.size > 0 ? { childSessionIds: [...state.childSessionIds], childSessionCreatedAt: state.childSessionCreatedAt } : {}),
+    ...(state.childSessionIds.size > 0 ? {
+      childSessionIds: [...state.childSessionIds], childSessionCreatedAt: state.childSessionCreatedAt,
+      ...(Object.keys(state.childSessionOpenedAt).length ? { childSessionOpenedAt: state.childSessionOpenedAt } : {}),
+    } : {}),
     ...(state.relaySenderId && state.relaySenderId !== state.sessionId.toLowerCase() ? { relaySenderId: state.relaySenderId } : {}),
   });
 }

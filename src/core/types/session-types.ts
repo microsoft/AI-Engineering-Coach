@@ -263,6 +263,9 @@ export interface SessionRequest {
   /** How much older the prompt is than its transcript's first line (ms). A Claude Code fork (`--fork-session`) starts
    *  its transcript with the source's messages, copied with their own, older times; see `fork-ownership.ts`. */
   historyLeadMs?: number;
+  /** Claude Code logged the turn's own bookkeeping (queue, API request, last-prompt or cost records) beside it: the
+   *  transcript was written as the turn ran. A fork copies only the conversation lines, so its copies never have it. */
+  loggedLive?: true;
   /** AI credits Copilot logged for the turn's model calls, sub-agents included: `session.usage_record`
    *  `copilotUsage.totalNanoAiu` ÷ 1e9 (Copilot CLI and Copilot App). Absent when none were logged. */
   aiCredits?: number;
@@ -364,9 +367,11 @@ export interface Session {
   /** Sessions this session started: the session IDs in the results of its `create_session`, `open_pr_session` and
    *  `open_issue_session` calls (Copilot CLI and Copilot App). */
   childSessionIds?: string[];
-  /** When the call that named each child (by lower-case ID) started (epoch ms): a session that began well before it
-   *  was opened, not created, by the call. */
+  /** When the `create_session` call that created each child (by lower-case ID) was requested (epoch ms). */
   childSessionCreatedAt?: Record<string, number>;
+  /** When an `open_pr_session` or `open_issue_session` call named each child it didn't create first (by lower-case ID):
+   *  such a call can open a session that already existed, which then isn't its child. */
+  childSessionOpenedAt?: Record<string, number>;
   /** The session that relayed this session's FIRST message (`from_session_id`), which started it. Relayed messages
    *  later in a session are reports, not parentage (Copilot CLI and Copilot App). */
   relaySenderId?: string;

@@ -27,7 +27,7 @@ describe('resolveParentLinks', () => {
     const minute = 60_000;
     const links = resolveParentLinks([
       s('old', 0),
-      s('coord', 10 * minute, { childSessionIds: ['old', 'new'], childSessionCreatedAt: { old: 20 * minute, new: 30 * minute } }),
+      s('coord', 10 * minute, { childSessionIds: ['old', 'new'], childSessionOpenedAt: { old: 20 * minute, new: 30 * minute } }),
       s('new', 30 * minute + 5_000),
     ]);
     expect(Object.fromEntries(links)).toEqual({ new: { parent: 'coord', via: 'create' } });

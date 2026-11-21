@@ -33,7 +33,18 @@ function sharedPrefix(a: readonly SessionRequest[], b: readonly SessionRequest[]
 
 type PrefixFork = { copies: Set<SessionRequest>; source: Session };
 
-/** The session `s` copied its opening prompts from: the one it shares most with, among those it went on before. */
+/** Whether `mine` copied the first `k` prompts it shares with `theirs`. A copy carries only the conversation lines:
+ *  when one side logged those turns live and the other didn't, the other copied them. Without that witness, a
+ *  transcript that went on copied from one that holds only those prompts; when both went on, nothing says which
+ *  copied, and neither is taken for a fork. */
+function copiedFrom(mine: readonly SessionRequest[], theirs: readonly SessionRequest[], k: number): boolean {
+  const liveMine = mine.slice(0, k).some(r => r.loggedLive);
+  const liveTheirs = theirs.slice(0, k).some(r => r.loggedLive);
+  if (liveMine !== liveTheirs) return liveTheirs;
+  return mine.length > k && theirs.length === k;
+}
+
+/** The session `s` copied its opening prompts from: the one it shares most with, among those it copied from. */
 function prefixSource(s: Session, group: readonly Session[]): { source: Session; k: number } | undefined {
   const mine = mainTurns(s);
   let best: { source: Session; k: number } | undefined;
@@ -41,14 +52,10 @@ function prefixSource(s: Session, group: readonly Session[]): { source: Session;
     if (other === s) continue;
     const theirs = mainTurns(other);
     const k = sharedPrefix(mine, theirs);
-    const myNext = mine[k]?.timestamp;
-    const theirNext = theirs[k]?.timestamp;
-    const forked = k > 0 && myNext != null && (theirNext == null || myNext < theirNext);
-    if (forked && (!best || k > best.k)) best = { source: other, k };
+    if (k > 0 && copiedFrom(mine, theirs, k) && (!best || k > best.k)) best = { source: other, k };
   }
   return best;
 }
-
 /** The copied coordinator prompts, plus the sub-agent turns up to the last of them that the source holds too. */
 function prefixCopySet(s: Session, source: Session, k: number): Set<SessionRequest> {
   const mine = mainTurns(s);
@@ -63,10 +70,9 @@ function prefixCopySet(s: Session, source: Session, k: number): Set<SessionReque
 }
 
 /** Claude Code forks whose copies show no clock lead (the fork's opening lines are missing): a transcript that begins
- *  with the same prompts, in the same order, as another one, and went on first after them, copied them. The source is
- *  the one it shares most with (the direct source of a fork of a fork). When both went on at the same moment, or
- *  neither did, nothing tells them apart, and both keep their turns. Only coordinator turns are compared; a sub-agent
- *  turn is a copy only when the source holds the same message. */
+ *  with the same prompts, in the same order, as another one copied them when the other logged them live (see
+ *  `copiedFrom`). The source is the one it shares most with (the direct source of a fork of a fork). Only coordinator
+ *  turns are compared; a sub-agent turn is a copy only when the source holds the same message. */
 function prefixCopies(sessions: readonly Session[]): Map<Session, PrefixFork> {
   const out = new Map<Session, PrefixFork>();
   const claude = sessions.filter(s => s.harness === 'Claude' && mainTurns(s).length > 0 && !s.requests.some(isCandidate));

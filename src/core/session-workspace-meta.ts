@@ -156,5 +156,6 @@ export function isPromptText(title: string, prompt: string): boolean {
   const norm = (s: string) => s.toLowerCase().replaceAll(/\s+/g, ' ').replace(/[.…]+$/, '').trim();
   const t = norm(title);
   const p = norm(prompt);
-  return t.length > 0 && p.length > 0 && (p === t || (t.length >= 12 && p.startsWith(t)));
+  // The prompt's first words, however few: the title ends where a word of the prompt ends.
+  return t.length > 0 && p.length > 0 && (p === t || (p.startsWith(t) && !/[\p{L}\p{N}]/u.test(p.charAt(t.length))));
 }

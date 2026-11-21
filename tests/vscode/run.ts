@@ -82,6 +82,15 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
   await fs.cp(source, destination, { recursive: true });
 }
 
+/** vscode-extension-tester asks the test build for its version (`code -v`) with a fixed 30 s limit, which a busy
+ *  machine can exceed: the scenario then fails with `spawnSync cmd.exe ETIMEDOUT` before it starts. The build in
+ *  `storage` was copied from the cache kept for exactly `version`, so its version is known: hand it to the tester, which
+ *  then never runs that check. Without a cached build, the tester downloads one as usual. */
+async function primeCodeVersion(tester: object, storage: string, version: string): Promise<void> {
+  const cached = (await fs.readdir(storage).catch(() => [] as string[])).some(name => name.startsWith('VSCode-'));
+  const code = (tester as { code?: { cachedCodeVersion?: string } }).code;
+  if (cached && code && !code.cachedCodeVersion) code.cachedCodeVersion = version;
+}
 async function runWorker(vsix: string, version: string, scenario: string): Promise<void> {
   if (!(await discoverSuites(SUITES)).includes(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
   const { root, timestamp } = scenarioContext();
@@ -114,6 +123,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
   const extensions = path.join(root, 'extensions');
   const tester = new ExTester(storage, ReleaseQuality.Stable, extensions);
   try {
+    await primeCodeVersion(tester, storage, version);
     await tester.downloadCode(version);
     await tester.downloadChromeDriver(version);
     await tester.installVsix({ vsixFile: vsix, installDependencies: false });

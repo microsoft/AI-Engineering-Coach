@@ -123,6 +123,12 @@ interface CodexParseState {
   inherited: { input: number; output: number; cached: number; reasoning: number; total: number };
   /** The usage Codex logged for its latest response (`token_usage_record`, codex-cli 0.167+): owned by this thread. */
   lastResponseUsage?: Record<string, unknown>;
+  /** A fork's own usage: the sum of its responses' `token_usage_record`s, by response ID. Once there is one, it, not the
+   *  cumulative snapshots (which hold the source's usage, and can be copied from it), gives the fork's totals. */
+  forkOwn?: { input: number; output: number; cached: number; reasoning: number | null; total: number };
+  ownResponses: Set<string>;
+  /** The latest snapshot's `total_tokens`, to tell a new model call from a repeated snapshot. */
+  lastSnapshotTotal: number | null;
 }
 
 interface PendingCodexEdit {
@@ -223,6 +229,8 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     curTotalCachedReported: false,
     forked: false,
     inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
+  ownResponses: new Set(),
+  lastSnapshotTotal: null,
   };
 }
 
@@ -542,11 +550,27 @@ function tokenCount(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+/** A fork with records of its own responses counts those (`handleTokenUsageRecord`): its snapshot only says how big
+ *  the context of a new call was. */
+function noteForkSnapshot(info: Record<string, unknown>, totalUsage: Record<string, unknown>, last: Record<string, unknown> | undefined, state: CodexParseState): void {
+  const lastInput = tokenCount(last?.input_tokens);
+  const snapshot = tokenCount(totalUsage.total_tokens);
+  if (snapshot != null && snapshot !== state.lastSnapshotTotal && lastInput != null) {
+    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info.model_context_window), model: state.turnModel || undefined });
+  }
+  state.lastSnapshotTotal = snapshot;
+}
+
 function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexParseState): void {
   const info = recordValue(payload.info);
   const totalUsage = recordValue(info?.total_token_usage);
   if (!totalUsage) return;
   const last = recordValue(info?.last_token_usage);
+  if (state.forkOwn) {
+    noteForkSnapshot(info ?? {}, totalUsage, last, state);
+    return;
+  }
+  state.lastSnapshotTotal = tokenCount(totalUsage.total_tokens);
 
   // A fork (`codex fork`) continues its source's thread, so its first cumulative total already holds everything the
   // source used. That baseline (the first total less its own call) belongs to the source; the fork counts from it. Its
@@ -581,6 +605,42 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   if (newCall && lastInput != null) {
     state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window), model: state.turnModel || undefined });
   }
+}
+
+/** A response's own usage (`token_usage_record`, codex-cli 0.167+). One of another thread (the source's, copied with
+ *  a fork's history) isn't this thread's. In a fork, each response counts once, by its ID, and their sum is the fork's
+ *  usage: its cumulative snapshots start with the source's. */
+function handleTokenUsageRecord(payload: Record<string, unknown>, state: CodexParseState, threadId: string): void {
+  const usage = recordValue(payload.usage);
+  const thread = stringValue(payload.thread_id);
+  if (!usage || (thread && threadId && thread !== threadId)) return;
+  state.lastResponseUsage = usage;
+  if (!state.forked) return;
+  const id = stringValue(payload.response_id);
+  if (id && state.ownResponses.has(id)) return;
+  if (id) state.ownResponses.add(id);
+  if (!state.forkOwn) {
+    // Earlier totals came from snapshots, which may be the source's: the fork's own count starts here, from zero.
+    state.forkOwn = { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 };
+    state.prevTotalInput = 0;
+    state.prevTotalOutput = 0;
+  }
+  const own = state.forkOwn;
+  const input = tokenCount(usage.input_tokens) ?? 0;
+  const output = tokenCount(usage.output_tokens) ?? 0;
+  own.input += input;
+  own.output += output;
+  own.cached += tokenCount(usage.cached_input_tokens) ?? 0;
+  const reasoning = tokenCount(usage.reasoning_output_tokens);
+  own.reasoning = reasoning == null || own.reasoning == null ? null : own.reasoning + reasoning;
+  own.total += tokenCount(usage.total_tokens) ?? input + output;
+  state.curTotalInput = own.input;
+  state.curTotalOutput = own.output;
+  state.curTotalCachedInput = own.cached;
+  state.curTotalCachedReported = typeof usage.cached_input_tokens === 'number';
+  state.curTotalReasoning = own.reasoning;
+  state.curTotalTokens = own.total;
+  state.hasTokenData = true;
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
@@ -723,7 +783,7 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
   } else if (line.type === 'response_item') {
     handleResponseItem(line.payload || {}, state, ts, meta.model);
   } else if (line.type === 'token_usage_record') {
-    state.lastResponseUsage = recordValue(line.payload?.usage) ?? state.lastResponseUsage;
+    handleTokenUsageRecord(line.payload || {}, state, meta.sessionId);
   }
   recordTurnEnd(line, state, ts);
 }

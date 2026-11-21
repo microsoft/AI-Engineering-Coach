@@ -15,10 +15,11 @@
 import type { Session } from './types/session-types';
 import type { TimelineLinkKind } from './types/timeline-types';
 
-export type LinkableSession = Pick<Session, 'sessionId' | 'creationDate' | 'childSessionIds' | 'childSessionCreatedAt' | 'relaySenderId' | 'parentSessionId'>;
+export type LinkableSession = Pick<Session, 'sessionId' | 'creationDate' | 'childSessionIds' | 'childSessionCreatedAt' | 'childSessionOpenedAt' | 'relaySenderId' | 'parentSessionId'>;
 
-/** A session that began this long before the call that named it was opened by the call, not created by it. */
-const OPENED_BEFORE_MS = 60_000;
+/** A session an `open_pr_session` or `open_issue_session` call named that began more than this before the call was
+ *  opened by it, not created by it (the allowance covers clock differences between the two logs). */
+const OPENED_BEFORE_MS = 5_000;
 
 export interface ParentLink {
   parent: string;
@@ -42,10 +43,11 @@ export function resolveParentLinks(sessions: readonly LinkableSession[]): Map<st
     || a.sessionId.localeCompare(b.sessionId));
   for (const parent of byAge) {
     for (const child of parent.childSessionIds ?? []) {
-      const at = parent.childSessionCreatedAt?.[key(child)];
+      // create_session always makes a new session. An open_pr_session or open_issue_session call can open a session
+      // that already existed: that's no birth.
+      const opened = parent.childSessionCreatedAt?.[key(child)] === undefined ? parent.childSessionOpenedAt?.[key(child)] : undefined;
       const began = byKey.get(key(child))?.creationDate;
-      // An open_pr_session or open_issue_session call can open a session that already existed: that's no birth.
-      if (at != null && began != null && began < at - OPENED_BEFORE_MS) continue;
+      if (opened != null && began != null && began < opened - OPENED_BEFORE_MS) continue;
       link(child, parent, 'create');
     }
   }

@@ -120,6 +120,7 @@ describe('parseCodexSessions', () => {
     });
   });
 
+
   it('leaves a turn’s duration unknown when only the prompt’s acknowledgment was logged', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'failed', cwd: '/Users/me/proj' } },

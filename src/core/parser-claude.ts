@@ -892,6 +892,10 @@ function buildClaudeRequest(
 }
 
 /** Parse one transcript file. `subagentFile`: the file is a sub-agent's transcript (see `isClaudeSubagentFile`). */
+/** Records Claude Code writes beside a turn as it runs. A fork (`--fork-session`) copies the conversation lines of
+ *  its source, not these, so a turn with them was logged live, where it happened. */
+const LIVE_RECORDS = new Set(['queue-operation', 'api-request', 'last-prompt', 'cost-state']);
+
 export function parseClaudeSessionFile(
   filePath: string,
   wsId: string,
@@ -948,6 +952,7 @@ export function parseClaudeSessionFile(
     const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
     if (!subagentFile && userTs && fileStart !== null && userTs < fileStart) request.historyLeadMs = fileStart - userTs;
+    if (lines.slice(i + 1, assistantData.nextIndex).some(l => LIVE_RECORDS.has(l.type))) request.loggedLive = true;
     requests.push(request);
     i = assistantData.nextIndex;
   }

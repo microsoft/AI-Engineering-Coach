@@ -188,7 +188,32 @@ describe('computeDirMetas', () => {
     expect(syncAfter).toBeGreaterThan(before);
     expect(asyncAfter).toBe(syncAfter);
   });
+});
 
+describe('computeDirMetas with a Copilot CLI log beside the chats', () => {
+  it('marks a workspace stale when the Copilot CLI log beside its chats, or that log’s sidecar, changes or goes (B9)', async () => {
+    const logsDir = makeTempDir();
+    const wsDir = path.join(logsDir, 'workspace1');
+    fs.mkdirSync(path.join(wsDir, 'chatSessions'), { recursive: true });
+    const events = path.join(wsDir, 'events.jsonl');
+    fs.writeFileSync(events, '{"type":"session.start"}\n');
+    const before = computeDirMetas([logsDir]);
+    expect(await computeDirMetasAsync([logsDir])).toEqual(before);
+    const stale = () => [...findStaleDirs(computeDirMetas([logsDir]), before).stale];
+    // Another turn appended: the chat folders are unchanged, the log isn't.
+    fs.appendFileSync(events, '{"type":"user.message"}\n');
+    expect(stale()).toEqual([wsDir]);
+    fs.writeFileSync(path.join(wsDir, 'workspace.yaml'), 'client_name: github/cli\n');
+    const withSidecar = computeDirMetas([logsDir]);
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(path.join(wsDir, 'workspace.yaml'), future, future);
+    expect([...findStaleDirs(computeDirMetas([logsDir]), withSidecar).stale]).toEqual([wsDir]);
+    fs.rmSync(events);
+    expect(stale()).toEqual([wsDir]);
+  });
+});
+
+describe('computeDirMetas for other directories', () => {
   it('skips Xcode and CLI directories', () => {
     const logsDir = makeTempDir();
     const xcodeDir = path.join(logsDir, '.config', 'github-copilot', 'xcode');

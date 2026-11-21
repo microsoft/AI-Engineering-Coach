@@ -191,7 +191,9 @@
 .tlx .ftable .tn { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
 .tlx .ftable .tree { color: var(--text-muted); font-weight: 400; }
 .tlx .hand { color: #d29922; font-weight: 600; }
-.tlx .ftable tr.ctx { opacity: 0.6; }
+/* A member with no activity in range: marked by a dashed rule and italic name, its text kept at full contrast. */
+.tlx .ftable tr.ctx td { font-style: italic; border-bottom-style: dashed; }
+.tlx .ftable tr.ctx td:first-child { box-shadow: inset 3px 0 0 var(--border); }
 .tlx-fam:focus-visible, .tlx tr.click:focus-visible { outline: 1px solid var(--focus-border); outline-offset: -1px; }
 .tlx .mbar { display: block; height: 3px; background: var(--accent-blue); border-radius: 2px; margin-top: 3px; margin-left: auto; }
 

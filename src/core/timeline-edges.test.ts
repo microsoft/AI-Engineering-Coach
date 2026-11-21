@@ -39,11 +39,11 @@ const reply = (t: number) => ev('assistant.message', t, { content: 'Done' });
 const start = (t: number, id = 'q', toolName = 'ask_user') => ev('tool.execution_start', t, { toolName, toolCallId: id });
 const end = (t: number, id = 'q', content = 'User selected: Yes') => ev('tool.execution_complete', t, { toolCallId: id, success: true, result: { content } });
 
-function session(i: number, events: Ev[], startAt = events[0] ? Date.parse(events[0].timestamp) : at(17)): Session | null {
+function session(i: number, events: Ev[], startAt = events[0] ? Date.parse(events[0].timestamp) : at(17), start: Record<string, unknown> = {}): Session | null {
   const dir = path.join(root, sid(i));
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'events.jsonl');
-  fs.writeFileSync(file, [ev('session.start', startAt, { sessionId: sid(i) }), ...events].map(x => JSON.stringify(x)).join('\n'));
+  fs.writeFileSync(file, [ev('session.start', startAt, { sessionId: sid(i), ...start }), ...events].map(x => JSON.stringify(x)).join('\n'));
   return parseCLIEventsFile(file, 'ws', 'fixture');
 }
 
@@ -150,5 +150,84 @@ describe('families with one active member', () => {
     const an = analyzer(session(14, [prompt(at(17, 10)), reply(at(17, 10, 5))]), session(15, [prompt(at(18, 9), 14), reply(at(18, 9, 30))]));
     const family = view(an, D18, only(D18)).fam.families[0];
     expect([family.sessions, family.members]).toEqual([1, 2]);
+  });
+});
+
+describe('fourth review: provenance, attestation and activity', () => {
+  const perm = (t: number, id: string) => ev('permission.requested', t, { requestId: id });
+  const allow = (t: number, id: string) => ev('permission.completed', t, { requestId: id, decisionSource: 'human_response', result: { kind: 'approved' } });
+
+  it('labels a session that only holds a permission by its own client metadata (B1)', () => {
+    const dir = path.join(root, sid(40));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workspace.yaml'), 'client_name: github/cli\nname: Fixture name\nuser_named: true\nbranch: feature/example\n');
+    // Both clients log `remoteSteerable`; only the sidecar names the CLI.
+    const s = session(40, [perm(at(18, 8, 1), 'x'), allow(at(18, 8, 1) + 100, 'x')], at(18, 8), { remoteSteerable: false });
+    expect([s?.harness, s?.requests.length, s?.displayName]).toEqual(['GitHub Copilot CLI', 0, 'Fixture name']);
+    const an = analyzer(s);
+    const lanes = (harness: string) => view(an, D18, { ...only(D18), harness }).lanes.length;
+    expect([view(an, D18, only(D18)).lanes.length, lanes('GitHub Copilot CLI'), lanes('GitHub Copilot App')]).toEqual([1, 1, 0]);
+  });
+
+  it('does not let an unrelated permission elsewhere absorb a child’s relayed answer (B3)', () => {
+    const an = analyzer(
+      session(41, [prompt(at(18, 8)), reply(at(18, 8, 1))]),
+      session(42, [prompt(at(18, 9), 41), start(at(18, 9, 1), 'r', 'relay_session_input'), end(at(18, 9, 3), 'r', '{"outcome":"answered_here"}'), reply(at(18, 9, 4))]),
+      session(43, [prompt(at(18, 9)), perm(at(18, 9, 2), 'p'), allow(at(18, 9, 3) + 5000, 'p'), reply(at(18, 9, 4))]),
+    );
+    const v = view(an, D18, only(D18));
+    expect([v.kpis.answered, v.fam.families[0].verdict]).toEqual([2, 'needed']);
+  });
+
+  it('counts a relay the same in the whole range and in its own day (B3)', () => {
+    const an = analyzer(
+      session(44, [prompt(at(17, 23, 50)), start(at(17, 23, 56), 'r', 'relay_session_input'), end(at(18) - 2000, 'r', '{"outcome":"answered_here"}'), reply(at(18) - 1000)]),
+      session(45, [prompt(at(18)), perm(at(18) + 1000, 'p'), allow(at(18) + 3000, 'p'), reply(at(18) + 5000)]),
+    );
+    expect([view(an, D17).kpis.answered, view(an, D17, only(D17)).kpis.answered]).toEqual([1, 1]);
+  });
+
+  it('does not count a day that only lies inside an unanswered stop, even when a reply follows it (B4)', () => {
+    const an = analyzer(session(46, [prompt(at(17, 23)), start(at(17, 23, 1)), end(at(19, 0, 10), 'q', 'The question was interrupted.'), reply(at(19, 0, 12))]));
+    const v = view(an, D18, only(D18));
+    expect([v.lanes.length, v.fam.totals.sessions]).toEqual([0, 0]);
+    expect(formatTimeline(an, only(D18))).toMatchObject({ sessions: 0 });
+    expect(buildSummaryExportFromAnalyzer(an, only(D18)).autonomy ?? null).toBeNull();
+  });
+
+  it('dates an answer known only from its human_response record at that record’s time (B5)', () => {
+    const an = analyzer(session(47, [prompt(at(17, 23, 55)), start(at(17, 23, 57), 'late'), ev('hook.start', at(17, 23, 58), {}),
+      ev('human_response.recorded', at(18) + M, { toolCallId: 'late' }), reply(at(18) + 2 * M)]));
+    expect([view(an, D17).kpis.answered, view(an, D18).kpis.answered]).toEqual([0, 1]);
+  });
+});
+
+describe('fourth review: wording and links', () => {
+  it('says an answer ended a wait that began earlier, not that it took no time, when the day holds only its end (B13)', () => {
+    const an = analyzer(session(52, [prompt(at(17, 23, 50)), start(at(17, 23, 58)), reply(at(17, 23, 58) + 1000), end(at(18))]));
+    const v = view(an, D18, only(D18));
+    expect([v.kpis.answered, v.kpis.waitMs]).toEqual([1, 0]);
+    expect(v.waits).toContain('ended a wait that began earlier');
+    expect(v.waits).not.toContain('no measurable time');
+    const instant = analyzer(session(53, [prompt(at(18, 9)), start(at(18, 9, 1)), end(at(18, 9, 1)), reply(at(18, 9, 2))]));
+    expect(view(instant, D18).waits).toContain('took no measurable time');
+  });
+
+  it('does not take a session that existed before it was opened for a new child (B6)', () => {
+    const an = analyzer(
+      session(48, [prompt(at(18, 13)), start(at(18, 13, 1), 'reuse', 'open_pr_session'), end(at(18, 13, 1) + 100, 'reuse', `Opened PR. Session ${sid(49)} is ready`)]),
+      session(49, [prompt(at(18, 13, 1) - 20_000), reply(at(18, 13, 2))]),
+    );
+    expect(view(an, D18).kpis.childLanes).toBe(0);
+  });
+
+  it('links a session create_session made, timed by the app’s request, even when the call is logged when it completes (B6)', () => {
+    const asked = at(18, 14);
+    const an = analyzer(
+      session(50, [prompt(at(18, 13, 59)), ev('external_tool.requested', asked, { toolName: 'create_session', toolCallId: 'c' }),
+        start(asked + 100_000, 'c', 'create_session'), end(asked + 100_100, 'c', `Created session 'X' (id: ${sid(51)})`), reply(asked + 101_000)]),
+      session(51, [prompt(asked + 1_000), reply(asked + 60_000)]),
+    );
+    expect(view(an, D18).kpis.childLanes).toBe(1);
   });
 });

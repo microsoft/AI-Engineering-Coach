@@ -43,7 +43,8 @@ function removeNames(value: string, names: string[], mark = ''): string {
   for (const name of names) {
     const n = escapeRegExp(name);
     if (mark) {
-      out = out.replace(new RegExp(`(^|[^A-Za-z0-9_])${n}(?![A-Za-z0-9_])`, 'gi'), `$1${mark}`);
+      // `_` separates words here too: `name_topic` reads `[name]_topic`.
+      out = out.replace(new RegExp(`(^|[^A-Za-z0-9])${n}(?![A-Za-z0-9])`, 'gi'), `$1${mark}`);
       continue;
     }
     // `handle/repo`, `handle-topic` and `handle_topic` keep what follows; a standalone name goes.
@@ -57,6 +58,14 @@ function tidy(value: string): string {
   return value.replaceAll(/\s+/g, ' ').replaceAll(/^[\s/_\-:·,]+|[\s/_\-:·,]+$/g, '').trim();
 }
 
+/** An unquoted drive or network path, spaces and all: it runs to its first word with a file extension, else to the end
+ *  of the clause, so no part of it is left behind. */
+function unquotedPath(match: string): string {
+  const words = match.split(' ');
+  const last = words.findIndex(w => /\.[A-Za-z0-9]{1,5}$/.test(w));
+  return last < 0 ? '[path]' : ['[path]', ...words.slice(last + 1)].join(' ');
+}
+
 /** A label without links, email addresses, drive or UNC paths, the home directory or the user's names. */
 export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME, nameMark = ''): string {
   let out = value
@@ -64,7 +73,7 @@ export function scrubLabel(value: string, ctx: ScrubContext, max = MAX_NAME, nam
     .replaceAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[email]')
     // A quoted path is one path, spaces and all; an unquoted one goes on through later words that carry a separator.
     .replaceAll(/(["'`])(?:[A-Za-z]:[\\/]|\\\\)[^"'`\n]*\1/g, '[path]')
-    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^\s,;)"'`]*(?: [^\s,;)"'`]*[\\/][^\s,;)"'`]*)*(?: [^\s\\/,;)"'`]+\.[A-Za-z0-9]{1,5}(?=$|[\s,;)]))?/g, '[path]')
+    .replaceAll(/(?:\b[A-Za-z]:[\\/]|\\\\)[^,;)"'`\n]*/g, unquotedPath)
     .replaceAll(/(["'`])\/[^"'`\n/]+\/[^"'`\n]*\1/g, '[path]');
   if (ctx.home && ctx.home.length > 1) {
     const home = ctx.home.replace(/[\\/]+$/, '');

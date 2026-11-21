@@ -17,7 +17,7 @@
  *                      longer gaps are time away) and the questions and permission prompts you answered. Counted on
  *                      the day each wait started; its time counts where it falls.
  *   Unattended         per family: from one of your inputs anywhere in the family, for as long as the family's agent
- *                      work kept running (pauses under 2 min don't end it), and never past your next input anywhere in
+ *                      work kept running (pauses of at most 2 min don't end it), and never past your next input anywhere in
  *                      the family. All members count, whatever the filters show.
  *   Peak parallel      most sessions doing agent work at once.
  *   Family             a coordinator session and every session it started, directly or through its children. */
@@ -49,6 +49,8 @@ export interface TimelineWait {
 /** Your answer to a question or a permission prompt, when you gave it. */
 export interface TimelineAnswer {
   at: number;
+  /** When it was asked: equal to `at` for an answer that took no measurable time. */
+  start: number;
   kind: TimelineTurnWait['k'];
   /** Counted as an answer: false for a relayed answer the child also logged as its own (one answer, counted there). */
   counted: boolean;
@@ -215,14 +217,25 @@ export function unattendedStretches(inputs: readonly number[], work: readonly In
 /** How far apart a relayed answer and the child's own answer can be logged and still be the same answer. */
 const RELAY_MATCH_MS = 10_000;
 
-/** A relayed answer is the child's answer too when another session logged its own answer to a question within 10 s of
- *  it (in real logs, the same second): then it counts once, there. Otherwise the relay is the only record, and counts.
- *  The relay's target is an app project ID, not a session ID, so the pair is found by time. */
+/** Whether `d` descends from `s` (a child, grandchild…). */
+function descendsFrom(d: PreparedSession, s: PreparedSession, sessions: readonly PreparedSession[]): boolean {
+  for (let at = d.parent, steps = 0; at >= 0 && steps < MAX_DEPTH; at = sessions[at].parent, steps++) if (at === s.index) return true;
+  return false;
+}
+
+/** A relayed answer is also logged by the child that asked: as its own answer to a question, within 10 s (in real logs,
+ *  the same second). Each relayed answer is paired, one to one and nearest first, with such an answer in a session it
+ *  descends to; it then counts once, in the child. Unpaired, the relay is the only record and counts. The relay's target
+ *  is an app project ID, not a session ID, so the pair is found by family, kind and time, never by time alone. */
 function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
-  const direct = sessions.flatMap(s => s.answers.filter(a => a.kind !== 'relay').map(a => ({ s, at: a.at })));
+  const claimed = new Set<TimelineAnswer>();
   for (const s of sessions) {
-    for (const a of s.answers) {
-      if (a.kind === 'relay') a.counted = !direct.some(d => d.s !== s && Math.abs(d.at - a.at) <= RELAY_MATCH_MS);
+    for (const a of s.answers.filter(x => x.kind === 'relay')) {
+      const match = sessions.filter(d => d !== s && d.root === s.root && descendsFrom(d, s, sessions))
+        .flatMap(d => d.answers.filter(x => x.kind === 'question' && !claimed.has(x) && Math.abs(x.at - a.at) <= RELAY_MATCH_MS))
+        .sort((x, y) => Math.abs(x.at - a.at) - Math.abs(y.at - a.at))[0];
+      a.counted = !match;
+      if (match) claimed.add(match);
     }
   }
 }
@@ -242,11 +255,10 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
       waits,
       waiting: mergeIntervals(waits.map(w => [w.start, w.end])),
       answers: [...all.flatMap(t => t.w ?? []), ...stops].filter(w => w.a)
-        .map((w): TimelineAnswer => ({ at: w.e, kind: w.k, counted: true })).sort((a, b) => a.at - b.at),
+        .map((w): TimelineAnswer => ({ at: w.e, start: w.s, kind: w.k, counted: true })).sort((a, b) => a.at - b.at),
       away,
     };
   });
-  countRelayedAnswersOnce(sessions);
   for (const s of sessions) {
     let at = s.index;
     let depth = 0;
@@ -258,6 +270,7 @@ export function prepareTimeline(data: TimelineDataset): PreparedTimeline {
     s.depth = depth;
     if (s.parent >= 0) sessions[s.parent].children++;
   }
+  countRelayedAnswersOnce(sessions);
   const familySize = new Map<number, number>();
   const members = new Map<number, PreparedSession[]>();
   for (const s of sessions) {
@@ -659,9 +672,6 @@ function letters(n: number): string {
   return (n >= 26 ? letters(Math.floor(n / 26) - 1) : '') + String.fromCharCode(65 + (n % 26));
 }
 
-/** A common public model ID (`gpt-5.4`, `claude-opus-4.7`, `gemini-2.5-pro`…): safe to show when names are masked. */
-const PUBLIC_MODEL = /^(?:gpt|o\d|claude|gemini|grok|codex|llama|mistral|deepseek|qwen|phi|mai|big-pickle)[\w.:-]{0,40}$/i;
-
 /** Shown for a session that logged no repository or folder. */
 export const NO_REPOSITORY = 'no repository';
 
@@ -670,7 +680,8 @@ export function createNamer(p: PreparedTimeline, masked: boolean): Namer {
   for (const s of p.sessions) repoCredits.set(s.repo, (repoCredits.get(s.repo) ?? 0) + sum(s.turns, t => t.cr));
   const repoMask = new Map<string, string>();
   for (const [i, [repo]] of [...repoCredits.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).entries()) repoMask.set(repo, `Repository ${letters(i)}`);
-  const modelMask = new Map([...new Set(p.sessions.map(s => s.model).filter(m => m && !PUBLIC_MODEL.test(m)))].sort().map((m, i) => [m, `Model ${letters(i)}`]));
+  // A model name can be a deployment you named, even behind a provider's prefix, so every one is masked.
+  const modelMask = new Map([...new Set(p.sessions.map(s => s.model).filter(Boolean))].sort().map((m, i) => [m, `Model ${letters(i)}`]));
   return {
     name: s => {
       if (masked) return `${s.parent < 0 ? 'Session' : 'Child session'} ${s.index + 1}`;
@@ -681,7 +692,7 @@ export function createNamer(p: PreparedTimeline, masked: boolean): Namer {
     },
     repo: s => (masked ? repoMask.get(s.repo) ?? 'Repository' : s.repo || NO_REPOSITORY),
     branch: s => (masked ? '' : s.branch),
-    model: s => (masked && s.model && !PUBLIC_MODEL.test(s.model) ? modelMask.get(s.model) ?? 'Model' : s.model),
+    model: s => (masked && s.model ? modelMask.get(s.model) ?? 'Model' : s.model),
   };
 }
 
@@ -793,8 +804,19 @@ function waitsInsight(lanes: readonly TimelineLane[], when: string): string {
   const answered = sum(lanes, l => l.answered);
   const answers = plural(answered, 'question or permission prompt', 'questions or permission prompts');
   if (total <= 0) {
+    // Answers here whose wait took no time, and those whose wait ran before this period (measured there, not here).
+    const here = lanes.flatMap(l => l.s.answers.filter(a => a.counted && a.at >= l.win[0] && a.at < l.win[1]).map(a => ({ a, from: l.win[0] })));
+    const instant = here.filter(({ a }) => a.at <= a.start).length;
+    const earlier = here.filter(({ a, from }) => a.at > a.start && a.start < from).length;
+    const how = [
+      instant > 0 ? `took no measurable time` : '',
+      earlier > 0 ? `ended a wait that began earlier` : '',
+    ];
+    const detail = instant > 0 && earlier > 0
+      ? `: ${instant} ${how[0]}, and ${earlier} ${how[1]}`
+      : ` that ${how.find(Boolean) ?? 'took no measurable time'}`;
     const none = `No time waiting on you was measured ${when}: no gap of 2–120 min before your next prompt`
-      + (answered > 0 ? `, and the ${answers} you answered took no measurable time.` : ', and no question or permission prompt you answered.');
+      + (answered > 0 ? `, and you answered ${answers}${detail}.` : ', and no question or permission prompt you answered.');
     return away > 0 ? `${none} ${plural(away, 'longer gap', 'longer gaps')} before your next prompt ${away === 1 ? 'counts' : 'count'} as time away, not waiting.` : none;
   }
   const answeredHere = answered > 0 ? ` You answered ${answers} ${when}.` : '';
@@ -860,7 +882,10 @@ export interface FamilySummary {
   children: number;
   depth: number;
   fanOut: number;
+  /** Distinct repositories of the members with activity in range. */
   repos: number;
+  /** The member whose repository the family is shown with: one of those `repos` (the coordinator when active). */
+  repoSession: PreparedSession;
   harnesses: string[];
   typed: number;
   coordinatorTyped: number;
@@ -902,6 +927,8 @@ export interface FamiliesTotals {
   tokenShare: number;
   agentMs: number;
   agentShare: number;
+  /** All agent time in range, families or not: the share's denominator (a share of zero is real when it's positive). */
+  totalAgentMs: number;
   typed: number;
   automated: number;
   childTyped: number;
@@ -1003,6 +1030,8 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     depth: Math.max(0, ...counted.map(n => n.depth)),
     fanOut: Math.max(0, ...nodes.map(activeKids)),
     repos: new Set(counted.map(n => n.s.repo)).size,
+    // The repository named first: the coordinator's when it has activity in range, else the first active member's.
+    repoSession: (counted[0] ?? coordinator).s,
     harnesses: [...new Set(counted.map(n => n.s.harness))],
     typed: sum(counted, n => n.typed),
     coordinatorTyped: coordinator.ctx ? 0 : coordinator.typed,
@@ -1049,6 +1078,7 @@ function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): Familie
     tokenShare: share(sum(families, f => f.tokens), totalTokens),
     agentMs: sum(families, f => f.agentMs),
     agentShare: share(sum(families, f => f.agentMs), totalAgent),
+    totalAgentMs: totalAgent,
     typed: sum(families, f => f.typed),
     automated: sum(families, f => f.automated),
     childTyped: sum(families, f => f.childTyped),

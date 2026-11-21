@@ -125,12 +125,14 @@ function nearestDay(date: string, days: readonly string[], rangeStart = -Infinit
   return [...days].reverse().find(d => d <= date) ?? days[0];
 }
 
-/** The day with most of the session's turns in range; without one, the first day of its work or waiting in range. */
+/** The day with most of the session's turns in range; without one, the first day of its work, waiting or answers in
+ *  range, so a session with only an answer opens where it has a lane. */
 function busiestDay(s: PreparedSession): string {
   const counts = new Map<string, number>();
   for (const t of s.turns) counts.set(toDateStr(t.t), (counts.get(toDateStr(t.t)) ?? 0) + 1);
   const bounds = loaded?.prepared.bounds ?? [-Infinity, Infinity];
-  const first = [...clipIntervals(s.work, bounds), ...clipIntervals(s.waiting, bounds)].map(([a]) => a).sort((a, b) => a - b)[0];
+  const first = [...clipIntervals(s.work, bounds), ...clipIntervals(s.waiting, bounds)].map(([a]) => a)
+    .concat(s.answers.map(x => x.at).filter(t => t >= bounds[0] && t < bounds[1])).sort((a, b) => a - b)[0];
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
     ?? (first !== undefined ? toDateStr(first) : state.date);
 }
@@ -193,9 +195,10 @@ function page(data: Loaded): VNode {
     ${toolbar(p)}
     ${ctx ? filterBar(p, ctx) : null}
     <div class="tlx-view">${ctx ? timelineView(ctx) : familiesView(data, namer)}</div>
-    <p class="tlx-foot">Agent time is the time from a prompt to the turn’s last logged agent activity, merged per session, minus the time
-      the turn was stopped on a question or a permission prompt. Waiting on you counts the gaps from the end of a session’s work to your next
-      prompt (2–120 min) and the questions and permission prompts you answered, once per session where they overlap; permissions a policy
+    <p class="tlx-foot">Agent time is, for each turn, the time from its prompt to its last logged agent activity, less the time that
+          turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
+          gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
+          answered, once per session where they overlap; permissions a policy
       decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
       Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
       create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
@@ -683,6 +686,23 @@ function formatTokens(n: number): string {
   return n >= 1e5 ? `${(n / 1e6).toFixed(1)}M tokens` : `${Math.round(n / 1000)}k tokens`;
 }
 
+/** What a lane with no turn start in the window shows: work or waiting that began earlier, or, in a session that logged
+ *  no turn at all, the questions or permission prompts you answered. Each part only when the logs show it. */
+function noTurnNote(ctx: ViewContext, l: TimelineLane): string {
+  const [from] = l.win;
+  const workEarlier = l.s.work.some(([a, b]) => a < from && b > from);
+  const waitEarlier = l.waits.some(w => w.start < from && w.end > from);
+  const parts = [
+    l.agentMs > 0 ? `${formatDuration(l.agentMs)} of agent work${workEarlier ? ' from a turn that began earlier' : ''}` : '',
+    l.waitMs > 0 ? `${formatDuration(l.waitMs)} of waiting on you${waitEarlier ? ' that began earlier' : ''}` : '',
+    l.answered > 0 ? `${formatCount(l.answered)} ${l.answered === 1 ? 'question or permission prompt' : 'questions or permission prompts'} you answered` : '',
+  ].filter(Boolean);
+  const shows = parts.length ? `the lane shows ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]}` : 'nothing was measured in it';
+  return l.s.all.length === 0
+    ? `This session logged no turn, only stops for you: ${shows}.`
+    : `No turn started this ${ctx.view}: ${shows}.`;
+}
+
 function detailPanel(ctx: ViewContext): VNode {
   const l = ctx.lanes.find(x => x.s.id === state.selected);
   if (!l) return html`<div class="tlx-panel" id="tlxDetail"><p class="note">Select a lane to see its turns.</p></div>` as VNode;
@@ -709,7 +729,7 @@ function detailPanel(ctx: ViewContext): VNode {
         <div><b>${l.subagents}</b><span>sub-agent launches</span></div>
       </div>
       ${l.turns.length === 0
-        ? html`<p class="note">No turn started this ${ctx.view}: the lane shows ${l.agentMs > 0 ? 'work' : 'waiting'} carried over from an earlier one.</p>`
+        ? html`<p class="note">${noTurnNote(ctx, l)}</p>`
         : html`<div class="dr-turns"><table>
         <thead><tr><th>Time</th><th>Sent by</th><th class="num">Agent worked</th><th class="num">Stopped for you</th><th class="num">Sub-agents</th></tr></thead>
         <tbody>${l.turns.map(t => {
@@ -816,7 +836,7 @@ function familiesView(data: Loaded, namer: Namer): VNode {
       ${kpiCard(formatCount(t.families), 'Session families', `${formatCount(t.sessionsInFamilies)} of ${formatCount(t.sessions)} sessions belong to one`, '#3794ff')}
       ${kpiCard(formatCount(t.children), 'Child sessions', `${formatCount(t.children - t.childrenNeedingYou)} with no prompt or answer from you`, '#b180d7')}
       ${kpiCard(shareText(t.creditShare, credits), 'Of all AI credits', credits > 0 ? `${Math.round(t.childCreditShare)}% in the child sessions alone` : 'no credits logged: only Copilot logs them', '#cf222e')}
-      ${kpiCard(formatHours(t.agentMs), 'Agent time', t.agentMs > 0 ? `${Math.round(t.agentShare)}% of all agent time` : 'no agent time measured', '#f0883e')}
+      ${kpiCard(formatHours(t.agentMs), 'Agent time', t.totalAgentMs > 0 ? `${Math.round(t.agentShare)}% of all agent time` : 'no agent time measured', '#f0883e')}
       ${kpiCard(formatCount(t.childTyped), 'Prompts you typed into children', `out of ${formatCount(t.typed)} you typed in families${t.childAnswered ? `, plus ${formatCount(t.childAnswered)} answers in children` : ''}`, '#d29922')}
       ${kpiCard(shareText(t.top3Share, credits), `Credits in the top ${top}`, `of ${formatCount(t.families)} ${t.families === 1 ? 'family' : 'families'}, by credits`, '#8b949e')}
     </div>
@@ -860,7 +880,7 @@ function familyRow(f: FamilySummary, namer: Namer, o: FamiliesOverview, cumulati
       <div class="fr-rank">#${f.rank}</div>
       <div class="fr-main">
         <div class="fr-name">${namer.name(f.s)}</div>
-        <div class="fr-sub">${namer.repo(f.s)}${f.repos > 1 ? ` + ${f.repos - 1} more ${f.repos > 2 ? 'repositories' : 'repository'}` : ''} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.children} child ${f.children === 1 ? 'session' : 'sessions'}</div>
+        <div class="fr-sub">${namer.repo(f.repoSession)}${f.repos > 1 ? ` + ${f.repos - 1} more ${f.repos > 2 ? 'repositories' : 'repository'}` : ''} · ${shortDate(f.from)}${f.to !== f.from ? '–' + shortDate(f.to) : ''} · ${f.children} child ${f.children === 1 ? 'session' : 'sessions'}</div>
         <div class="fr-kids">${biggest.map(n => html`<span class=${neededYou(n) ? 'kt' : ''} title=${neededYou(n) ? 'you typed into this child or answered its question or permission prompt' : ''}>↳ ${namer.name(n.s)}</span>`)}
           ${kids.length > 3 ? html`<span class="more">+${kids.length - 3} more</span>` : null}</div>
       </div>
@@ -913,7 +933,7 @@ function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VN
         <div><b>${formatCredits(f.perChild)}</b><span>credits per child · ${f.credits > 0 ? `${Math.round(f.childShare)}% in children` : 'no credits logged'}</span></div>
       </div>
       ${f.busiest && focus ? html`<p class="fa-open"><button type="button" class="tlx-btn" id="tlxOpenFamilyDay" onClick=${openDay}>Open on the Timeline, ${shortDate(f.busiest)} ›</button>
-        <span class="muted">the day with most of its turns</span></p>` : null}
+        <span class="muted">${f.nodes.some(n => !n.ctx && n.s.turns.some(t => toDateStr(t.t) === f.busiest)) ? 'the day with most of its turns' : 'its first day with work, waiting or an answer in this range'}</span></p>` : null}
       <table class="ftable">
         <thead><tr><th>Session · ${f.sessions} in range</th><th class="num">You typed</th><th class="num">Agent</th><th class="num">Credits</th></tr></thead>
         <tbody>${f.nodes.map(n => {
