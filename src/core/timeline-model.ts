@@ -23,7 +23,7 @@
  *   Family             a coordinator session and every session it started, directly or through its children. */
 
 import { toDateStr } from './helpers';
-import type { TimelineDataset, TimelineSessionRecord, TimelineTextTurn, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
+import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
 
 export const WAIT_MIN_MS = 2 * 60_000;
 export const WAIT_MAX_MS = 120 * 60_000;
@@ -275,9 +275,9 @@ function countRelayedAnswersOnce(sessions: readonly PreparedSession[]): void {
 /** Finds each Timeline turn's text, read again from its log: by the turn's identity, else by its time when a single text
  *  turn has that time. Two turns can share a time (a sub-agent's), so time alone never picks between them; a turn whose
  *  prompt logged no ID is known by its latest reply, an identity a live turn changes as it gains messages. */
-export function textTurnFinder(turns: readonly TimelineTextTurn[]): (t: Pick<TimelineTurn, 't' | 'id'>) => TimelineTextTurn | undefined {
+export function textTurnFinder<T extends { t: number; id?: string }>(turns: readonly T[]): (t: Pick<TimelineTurn, 't' | 'id'>) => T | undefined {
   const byId = new Map(turns.filter(t => t.id).map(t => [t.id, t]));
-  const byTime = new Map<number, TimelineTextTurn | null>();
+  const byTime = new Map<number, T | null>();
   for (const t of turns) byTime.set(t.t, byTime.has(t.t) ? null : t);
   return t => (t.id ? byId.get(t.id) : undefined) ?? byTime.get(t.t) ?? undefined;
 }

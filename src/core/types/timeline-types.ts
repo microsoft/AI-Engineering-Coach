@@ -105,9 +105,17 @@ export interface TimelineDataset {
   to?: number;
 }
 
+/** What one lane's detail panel shows, so the text read returns that and no more: its window [`from`, `to`) and the
+ *  turns it lists (by identity, else time), with the turn before each wait for your next prompt. */
+export interface TimelineTextScope {
+  from: number;
+  to: number;
+  turns: { t: number; id?: string }[];
+}
+
 /** The text behind one session's turns and stops, for the Timeline detail panel: loaded when a lane is opened, never
  *  part of the dataset, the chat tool or the export. Scrubbed of links, email addresses, the home directory, the user's
- *  names and secret-like tokens; long text is cut, with `cut` set. */
+ *  names and credentials; long text is cut, with `cut` set. Read for one lane's scope: nothing it doesn't show. */
 export interface TimelineSessionText {
   sessionId: string;
   /** Turns by start time (`t`, as in `TimelineTurn`): the prompt that started each one, and the end of the agent's reply. */

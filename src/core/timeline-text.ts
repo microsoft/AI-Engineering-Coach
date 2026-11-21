@@ -8,10 +8,11 @@
  * full when its lane is opened (the analyzers hold no such text), scrubbed, and sent only to the local Timeline panel:
  * never to the chat tool, the summary export or anywhere else. */
 
-import type { Session, TimelineSessionText, TimelineTextTurn, TimelineTextWait, UserWait, UserWaitText } from './types';
+import type { Session, SessionRequest, TimelineSessionText, TimelineTextScope, TimelineTextTurn, TimelineTextWait, UserWait, UserWaitText } from './types';
 import { turnSender } from './analyzer-timeline';
 import { turnIdentity } from './fork-ownership';
 import { scrubText, type ScrubContext } from './session-labels';
+import { textTurnFinder, waitInWindow } from './timeline-model';
 
 /** Longest prompt, question or answer shown; the rest is cut. */
 export const MAX_TEXT = 4000;
@@ -55,32 +56,47 @@ function waitText(w: UserWait, labels: ScrubContext): TimelineTextWait {
 }
 
 /** The text of `session`'s turns and stops, scrubbed with `labels`. `session` is the full session, re-read from its
- *  log with the turns the analysis kept. Compaction and system turns carry no prompt text (a summary or a harness
- *  message, not an instruction). */
-export function timelineSessionText(session: Session, labels: ScrubContext): TimelineSessionText {
-  const turns: TimelineTextTurn[] = [];
-  const waits: TimelineTextWait[] = [];
-  for (const r of session.requests) {
-    for (const w of r.userWaits ?? []) waits.push(waitText(w, labels));
-    if (!r.timestamp) continue;
-    const k = turnSender(r.nonHumanKind);
-    const turn: TimelineTextTurn = { t: r.timestamp, k, ...(turnIdentity(r) ? { id: turnIdentity(r) } : {}) };
-    let cut = false;
-    if (k !== 'compaction' && k !== 'other' && r.messageText.trim()) {
-      const [v, c] = cutHead(scrubText(r.messageText.trim(), labels), MAX_TEXT);
-      turn.prompt = v;
-      cut ||= c;
-    }
-    // The agent's own messages: the code it wrote to files is no reply. A compaction's reply is its summary.
-    const reply = k === 'compaction' ? '' : (r.replyText ?? r.responseText).trim();
-    if (reply) {
-      const [v, c] = cutTail(scrubText(reply, labels), MAX_REPLY);
-      turn.reply = v;
-      cut ||= c;
-    }
-    if (cut) turn.cut = true;
-    turns.push(turn);
+ *  log. With `scope`, only what that lane shows is built: the turns it lists (matched by identity, else by a time no
+ *  other turn has) and the stops that belong to its window; nothing else is scrubbed or returned. With `kept`, only
+ *  the turns the analysis kept are read (a fork's copied turns, and their stops, count in their source). Compaction
+ *  and system turns carry no prompt text (a summary or a harness message, not an instruction). */
+export function timelineSessionText(session: Session, labels: ScrubContext, scope?: TimelineTextScope, kept?: ReadonlySet<string>): TimelineSessionText {
+  const requests = kept ? session.requests.filter(r => kept.has(turnIdentity(r))) : session.requests;
+  const timed = requests.filter((r): r is SessionRequest & { timestamp: number } => !!r.timestamp)
+    .map(r => ({ r, t: r.timestamp, ...(turnIdentity(r) ? { id: turnIdentity(r) } : {}) }));
+  let shown = timed;
+  if (scope) {
+    const find = textTurnFinder(timed);
+    const wanted = new Set(scope.turns.map(find));
+    shown = timed.filter(x => wanted.has(x));
   }
-  for (const w of session.userWaits ?? []) waits.push(waitText(w, labels));
-  return { sessionId: session.sessionId, turns: turns.sort((a, b) => a.t - b.t), waits: waits.sort((a, b) => a.s - b.s) };
+  const allWaits = [...requests.flatMap(r => r.userWaits ?? []), ...session.userWaits ?? []];
+  const waits = scope
+    ? allWaits.filter(w => waitInWindow({ s: w.start, e: w.end, k: w.kind, a: w.answered, ...(w.answeredAt != null ? { at: w.answeredAt } : {}) }, scope.from, scope.to))
+    : allWaits;
+  return {
+    sessionId: session.sessionId,
+    turns: shown.map(x => textTurn(x.r, x.t, labels)).sort((a, b) => a.t - b.t),
+    waits: waits.map(w => waitText(w, labels)).sort((a, b) => a.s - b.s),
+  };
+}
+
+function textTurn(r: SessionRequest, t: number, labels: ScrubContext): TimelineTextTurn {
+  const k = turnSender(r.nonHumanKind);
+  const turn: TimelineTextTurn = { t, k, ...(turnIdentity(r) ? { id: turnIdentity(r) } : {}) };
+  let cut = false;
+  if (k !== 'compaction' && k !== 'other' && r.messageText.trim()) {
+    const [v, c] = cutHead(scrubText(r.messageText.trim(), labels), MAX_TEXT);
+    turn.prompt = v;
+    cut ||= c;
+  }
+  // The agent's own messages: the code it wrote to files is no reply. A compaction's reply is its summary.
+  const reply = k === 'compaction' ? '' : (r.replyText ?? r.responseText).trim();
+  if (reply) {
+    const [v, c] = cutTail(scrubText(reply, labels), MAX_REPLY);
+    turn.reply = v;
+    cut ||= c;
+  }
+  if (cut) turn.cut = true;
+  return turn;
 }

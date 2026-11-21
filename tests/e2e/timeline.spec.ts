@@ -158,6 +158,23 @@ test.describe('Timeline', () => {
     await expect(text.locator('.tx-item.focus')).toHaveAttribute('data-text-at', /^w:question:/);
   });
 
+  test('of two questions that began together, a hatched wait highlights the one it stands for', async ({ page }) => {
+    await page.evaluate(() => {
+      const at = (m: number) => new Date(2026, 4, 2, 15, m).getTime();
+      (window as unknown as { mockTimelineTextHook?: (id: string) => unknown }).mockTimelineTextHook = id => ({
+        sessionId: id, turns: [{ t: at(0), k: 'you', prompt: 'Draft the release notes for 2.4' }], waits: [
+          { s: at(2), e: at(9), k: 'question', a: true, ask: 'Ship today?' },
+          { s: at(2), e: at(6), k: 'question', a: true, ask: 'Include the beta features?' },
+        ],
+      });
+    });
+    await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
+    await page.locator('.tlx-lane[data-session="tl-notes"] .wait').click();
+    const focus = page.locator('#tlxText .tx-item.focus');
+    await expect(focus).toHaveCount(1);
+    await expect(focus).toContainText('Include the beta features?');
+  });
+
   test('says a wait for your next prompt followed a compaction, not that no reply was logged', async ({ page }) => {
     await page.evaluate(() => {
       (window as unknown as { mockTimelineTextHook?: (id: string) => unknown }).mockTimelineTextHook = id => ({

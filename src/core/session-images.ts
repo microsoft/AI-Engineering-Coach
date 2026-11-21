@@ -5,7 +5,9 @@
 
 import * as path from 'path';
 import type { SessionSource } from './cache';
-import type { Session } from './types';
+import type { Session, TimelineSessionText, TimelineTextScope } from './types';
+import type { ScrubContext } from './session-labels';
+import { timelineSessionText } from './timeline-text';
 import { extractCLIImageReferences, parseCLIEventsFile } from './parser-vscode-cli';
 import { extractClaudeImageReferences, isClaudeSubagentFile, parseClaudeSessionFile } from './parser-claude';
 import { extractCodexImageReferences, parseCodexSessionFile } from './parser-codex';
@@ -28,7 +30,24 @@ export interface SessionDetailRequest {
   sessionId: string;
 }
 
-export type SessionSourceRequest = SessionImagesRequest | SessionDetailRequest;
+/** The text behind one Timeline lane, built in the worker so the full session never crosses to the extension host. */
+export interface TimelineTextRequest {
+  type: 'timeline-text';
+  source: SessionSource;
+  sessionId: string;
+  scope: TimelineTextScope;
+  /** The turns the analysis kept, by identity, when it dropped a fork's copied turns. */
+  kept?: string[];
+  labels: ScrubContext;
+}
+
+export type SessionSourceRequest = SessionImagesRequest | SessionDetailRequest | TimelineTextRequest;
+
+/** Runs in the parse worker: the lane's scoped, scrubbed text, or null when its log can't be read again. */
+export function loadTimelineText(request: TimelineTextRequest): TimelineSessionText | null {
+  const session = loadSourceSession(request.source, request.sessionId);
+  return session ? timelineSessionText(session, request.labels, request.scope, request.kept ? new Set(request.kept) : undefined) : null;
+}
 
 export function loadSourceSession(source: SessionSource, sessionId: string): Session | null {
   switch (source.kind) {

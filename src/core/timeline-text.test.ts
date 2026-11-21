@@ -160,6 +160,25 @@ describe('timelineSessionText turns', () => {
     expect(turns.map(t => [t.t, text.turns.find(x => x.id === t.id)?.prompt])).toEqual([[turns[0].t, 'First'], [turns[0].t, 'Second']]);
   });
 
+  it('builds only what a lane’s scope lists, and only the turns the analysis kept', () => {
+    const s = parse([
+      { type: 'user.message', timestamp: at(0), id: 'u1', data: { content: 'Before the window' } },
+      { type: 'assistant.message', timestamp: at(1), data: { content: 'Its reply' } },
+      { type: 'user.message', timestamp: at(20), id: 'u2', data: { content: 'In the window' } },
+      { type: 'tool.execution_start', timestamp: at(21), data: { toolName: 'ask_user', toolCallId: 'q2', arguments: { question: 'In-window question?' } } },
+      { type: 'tool.execution_complete', timestamp: at(22), data: { toolCallId: 'q2', success: true, result: { content: 'User selected: yes' } } },
+      { type: 'user.message', timestamp: at(30), id: 'u3', data: { content: 'Not listed' } },
+    ]);
+    const window = { from: Date.parse(at(15)), to: Date.parse(at(40)) };
+    // The lane lists its turn in the window, and the turn before its wait for your next prompt (outside the window).
+    const scoped = timelineSessionText(s, labels, { ...window, turns: [{ t: Date.parse(at(20)), id: 'u2' }, { t: Date.parse(at(0)), id: 'u1' }] });
+    expect(scoped.turns.map(t => t.prompt)).toEqual(['Before the window', 'In the window']);
+    expect(scoped.waits.map(w => w.ask)).toEqual(['In-window question?']);
+    // A turn the analysis dropped (a fork's copy) is never read, nor its stops, even when listed.
+    const kept = timelineSessionText(s, labels, { ...window, turns: [{ t: Date.parse(at(20)), id: 'u2' }] }, new Set(['u1', 'u3']));
+    expect([kept.turns, kept.waits]).toEqual([[], []]);
+  });
+
   it('shows no text for compaction or system turns', () => {
     const s = fixture();
     s.requests[0].nonHumanKind = 'compaction';

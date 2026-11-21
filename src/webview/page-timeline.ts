@@ -8,7 +8,7 @@
  * the range once (`getTimelineData`); every view, filter and the name mask are computed here with the shared model. */
 
 import type {
-  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
+  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextScope, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
 } from '../core/types';
 import {
   addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
@@ -55,12 +55,14 @@ interface TimelineState {
   showText: boolean | null;
   /** The prompt, question or wait highlighted in the detail panel (`t:<time>`, `w:<kind>:<start>`, `i:<start>`). */
   textFocus: string | null;
+  /** When the highlighted wait ended: tells apart two of a kind that began together. */
+  textFocusEnd: number | null;
 }
 
 const state: TimelineState = {
   view: 'day', date: '', group: 'tree', color: 'family', strip: 'turns', selected: null, focusId: null,
   collapsed: new Set(), masked: false, filters: { ...NO_LANE_FILTERS }, family: null, familyQuery: '',
-  familySort: 'credits', familyMin: 2, verdict: 'all', showText: null, textFocus: null,
+  familySort: 'credits', familyMin: 2, verdict: 'all', showText: null, textFocus: null, textFocusEnd: null,
 };
 
 interface Loaded {
@@ -104,6 +106,7 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   texts.clear();
   // A highlight belongs to the click that made it, not to the next load.
   state.textFocus = null;
+  state.textFocusEnd = null;
   scrollToText = false;
   state.showText ??= (vscode.getState() as Record<string, unknown> | null)?.[SHOW_TEXT_KEY] !== false;
   rootEl = root;
@@ -169,7 +172,7 @@ function draw(): void {
     scrollToSelected = false;
     requestAnimationFrame(() => rootEl?.querySelector('.tlx-lane.sel, .frow.sel')?.scrollIntoView({ block: 'center' }));
   }
-  const focus = scrollToText && state.textFocus ? rootEl.querySelector(`[data-text-at="${state.textFocus}"]`) : null;
+  const focus = scrollToText && state.textFocus ? rootEl.querySelector('#tlxText .tx-item.focus') : null;
   if (focus) {
     scrollToText = false;
     requestAnimationFrame(() => focus.scrollIntoView({ block: 'nearest' }));
@@ -179,7 +182,7 @@ function draw(): void {
 function update(change: Partial<TimelineState>): void {
   // A highlighted prompt or wait belongs to the click that chose it: another lane, or this one opened again, has none.
   if (change.selected !== undefined && !('textFocus' in change)) {
-    change = { ...change, textFocus: null };
+    change = { ...change, textFocus: null, textFocusEnd: null };
     scrollToText = false;
   }
   Object.assign(state, change);
@@ -590,7 +593,7 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
             // Shown text only: a highlight set while it is hidden would turn up, stale, when it shows again.
             const shown = !!state.showText && !state.masked;
             scrollToText = shown;
-            update({ selected: s.id, textFocus: shown ? key : null });
+            update({ selected: s.id, textFocus: shown ? key : null, textFocusEnd: shown ? w.end : null });
           };
           const tip = waitTip(ctx, w, l.win);
           return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} data-wait-at=${key}
@@ -821,26 +824,31 @@ function setShowText(on: boolean): void {
   update({ showText: on });
 }
 
-/** The lane's text, read once per load: the first call starts the request and redraws when it answers. */
-function sessionText(id: string): TextEntry {
-  const known = texts.get(id);
+/** The lane's text, read once per load and window: the first call starts the request and redraws when it answers. The
+ *  request names what the lane shows (its window, its turns and the turn before each wait for your next prompt), so
+ *  the read returns that and nothing more. */
+function sessionText(l: TimelineLane): TextEntry {
+  const key = `${l.s.id}|${l.win[0]}|${l.win[1]}`;
+  const known = texts.get(key);
   if (known) return known;
   const entry: TextEntry = { status: 'loading' };
-  texts.set(id, entry);
+  texts.set(key, entry);
   // A read the Timeline reloaded under (the map was cleared, and the lane read again) is dropped.
   const settle = (next: TextEntry) => {
-    if (texts.get(id) !== entry) return;
-    texts.set(id, next);
+    if (texts.get(key) !== entry) return;
+    texts.set(key, next);
     draw();
   };
-  rpc<TimelineSessionText | null>('getTimelineSessionText', { sessionId: id })
+  const listed = [...l.turns, ...l.waits.flatMap(w => (w.after ? [w.after] : []))];
+  const scope: TimelineTextScope = { from: l.win[0], to: l.win[1], turns: listed.map(t => ({ t: t.t, ...(t.id ? { id: t.id } : {}) })) };
+  rpc<TimelineSessionText | null>('getTimelineSessionText', { sessionId: l.s.id, scope })
     .then(text => settle(text ? { status: 'ready', text } : { status: 'missing' }))
     .catch(() => settle({ status: 'missing' }));
   return entry;
 }
 
-function textItem(key: string, head: string, body: (VNode | null)[]): VNode {
-  return html`<div class=${'tx-item' + (state.textFocus === key ? ' focus' : '')} data-text-at=${key}>
+function textItem(key: string, head: string, body: (VNode | null)[], focus = state.textFocus === key): VNode {
+  return html`<div class=${'tx-item' + (focus ? ' focus' : '')} data-text-at=${key}>
     <div class="tx-head">${head}</div>${body}</div>` as VNode;
 }
 
@@ -866,7 +874,7 @@ function turnItem(ctx: ViewContext, t: TimelineTurn, tt: TimelineTextTurn | unde
   ]);
 }
 
-function askItem(ctx: ViewContext, w: TimelineTextWait, win: Interval): VNode {
+function askItem(ctx: ViewContext, w: TimelineTextWait, win: Interval, focus: boolean): VNode {
   // Timed to Copilot's record of your answer when it logged one, else to the result.
   const answered = w.at ?? w.e;
   const took = answered >= w.s ? `after ${formatDuration(answered - w.s)}` : 'before the request was logged';
@@ -884,7 +892,15 @@ function askItem(ctx: ViewContext, w: TimelineTextWait, win: Interval): VNode {
     quote(w.ask) ?? html`<p class="note">The question’s text wasn’t logged.</p>` as VNode,
     w.choices?.length ? html`<ul class="tx-choices">${w.choices.map(c => html`<li>${c}</li>`)}</ul>` as VNode : null,
     w.answer ? html`<div class="tx-answer"><b>${w.k === 'relay' ? 'Your reply' : 'Your answer'}</b> ${w.answer}</div>` as VNode : null,
-  ]);
+  ], focus);
+}
+
+/** The questions or permission prompts a click on a hatched wait highlights: those of its kind and start, and of them
+ *  the one that ended when it did, when two began together. */
+function focusedAsks(asks: readonly TimelineTextWait[]): Set<TimelineTextWait> {
+  const same = asks.filter(w => `w:${w.k}:${w.s}` === state.textFocus);
+  const exact = same.filter(w => w.e === state.textFocusEnd);
+  return new Set(exact.length ? exact : same);
 }
 
 /** The prompts that started this window's turns, what each question or permission prompt asked and what you answered,
@@ -896,16 +912,17 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
   const wrap = (...body: (VNode | null)[]) => html`<div class="tlx-text" id="tlxText">${toggle}${body}</div>` as VNode;
   if (state.masked) return wrap(html`<p class="note">Hidden while names are masked.</p>` as VNode);
   if (!on) return wrap();
-  const entry = sessionText(l.s.id);
+  const entry = sessionText(l);
   if (entry.status === 'loading') return wrap(html`<p class="note">Reading this session’s log…</p>` as VNode);
   if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);
   const { text } = entry;
   const [from, to] = l.win;
   const textOf = textTurnFinder(text.turns);
   const asks = text.waits.filter(w => waitInWindow(w, from, to));
+  const focused = focusedAsks(asks);
   const items: [number, VNode][] = [
     ...l.turns.map(t => [t.t, turnItem(ctx, t, textOf(t))] as [number, VNode]),
-    ...asks.map(w => [w.s, askItem(ctx, w, l.win)] as [number, VNode]),
+    ...asks.map(w => [w.s, askItem(ctx, w, l.win, focused.has(w))] as [number, VNode]),
     ...l.waits.filter(w => w.kind === 'idle').map(w => {
       const before = w.after && textOf(w.after);
       return [w.start, textItem(`i:${w.start}`, `${textTime(ctx, w.start, l.win)} · Waited ${formatDuration(w.end - w.start)} for your next prompt`, [

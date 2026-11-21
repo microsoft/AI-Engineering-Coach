@@ -6,9 +6,9 @@
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import type { SessionSource } from './cache';
-import type { Session } from './types';
-import type { SessionSourceRequest } from './session-images';
-import { SessionSchema } from './schemas';
+import type { Session, TimelineSessionText } from './types';
+import type { SessionSourceRequest, TimelineTextRequest } from './session-images';
+import { SessionSchema, TimelineSessionTextSchema } from './schemas';
 import { warnCore } from './log';
 import type { ImageRequestMatch } from './image-data';
 
@@ -48,6 +48,14 @@ export class SessionImageLoader {
     return this.enqueue({ type: 'session-detail', source, sessionId }, value => {
       if (!('session' in value)) throw new Error('Invalid session worker response');
       return value.session === null ? null : SessionSchema.parse(value.session);
+    });
+  }
+
+  /** One Timeline lane's text, built and scrubbed in the worker: the host gets only what the lane shows. */
+  loadTimelineText(request: TimelineTextRequest): Promise<TimelineSessionText | null> {
+    return this.enqueue(request, value => {
+      if (!('text' in value)) throw new Error('Invalid timeline text worker response');
+      return value.text === null ? null : TimelineSessionTextSchema.parse(value.text);
     });
   }
 
@@ -141,4 +149,8 @@ export function loadSessionImages(source: SessionSource, sessionId: string, requ
 
 export function loadSessionDetails(source: SessionSource, sessionId: string): Promise<Session | null> {
   return imageLoader.loadSession(source, sessionId);
+}
+
+export function loadSessionTimelineText(request: TimelineTextRequest): Promise<TimelineSessionText | null> {
+  return imageLoader.loadTimelineText(request);
 }

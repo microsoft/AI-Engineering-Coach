@@ -7,10 +7,10 @@
 
 import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
-import { loadSessionFromDisk } from '../core/cache';
-import { withAnalyzedTurns } from '../core/fork-ownership';
+import { loadSessionFromDisk, loadTimelineTextFromDisk } from '../core/cache';
+import { turnIdentity, withAnalyzedTurns } from '../core/fork-ownership';
 import { localScrubContext } from '../core/session-workspace-meta';
-import { timelineSessionText } from '../core/timeline-text';
+import type { TimelineTextScope } from '../core/types/timeline-types';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
 import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
@@ -130,6 +130,21 @@ export function validateDateFilter(p: Record<string, unknown>): DateFilter | und
   else if (isString(p.workspace)) f.workspaceId = p.workspace;
   if (isString(p.harness)) f.harness = p.harness;
   return Object.keys(f).length > 0 ? f : undefined;
+}
+
+/** Most turns one lane's scope lists: more than any day or week shows. */
+const MAX_SCOPE_TURNS = 5000;
+
+/** A lane's text scope from the webview: a finite window and its turns, else nothing is read. */
+function validateTimelineTextScope(raw: unknown): TimelineTextScope | null {
+  if (!isRecord(raw) || !isNumber(raw.from) || !isNumber(raw.to) || !Number.isFinite(raw.from) || !Number.isFinite(raw.to)
+    || raw.to <= raw.from || !Array.isArray(raw.turns) || raw.turns.length > MAX_SCOPE_TURNS) return null;
+  const turns: TimelineTextScope['turns'] = [];
+  for (const t of raw.turns) {
+    if (!isRecord(t) || !isNumber(t.t) || !Number.isFinite(t.t) || !isOptionalString(t.id)) return null;
+    turns.push({ t: t.t, ...(t.id ? { id: t.id } : {}) });
+  }
+  return { from: raw.from, to: raw.to, turns };
 }
 
 function validateBurndownConfig(raw: unknown): BurndownConfig {
@@ -782,13 +797,17 @@ const rpcHandlers: TypedRpcHandlers = {
     // Fall back to in-memory (stripped) session.
     return a.getSessionDetail(sessionId);
   },
-  // The text behind one Timeline lane, read again from its log when the lane is opened: only for the local panel.
+  // The text behind one Timeline lane, read again from its log when the lane is opened: only for the local panel, and
+  // only what the lane shows. The worker reads, filters and scrubs it; the full session never comes to this thread.
   getTimelineSessionText: async (a, _p, params) => {
     const sessionId = params?.sessionId;
-    if (!isString(sessionId)) return null;
+    const scope = validateTimelineTextScope(params?.scope);
+    if (!isString(sessionId) || !scope) return null;
     const analyzed = a.getSessionDetail(sessionId);
-    const full = analyzed ? await loadSessionFromDisk(sessionId) : null;
-    return full ? timelineSessionText(withAnalyzedTurns(full, analyzed), localScrubContext()) : null;
+    if (!analyzed) return null;
+    // A fork's copied turns, and their stops, count once, in their source.
+    const kept = analyzed.inheritedTurns ? analyzed.requests.map(turnIdentity) : undefined;
+    return loadTimelineTextFromDisk(sessionId, scope, localScrubContext(), kept);
   },
   getWorkLifeBalance: (a, _p, params) => a.getWorkLifeBalance(validateDateFilter(params)),
   getAntiPatterns: (a, _p, params) => a.getAntiPatterns(validateDateFilter(params)),
