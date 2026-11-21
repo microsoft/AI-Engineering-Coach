@@ -876,9 +876,11 @@ function textTime(ctx: ViewContext, t: number, win: Interval): string {
 }
 
 function turnItem(ctx: ViewContext, t: TimelineTurn, tt: TimelineTextTurn | undefined): VNode {
-  const hidden = t.k === 'compaction' || t.k === 'other';
+  const kind = tt?.k ?? t.k;
+  const hidden = kind === 'compaction' || kind === 'other';
   return textItem(`t:${t.t}${t.id ? `:${t.id}` : ''}`, `${formatWhen(t.t, ctx.view)} · ${TURN_TITLE[t.k]}`, [
-    tt?.prompt ? quote(tt.prompt) : html`<p class="note">${hidden ? 'Its text isn’t shown: it is a summary or a harness message, not an instruction.' : 'No message text was logged.'}</p>` as VNode,
+    // The agent's reply to a harness message is its own words, and can be the last it said before it needed you.
+    tt?.prompt ? quote(tt.prompt) : html`<p class="note">${hidden ? 'The message that started it isn’t shown: it is a summary or a harness message, not an instruction.' : 'No message text was logged.'}</p>` as VNode,
     earlier('End of the agent’s reply in this turn', tt?.reply),
   ]);
 }

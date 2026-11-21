@@ -184,6 +184,18 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxText [data-text-at^="t:"] > .tx-body').first()).toHaveText('Why is the checkout test flaky?');
   });
 
+  test('a harness turn hides the message that started it, not the agent’s reply', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as unknown as { mockTimelineTextHook?: (id: string) => unknown }).mockTimelineTextHook = id => ({
+        sessionId: id, waits: [], turns: [{ t: new Date(2026, 4, 3, 14).getTime(), k: 'other', reply: 'The background build finished green.' }],
+      });
+    });
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    const turn = page.locator('#tlxText [data-text-at^="t:"]').first();
+    await expect(turn).toContainText('The message that started it isn’t shown: it is a summary or a harness message, not an instruction.');
+    await expect(turn).toContainText('The background build finished green.');
+  });
+
   test('says a wait for your next prompt followed a compaction, not that no reply was logged', async ({ page }) => {
     await page.evaluate(() => {
       (window as unknown as { mockTimelineTextHook?: (id: string) => unknown }).mockTimelineTextHook = id => ({

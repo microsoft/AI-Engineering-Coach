@@ -63,7 +63,7 @@ Click a lane to see its details: role and direct parent, branch, harness, model 
 
 ![A lane's prompts and questions](/screenshots/screen-timeline-text.png)
 
-- **Each turn**: the message that started it (what you typed, or what a coordinator, relay or autopilot sent), and the end of the agent's reply in the turn: its own messages, never the code it wrote to files, its reasoning or a tool's output. Compaction summaries and harness messages aren't shown.
+- **Each turn**: the message that started it (what you typed, or what a coordinator, relay or autopilot sent), and the end of the agent's reply in the turn: its own messages, never the code it wrote to files, its reasoning or a tool's output. Compaction summaries and harness messages aren't shown; the agent's reply to a harness message is.
 - **Questions**: what the agent asked, with its choices and what it said just before, and your answer and how long you took. A relayed question shows the child's question and your reply.
 - **Permission prompts**: what was requested (the command, path, URL, tool or extension), the kind of request, the agent's stated reason, and the decision. Decisions a policy made aren't requests to you, so they aren't listed.
 - **Waits for your next prompt**: how long the agent waited, and the end of the reply it waited after.

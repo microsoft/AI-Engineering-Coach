@@ -164,6 +164,27 @@ describe('cache written by an earlier parser', () => {
     expect(await loadCacheData()).toBeNull();
     clearCache();
   });
+
+  it('re-parses a version 32 cache, whose Copilot waits beside editor chats took a later question reusing an answered one’s ID for answered', async () => {
+    clearCache();
+    const editor = makeSession();
+    const cli = createSession({
+      sessionId: 'cli-beside-editor', workspaceId: 'ws1', workspaceName: 'workspace', harness: 'GitHub Copilot CLI',
+      requests: [createRequest({ requestId: 'r1', timestamp: 1, messageText: 'go', responseText: '',
+        userWaits: [{ start: 2, end: 3, kind: 'question', answered: true, answeredAt: 3 }, { start: 5, end: 6, kind: 'question', answered: true, answeredAt: 3 }] })],
+    });
+    const result: ParseResult = {
+      workspaces: new Map(), sessions: [editor, cli], editLocIndex: new Map(),
+      sessionSourceIndex: new Map([[cli.sessionId, { kind: 'cli-events', filePath: '/logs/ws1/copilot/events.jsonl', workspaceId: 'ws1', workspaceName: 'workspace', harness: 'GitHub Copilot CLI' }]]),
+    };
+    await saveCacheData(result, { '/logs/ws1': { chatCount: 1, chatMaxMtime: 1, editCount: 0, editMaxMtime: 0 } });
+    await flushCacheWrites();
+    expect((await loadCacheData())?.result.sessions.length).toBe(2);
+    const metaFile = path.join(getCacheDir(), 'meta.json');
+    fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf-8')) as object, version: 32 }));
+    expect(await loadCacheData()).toBeNull();
+    clearCache();
+  });
 });
 
 describe('computeDirMetas', () => {
