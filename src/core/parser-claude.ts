@@ -767,7 +767,8 @@ function readClaudeCwd(filePath: string): string | undefined {
 /**
  * Finds transcripts that are one file under two project folders (the same device and inode). The copy in the folder
  * Claude Code would use for the transcript's working folder is parsed, or the first by folder name; the others are
- * skipped, and their `subagents/` folders merge into the parsed copy's session.
+ * skipped, and their `subagents/` folders merge into the parsed copy's session. The stat is read as `bigint`, because
+ * Windows file IDs can be too large for a number to tell apart, and a file with one link is not a hard link.
  */
 function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
   const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), seenTurns: new Set() };
@@ -784,7 +785,8 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
       const filePath = path.join(projectsDir, dirName, entry.name);
       let key: string;
       try {
-        const stat = fs.statSync(filePath);
+        const stat = fs.statSync(filePath, { bigint: true });
+        if (stat.nlink < 2n) continue;
         key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
       } catch {
         continue;
