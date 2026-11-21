@@ -91,6 +91,8 @@ interface CodexParseState {
   turnStartTs: number | null;
   /** When the turn's task completed or was aborted; later lines until the next prompt are idle time. */
   turnEndTs: number | null;
+  /** A task started after the turn's task ended: nothing more belongs to this turn. */
+  turnEnded: boolean;
   turnCanceled: boolean;
   answerEvidence: 'final' | 'legacy' | 'missing';
   prevTotalInput: number;
@@ -192,6 +194,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     turnEffort: null,
     turnStartTs: null,
     turnEndTs: null,
+    turnEnded: false,
     turnCanceled: false,
     answerEvidence: 'missing',
     prevTotalInput: 0,
@@ -338,6 +341,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
   state.turnEndTs = null;
+  state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
   state.currentEditLocs = new Map();
@@ -556,7 +560,17 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
 
 /** Work logged after the task completed: the turn ends with that work instead. */
 function extendCodexTurnEnd(state: CodexParseState, ts: number | null): void {
-  if (state.turnEndTs !== null && ts !== null && ts > state.turnEndTs) state.turnEndTs = ts;
+  if (!state.turnEnded && state.turnEndTs !== null && ts !== null && ts > state.turnEndTs) state.turnEndTs = ts;
+}
+
+/** A task_complete or turn_aborted ends the turn's work; time until the next prompt is the user's, not the agent's.
+ *  A task with no prompt of its own (a manual `/compact`) is not a turn's work, whether it starts after the turn's
+ *  task ended or before the first prompt. */
+function trackCodexTaskEnd(eventType: string, state: CodexParseState, ts: number | null): void {
+  if (eventType === 'task_started' && state.turnEndTs !== null) state.turnEnded = true;
+  if (eventType !== 'task_complete' && eventType !== 'turn_aborted') return;
+  if (state.turnEnded || state.turnStartTs === null || ts === null) return;
+  state.turnEndTs = ts;
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
@@ -590,8 +604,7 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     state.answerEvidence = 'final';
   }
   if (eventType === 'turn_aborted') state.turnCanceled = true;
-  // The turn's work ends here; time until the next prompt is the user's, not the agent's.
-  if (eventType === 'task_complete' || eventType === 'turn_aborted') state.turnEndTs = ts ?? state.turnEndTs;
+  trackCodexTaskEnd(eventType, state, ts);
 }
 
 function handleTurnContext(payload: Record<string, unknown>, state: CodexParseState): void {
