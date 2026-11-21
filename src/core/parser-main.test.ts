@@ -32,7 +32,7 @@ vi.mock('./cache', () => ({
   setMemoryCache: vi.fn(),
   computeDirMetasAsync: vi.fn(() => Promise.resolve({})),
   loadCacheData: vi.fn(() => Promise.resolve(null)),
-  saveCacheData: vi.fn(() => Promise.resolve()),
+  saveCacheData: vi.fn(() => Promise.resolve(true)),
   findStaleDirs: vi.fn(() => ({ stale: new Set(), removed: new Set() })),
   clearCache: vi.fn(),
   stripSessionsForMemory: vi.fn(),
@@ -120,7 +120,7 @@ beforeEach(() => {
   vi.mocked(setMemoryCache).mockImplementation(() => {});
   vi.mocked(computeDirMetasAsync).mockResolvedValue({});
   vi.mocked(loadCacheData).mockResolvedValue(null);
-  vi.mocked(saveCacheData).mockResolvedValue();
+  vi.mocked(saveCacheData).mockResolvedValue(true);
   vi.mocked(findStaleDirs).mockReturnValue({ stale: new Set(), removed: new Set() });
   vi.mocked(stripSessionsForMemory).mockImplementation(() => {});
 });
@@ -197,7 +197,7 @@ describe('parseAllLogs', () => {
 
     const result = parseAllLogs([XCODE_DIR]);
 
-    expect(parseXcodeDatabases).toHaveBeenCalledWith(XCODE_DIR, result.editLocIndex);
+    expect(parseXcodeDatabases).toHaveBeenCalledWith(XCODE_DIR, result.editLocIndex, result.sessionSourceIndex);
     expect(result.sessions).toHaveLength(1);
     expect(result.workspaces.get('xc-ws')).toEqual({
       id: 'xc-ws',
@@ -235,6 +235,7 @@ describe('parseAllLogs', () => {
       result.workspaces,
       result.sessions,
       result.editLocIndex,
+      result.sessionSourceIndex,
     );
   });
 
@@ -293,6 +294,7 @@ describe('parseAllLogsAsyncDetailed', () => {
       cachedResult.sessions,
       cachedResult.editLocIndex,
       expect.any(Object),
+      cachedResult.sessionSourceIndex,
     );
   });
 
@@ -372,7 +374,7 @@ describe('parseAllLogsAsyncDetailed', () => {
       'VS Code',
       expect.any(Object),
     );
-    expect(parseXcodeDatabasesAsync).toHaveBeenCalledWith(XCODE_DIR, parsed.result.editLocIndex);
+    expect(parseXcodeDatabasesAsync).toHaveBeenCalledWith(XCODE_DIR, parsed.result.editLocIndex, parsed.result.sessionSourceIndex);
   });
 
   it('reports progress during a cold parse', async () => {
@@ -419,7 +421,7 @@ describe('parseAllLogsAsyncDetailed', () => {
 
     const parsed = await parseAllLogsAsyncDetailed([XCODE_DIR]);
 
-    expect(parseXcodeDatabasesAsync).toHaveBeenCalledWith(XCODE_DIR, parsed.result.editLocIndex);
+    expect(parseXcodeDatabasesAsync).toHaveBeenCalledWith(XCODE_DIR, parsed.result.editLocIndex, parsed.result.sessionSourceIndex);
     expect(parsed.result.workspaces.get('xc-ws')).toEqual({
       id: 'xc-ws',
       name: 'Xcode Workspace',
@@ -435,6 +437,7 @@ describe('parseAllLogsAsyncDetailed', () => {
       parsed.result.sessions,
       parsed.result.editLocIndex,
       expect.any(Object),
+      parsed.result.sessionSourceIndex,
     );
   });
 

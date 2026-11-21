@@ -90,12 +90,12 @@ const canvas = createCanvas({
     type: "object",
     description:
       "No input required. The dashboard reads your local AI coding session logs from disk.",
-    properties: {},
+    properties: { page: { type: "string", enum: ["dashboard", "curiosity"], description: "Initial dashboard page." } },
     additionalProperties: false,
   },
-  open() {
+  open(ctx) {
     return {
-      url: baseUrl,
+      url: ctx.input?.page === "curiosity" ? `${baseUrl}/?page=curiosity` : baseUrl,
       title: "AI Engineer Coach",
       status: isBuilt() ? "Loading dashboard" : "Build required",
     };

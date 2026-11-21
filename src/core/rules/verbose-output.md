@@ -37,6 +37,6 @@ examples: "{{messageText | truncate:80}}" → {{completionTokens}} tokens
 # Tests
 ```test
 {messageText: "fix this", messageLength: 8, completionTokens: 8000} -> triggered
-{messageText: "Explain in detail how the OAuth flow works including token refresh, PKCE, and edge cases for mobile clients", messageLength: 110, completionTokens: 8000} -> clean
+{messageText: "Explain in detail how the OAuth flow works including token refresh, PKCE, and edge cases for mobile clients. Cover the authorization code exchange, how refresh tokens rotate, and what to store on the device versus the server", messageLength: 224, completionTokens: 8000} -> clean
 {messageText: "fix this", messageLength: 8, completionTokens: 200} -> clean
 ```

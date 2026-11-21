@@ -229,8 +229,9 @@ export class DashboardAnalyzer extends AnalyzerBase {
     return { labels: sorted.map(([l]) => l), values: sorted.map(([, v]) => v) };
   }
 
+  /** Hours the user typed prompts in, by work type (automated turns are left out). */
   getHourlyDistribution(f?: DateFilter): HourlyDistribution {
-    const reqs = this.filter(f);
+    const reqs = this.humanFilter(f).reqs;
     const hours = makeHourBuckets();
     const byType: Record<string, number[]> = {};
     for (const wt of WORK_TYPES) byType[wt] = makeHourBuckets();
@@ -243,8 +244,9 @@ export class DashboardAnalyzer extends AnalyzerBase {
     return { hours, byType };
   }
 
+  /** When in the week the user typed prompts; automated turns are left out and counted in `turnBasis`. */
   getHeatmap(f?: DateFilter): HeatmapData {
-    const reqs = this.filter(f);
+    const { reqs, basis } = this.humanFilter(f);
     const heatmap = makeWeekHourGrid();
     const byType: Record<string, number[][]> = {};
     for (const wt of WORK_TYPES) byType[wt] = makeWeekHourGrid();
@@ -257,12 +259,13 @@ export class DashboardAnalyzer extends AnalyzerBase {
       byType[wt][dow][h]++;
     }
     const focusHeatmap = computeFocusHeatmap(reqs);
-    return { heatmap, byType, focusHeatmap };
+    return { heatmap, byType, focusHeatmap, turnBasis: basis };
   }
 
+  /** Days the user typed prompts on; automated turns are left out and counted in `turnBasis`. */
   getCalendarActivity(f?: DateFilter): CalendarActivityData {
-    const reqs = this.filter(f);
-    return computeCalendarActivity(reqs);
+    const { reqs, basis } = this.humanFilter(f);
+    return { ...computeCalendarActivity(reqs), turnBasis: basis };
   }
 
   getHarnessComparison(f?: DateFilter): HarnessComparisonData {
@@ -508,7 +511,7 @@ function computeFocusHeatmap(reqs: SessionRequest[]): number[][] {
  * Focus score per day: divide the day's active hours into 15-minute buckets.
  * Focus = activeBuckets / totalPossibleBuckets (across the time span).
  */
-function computeCalendarActivity(reqs: SessionRequest[]): CalendarActivityData {
+function computeCalendarActivity(reqs: SessionRequest[]): Omit<CalendarActivityData, 'turnBasis'> {
   const dayData = new Map<string, { count: number; minutes: number[] }>();
 
   for (const r of reqs) {

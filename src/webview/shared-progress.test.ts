@@ -15,9 +15,11 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import type { WorkerTelemetry } from './shared';
 
+const postMessage = vi.fn();
+
 beforeAll(() => {
   (globalThis as unknown as { acquireVsCodeApi: () => unknown }).acquireVsCodeApi = () => ({
-    postMessage: () => { /* noop */ },
+    postMessage,
     getState: () => null,
     setState: () => { /* noop */ },
   });
@@ -79,6 +81,19 @@ describe('initMessageListener progress forwarding', () => {
 });
 
 describe('initMessageListener dataReady forwarding', () => {
+  it('announces readiness after installing the message listener', async () => {
+    const { initMessageListener } = await import('./shared');
+    const onDataReady = vi.fn();
+    await Promise.resolve();
+    postMessage.mockClear();
+    postMessage.mockImplementationOnce(() => dispatch({ type: 'dataReady', currentWorkspace: 'cached-app' }));
+    initMessageListener(() => {}, onDataReady);
+    expect(postMessage).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(postMessage).toHaveBeenCalledWith({ type: 'ready' });
+    expect(onDataReady).toHaveBeenCalledWith('cached-app', { skippedFiles: 0, skippedLines: 0 });
+  });
+
   it('forwards authoritative skipped counts from the dataReady payload', async () => {
     const { initMessageListener } = await import('./shared');
     const onDataReady = vi.fn();

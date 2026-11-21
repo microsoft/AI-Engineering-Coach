@@ -6,9 +6,10 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 import { afterEach, describe, it, expect } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
-import { accumulateXcodeFileEdits, findXcodeDirs, parseXcodeDatabases } from './parser-xcode';
+import { accumulateXcodeFileEdits, findXcodeDirs, parseXcodeDatabases, parseXcodeDatabasesAsync } from './parser-xcode';
 
 const tempDirs: string[] = [];
 
@@ -55,6 +56,30 @@ describe('findXcodeDirs', () => {
 });
 
 describe('parseXcodeDatabases', () => {
+  it.skipIf(process.platform === 'win32')('captures explicit web hosts from recorded assistant tool inputs', async () => {
+    const xcodeBase = makeTempDir();
+    const directory = path.join(xcodeBase, 'machine', 'conversations');
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, 'sources.db');
+    const user = JSON.stringify({ content: 'Why?', requestType: 'conversation' }).replaceAll("'", "''");
+    const assistant = JSON.stringify({
+      content: 'A recorded answer.', turnStatus: 'completed', editAgentRounds: [{ toolCalls: [
+        { name: 'web_fetch', input: { url: 'https://docs.python.org/3/?private=1' } },
+        { name: 'web_search', input: { query: 'https://not-a-source.example' } },
+      ] }],
+    }).replaceAll("'", "''");
+    execFileSync('sqlite3', [file, `
+      CREATE TABLE Conversation (id TEXT, title TEXT, createdAt INTEGER, updatedAt INTEGER);
+      CREATE TABLE Turn (id TEXT, conversationID TEXT, role TEXT, data TEXT, createdAt INTEGER);
+      INSERT INTO Conversation VALUES ('sources', 'Sources', 1700000000, 1700000001);
+      INSERT INTO Turn VALUES ('user', 'sources', 'user', '${user}', 1700000000);
+      INSERT INTO Turn VALUES ('answer', 'sources', 'assistant', '${assistant}', 1700000001);
+    `], { cwd: os.tmpdir() });
+    for (const sessions of [parseXcodeDatabases(xcodeBase), await parseXcodeDatabasesAsync(xcodeBase)]) {
+      expect(sessions[0]?.requests[0].webDomains).toEqual(['docs.python.org']);
+    }
+  });
+
   it('returns empty array for non-existent directory', () => {
     const sessions = parseXcodeDatabases('/nonexistent/path');
     expect(sessions).toEqual([]);

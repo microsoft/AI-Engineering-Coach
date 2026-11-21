@@ -74,12 +74,34 @@ function firstStringProperty(value: Record<string, unknown>, ...keys: string[]):
 
 export function resolveWorkspaceRoot(id: string, ws: Workspace): string | null {
   if (id.startsWith('claude-')) {
+    // `ws.path` is the session's cwd when that folder still exists, as for the
+    // other CLI harnesses; otherwise addSession falls back to ~/.claude/projects.
+    // Keep the session-file lookup for paths that point into the session store.
+    if (isProjectRoot(ws.path)) return ws.path;
     return resolveClaudeRoot(ws.path);
   }
   if (id.startsWith('codex-') || id.startsWith('opencode-')) {
-    return fs.existsSync(ws.path) ? ws.path : null;
+    return isProjectRoot(ws.path) ? ws.path : null;
   }
   return resolveVsCodeRoot(ws.path) ?? resolveCLIRoot(ws.path);
+}
+
+/** True when the path is an existing directory that is not a Claude session
+ *  store (those hold .jsonl transcripts, not the user's project files). */
+function isProjectRoot(p: string): boolean {
+  try {
+    if (!fs.statSync(p).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return !isClaudeSessionStore(p);
+}
+
+/** `~/.claude/projects` itself, or one `<encoded>` folder inside it. */
+function isClaudeSessionStore(p: string): boolean {
+  const dir = path.resolve(p);
+  const isStoreRoot = (d: string) => path.basename(d) === 'projects' && path.basename(path.dirname(d)) === '.claude';
+  return isStoreRoot(dir) || isStoreRoot(path.dirname(dir));
 }
 
 function resolveVsCodeRoot(storagePath: string): string | null {

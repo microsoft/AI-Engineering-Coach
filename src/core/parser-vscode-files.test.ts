@@ -381,6 +381,15 @@ describe('forEachJsonlLine (sync streaming reader)', () => {
     });
   });
 
+  it.each([false, true])('stops immediately after the requested line (prefetched=%s)', prefetched => {
+    withTempFile('stop.jsonl', 'first\nsecond\nthird', fp => {
+      if (prefetched) prefetchCache.set(fp, 'first\nsecond\nthird');
+      const lines: string[] = [];
+      forEachJsonlLine(fp, line => { lines.push(line); }, () => lines.length === 1);
+      expect(lines).toEqual(['first']);
+    });
+  });
+
   it('reassembles a multibyte UTF-8 char split across the read-chunk boundary', () => {
     // Place a 3-byte '€' so its bytes straddle the 1MB chunk boundary: the StringDecoder must
     // carry the partial sequence to the next chunk instead of corrupting it (issue #106).

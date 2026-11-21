@@ -5,17 +5,26 @@
 
 /* Recommendations + anti-pattern detection analytics */
 
-import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem } from './types';
+import { Session, SessionRequest, DateFilter, RecommendationResult, AntiPatternData, PracticeGroup, GroupScore, ProjectOverviewData, ProjectOverviewItem, PatternContribution, WeeklyPatternObservation, RuleFailure } from './types';
 import { toDateStr, normalizeModel, modelMultiplier, extToLang } from './helpers';
 import { LONG_SESSION_REQS } from './constants';
 import { AnalyzerBase } from './analyzer-base';
+import { isHumanTurn, splitHumanTurns } from './human-turns';
 import {
   computeWeeklyTrend, computeWeeklyScores,
 } from './detectors';
-import { getDetectorGroupCounts, runDetectors } from './detector-registry';
+import { detectAntiPatterns, getDetectorGroupCounts, type DetectionResult } from './detector-registry';
+import { SEVERITY_PENALTIES } from './detectors/scoring';
 
 function scoreToStatus(score: number): 'good' | 'needs-improvement' | 'critical' {
   return score >= 70 ? 'good' : score >= 40 ? 'needs-improvement' : 'critical';
+}
+
+/** Each group's active detectors, without the rules that couldn't be evaluated: the scores cover the rules that ran. */
+function evaluatedDetectorCounts(skipIdeDetectors: boolean, failedRules: RuleFailure[]): Record<PracticeGroup, number> {
+  const counts = getDetectorGroupCounts(skipIdeDetectors);
+  for (const failure of failedRules) counts[failure.group] -= 1;
+  return counts;
 }
 
 export class PatternsAnalyzer extends AnalyzerBase {
@@ -224,7 +233,7 @@ export class PatternsAnalyzer extends AnalyzerBase {
   /** Public access to filtered sessions (for rule editor). */
   getFilteredSessions(f?: DateFilter): Session[] { return this.filteredSessions(f); }
 
-  getAntiPatterns(f?: DateFilter): AntiPatternData {
+  getAntiPatterns(f?: DateFilter, contribution: PatternContribution = { patterns: [], weekly: [] }): AntiPatternData {
     const reqs = this.filter(f);
     const sessions = this.filteredSessions(f);
 
@@ -245,26 +254,24 @@ export class PatternsAnalyzer extends AnalyzerBase {
     });
 
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
-    const patterns = runDetectors(enrichedReqs, sessions, skipIdeDetectors);
-    return this.buildAntiPatternResult(patterns, reqs, skipIdeDetectors);
+    // Index every session, not only `sessions`: a date filter can keep a request whose session it drops.
+    const detection = detectAntiPatterns(enrichedReqs, sessions, skipIdeDetectors, this.requestSessionMap);
+    detection.patterns.push(...contribution.patterns);
+    return this.buildAntiPatternResult(detection, reqs, skipIdeDetectors, contribution.weekly);
   }
 
-  private buildAntiPatternResult(patterns: import('./types').AntiPattern[], reqs: SessionRequest[], skipIdeDetectors: boolean): AntiPatternData {
+  private buildAntiPatternResult({ patterns, failures: failedRules }: DetectionResult, reqs: SessionRequest[], skipIdeDetectors: boolean, weekly: WeeklyPatternObservation[]): AntiPatternData {
     const groupOrder: Record<string, number> = { 'prompt-quality': 0, 'session-hygiene': 1, 'code-review': 2, 'tool-mastery': 3 };
     patterns.sort((a, b) => (groupOrder[a.group] ?? 9) - (groupOrder[b.group] ?? 9) || b.occurrences - a.occurrences);
 
-    const weeklyTrend = computeWeeklyTrend(reqs);
-    const weeklyScores = computeWeeklyScores(reqs);
+    const groupDetectorCount = evaluatedDetectorCounts(skipIdeDetectors, failedRules);
+    const weeklyTrend = computeWeeklyTrend(reqs, weekly);
+    const weeklyScores = computeWeeklyScores(reqs, weekly, groupDetectorCount);
     const totalOccurrences = patterns.reduce((s, p) => s + p.occurrences, 0);
 
     // Compute per-group health scores (0-100)
     // Score = 100 minus a penalty per detected pattern, scaled by severity and capped per-pattern
     const allGroups: PracticeGroup[] = ['prompt-quality', 'session-hygiene', 'code-review', 'tool-mastery'];
-    const sevPenalty: Record<string, number> = { high: 12, medium: 7, low: 3 };
-
-    // Count how many possible detectors exist per group (for baseline)
-    const groupDetectorCount = getDetectorGroupCounts(skipIdeDetectors);
-
     const groupScores: GroupScore[] = allGroups.map(group => {
       const gPatterns = patterns.filter(p => p.group === group);
       const maxDetectors = groupDetectorCount[group] || 8;
@@ -272,7 +279,7 @@ export class PatternsAnalyzer extends AnalyzerBase {
       // Penalty: each detected pattern costs points based on severity
       let penalty = 0;
       for (const p of gPatterns) {
-        penalty += sevPenalty[p.severity] || 5;
+        penalty += SEVERITY_PENALTIES[p.severity];
       }
       const maxPenalty = maxDetectors * 12;
       const score = Math.max(0, Math.round(100 * (1 - penalty / maxPenalty)));
@@ -309,25 +316,28 @@ export class PatternsAnalyzer extends AnalyzerBase {
         improvements.push(`Score up ${momPct}% compared to last month.`);
       }
 
-      // If no patterns detected, that's a strong positive
-      if (gPatterns.length === 0) {
+      // If no patterns detected, that's a strong positive -- unless a rule couldn't be evaluated
+      const groupFailures = failedRules.filter(failure => failure.group === group);
+      if (gPatterns.length === 0 && groupFailures.length === 0) {
         improvements.push('All checks passing -- no anti-patterns detected.');
       }
 
-      return { group, score, wowPct, momPct, topIssue, improvements, patternCount: gPatterns.length };
+      return { group, score, wowPct, momPct, topIssue, improvements, patternCount: gPatterns.length, failedRules: groupFailures };
     });
 
-    return { patterns, totalOccurrences, weeklyTrend, groupScores, weeklyScores };
+    return { patterns, totalOccurrences, weeklyTrend, groupScores, weeklyScores, failedRules };
   }
 
   getProjectOverview(f?: DateFilter): ProjectOverviewData {
     const sessions = this.filteredSessions(f);
-    const projects = Array.from(this.groupWorkspaceRequests(sessions, f).entries())
+    const workspaces = this.groupWorkspaceRequests(sessions, f);
+    const projects = Array.from(workspaces.entries())
       .map(([workspaceName, data]) => this.buildProjectOverviewItem(workspaceName, data))
       .filter((project): project is ProjectOverviewItem => project !== null)
       .sort((a, b) => b.estimatedHours - a.estimatedHours)
       .slice(0, 20);
-    return { projects };
+    const { basis } = splitHumanTurns([...workspaces.values()].flatMap(data => data.reqs));
+    return { projects, turnBasis: basis };
   }
 
   private groupWorkspaceRequests(
@@ -355,14 +365,16 @@ export class PatternsAnalyzer extends AnalyzerBase {
     workspaceName: string,
     data: { id: string; sessions: Session[]; reqs: SessionRequest[] },
   ): ProjectOverviewItem | null {
-    if (data.reqs.length === 0) return null;
+    // Hours, prompts and work pattern describe the user's time; code output counts every turn.
+    const typed = data.reqs.filter(isHumanTurn);
+    if (typed.length === 0) return null;
     return {
       workspaceName,
       workspaceId: data.id,
-      totalRequests: data.reqs.length,
-      estimatedHours: this.estimateProjectHours(data.reqs),
+      totalRequests: typed.length,
+      estimatedHours: this.estimateProjectHours(typed),
       languages: this.getProjectLanguages(data.reqs),
-      timePattern: this.getProjectTimePattern(data.reqs),
+      timePattern: this.getProjectTimePattern(typed),
       topFiles: this.getTopProjectFiles(data.reqs),
       estimatedLoc: this.getEstimatedProjectLoc(data.reqs),
       gitPath: data.sessions[0]?.location || null,

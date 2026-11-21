@@ -7,22 +7,25 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { getCacheDir } from './cache-paths';
 
-const DEBUG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.copilot-analytics-cache');
-const DEBUG_LOG_FILE = path.join(DEBUG_DIR, 'runtime.log');
 const HOOK_FLAG = '__aiEngineerCoachRuntimeHooksInstalled';
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB
 
-let debugDirCreated = false;
+let ensuredDebugDir: string | undefined;
 
-function ensureDebugDir(): void {
-  if (debugDirCreated) return;
-  try {
-    fs.mkdirSync(DEBUG_DIR, { recursive: true });
-    debugDirCreated = true;
-  } catch {
-    // Best-effort only.
+/** Path of runtime.log in the current cache dir, creating the dir on first use (best effort). */
+function debugLogFile(): string {
+  const dir = getCacheDir();
+  if (ensuredDebugDir !== dir) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      ensuredDebugDir = dir;
+    } catch {
+      // Best-effort only.
+    }
   }
+  return path.join(dir, 'runtime.log');
 }
 
 function formatMb(bytes: number): string {
@@ -49,8 +52,7 @@ function runtimeMemorySummary(): string {
 }
 
 export function getRuntimeDebugLogPath(): string {
-  ensureDebugDir();
-  return DEBUG_LOG_FILE;
+  return debugLogFile();
 }
 
 let outputHook: ((message: string) => void) | null = null;
@@ -61,18 +63,18 @@ export function setOutputHook(hook: ((message: string) => void) | null): void {
 
 export function runtimeDebug(scope: string, message: string, detail?: unknown): void {
   try {
-    ensureDebugDir();
+    const logFile = debugLogFile();
     const time = new Date().toISOString();
     const suffix = detail === undefined ? '' : ` | ${detailToString(detail)}`;
     const formatted = `${time} pid=${process.pid} [${scope}] ${message} | ${runtimeMemorySummary()}${suffix}`;
     // Rotate log if it exceeds the size limit
     try {
-      const stat = fs.statSync(DEBUG_LOG_FILE);
+      const stat = fs.statSync(logFile);
       if (stat.size > MAX_LOG_SIZE) {
-        fs.truncateSync(DEBUG_LOG_FILE, 0);
+        fs.truncateSync(logFile, 0);
       }
     } catch { /* file doesn't exist yet — that's fine */ }
-    fs.appendFileSync(DEBUG_LOG_FILE, formatted + '\n', 'utf-8');
+    fs.appendFileSync(logFile, formatted + '\n', 'utf-8');
     if (outputHook) outputHook(formatted);
   } catch {
     // Best-effort only.

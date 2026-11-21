@@ -13,7 +13,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ["src/**/*.ts"],
+    files: ["src/**/*.ts", "tests/vscode/**/*.ts"],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -83,6 +83,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "**/*.mjs", "tests/"],
+    ignores: ["dist/", "node_modules/", ".vscode-test/", "**/*.mjs", "tests/e2e/"],
   }
 );

@@ -7,9 +7,11 @@
     "src/core/warm-up-worker.ts",
     "src/core/parse-worker.ts",
     "src/core/cache-write-worker.ts",
-    "src/core/parser.bench.ts"
+    "src/core/parser.bench.ts",
+    "tests/vscode/run.ts",
+    "tests/vscode/suite/**/*.spec.ts"
   ],
-  "project": ["src/**/*.ts"],
+  "project": ["src/**/*.ts", "tests/vscode/**/*.ts"],
   "ignore": [
     "src/webview/page-insights.ts",
     "src/webview/page-rule-editor.ts",
@@ -17,7 +19,7 @@
     "src/webview/vibe-roles.ts"
   ],
   "ignoreDependencies": ["lint-staged", "serve"],
-  "ignoreBinaries": ["tsx", "sqlite3"],
+  "ignoreBinaries": ["tsx", "sqlite3", "mkfifo"],
   "rules": {
     "exports": "off",
     "types": "off",

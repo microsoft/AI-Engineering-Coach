@@ -8,6 +8,7 @@
 import { DateFilter } from '../core/types';
 import { rpc, el, formatDate, formatTime } from './shared';
 import { html, render } from './render';
+import { consumeNavHint } from './app';
 
 /* ── Gantt timeline types ── */
 interface TlSession {
@@ -271,7 +272,8 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   }
 
   // Initial render
-  await renderGanttTab();
+  const hint = consumeNavHint();
+  await renderGanttTab(hint && /^\d{4}-\d{2}-\d{2}$/.test(hint) ? hint : undefined);
 }
 
 /* ── Gantt helpers ── */

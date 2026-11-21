@@ -67,6 +67,35 @@ function parseSingleSession(lines: object[]) {
 }
 
 describe('parseCodexSessions extra coverage', () => {
+  it('captures web hosts from both function-call formats and resets source context each turn', () => {
+    const source = parseSingleSession([
+      { type: 'session_meta', payload: { id: 's', cwd: '/repo' } },
+      { type: 'event_msg', timestamp: '2026-09-30T12:00:00Z', payload: { type: 'user_message', message: 'Why?' } },
+      { type: 'event_msg', payload: { type: 'function_call', name: 'web_fetch', arguments: { url: 'https://docs.python.org/3/' } } },
+      { type: 'response_item', payload: { type: 'function_call', name: 'web_fetch', arguments: '{"url":"https://learn.microsoft.com/typescript"}' } },
+      { type: 'event_msg', timestamp: '2026-09-30T12:01:00Z', payload: { type: 'user_message', message: 'How?' } },
+      { type: 'event_msg', payload: { type: 'assistant_message', content: 'An answer.' } },
+    ]);
+    expect(source.requests.map(request => request.webDomains)).toEqual([['docs.python.org', 'learn.microsoft.com'], []]);
+  });
+
+  it('distinguishes final answers from reasoning and captures freeform patch paths', () => {
+    const source = parseSingleSession([
+      { type: 'session_meta', payload: { id: 's', cwd: '/repo' } },
+      { type: 'event_msg', timestamp: '2026-09-30T12:00:00Z', payload: { type: 'user_message', message: 'Why?' } },
+      { type: 'event_msg', payload: { type: 'agent_reasoning', text: 'I should inspect this.' } },
+      { type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch', input: '*** Update File: src/a.ts\n+x\n' } },
+      { type: 'response_item', payload: { type: 'function_call', name: 'spawn_agent', arguments: '{"agent_type":"research"}' } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final', content: [{ type: 'output_text', text: 'An answer.' }] } },
+      { type: 'event_msg', timestamp: '2026-09-30T12:01:00Z', payload: { type: 'user_message', message: 'How?' } },
+      { type: 'event_msg', payload: { type: 'agent_reasoning', text: 'Still thinking.' } },
+    ]);
+    expect(source.requests).toMatchObject([
+      { answerEvidence: 'final', editedFiles: ['src/a.ts'], toolsUsed: ['apply_patch', 'spawn_agent'], investigationDelegations: ['research'] },
+      { answerEvidence: 'missing', investigationDelegations: [] },
+    ]);
+  });
+
   describe('empty and invalid input', () => {
     it('returns no sessions for an empty file', () => {
       withCodexRawFile('', (sessionsDir) => {

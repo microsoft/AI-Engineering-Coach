@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, it, expect } from 'vitest';
+import { ChildProcess } from 'child_process';
+import { describe, it, expect, vi } from 'vitest';
 import { Analyzer } from './analyzer';
 import { Session, SessionRequest, DateFilter } from './types';
 import { accumulateEditLoc, EditTimelineLike } from './edit-loc-diff';
@@ -597,6 +598,46 @@ describe('Analyzer', () => {
   });
 
   describe('warmUp async progress', () => {
+    it('can warm up through a forked Node child with Map-preserving serialization', async () => {
+      const child = new ChildProcess();
+      const send = vi.fn((_payload: unknown) => {
+        queueMicrotask(() => child.emit('message', { type: 'result', antiPatterns: null, configHealth: null }));
+        return true;
+      });
+      child.send = send;
+      const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
+      const forkWorker = vi.fn(() => child);
+      const analyzer = new Analyzer([]);
+      await analyzer.warmUp(undefined, forkWorker);
+      expect(forkWorker).toHaveBeenCalledWith(expect.stringContaining('warm-up-worker.js'), [], {
+        serialization: 'advanced', execArgv: [],
+      });
+      expect(send.mock.calls[0][0]).toHaveProperty('workspaces', expect.any(Map));
+      expect(send.mock.calls[0][0]).toHaveProperty('editLocIndex', expect.any(Map));
+      expect(kill).toHaveBeenCalledOnce();
+    });
+
+    it('does not run synchronous analytics when an injected child fails', async () => {
+      const child = new ChildProcess();
+      child.send = () => {
+        queueMicrotask(() => child.emit('error', new Error('child failed')));
+        return true;
+      };
+      vi.spyOn(child, 'kill').mockReturnValue(true);
+      const analyzer = new Analyzer([]);
+      const synchronous = vi.spyOn(analyzer, 'getAntiPatterns');
+      await expect(analyzer.warmUp(undefined, () => child)).rejects.toThrow('child failed');
+      expect(synchronous).not.toHaveBeenCalled();
+    });
+
+    it('rejects a failed IPC send instead of throwing from the deferred callback', async () => {
+      const child = new ChildProcess();
+      child.send = () => { throw new Error('IPC disconnected'); };
+      const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
+      await expect(new Analyzer([]).warmUp(undefined, () => child)).rejects.toThrow('IPC disconnected');
+      expect(kill).toHaveBeenCalledOnce();
+    });
+
     it('delivers progress messages in order via setImmediate', async () => {
       const sessions = [
         makeSession({ sessionId: 's1', workspaceId: 'ws-1', workspaceName: 'proj', requests: [makeRequest()] }),

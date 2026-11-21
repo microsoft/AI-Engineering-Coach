@@ -10,4 +10,4 @@ The Improve section identifies bad habits and helps you adopt better practices f
 - [Rule Playground](/improve/rule-playground/) -- Interactive REPL for the rule DSL with a field browser, function catalog, and metric list
 - [Data Explorer](/improve/data-explorer/) -- Browse every request/session field, view distributions, and run ad-hoc filters
 - [Skill Finder](/improve/skill-finder/) -- Find repeated prompts and matching community skills
-- [Context Health](/improve/context-health/) -- Evaluate context quality and window management
+- [Context Health](/improve/context-health/) -- Evaluate context quality, window management, and prompt caching

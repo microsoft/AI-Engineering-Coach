@@ -31,14 +31,18 @@ Measures how well you provide context to the AI. Representative rules:
 - **Lazy Prompting** -- Short, unspecific requests that produce generic responses
 - **Caps Lock Rage** -- Requests written mostly in CAPS indicating frustration
 - **Profanity / Hostile Language / Frustration Signals** -- Sentiment-based rules that highlight breakdowns in the human-AI loop
+- **Curiosity Balance** -- Three activity-balance levels: Balanced, Needs review, and Strongly skewed
+- **Repeated Inquiry Wording** -- Exact normalized questions repeated across sessions, without inferring poor retention
 
 ### Session Hygiene
 
 Evaluates how you manage your coding sessions:
 
 - **Mega Sessions / Abandoned Sessions / Session Drift** -- Flag sessions that run too long, stop abruptly, or drift across unrelated topics
-- **Late-Night Coding / Weekend Overwork** -- Detect overwork patterns
+- **Late-Night Coding / Weekend Overwork** -- Detect overwork patterns in the prompts you typed
 - **Repeated Prompts** -- Surface near-duplicate prompts that suggest your context isn't landing
+
+The time-based rules count only the prompts you typed. Harnesses also log "user" turns that another agent, autopilot, a parent agent or the harness sent; those show when your agents ran, not when you worked. **Late-Night Coding** and **Weekend Overwork** leave them out, and Weekend Overwork divides by the prompts you typed, not by every turn. The weekly Session Hygiene score does the same for late-night and weekend hours, while canceled requests still count over every turn. **Broken Flow State** measures each pause from the end of the assistant's work, including automated turns that are still running, such as a sub-agent's, to your next prompt. **Speed Accept** (under Code Review) counts only a message you typed right after the code. Session-size rules such as **Mega Sessions** and **Session Drift** count every turn, because automated turns fill the context too. Your own rules can do the same with the `humanTurn` request field; see the [Rule Editor](/improve/rule-editor/).
 
 ### Code Review
 
@@ -55,6 +59,8 @@ Evaluates how broadly you use available features:
 - **No Slash Commands / No Plan Mode / Agentic No Tools** -- Underused productivity features
 - **Premium Waste / Model Overreliance** -- Using expensive models for simple questions
 - **No Skills / No Custom Instructions** -- Gaps in your context-engineering setup
+
+Some rules read fields that only some harnesses log, so they count only those harnesses' requests. **No Plan Mode** counts VS Code, GitHub Copilot CLI and App, and OpenCode, whose logs record plan mode. **No Custom Instructions**, and the custom-instructions signal of **Context Engineering Gaps**, count only VS Code, the only harness that logs active instruction files.
 
 ### Context Management
 
@@ -75,3 +81,42 @@ Each finding includes:
 ## Trends
 
 Week-over-week (WoW) and month-over-month (MoM) trend indicators appear on each score card, so you can see whether your practices are improving or regressing.
+
+## Rules that can't be evaluated
+
+When a personal or project rule's detection logic can't run, for example because a `match:` expression doesn't
+parse, the other rules still run. The rule's practice group is marked **Incomplete** on its score card and in its
+findings, with the rule and the error, instead of reporting that all checks pass. The rule's card in the
+[Rule Editor](rule-editor.md) shows **Not evaluated**.
+
+## Curiosity checks
+
+Curiosity appears inside **Prompt Quality**, alongside the existing findings.
+There is no separate Curiosity tab. The Prompt Quality score card shows the
+current level, and the **Curiosity checks** link on the
+[Curiosity page](../measure/curiosity.md) opens this practice group.
+The findings use the dashboard filters, not Curiosity's local date and language
+selections.
+
+For mixed coding work, the suggested ranges are **10-50% inquiry** and
+**50-90% project work**, with **no more than 80% of inquiry turns from one
+investigation type**. These are coaching defaults, not proven health standards.
+Research-only and implementation-only periods can be intentional.
+
+**Balanced** raises no balance finding. **Needs review** raises a medium-severity
+finding when inquiry falls outside its suggested range or one inquiry type
+exceeds 80%. **Strongly skewed** raises a high-severity finding when inquiry is
+strictly below 5% or above 95%, or one inquiry type exceeds 95%.
+
+Checks need **50 classified turns**, **seven active dates**, and **70% coverage**.
+The investigation mix also needs **20 inquiry turns**. Smaller samples show the
+ratios but no balance warning. Repeated wording is shown separately with an
+example link; it does not prove poor retention.
+
+Insufficient evidence is ungraded; it is not treated as Balanced. Repeated
+wording is a separate low-severity finding and does not change the balance level.
+
+Findings use the existing severity weights in the Prompt Quality score and
+appear in the standard finding count, examples, and weekly trends. They are
+native analysis checks, not editable DSL rules. Supporting examples describe
+the aggregate evidence, not a violation by each individual message.

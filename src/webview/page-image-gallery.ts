@@ -119,6 +119,10 @@ let activeRangeDays = 0;
 const PAGE_SIZE = 30;
 const IMAGE_PREFETCH_BATCH_SIZE = 8;
 
+function imageMomentKey(sessionId: string, requestId: string): string {
+  return JSON.stringify([sessionId, requestId]);
+}
+
 export async function renderImageGallery(container: HTMLElement, currentFilter: DateFilter): Promise<void> {
   renderImageGalleryLoading(container, 'Finding coding moments...', 0, 0);
   const data = await rpc<ImageGalleryData>('getImageGallery', currentFilter as Record<string, unknown>);
@@ -147,17 +151,19 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
   let isDiscoveringImages = false;
 
   async function loadImages(sessionId: string, requestId: string): Promise<string[]> {
-    if (imageCache.has(requestId)) return imageCache.get(requestId)!;
+    const key = imageMomentKey(sessionId, requestId);
+    if (imageCache.has(key)) return imageCache.get(key)!;
     try {
       const result = await rpc<{ images: string[] }>('getSessionImages', { sessionId, requestId });
       const images = result?.images || [];
-      imageCache.set(requestId, images);
-      if (images.length === 0) noImageSet.add(requestId);
-      else confirmedImageSet.add(requestId);
+      imageCache.set(key, images);
+      if (images.length === 0) noImageSet.add(key);
+      else confirmedImageSet.add(key);
       return images;
-    } catch {
-      imageCache.set(requestId, []);
-      noImageSet.add(requestId);
+    } catch (error) {
+      console.error('Could not load Coding Moments images', error);
+      imageCache.set(key, []);
+      noImageSet.add(key);
       return [];
     }
   }
@@ -186,7 +192,7 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
     return pickTopStories(data.stories, 8)
       .map(s => {
         const moments = s.moments.filter(
-          m => confirmedImageSet.has(m.id) && (start === 0 || m.timestamp >= start),
+          m => confirmedImageSet.has(imageMomentKey(m.sessionId, m.id)) && (start === 0 || m.timestamp >= start),
         );
         return { ...s, moments, totalImages: moments.length };
       })
@@ -212,7 +218,7 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
   }
 
   function hasUndiscoveredImages(base: ImageMoment[]): boolean {
-    return base.some(m => !confirmedImageSet.has(m.id) && !noImageSet.has(m.id));
+    return base.some(m => !confirmedImageSet.has(imageMomentKey(m.sessionId, m.id)) && !noImageSet.has(imageMomentKey(m.sessionId, m.id)));
   }
 
   async function discoverImagesUntil(targetCount: number, showInitialLoading = false): Promise<void> {
@@ -220,15 +226,15 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
     isDiscoveringImages = true;
     try {
       const base = getFilterBase();
-      let checked = base.filter(m => confirmedImageSet.has(m.id) || noImageSet.has(m.id)).length;
-      let confirmed = base.filter(m => confirmedImageSet.has(m.id)).length;
+      let checked = base.filter(m => confirmedImageSet.has(imageMomentKey(m.sessionId, m.id)) || noImageSet.has(imageMomentKey(m.sessionId, m.id))).length;
+      let confirmed = base.filter(m => confirmedImageSet.has(imageMomentKey(m.sessionId, m.id))).length;
       let cursor = 0;
 
       while (confirmed < targetCount) {
         const batch: ImageMoment[] = [];
         while (cursor < base.length && batch.length < IMAGE_PREFETCH_BATCH_SIZE) {
           const moment = base[cursor++];
-          if (!moment || confirmedImageSet.has(moment.id) || noImageSet.has(moment.id)) continue;
+          if (!moment || confirmedImageSet.has(imageMomentKey(moment.sessionId, moment.id)) || noImageSet.has(imageMomentKey(moment.sessionId, moment.id))) continue;
           batch.push(moment);
         }
 
@@ -236,24 +242,24 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
         if (showInitialLoading) renderImageGalleryLoading(container, 'Loading screenshots...', checked, base.length);
         await Promise.all(batch.map(m => loadImages(m.sessionId, m.id)));
         checked += batch.length;
-        confirmed = base.filter(m => confirmedImageSet.has(m.id)).length;
+        confirmed = base.filter(m => confirmedImageSet.has(imageMomentKey(m.sessionId, m.id))).length;
       }
     }
     finally {
       for (const m of rankedMoments) {
-        if (confirmedImageSet.has(m.id)) workspacesWithImages.add(m.workspace);
+        if (confirmedImageSet.has(imageMomentKey(m.sessionId, m.id))) workspacesWithImages.add(m.workspace);
       }
       isDiscoveringImages = false;
     }
   }
 
   function getFiltered(): ImageMoment[] {
-    return getFilterBase().filter(m => confirmedImageSet.has(m.id)).slice(0, visibleCount);
+    return getFilterBase().filter(m => confirmedImageSet.has(imageMomentKey(m.sessionId, m.id))).slice(0, visibleCount);
   }
 
   function canLoadMore(): boolean {
     const base = getFilterBase();
-    const confirmedCount = base.filter(m => confirmedImageSet.has(m.id)).length;
+    const confirmedCount = base.filter(m => confirmedImageSet.has(imageMomentKey(m.sessionId, m.id))).length;
     return confirmedCount > visibleCount || hasUndiscoveredImages(base);
   }
 
@@ -288,7 +294,7 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
           ${filtered.map(m => renderMomentCard(m, (mm: ImageMoment) => {
             const story = storyBySession.get(mm.sessionId);
             if (story) {
-              const filtered = { ...story, moments: story.moments.filter(x => confirmedImageSet.has(x.id)) };
+              const filtered = { ...story, moments: story.moments.filter(x => confirmedImageSet.has(imageMomentKey(x.sessionId, x.id))) };
               if (filtered.moments.length >= 2) openStoryPlayer(filtered);
             }
           }))}
@@ -402,7 +408,7 @@ export async function renderImageGallery(container: HTMLElement, currentFilter: 
             </div>
             <button class="img-story-player-close" onClick=${() => closeStoryPlayer()}>\u00D7</button>
           </div>
-          <div class="img-story-player-visual img-lazy" key=${moment.id} data-session-id=${moment.sessionId} data-request-id=${moment.id}
+          <div class="img-story-player-visual img-lazy" key=${imageMomentKey(moment.sessionId, moment.id)} data-session-id=${moment.sessionId} data-request-id=${moment.id}
                style=${`background: linear-gradient(135deg, hsl(${hue}, 40%, 12%), hsl(${hue + 30}, 30%, 8%));`}>
             <div class="img-lazy-placeholder">
               <span class="img-lazy-spinner"></span>
@@ -556,10 +562,10 @@ function setupLazyImages(
           img.loading = 'lazy';
           el.textContent = '';
           el.appendChild(img);
-          const m = allMoments.find(mm => mm.id === requestId);
+          const m = allMoments.find(mm => mm.sessionId === sessionId && mm.id === requestId);
           if (m) workspacesWithImages.add(m.workspace);
         } else {
-          noImageSet.add(requestId);
+          noImageSet.add(imageMomentKey(sessionId, requestId));
           const card = el.closest('.img-card');
           if (card) (card as HTMLElement).style.display = 'none';
         }

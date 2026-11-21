@@ -4,7 +4,7 @@ name: No Spec-Driven Development
 group: prompt-quality
 severity: medium
 scope: sessions
-version: 1
+version: 2
 tags: [prompt, spec, planning]
 thresholds:
   minAgentSessions: 5
@@ -54,4 +54,15 @@ totalSessions: specSessionTotal
 specPct: round(specRate * 100)
 check: specSessionTotal >= thresholds.minAgentSessions AND specRate < thresholds.specRate
 examples: {{workspaceName}}: not spec-driven
+```
+
+# Tests
+```test
+{messageText: "fix the login bug", requestCount: 3} -> triggered
+{messageText: "- add the parser\n- add tests\n- update the docs", requestCount: 3} -> clean
+{messageText: "1. add the parser\n2. add tests\n3. update the docs", requestCount: 3} -> clean
+{messageText: "# Goal\nadd the parser", requestCount: 3} -> clean
+{messageText: "the export must keep the order", requestCount: 3} -> clean
+{messageText: "update the parser", referencedFiles: ["docs/spec.md"], requestCount: 3} -> clean
+{messageText: "update the parser", referencedFiles: ["src/parser.ts"], requestCount: 3} -> triggered
 ```

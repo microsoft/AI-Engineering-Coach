@@ -11,6 +11,7 @@
  * to a simple template-based heuristic.
  */
 
+import { COPILOT_AUTO_MODEL_SELECTOR, COPILOT_LM_JUSTIFICATION } from './copilot-model';
 import { FIELD_SCHEMA, FUNCTION_CATALOG } from './dsl/index';
 import { parseRule } from './rule-parser';
 import type { DetectionRule } from './types/rule-types';
@@ -82,7 +83,7 @@ async function compileLlm(
   const lm = vscode.lm;
   if (!lm) return null;
 
-  const models = await lm.selectChatModels({ family: 'gpt-4.1' });
+  const models = await lm.selectChatModels(COPILOT_AUTO_MODEL_SELECTOR);
   const model = models[0];
   if (!model) return null;
 
@@ -94,7 +95,7 @@ async function compileLlm(
     vscode.LanguageModelChatMessage.User(userPrompt),
   ];
 
-  const response = await model.sendRequest(messages, {});
+  const response = await model.sendRequest(messages, { justification: COPILOT_LM_JUSTIFICATION });
   let result = '';
   for await (const chunk of response.text) {
     result += chunk;

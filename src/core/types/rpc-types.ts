@@ -50,9 +50,13 @@ import type {
 } from './analytics-types';
 import type { ConfigHealthData } from './config-types';
 import type { InsightsData } from './insights-types';
-import type { ContextManagementData, FlowStateData, WorkspaceContextSessionsData } from './context-types';
+import type { ContextManagementData, FlowStateData, SessionRangeMatch, WorkspaceContextSessionsData } from './context-types';
+import type { PromptCacheData, PromptCacheSessionsData } from './prompt-cache-types';
+import type { SessionTimelineData } from './session-timeline-types';
+import type { TokenTypesData } from './token-usage-types';
 import type { GitHubAppIssueCreditsSnapshot, GitHubAppSnapshot } from './github-app-types';
 import type { DateFilter, Session } from './session-types';
+import type { CuriosityData, CuriosityFilter } from './curiosity-types';
 
 /* RPC method map: method name -> { params, result } */
 export interface RpcMethodMap {
@@ -83,10 +87,15 @@ export interface RpcMethodMap {
   getGitHubAppIssueCredits: { params: undefined; result: GitHubAppIssueCreditsSnapshot };
   getConfigHealth: { params: DateFilter | undefined; result: ConfigHealthData };
   getInsights: { params: DateFilter | undefined; result: InsightsData };
+  getCuriosity: { params: CuriosityFilter | undefined; result: CuriosityData };
   getFlowState: { params: DateFilter | undefined; result: FlowStateData };
   getContextManagement: { params: { filter?: DateFilter } | undefined; result: ContextManagementData };
-  getWorkspaceContextSessions: { params: { workspaceId: string; filter?: DateFilter }; result: WorkspaceContextSessionsData };
+  getWorkspaceContextSessions: { params: { workspaceId: string; filter?: DateFilter; rangeMatch?: SessionRangeMatch }; result: WorkspaceContextSessionsData };
   getContextRangeAvailability: { params: { filter?: DateFilter } | undefined; result: { rangesWithTokens: number[]; matchingSessions: number; sessionsWithRequestTokens: number; harnessesWithoutRequestTokens: string[] } };
+  getPromptCache: { params: { filter?: DateFilter } | undefined; result: PromptCacheData };
+  getPromptCacheSessions: { params: { workspaceId: string; harness?: string; filter?: DateFilter }; result: PromptCacheSessionsData };
+  getSessionTimeline: { params: { sessionId: string }; result: SessionTimelineData | null };
+  getTokenTypes: { params: { filter?: DateFilter } | undefined; result: TokenTypesData };
   getCalendarActivity: { params: DateFilter | undefined; result: CalendarActivityData };
   getProjectOverview: { params: DateFilter | undefined; result: ProjectOverviewData };
   getImageGallery: { params: DateFilter | undefined; result: ImageGalleryData };
@@ -140,8 +149,17 @@ export interface ExtensionMethodMap extends RpcMethodMap {
   saveModelBudgets: { params: { budgets: Record<string, number> }; result: { ok: boolean } };
   loadModelBudgets: { params: Record<string, unknown> | undefined; result: Record<string, number> };
   showOutput: { params: undefined; result: { ok: boolean } };
-  getCapabilities: { params: Record<string, unknown> | undefined; result: { host: 'vscode' | 'canvas'; llm: boolean } };
+  getCapabilities: { params: Record<string, unknown> | undefined; result: HostCapabilities };
 }
+
+/** What the dashboard host can do. `llm` is true when GitHub Copilot's Auto model is usable. */
+export interface HostCapabilities {
+  host: 'vscode' | 'canvas';
+  llm: boolean;
+}
+
+/** Pushed by the VS Code host when language model availability changes after load. */
+export type HostCapabilitiesMessage = { type: 'capabilities' } & HostCapabilities;
 
 export type ExtensionMethodName = keyof ExtensionMethodMap;
 export type WebviewRequestMessage<M extends ExtensionMethodName = ExtensionMethodName> = {
@@ -153,4 +171,4 @@ export type WebviewRequestMessage<M extends ExtensionMethodName = ExtensionMetho
 export type WebviewResponseMessage = { type: 'response'; id: string; data: unknown };
 
 /* Message types for webview <-> extension communication */
-export type WebviewMessage = WebviewRequestMessage | WebviewResponseMessage;
+export type WebviewMessage = WebviewRequestMessage | WebviewResponseMessage | { type: 'ready' };

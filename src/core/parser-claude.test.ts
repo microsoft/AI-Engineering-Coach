@@ -170,6 +170,53 @@ describe('parseClaudeSessions', () => {
     });
   });
 
+  it('captures explicit WebFetch hosts and resets them for each human turn', () => {
+    withProjectsDir('sources.jsonl', [
+      makeUser('Why?'),
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'WebFetch', input: { url: 'https://docs.python.org/3/?private=1' } },
+        { type: 'tool_use', name: 'WebSearch', input: { query: 'https://not-a-source.example' } },
+      ] } },
+      makeAssistant('An answer.'),
+      makeUser('How?', '2025-06-15T10:01:00Z'),
+      makeAssistant('Another answer.', '2025-06-15T10:01:01Z'),
+    ], projectsDir => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(request => request.webDomains))
+        .toEqual([['docs.python.org'], []]);
+    });
+  });
+
+  it('keeps human IDs and final-answer evidence, without counting tool commentary as an answer', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('Why?', undefined, { uuid: 'human-1' }),
+      { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'An answer.' }] } },
+      makeUser('How?', '2025-06-15T10:01:00Z', { uuid: 'human-2' }),
+      makeAssistant('I will inspect it.'),
+      { type: 'assistant', message: { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: '/repo/a.ts' } },
+        { type: 'tool_use', name: 'Agent', input: { subagent_type: 'Explore' } },
+      ] } },
+    ], projectsDir => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests).toMatchObject([
+        { userEventId: 'human-1', answerEvidence: 'final' },
+        { userEventId: 'human-2', answerEvidence: 'missing', toolsUsed: ['Read', 'Agent'], referencedFiles: ['/repo/a.ts'],
+          investigationDelegations: ['explore'] },
+      ]);
+    });
+  });
+
+  it.each([{ isSidechain: true }, { isMeta: true }, { isCompactSummary: true }])('excludes %j messages from Curiosity without dropping their session data', extra => {
+    withProjectsDir('s.jsonl', [
+      makeUser('Why does this fail?', undefined, extra),
+      makeAssistant('Because the input is missing.'),
+    ], projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(workspace => workspace.sessions);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].requests).toHaveLength(1);
+      expect(sessions[0].requests[0].curiosity).toEqual({ kind: 'excluded', excerpts: [] });
+    });
+  });
+
   it('skips tool_result-only user records and merges following assistant into prior real user request', () => {
     withProjectsDir('s.jsonl', [
       makeUser('write a file please'),
@@ -341,6 +388,9 @@ describe('parseClaudeSessions', () => {
       // Sorted by timestamp
       expect(sessions[0].requests[0].messageText).toContain('parent prompt');
       expect(sessions[0].requests[1].messageText).toContain('subagent task');
+      // The sub-agent's lines carry no isSidechain; its file under subagents/ still marks its turn as the parent agent's
+      expect(sessions[0].requests.map(r => r.nonHumanKind)).toEqual([undefined, 'subagent']);
+      expect(sessions[0].requests.map(r => r.curiosity?.kind)).toEqual([undefined, 'excluded']);
       expect(sessions[0].requestCount).toBe(2);
       // lastMessageDate extends to the subagent's last assistant timestamp
       expect(sessions[0].lastMessageDate).toBe(new Date('2025-06-15T10:00:31Z').getTime());
@@ -379,10 +429,81 @@ describe('parseClaudeSessions', () => {
       expect(sessions[0].launcherKind).toBe('programmatic');
       expect(sessions[0].requests).toHaveLength(1);
       expect(sessions[0].requests[0].messageText).toContain('orphan task');
+      expect(sessions[0].requests[0].nonHumanKind).toBe('subagent');
+      expect(sessions[0].requests[0].curiosity?.kind).toBe('excluded');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // ---- workspace name from the recorded cwd ----
+
+  const encodeClaudeDir = (p: string) => {
+    const encoded = p.replaceAll(/[^a-zA-Z0-9]/g, '-');
+    return encoded.length > 200 ? `${encoded.slice(0, 200)}-kjgj8i` : encoded;
+  };
+  const longCwd = `/tmp/${Array.from({ length: 22 }, (_, i) => `segment_${i}`).join('/')}/proj.v1`;
+
+  it.each([
+    { label: 'a deleted folder', cwd: '/home/my_name/gone_project', expected: 'gone_project' },
+    { label: 'a Windows path read on another OS', cwd: String.raw`C:\Users\me\My App`, expected: 'My App' },
+    { label: 'a path Claude truncated to 200 characters', cwd: longCwd, expected: 'proj.v1' },
+    { label: 'a session with only sub-agent files', cwd: '/home/my_name/gone_project', expected: 'gone_project', subagentOnly: true },
+    { label: 'a drive letter in another case', cwd: String.raw`C:\Users\me\proj`, dir: 'c--Users-me-proj', expected: 'proj' },
+    { label: 'a cwd outside the project folder', cwd: '/elsewhere/other', dir: '-home-me-proj', expected: 'me-proj' },
+  ])('names the workspace from the session cwd for $label', ({ cwd, dir, expected, subagentOnly }) => {
+    const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-cwd-name-'));
+    const projDir = path.join(root, 'projects', dir ?? encodeClaudeDir(cwd));
+    const sessionDir = subagentOnly ? path.join(projDir, 'sess-1', 'subagents') : projDir;
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionDir, subagentOnly ? 'agent-a1.jsonl' : 's.jsonl'),
+      [makeUser('hello', '2025-06-15T10:00:00Z', { cwd }), makeAssistant('hi')].map(l => JSON.stringify(l)).join('\n'),
+    );
+
+    try {
+      const result = parseClaudeSessions(path.join(root, 'projects'));
+      expect(result).toHaveLength(1);
+      expect(result[0].workspaceName).toBe(expected);
+      expect(result[0].sessions[0].workspaceName).toBe(expected);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // ---- workspace name resolution with characters outside [A-Za-z0-9] ----
+
+  it.each(['my_home_dir', 'my.app', '.config', 'café'])(
+    'resolves workspace name when a parent folder is %s', { timeout: 30_000 }, (parentName) => {
+      // Claude Code replaces every character outside [A-Za-z0-9] with a hyphen,
+      // so the encoded name only matches readdirSync output if we apply the same rule.
+      const tmpBase = fs.mkdtempSync(path.join(longTmpDir(), 'claude-enc-'));
+      const targetDir = path.join(tmpBase, parentName, 'proj');
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const encodedDirName = targetDir
+        .replace(/^([a-zA-Z])(?=:)/, d => d.toLowerCase())
+        .replaceAll(/[^a-zA-Z0-9]/g, '-');
+
+      const root = fs.mkdtempSync(path.join(longTmpDir(), 'claude-proj-'));
+      const projectsDir = path.join(root, 'projects');
+      const projDir = path.join(projectsDir, encodedDirName);
+      fs.mkdirSync(projDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projDir, 's.jsonl'),
+        [makeUser('hello'), makeAssistant('hi')].map(l => JSON.stringify(l)).join('\n'),
+      );
+
+      try {
+        const result = parseClaudeSessions(projectsDir);
+        expect(result).toHaveLength(1);
+        expect(result[0].workspaceName).toBe('proj');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(tmpBase, { recursive: true, force: true });
+      }
+    },
+  );
 
   // ---- workspace name resolution with spaces ----
 

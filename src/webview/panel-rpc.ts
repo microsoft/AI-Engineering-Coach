@@ -11,7 +11,7 @@ import { loadSessionFromDisk } from '../core/cache';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
 import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
-import { extractSessionImages } from '../core/parser-vscode-files';
+import { loadSessionImages } from '../core/session-image-loader';
 import { DateFilter, RpcMethodName, BurndownConfig } from '../core/types';
 import type { RpcMethodMap, RpcResult } from '../core/types/rpc-types';
 import {
@@ -23,14 +23,15 @@ import {
   getRule,
   evaluateRule,
 } from '../core/rule-engine';
-import { runDetectors, runEmitters } from '../core/detector-registry';
+import { detectAntiPatterns, runDetectors, runEmitters } from '../core/detector-registry';
 import { parsePipeline, executePipeline, checkPipelineTrigger, resolveInheritance } from '../core/rule-pipeline';
 import { parseRule, serializeRule } from '../core/rule-parser';
+import { ruleSummary } from '../core/rule-summary';
 import { getRuleLayerInfo, getPersonalRulesDir, getProjectRulesDir } from '../core/rule-loader';
 import { getPending } from '../core/rule-trust';
 import { spotlight } from '../core/spotlight';
 import { isoWeek } from '../core/helpers';
-import { FIELD_SCHEMA, METRIC_PRIMITIVES, FUNCTION_CATALOG, compileFilter, validateExpression  } from '../core/dsl/index';
+import { FIELD_SCHEMA, METRIC_PRIMITIVES, FUNCTION_CATALOG, compileFilter, validateExpression, type FieldInfo } from '../core/dsl/index';
 import {
   getAllMetrics,
   parseRuleExtensions,
@@ -39,6 +40,8 @@ import {
   serializeCalibration,
 } from '../core/metric-engine';
 import { compileNaturalLanguageRule } from '../core/rule-compiler';
+import { toRuleRequestRows } from '../core/rule-rows';
+import { runInlineTests } from '../core/rule-inline-tests';
 import type { SessionRequest, Session } from '../core/types';
 import { errorResult, isString, isNumber, isOptionalString, isRecord } from './panel-shared';
 import { DSL_CHEATSHEET } from './dsl-cheatsheet';
@@ -49,12 +52,25 @@ import type { EditLocIndex } from '../core/edit-loc-diff';
  * Pick `reqs` or `sessions` based on scope and return them typed as
  * DSL-friendly row records. Centralizes the cast so every DSL call site
  * uses the same shape. Accepts both 'sessions' (rule scope) and 'session'
- * (field scope) as truthy session values.
+ * (field scope) as truthy session values. Request rows carry their
+ * session's `harness` and their `humanTurn`, as they do when rules run; `sessionOf` must index
+ * every request's session, because a date filter can drop the session.
  */
 type DslRow = Record<string, unknown>;
-function pickRows(scope: string, reqs: SessionRequest[], sessions: Session[]): DslRow[] {
+function pickRows(
+  scope: string,
+  reqs: SessionRequest[],
+  sessions: Session[],
+  sessionOf: ReadonlyMap<SessionRequest, Session>,
+): DslRow[] {
   const isSessionScope = scope === 'sessions' || scope === 'session';
-  return (isSessionScope ? sessions : reqs) as unknown as DslRow[];
+  return (isSessionScope ? sessions : toRuleRequestRows(reqs, sessionOf)) as unknown as DslRow[];
+}
+
+/** The Data Explorer reads request fields from request rows as rules see them (so `humanTurn` is there),
+ *  and `both` fields such as `harness` from sessions, where they're logged. */
+function explorerRows(field: FieldInfo, requestRows: () => DslRow[], sessions: Session[]): DslRow[] {
+  return field.scope === 'request' ? requestRows() : sessions as unknown as DslRow[];
 }
 
 function isPathUnder(pathMod: typeof import('path'), resolved: string, dir: string): boolean {
@@ -246,7 +262,7 @@ name: Context Engineering Gaps
 group: prompt-quality
 severity: medium
 scope: both
-version: 1
+version: 2
 tags: [context, agents, skills, mcp, instructions]
 thresholds:
   minReqs: 30
@@ -255,16 +271,16 @@ thresholds:
 ---
 
 # Description
-Audits your context engineering setup: custom agents, skills, MCP tools, file references, and custom instructions.
+Audits your context engineering setup: custom agents, skills, MCP tools, file references, and custom instructions. Only VS Code (Local Agent) logs custom instructions, so that signal counts VS Code requests only.
 
 # When Triggered
-{{count}} of 5 context engineering signals missing. Your AI lacks the context to be maximally effective.
+{{count}} of {{total}} context engineering signals missing. Your AI lacks the context to be maximally effective.
 
 # How to Improve
 Level up your context engineering: create AGENTS.md for custom agents, SKILL.md for domain knowledge, connect MCP tools, use #file references, and add .instructions.md with project conventions.
 
 # Examples
-{{extra.gapCount}} of 5 context engineering signals missing
+{{extra.gapCount}} of {{extra.signalCount}} context engineering signals missing
 
 # Detection Logic
 \\\`\\\`\\\`detect
@@ -276,15 +292,17 @@ hasSubAgents: someWhere(allReqs, "agentName", "!=", "") AND someWhere(allReqs, "
 hasSkills: flatCount(allReqs, "skillsUsed") > 0
 hasMcp: flatSomeWhere(allReqs, "toolsUsed", ".", "mcp_", "startsWith")
 fileRefRate: countWhere(allReqs, "referencedFiles.length", ">", 0) / reqCount
-instrRate: countWhere(allReqs, "customInstructions.length", ">", 0) / reqCount
+instrReportedReqs: countWhere(allReqs, "harness", "matches", "^Local Agent")
+instrRate: countWhere(allReqs, "customInstructions.length", ">", 0) / instrReportedReqs
 gap1: hasSubAgents == 0
 gap2: hasSkills == 0
 gap3: hasMcp == 0
 gap4: fileRefRate < thresholds.fileRefMinRate
-gap5: instrRate < thresholds.instructionMinRate
+gap5: instrReportedReqs > 0 AND instrRate < thresholds.instructionMinRate
 gapCount: gap1 + gap2 + gap3 + gap4 + gap5
+signalCount: 4 + (instrReportedReqs > 0)
 emitCount: gapCount
-emitTotal: 5
+emitTotal: signalCount
 check: gapCount > 0 AND reqCount >= thresholds.minReqs
 severity: gapCount >= 4
 \\\`\\\`\\\`
@@ -482,7 +500,7 @@ check: models.topShare > thresholds.maxTopModelRate AND models.modelCount < thre
 \\\`\\\`\\\`
 \`\`\`
 
-### tool-mastery: No Plan Mode (boolean reduce + agent detection)
+### tool-mastery: No Plan Mode (boolean reduce + agent detection, counting only harnesses that log plan mode)
 \`\`\`markdown
 ---
 id: no-plan-mode
@@ -490,7 +508,7 @@ name: Never Uses Plan Mode
 group: tool-mastery
 severity: medium
 scope: requests
-version: 1
+version: 2
 tags: [tools, planning, agent]
 thresholds:
   minReqs: 30
@@ -498,7 +516,7 @@ thresholds:
 ---
 
 # Description
-Detects heavy agentic usage with no use of plan mode, which helps the agent understand scope before implementation.
+Detects heavy agentic usage with no use of plan mode, which helps the agent understand scope before implementation. Only VS Code (Local Agent), GitHub Copilot CLI and App, and OpenCode log plan mode, so only their requests count.
 
 # When Triggered
 {{extra.agenticReqs}} agentic requests but no use of plan mode.
@@ -512,12 +530,14 @@ Switch to Plan mode in the mode picker before starting large features
 # Detection Logic
 \\\`\\\`\\\`detect
 scan: requests
-match: agentMode == "agent" OR agentName != ""
+match: matches(harness, "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)") AND NOT matches(agentMode, "(?i)^(ask|edit|chat|plan)?$")
 aggregate: count
-agentRatio: count / total
-planUsage: someWhere(all, "slashCommand", "plan") OR someWhere(all, "agentMode", "matches", "(?i)plan")
+planLoggedReqs: countWhere(all, "harness", "matches", "^(Local Agent|GitHub Copilot (CLI|App)$|OpenCode$)")
+agentRatio: count / planLoggedReqs
+planUsage: someWhere(all, "slashCommand", "plan") OR someWhere(all, "agentMode", "matches", "(?i)^plan$")
 agenticReqs: count
-check: planUsage == 0 AND total >= thresholds.minReqs AND agentRatio >= thresholds.agentRate
+emitTotal: planLoggedReqs
+check: planUsage == 0 AND planLoggedReqs >= thresholds.minReqs AND agentRatio >= thresholds.agentRate
 \\\`\\\`\\\`
 \`\`\`
 
@@ -607,9 +627,14 @@ examples: {{workspaceName}}: {{requestCount}} messages
 Output ONLY the raw markdown rule. No code fences around the whole output. No explanation.`;
 
 function cleanRuleMarkdown(raw: string): string {
-  let md = raw.trim();
-  // Strip outer code fences
-  md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+  let md = raw.replaceAll(/\r\n?/g, '\n').trim();
+  // Strip an outer code fence: one still open where the rule starts, at its front matter (or, without front
+  // matter, its first heading). Only then is the reply's last fence its closing one; otherwise the last fence
+  // closes the rule's detect block.
+  const fmStart = md.indexOf('---');
+  const ruleStart = fmStart >= 0 ? fmStart : Math.max(md.search(/^#/m), 0);
+  const fencesBefore = md.slice(0, ruleStart).split('\n').filter(line => line.startsWith('```')).length;
+  if (fencesBefore % 2 === 1) md = md.replace(/^```(?:markdown|md)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
   // Strip leading prose before the frontmatter
   const fmIdx = md.indexOf('---');
   if (fmIdx > 0) md = md.substring(fmIdx);
@@ -626,7 +651,7 @@ function validateRuleMarkdown(md: string): string[] {
     issues.push('Missing or invalid "group:" (must be one of: prompt-quality, session-hygiene, code-review, tool-mastery, context-management)');
   }
   if (!md.match(/^severity:\s*(low|medium|high)/m)) issues.push('Missing or invalid "severity:" (must be low, medium, or high)');
-  if (!md.match(/^scope:\s*(requests|sessions)/m)) issues.push('Missing or invalid "scope:" (must be requests or sessions)');
+  if (!md.match(/^scope:[ \t]*(['"]?)(requests|sessions|both)\1[ \t]*$/m)) issues.push('Missing or invalid "scope:" (must be requests, sessions, or both)');
   if (!md.includes('# Description')) issues.push('Missing "# Description" section');
   if (!md.includes('# When Triggered')) issues.push('Missing "# When Triggered" section');
   if (!md.includes('# How to Improve')) issues.push('Missing "# How to Improve" section');
@@ -641,6 +666,43 @@ function validateRuleMarkdown(md: string): string[] {
     }
   }
   return issues;
+}
+
+/** Validation issues sent back to the model when a generated rule is incomplete. */
+export interface RuleFeedback {
+  reply: string;
+  issues: string[];
+}
+
+const RULE_GENERATION_ATTEMPTS = 2;
+
+/**
+ * Ask the model for a detection rule, feeding validation issues back for up to
+ * {@link RULE_GENERATION_ATTEMPTS} attempts and then accepting the next reply
+ * as-is. If a follow-up request fails (for example because the request's
+ * shared time budget ran out), the latest draft is returned along with the
+ * error instead of being discarded.
+ */
+export async function generateRuleMarkdown(
+  ask: (feedback?: RuleFeedback) => Promise<string>,
+): Promise<{ markdown: string; retryError?: unknown }> {
+  let feedback: RuleFeedback | undefined;
+  let draft: string | undefined;
+  try {
+    for (let attempt = 0; attempt < RULE_GENERATION_ATTEMPTS; attempt++) {
+      const reply = await ask(feedback);
+      const markdown = cleanRuleMarkdown(reply);
+      const issues = validateRuleMarkdown(markdown);
+      if (issues.length === 0) return { markdown };
+      draft = markdown;
+      feedback = { reply, issues };
+    }
+    // After retries, return the last attempt even if imperfect
+    return { markdown: cleanRuleMarkdown(await ask(feedback)) };
+  } catch (err: unknown) {
+    if (draft === undefined) throw err;
+    return { markdown: draft, retryError: err };
+  }
 }
 
 function ruleTemplate(id: string, prompt: string): string {
@@ -731,6 +793,10 @@ const rpcHandlers: TypedRpcHandlers = {
   getGitHubAppIssueCredits: () => loadGitHubAppIssueCredits(),
   getConfigHealth: (a, _p, params) => a.getConfigHealth(validateDateFilter(params)),
   getInsights: (a, _p, params) => a.getInsights(validateDateFilter(params)),
+  getCuriosity: (a, _p, params) => {
+    if (params.language !== undefined && !isString(params.language)) return errorResult('Invalid session language filter');
+    return a.getCuriosity({ ...validateDateFilter(params), ...(isString(params.language) ? { language: params.language } : {}) });
+  },
   getFlowState: (a, _p, params) => a.getFlowState(validateDateFilter(params)),
   getContextManagement: (a, _p, params) => a.getContextManagement(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
   getWorkspaceContextSessions: (a, _p, params) => {
@@ -744,19 +810,38 @@ const rpcHandlers: TypedRpcHandlers = {
       };
     }
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
-    return a.getWorkspaceContextSessions(workspaceId, filter);
+    // Context Composition asks for every session with a request in range; the default keys on last activity.
+    return a.getWorkspaceContextSessions(workspaceId, filter, params?.rangeMatch === 'requests' ? 'requests' : 'lastActivity');
   },
   getContextRangeAvailability: (a, _p, params) => a.getContextRangeAvailability(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
+  getPromptCache: (a, _p, params) => a.getPromptCache(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
+  getPromptCacheSessions: (a, _p, params) => {
+    const workspaceId = isString(params?.workspaceId) ? params.workspaceId : '';
+    if (!workspaceId) return { workspaceName: '', harness: null, sessions: [], total: 0 };
+    const harness = isString(params?.harness) && params.harness ? params.harness : undefined;
+    const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
+    return a.getPromptCacheSessions(workspaceId, harness, filter);
+  },
+  getSessionTimeline: (a, _p, params) => {
+    const sessionId = isString(params?.sessionId) ? params.sessionId : '';
+    return sessionId ? a.getSessionTimeline(sessionId) : null;
+  },
+  getTokenTypes: (a, _p, params) => a.getTokenTypes(validateDateFilter(isRecord(params?.filter) ? params.filter : params)),
   getCalendarActivity: (a, _p, params) => a.getCalendarActivity(validateDateFilter(params)),
   getProjectOverview: (a, _p, params) => a.getProjectOverview(validateDateFilter(params)),
   getImageGallery: (a, _p, params) => a.getImageGallery(validateDateFilter(params)),
-  getSessionImages: (_a, p, params) => {
+  getSessionImages: async (_a, p, params) => {
     const sessionId = isString(params?.sessionId) ? params.sessionId : '';
     const requestId = isString(params?.requestId) ? params.requestId : '';
     if (!sessionId || !requestId) return { images: [] };
     const source = p.sessionSourceIndex.get(sessionId);
-    if (!source) return { images: [] };
-    return { images: extractSessionImages(source.filePath, requestId) };
+    const session = p.sessions.find(value => value.sessionId === sessionId);
+    const index = session?.requests.findIndex(request => request.requestId === requestId) ?? -1;
+    if (!source || !session || index < 0) return { images: [] };
+    return { images: await loadSessionImages(source, sessionId, requestId, {
+      userEventId: session.requests[index].userEventId,
+      requestIndex: index,
+    }) };
   },
 
   /* ---- Rule Editor methods ---- */
@@ -765,9 +850,10 @@ const rpcHandlers: TypedRpcHandlers = {
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
     const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
-    const detectorResults = runDetectors(reqs, sessions, skipIde);
-    const emissions = runEmitters(reqs, sessions, skipIde);
-    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions);
+    const sessionOf = a.getRequestSessionMap();
+    const { patterns: detectorResults, failures } = detectAntiPatterns(reqs, sessions, skipIde, sessionOf);
+    const emissions = runEmitters(reqs, sessions, skipIde, sessionOf);
+    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions, failures);
     const rules = getAllRules().map(r => ({
       id: r.id,
       name: r.name,
@@ -775,9 +861,7 @@ const rpcHandlers: TypedRpcHandlers = {
       severity: r.severity,
       scope: r.scope,
       requiresIdeContext: r.requiresIdeContext,
-      description: r.descriptionTemplate
-        ? r.descriptionTemplate.replaceAll(/\{\{[^}]+\}\}/g, '...').substring(0, 200)
-        : r.name,
+      description: ruleSummary(r),
       descriptionTemplate: r.descriptionTemplate,
       suggestionTemplate: r.suggestionTemplate,
       exampleTemplate: r.exampleTemplate,
@@ -810,7 +894,7 @@ const rpcHandlers: TypedRpcHandlers = {
       const weekEmissions = new Map<string, Map<string, number>>();
       for (const wk of sortedWeeks) {
         const wkReqs = weekBuckets.get(wk) || [];
-        const wkEmissions = runEmitters(wkReqs, sessions, skipIde);
+        const wkEmissions = runEmitters(wkReqs, sessions, skipIde, sessionOf);
         const counts = new Map<string, number>();
         for (const [ruleId, emission] of wkEmissions) {
           counts.set(ruleId, emission.count);
@@ -838,9 +922,10 @@ const rpcHandlers: TypedRpcHandlers = {
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
     const skipIde = !!(filter?.harness && !filter.harness.startsWith('Local Agent') && filter.harness !== 'Xcode');
-    const detectorResults = runDetectors(reqs, sessions, skipIde);
-    const emissions = runEmitters(reqs, sessions, skipIde);
-    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions);
+    const sessionOf = a.getRequestSessionMap();
+    const { patterns: detectorResults, failures } = detectAntiPatterns(reqs, sessions, skipIde, sessionOf);
+    const emissions = runEmitters(reqs, sessions, skipIde, sessionOf);
+    const previews = getRulePreviewStats(reqs, sessions, skipIde, detectorResults, emissions, failures);
     return previews.find(p => p.ruleId === ruleId) || { ruleId, triggered: false, occurrences: 0, total: 0, pct: 0, severity: rule.severity, group: rule.group, previewDescription: 'No data.', previewExamples: [] };
   },
 
@@ -916,7 +1001,7 @@ const rpcHandlers: TypedRpcHandlers = {
       const sessions = a.filterSessions(filter);
       const resolved = resolveInheritance(rule);
       const pipeline = parsePipeline(resolved);
-      const emission = executePipeline(pipeline, resolved, { reqs, sessions, skipIdeDetectors: false });
+      const emission = executePipeline(pipeline, resolved, { reqs: toRuleRequestRows(reqs, a.getRequestSessionMap()), sessions, skipIdeDetectors: false });
       const triggered = checkPipelineTrigger(pipeline, emission, resolved);
       const evalResult = evaluateRule(resolved, triggered ? emission : null);
       const pct = emission.total > 0 ? `${(emission.count / emission.total * 100).toFixed(0)}%` : '0%';
@@ -1005,7 +1090,7 @@ Explain why this session triggered the rule.`;
         return e;
       });
 
-      const detectorResults = runDetectors(enrichedReqs, sessions, skipIde);
+      const detectorResults = runDetectors(enrichedReqs, sessions, skipIde, a.getRequestSessionMap());
       // Build workspaces list (top N by session count)
       const wsCounts = new Map<string, number>();
       for (const s of sessions) {
@@ -1050,30 +1135,30 @@ Explain why this session triggered the rule.`;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const vscode = require('vscode') as typeof import('vscode');
-      const { callLlm } = await import('./panel-llm');
+      const { callLlm, llmDeadline } = await import('./panel-llm');
 
       const messages = [
         vscode.LanguageModelChatMessage.User(GENERATE_RULE_SYSTEM_PROMPT),
         vscode.LanguageModelChatMessage.User(`Generate a complete detection rule for: ${prompt}\n\nUse id: ${id}`),
       ];
 
-      const MAX_ATTEMPTS = 2;
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const result = await callLlm(messages);
-        const markdown = cleanRuleMarkdown(result);
-        const issues = validateRuleMarkdown(markdown);
-        if (issues.length === 0) return { markdown };
-
-        // Retry: tell the LLM what was wrong
-        messages.push(vscode.LanguageModelChatMessage.Assistant(result));
-        messages.push(vscode.LanguageModelChatMessage.User(
-          `The generated rule has issues:\n${issues.map(i => `- ${i}`).join('\n')}\n\nPlease fix and output the complete corrected rule markdown. No code fences around the output.`
-        ));
+      // One budget for every attempt, so the request settles before the webview's RPC timeout.
+      const deadline = llmDeadline();
+      const { markdown, retryError } = await generateRuleMarkdown(feedback => {
+        if (feedback) {
+          // Retry: tell the LLM what was wrong
+          messages.push(vscode.LanguageModelChatMessage.Assistant(feedback.reply));
+          messages.push(vscode.LanguageModelChatMessage.User(
+            `The generated rule has issues:\n${feedback.issues.map(i => `- ${i}`).join('\n')}\n\nPlease fix and output the complete corrected rule markdown. No code fences around the output.`
+          ));
+        }
+        return callLlm(messages, { deadline });
+      });
+      if (retryError !== undefined) {
+        const { warnCore } = await import('../core/log');
+        warnCore('generateRule', 'LLM retry failed, keeping the latest draft', retryError);
       }
-
-      // After retries, return the last attempt even if imperfect
-      const lastResult = await callLlm(messages);
-      return { markdown: cleanRuleMarkdown(lastResult) };
+      return { markdown };
     } catch (err: unknown) {
       // Log so the Output channel shows why; fall back to a template so the
       // editor still has something usable to edit.
@@ -1116,7 +1201,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = pickRows(scope, reqs, sessions);
+    const rows = pickRows(scope, reqs, sessions, a.getRequestSessionMap());
 
     try {
       const filterFn = compileFilter(expr);
@@ -1145,7 +1230,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = pickRows(rule.scope, reqs, sessions);
+    const rows = pickRows(rule.scope, reqs, sessions, a.getRequestSessionMap());
 
     const result = calibrate(
       ext.filterExpr || '',
@@ -1164,7 +1249,12 @@ Explain why this session triggered the rule.`;
     if (!rule) return errorResult('Rule not found');
 
     const ext = parseRuleExtensions(rule.rawSource);
-    if (ext.testCases.length === 0) return errorResult('No test cases found in rule');
+    if (ext.testCases.length === 0) {
+      // Built-in rules ship an inline `# Tests` block instead of `# Test Cases`.
+      const inline = runInlineTests(rule);
+      if (inline.length === 0) return errorResult('No test cases found in rule');
+      return { results: inline, passed: inline.filter(r => r.passed).length, total: inline.length };
+    }
 
     const results = runTestCases(
       ext.filterExpr || '',
@@ -1197,10 +1287,11 @@ Explain why this session triggered the rule.`;
     const filter = validateDateFilter(params || {});
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
+    const requestRows = pickRows('requests', reqs, sessions, a.getRequestSessionMap());
 
     // Compute summary stats for each field
     const fieldSummaries = FIELD_SCHEMA.map(field => {
-      const rows = pickRows(field.scope, reqs, sessions);
+      const rows = explorerRows(field, () => requestRows, sessions);
 
       const values = rows.map(r => r[field.name]).filter(v => v != null && v !== '' && v !== 0);
       const nonEmpty = values.length;
@@ -1228,7 +1319,7 @@ Explain why this session triggered the rule.`;
     const filter = isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined;
     const reqs = a.filterRequests(filter);
     const sessions = a.filterSessions(filter);
-    const rows = pickRows(fieldInfo.scope, reqs, sessions);
+    const rows = explorerRows(fieldInfo, () => pickRows('requests', reqs, sessions, a.getRequestSessionMap()), sessions);
 
     const values = rows.map(r => r[fieldName]).filter(v => v != null);
 

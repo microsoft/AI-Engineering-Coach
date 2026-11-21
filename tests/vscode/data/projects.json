@@ -1,0 +1,134 @@
+{
+  "description": "Fully synthetic projects, prompts and code. No personal session logs were used. The schedule is relative to the test anchor date.",
+  "schedule": [
+    { "daysAgo": 0, "hour": 12, "topic": "validation" },
+    { "daysAgo": 1, "hour": 9, "topic": "empty inputs" },
+    { "daysAgo": 2, "hour": 14, "topic": "batch processing" },
+    { "daysAgo": 3, "hour": 21, "topic": "error handling" },
+    { "daysAgo": 4, "hour": 10, "topic": "regression tests" },
+    { "daysAgo": 5, "hour": 16, "topic": "refactoring" },
+    { "daysAgo": 6, "hour": 11, "topic": "documentation examples" }
+  ],
+  "projects": [
+    {
+      "id": "inventory-api",
+      "language": "typescript",
+      "modelId": "gpt-4o",
+      "sourceFile": "inventory.ts",
+      "testFile": "inventory.test.ts",
+      "prompts": [
+        "Plan how the synthetic inventory API should handle empty stock.",
+        "Implement the inventory availability function for this isolated example.",
+        "Correct the zero-stock boundary and add deterministic inventory tests."
+      ],
+      "source": [
+        "export interface Item {",
+        "  id: string;",
+        "  quantity: number;",
+        "}",
+        "export function available(item: Item): boolean {",
+        "  const count = item.quantity;",
+        "  return count >= 0;",
+        "}"
+      ],
+      "revised": [
+        "export interface Item {",
+        "  id: string;",
+        "  quantity: number;",
+        "}",
+        "export function available(item: Item): boolean {",
+        "  const count = item.quantity;",
+        "  return count > 0;",
+        "}"
+      ],
+      "tests": [
+        "import { available } from './inventory';",
+        "export function testAvailability(): void {",
+        "  if (available({ id: 'empty', quantity: 0 })) throw new Error('Expected unavailable');",
+        "  if (!available({ id: 'stocked', quantity: 2 })) throw new Error('Expected available');",
+        "  console.log('Synthetic inventory checks passed');",
+        "}"
+      ]
+    },
+    {
+      "id": "sensor-pipeline",
+      "language": "python",
+      "modelId": "claude-sonnet-4",
+      "sourceFile": "readings.py",
+      "testFile": "test_readings.py",
+      "prompts": [
+        "Explain a plan for normalizing synthetic sensor readings.",
+        "Implement the isolated reading normalization and summary functions.",
+        "Keep two decimal places and add deterministic reading tests."
+      ],
+      "source": [
+        "def normalize_reading(value):",
+        "    number = float(value)",
+        "    return round(number, 1)",
+        "",
+        "def summarize_readings(values):",
+        "    readings = [normalize_reading(value) for value in values]",
+        "    total = sum(readings)",
+        "    return {\"count\": len(readings), \"total\": total}"
+      ],
+      "revised": [
+        "def normalize_reading(value):",
+        "    number = float(value)",
+        "    return round(number, 2)",
+        "",
+        "def summarize_readings(values):",
+        "    readings = [normalize_reading(value) for value in values]",
+        "    total = sum(readings)",
+        "    return {\"count\": len(readings), \"total\": total}"
+      ],
+      "tests": [
+        "from readings import normalize_reading, summarize_readings",
+        "",
+        "def test_readings():",
+        "    assert normalize_reading(\"2.345\") == 2.35",
+        "    assert summarize_readings([1, 2]) == {\"count\": 2, \"total\": 3.0}",
+        "    assert summarize_readings([])[\"count\"] == 0"
+      ]
+    },
+    {
+      "id": "release-worker",
+      "language": "go",
+      "modelId": "gemini-2.5-pro",
+      "sourceFile": "queue.go",
+      "testFile": "queue_test.go",
+      "prompts": [
+        "Plan a pending-job counter for a synthetic release queue.",
+        "Implement the queue counter without calling external services.",
+        "Fix the extra pending job and add empty-queue and batch tests."
+      ],
+      "source": [
+        "package queue",
+        "",
+        "func Pending(jobs []string) int {",
+        "    count := 0",
+        "    for range jobs { count++ }",
+        "    if count < 0 { return 0 }",
+        "    return count + 1",
+        "}"
+      ],
+      "revised": [
+        "package queue",
+        "",
+        "func Pending(jobs []string) int {",
+        "    count := 0",
+        "    for range jobs { count++ }",
+        "    if count < 0 { return 0 }",
+        "    return count",
+        "}"
+      ],
+      "tests": [
+        "package queue",
+        "import \"testing\"",
+        "func TestPending(t *testing.T) {",
+        "    if Pending(nil) != 0 { t.Fatal(\"empty queue\") }",
+        "    if Pending([]string{\"build\", \"test\"}) != 2 { t.Fatal(\"pending jobs\") }",
+        "}"
+      ]
+    }
+  ]
+}

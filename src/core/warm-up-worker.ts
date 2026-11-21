@@ -7,26 +7,17 @@
 
 import { parentPort } from 'worker_threads';
 import { Analyzer } from './analyzer';
-import type { EditLocIndex } from './edit-loc-diff';
-import type { Session, Workspace } from './types';
+import { isWarmUpWorkerRequest, type WarmUpWorkerResponse } from './warm-up-worker-protocol';
 
-interface WarmUpWorkerRequest {
-  sessions: Session[];
-  editLocIndex?: EditLocIndex;
-  workspaces?: Map<string, Workspace>;
-}
+const port: {
+  on(event: 'message', listener: (message: unknown) => void): void;
+  postMessage(message: WarmUpWorkerResponse): void;
+} | null = parentPort ?? (process.send ? {
+  on: (_event: 'message', listener: (message: unknown) => void) => process.on('message', listener),
+  postMessage: (message: WarmUpWorkerResponse) => process.send!(message),
+} : null);
 
-const port = parentPort;
-
-if (!port) throw new Error('warm-up-worker: must run as worker thread');
-
-function isWarmUpWorkerRequest(value: unknown): value is WarmUpWorkerRequest {
-  if (typeof value !== 'object' || value === null) return false;
-  const request = value as Record<string, unknown>;
-  return Array.isArray(request.sessions) &&
-    (request.editLocIndex === undefined || request.editLocIndex instanceof Map) &&
-    (request.workspaces === undefined || request.workspaces instanceof Map);
-}
+if (!port) throw new Error('warm-up-worker: must run as a worker thread or forked child');
 
 port.on('message', (msg) => {
   try {

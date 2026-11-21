@@ -22,6 +22,8 @@ import { assertTrustedPath, createRequest, createSession, detectDevcontainerFrom
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
+import { markNonHuman } from './human-turns';
+import { openCodeMessageNonHumanKind } from './parser-turn-kinds';
 import {
   addFileEditLoc,
   FileEditLocMap,
@@ -31,6 +33,13 @@ import {
   recordContentReplacement,
   recordCreatedContent,
 } from './edit-tool-diff';
+import { recordedInvestigation, recordedWebDomains } from './curiosity-activity';
+import { imageReferencesFromContent, type ImageReference } from './image-data';
+import type { SessionSource } from './cache';
+import type { TurnContextUsage } from './types';
+import { RequestCacheBuilder, cacheModelName, missTokens } from './prompt-cache-usage';
+import { stopReasonSample } from './call-outputs';
+import { TurnContextAccumulator } from './cli-turn-context';
 
 interface OcSession {
   id: string;
@@ -39,6 +48,8 @@ interface OcSession {
   projectID?: string;
   directory?: string;
   title?: string;
+  /** Set on child sessions, which the parent session's task tool created and prompted. */
+  parentID?: string;
   time?: { created?: number; updated?: number };
 }
 
@@ -74,6 +85,12 @@ interface OcPart {
   messageID: string;
   type: string;
   text?: string;
+  /** OpenCode generated the text part, rather than the user typing it. */
+  synthetic?: boolean;
+  /** On a `compaction` part: OpenCode started the compaction itself (`false` when the user typed `/compact`). */
+  auto?: boolean;
+  mime?: string;
+  url?: string;
   tool?: string;
   callID?: string;
   state?: { status?: string; input?: Record<string, unknown>; output?: string };
@@ -90,8 +107,24 @@ interface OpenCodeAssistantData {
   modelId: string;
   totalElapsed: number | null;
   lastTs: number | null;
-  tokenSource: OcMessage['tokens'] | null;
+  /** Token totals over the request's model calls; `null` when no call logged tokens. */
+  tokens: OpenCodeTokenTotals | null;
+  /** The request's last and largest prompt among its model calls. */
+  contextUsage?: TurnContextUsage;
   editLocs: FileEditLocMap;
+  answerEvidence: SessionRequest['answerEvidence'];
+  investigationDelegations: ('research' | 'explore')[];
+  webDomains: string[];
+}
+
+interface OpenCodeTokenTotals {
+  /** Prompt tokens: uncached input plus the tokens read from and written to the cache. */
+  prompt: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** A call logged a `tokens.cache` entry; otherwise the cache fields stay null (not reported). */
+  cacheReported: boolean;
 }
 
 const WRITE_TOOLS = new Set(['write', 'edit', 'create', 'patch', 'apply_patch']);
@@ -99,7 +132,7 @@ const READ_TOOLS = new Set(['read', 'glob', 'grep', 'ls', 'find']);
 
 /** The subset of `node:sqlite` this parser uses, so the module stays optional at build time. */
 interface SqliteDatabase {
-  prepare(sql: string): { all(): unknown[] };
+  prepare(sql: string): { all(...parameters: string[]): unknown[] };
   close(): void;
 }
 
@@ -198,19 +231,19 @@ function getOpenCodeUserText(msg: OcMessage, partsByMsg: Map<string, OcPart[]>):
   return userTextFromParts || msg.summary?.title || '';
 }
 
-function findAssistantMessage(messages: OcMessage[], startIndex: number, parentId: string): OcMessage | null {
+function findAssistantMessages(messages: OcMessage[], startIndex: number): OcMessage[] {
+  const result: OcMessage[] = [];
   for (let i = startIndex; i < messages.length; i++) {
     const candidate = messages[i];
-    if (candidate.role === 'assistant' && candidate.parentID === parentId) return candidate;
+    if (candidate.role === 'user') break;
+    if (candidate.role === 'assistant') result.push(candidate);
   }
-
-  const next = messages[startIndex];
-  return next?.role === 'assistant' ? next : null;
+  return result;
 }
 
 function applyOpenCodePart(
   part: OcPart,
-  data: Pick<OpenCodeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'editLocs'>,
+  data: Pick<OpenCodeAssistantData, 'toolsUsed' | 'editedFiles' | 'referencedFiles' | 'editLocs' | 'investigationDelegations' | 'webDomains'>,
   textParts: string[],
 ): void {
   if (part.type === 'text' && part.text) {
@@ -222,6 +255,9 @@ function applyOpenCodePart(
 
   data.toolsUsed.push(part.tool);
   const input = part.state?.input || {};
+  data.webDomains.push(...recordedWebDomains(part.tool, input));
+  const role = recordedInvestigation(part.tool, input);
+  if (role && !data.investigationDelegations.includes(role)) data.investigationDelegations.push(role);
   const toolLower = part.tool.toLowerCase();
   const toolSucceeded = part.state?.status === undefined || part.state.status === 'completed';
   if (!toolSucceeded && WRITE_TOOLS.has(toolLower)) return;
@@ -276,8 +312,31 @@ function applyOpenCodePart(
   }
 }
 
+/** Token totals over every model call of a request, and its context from the calls' prompts. OpenCode writes
+ *  one assistant message per model call (one step: its `tokens` equal its `step-finish` part's), and
+ *  `tokens.input` excludes the cached tokens. */
+function addOpenCodeTokens(data: OpenCodeAssistantData, assistantMessages: OcMessage[]): void {
+  const context = new TurnContextAccumulator();
+  for (const message of assistantMessages) {
+    const tokens = message.tokens;
+    if (!tokens) continue;
+    const cacheRead = tokenCount(tokens.cache?.read);
+    const cacheWrite = tokenCount(tokens.cache?.write);
+    const prompt = tokenCount(tokens.input) + cacheRead + cacheWrite;
+    const totals = data.tokens ??= { prompt: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheReported: false };
+    totals.prompt += prompt;
+    totals.output += tokenCount(tokens.output);
+    totals.cacheRead += cacheRead;
+    totals.cacheWrite += cacheWrite;
+    if (tokens.cache) totals.cacheReported = true;
+    context.addCall({ stream: 'main', inputTokens: prompt, maxPromptTokens: null });
+  }
+  const contextUsage = context.result();
+  if (contextUsage) data.contextUsage = contextUsage;
+}
+
 function collectAssistantData(
-  assistantMsg: OcMessage | null,
+  assistantMessages: OcMessage[],
   partsByMsg: Map<string, OcPart[]>,
   userTs: number | null,
   lastTs: number | null,
@@ -290,9 +349,13 @@ function collectAssistantData(
     modelId: '',
     totalElapsed: null,
     lastTs,
-    tokenSource: null,
+    tokens: null,
     editLocs: new Map(),
+    answerEvidence: 'missing',
+    investigationDelegations: [],
+    webDomains: [],
   };
+  const assistantMsg = assistantMessages[0];
   if (!assistantMsg) return data;
 
   const assistantTs = assistantMsg.time?.completed || assistantMsg.time?.created || null;
@@ -300,12 +363,15 @@ function collectAssistantData(
   if (userTs && assistantTs) data.totalElapsed = assistantTs - userTs;
 
   data.modelId = assistantMsg.modelID || '';
-  data.tokenSource = assistantMsg.tokens ?? null;
+  addOpenCodeTokens(data, assistantMessages);
 
   const textParts: string[] = [];
-  const parts = partsByMsg.get(assistantMsg.id) || [];
-  for (const part of parts) {
-    applyOpenCodePart(part, data, textParts);
+  for (const message of assistantMessages) {
+    const parts = partsByMsg.get(message.id) || [];
+    const hasText = parts.some(part => part.type === 'text' && part.text?.trim());
+    data.answerEvidence = hasText && (message.finish === 'stop' || message.finish === 'end_turn') ? 'final'
+      : hasText && !message.finish && !parts.some(part => part.type === 'tool') ? 'legacy' : 'missing';
+    for (const part of parts) applyOpenCodePart(part, data, textParts);
   }
   data.responseText = textParts.join('\n');
 
@@ -338,9 +404,7 @@ function buildOpenCodeRequest(
   userTs: number | null,
   editLocIndex?: EditLocIndex,
 ): SessionRequest {
-  const cacheRead = assistantData.tokenSource?.cache?.read ?? 0;
-  const cacheWrite = assistantData.tokenSource?.cache?.write ?? 0;
-  const hasTokenData = assistantData.tokenSource != null;
+  const tokens = assistantData.tokens;
   const hasSummaryDiffs = Array.isArray(msg.summary?.diffs);
   const summaryLocs: FileEditLocMap = new Map();
   for (const diff of msg.summary?.diffs ?? []) {
@@ -352,33 +416,87 @@ function buildOpenCodeRequest(
     }
   }
   const exactLocs = hasSummaryDiffs ? summaryLocs : assistantData.editLocs;
+  const imageCount = imageReferencesFromContent(partsByMsg.get(msg.id)).length;
   mergeRequestEditLoc(editLocIndex, msg.id, exactLocs, hasSummaryDiffs);
 
   return createRequest({
     requestId: msg.id,
+    userEventId: msg.id,
+    answerEvidence: assistantData.answerEvidence,
     timestamp: userTs,
     messageText: getOpenCodeUserText(msg, partsByMsg),
+    variableKinds: imageCount > 0 ? { image: imageCount } : {},
     responseText: assistantData.responseText,
     agentName: msg.agent || 'OpenCode',
     agentMode: msg.agent || 'build',
     modelId: assistantData.modelId,
     toolsUsed: assistantData.toolsUsed,
+    investigationDelegations: assistantData.investigationDelegations,
+    webDomains: [...new Set(assistantData.webDomains)],
     editedFiles: hasSummaryDiffs
       ? [...exactLocs.keys()]
       : [...new Set([...assistantData.editedFiles, ...exactLocs.keys()])],
     referencedFiles: [...new Set(assistantData.referencedFiles)],
     totalElapsed: assistantData.totalElapsed,
-    // promptTokens = total input context (uncached input + cache read + cache write)
-    // so that context-window analysis sees the full context. Cached portions
-    // are tracked separately for billing.
-    promptTokens: hasTokenData ? (assistantData.tokenSource?.input ?? 0) + cacheRead + cacheWrite : null,
-    completionTokens: hasTokenData ? (assistantData.tokenSource?.output ?? 0) : null,
-    cacheReadTokens: cacheRead > 0 ? cacheRead : null,
-    cacheWriteTokens: cacheWrite > 0 ? cacheWrite : null,
+    // promptTokens = the input of every model call in the turn (uncached input + cache read + cache write);
+    // the context size is in contextUsage. Cached portions are tracked separately for billing.
+    promptTokens: tokens ? tokens.prompt : null,
+    completionTokens: tokens ? tokens.output : null,
+    // null: no cache usage was reported. 0: it was reported with no cache reads or writes (caching off).
+    cacheReadTokens: tokens?.cacheReported ? tokens.cacheRead : null,
+    cacheWriteTokens: tokens?.cacheReported ? tokens.cacheWrite : null,
     // OpenCode stores reasoning effort as "variant" on user messages
     reasoningEffort: canonicalizeReasoningEffort(msg.variant)
       ?? extractReasoningEffortFromModelId(assistantData.modelId),
+    ...(assistantData.contextUsage ? { contextUsage: assistantData.contextUsage } : {}),
   });
+}
+
+/**
+ * Marks the prompts OpenCode generated itself and, in a child session (one the parent session's task tool
+ * created), the prompts its parent agent sent. A message keeps the more specific kind OpenCode recorded.
+ */
+function markOpenCodeTurns(requests: SessionRequest[], partsByMsg: Map<string, OcPart[]>, childSession: boolean): void {
+  for (const request of requests) {
+    const kind = openCodeMessageNonHumanKind(partsByMsg.get(request.requestId)) ?? (childSession ? 'subagent' : undefined);
+    if (kind) markNonHuman(request, kind);
+  }
+}
+
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Cache usage of every model call of a request, and whether each stopped at the output-token limit
+ *  (`finish: length`; unknown while a call has no `finish`). OpenCode writes one assistant message per call,
+ *  and its `tokens.input` excludes the cached tokens. */
+function openCodeRequestCache(assistantMessages: OcMessage[], cacheState: { sawMain: boolean }): Pick<SessionRequest, 'promptCache' | 'callRowsWithoutCacheData'> {
+  const builder = new RequestCacheBuilder();
+  for (const message of assistantMessages) {
+    const tokens = message.tokens;
+    if (!tokens) continue;
+    const model = cacheModelName(message.modelID || message.model?.modelID);
+    const truncated = typeof message.finish === 'string' && message.finish ? message.finish === 'length' : null;
+    // A message whose tokens carry no cache entry didn't report cache usage; don't count it as uncached. Its stop
+    // reason still counts, on a row without cache data.
+    if (!tokens.cache) {
+      const input = tokenCount(tokens.input);
+      if (input > 0) builder.addCallWithoutCacheData('main', model, { input, outputs: stopReasonSample(truncated) });
+      continue;
+    }
+    const cacheRead = tokenCount(tokens.cache.read);
+    const cacheWrite = tokenCount(tokens.cache.write);
+    const sample = { input: tokenCount(tokens.input) + cacheRead + cacheWrite, cacheRead, cacheWrite };
+    if (sample.input <= 0) continue;
+    builder.addCall('main', model, { ...sample, outputs: stopReasonSample(truncated) });
+    if (!cacheState.sawMain) {
+      cacheState.sawMain = true;
+      builder.addColdStart(missTokens(sample), undefined);
+    }
+  }
+  const promptCache = builder.take();
+  const callRowsWithoutCacheData = builder.takeRowsWithoutCacheData();
+  return { ...(promptCache ? { promptCache } : {}), ...(callRowsWithoutCacheData ? { callRowsWithoutCacheData } : {}) };
 }
 
 function buildOpenCodeSession(
@@ -394,6 +512,7 @@ function buildOpenCodeSession(
 
   const { wsId, wsName } = getOpenCodeWorkspace(rawSession);
   const requests: SessionRequest[] = [];
+  const cacheState = { sawMain: false };
   let firstTs: number | null = null;
   let lastTs: number | null = null;
 
@@ -404,13 +523,16 @@ function buildOpenCodeSession(
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
 
-    const assistantMsg = findAssistantMessage(rawMessages, i + 1, msg.id);
-    const assistantData = collectAssistantData(assistantMsg, partsByMsg, userTs, lastTs);
+    const assistantMessages = findAssistantMessages(rawMessages, i + 1);
+    const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
-    requests.push(buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex));
+    const request = buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex);
+    Object.assign(request, openCodeRequestCache(assistantMessages, cacheState));
+    requests.push(request);
   }
 
   if (requests.length === 0) return null;
+  markOpenCodeTurns(requests, partsByMsg, Boolean(rawSession.parentID));
 
   return createSession({
     sessionId: rawSession.id,
@@ -426,10 +548,12 @@ function buildOpenCodeSession(
   });
 }
 
-function parseLegacyOpenCodeSessions(storageDir: string, editLocIndex?: EditLocIndex): Session[] {
+function parseLegacyOpenCodeSessions(storageDir: string, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
   const sessions: Session[] = [];
   const sessionDir = path.join(storageDir, 'session', 'global');
-  const rawSessions = readAllJsonInDir<OcSession>(sessionDir);
+  const selected = sessionId === undefined ? null : readJsonSafe<OcSession>(path.join(sessionDir, `${sessionId}.json`));
+  const rawSessions = sessionId === undefined ? readAllJsonInDir<OcSession>(sessionDir)
+    : selected?.id === sessionId ? [selected] : [];
 
   for (const rawSession of rawSessions) {
     const rawMessages = readAllJsonInDir<OcMessage>(path.join(storageDir, 'message', rawSession.id));
@@ -441,10 +565,11 @@ function parseLegacyOpenCodeSessions(storageDir: string, editLocIndex?: EditLocI
   return sessions;
 }
 
-function queryOpenCodeDatabase<T>(database: SqliteDatabase, sql: string): T[] {
+function queryOpenCodeDatabase<T>(database: SqliteDatabase, sql: string, ...parameters: string[]): T[] {
   try {
-    return database.prepare(sql).all() as T[];
-  } catch {
+    return database.prepare(sql).all(...parameters) as T[];
+  } catch (error) {
+    warnCore('parser-opencode', 'Could not query OpenCode database', error);
     return [];
   }
 }
@@ -452,6 +577,7 @@ function queryOpenCodeDatabase<T>(database: SqliteDatabase, sql: string): T[] {
 interface OcDbSessionRow {
   id: string;
   projectID?: string;
+  parentID?: string | null;
   directory?: string;
   title?: string;
   slug?: string;
@@ -504,27 +630,34 @@ function decodeOpenCodePart(row: OcDbDataRow): OcPart | null {
   }
 }
 
-function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex): Session[] {
+function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex, sessionId?: string): Session[] {
   assertTrustedPath(dbPath);
   const sqlite = loadSqlite();
   if (!sqlite) return [];
   let database: SqliteDatabase;
   try {
     database = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-  } catch {
+  } catch (error) {
+    warnCore('parser-opencode', 'Could not open OpenCode database', error);
     return [];
   }
 
+  const parameters = sessionId === undefined ? [] : [sessionId];
+  const sessionFilter = sessionId === undefined ? '' : ' WHERE id = ?';
+  const dataFilter = sessionId === undefined ? '' : ' WHERE session_id = ?';
+  // Older databases have no `session.parent_id`; selecting it there would fail the whole query.
+  const parentColumn = queryOpenCodeDatabase<{ name?: unknown }>(database, 'PRAGMA table_info(session)')
+    .some(column => column.name === 'parent_id') ? 'parent_id AS parentID, ' : '';
   const rawSessions = queryOpenCodeDatabase<OcDbSessionRow>(database,
-    'SELECT id, project_id AS projectID, directory, title, slug, '
-      + 'time_created AS created, time_updated AS updated FROM session ORDER BY time_created');
+    `SELECT id, project_id AS projectID, ${parentColumn}directory, title, slug, `
+      + `time_created AS created, time_updated AS updated FROM session${sessionFilter} ORDER BY time_created`, ...parameters);
   const messageRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, time_created AS created, '
-      + 'time_updated AS completed, data FROM message ORDER BY session_id, time_created, id');
+      + `time_updated AS completed, data FROM message${dataFilter} ORDER BY session_id, time_created, id`, ...parameters);
   const partRows = queryOpenCodeDatabase<OcDbDataRow>(database,
     'SELECT id, session_id AS sessionID, message_id AS messageID, '
-      + 'time_created AS created, time_updated AS completed, data FROM part '
-      + 'ORDER BY session_id, time_created, id');
+      + `time_created AS created, time_updated AS completed, data FROM part${dataFilter} `
+      + 'ORDER BY session_id, time_created, id', ...parameters);
   database.close();
   const messagesBySession = new Map<string, OcMessage[]>();
   for (const message of messageRows.map(decodeOpenCodeMessage)) {
@@ -552,6 +685,7 @@ function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex): Ses
     const rawSession: OcSession = {
       id: row.id,
       projectID: row.projectID,
+      parentID: row.parentID ?? undefined,
       directory: row.directory,
       title: row.title,
       slug: row.slug,
@@ -568,8 +702,69 @@ function parseOpenCodeDatabase(dbPath: string, editLocIndex?: EditLocIndex): Ses
   return sessions;
 }
 
-export function parseOpenCodeSessions(source: string, editLocIndex?: EditLocIndex): Session[] {
-  return source.endsWith('.db')
+export function loadOpenCodeSession(source: string, sessionId: string): Session | null {
+  if (!/^[\w-]+$/.test(sessionId)) {
+    warnCore('parser-opencode', 'Invalid OpenCode session ID');
+    return null;
+  }
+  const sessions = source.endsWith('.db')
+    ? parseOpenCodeDatabase(source, undefined, sessionId)
+    : parseLegacyOpenCodeSessions(source, undefined, sessionId);
+  return sessions[0] ?? null;
+}
+
+export function parseOpenCodeSessions(source: string, editLocIndex?: EditLocIndex, sessionSourceIndex?: Map<string, SessionSource>): Session[] {
+  const sessions = source.endsWith('.db')
     ? parseOpenCodeDatabase(source, editLocIndex)
     : parseLegacyOpenCodeSessions(source, editLocIndex);
+  for (const session of sessions) {
+    sessionSourceIndex?.set(session.sessionId, {
+      kind: source.endsWith('.db') ? 'opencode-db' : 'opencode-storage',
+      filePath: source,
+      workspaceId: session.workspaceId,
+      workspaceName: session.workspaceName,
+      workspaceRootPath: session.workspaceRootPath,
+      harness: session.harness,
+    });
+  }
+  return sessions;
+}
+
+export function readOpenCodeImageReferences(source: string, sessionId: string, requestId: string): ImageReference[] {
+  assertTrustedPath(source);
+  if (!source.endsWith('.db')) {
+    if (![sessionId, requestId].every(id => /^[\w-]+$/.test(id))) {
+      warnCore('image-extract', 'Invalid OpenCode session or message ID');
+      return [];
+    }
+    const message = readJsonSafe<OcMessage>(path.join(source, 'message', sessionId, `${requestId}.json`));
+    if (message?.role !== 'user' || (message.sessionID !== undefined && message.sessionID !== sessionId)) return [];
+    return imageReferencesFromContent(readAllJsonInDir<OcPart>(path.join(source, 'part', requestId)));
+  }
+  const sqlite = loadSqlite();
+  if (!sqlite) return [];
+  let database: SqliteDatabase | undefined;
+  try {
+    database = new sqlite.DatabaseSync(source, { readOnly: true });
+    const rows = database.prepare(
+      'SELECT part.data FROM part JOIN message ON message.id = part.message_id AND message.session_id = part.session_id '
+      + "WHERE part.session_id = ? AND part.message_id = ? AND json_extract(message.data, '$.role') = 'user' "
+      + 'ORDER BY part.time_created, part.id',
+    ).all(sessionId, requestId);
+    const parts: unknown[] = [];
+    for (const row of rows) {
+      if (!isRecord(row) || typeof row.data !== 'string') continue;
+      try {
+        parts.push(JSON.parse(row.data));
+      } catch (error) {
+        warnCore('image-extract', 'Could not decode an OpenCode image part', error);
+      }
+    }
+    return imageReferencesFromContent(parts);
+  } catch (error) {
+    warnCore('image-extract', 'Could not read OpenCode image parts', error);
+    return [];
+  } finally {
+    database?.close();
+  }
 }

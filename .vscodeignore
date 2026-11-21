@@ -10,6 +10,7 @@ eslint.config.mjs
 
 # Dev state
 .vscode/**
+.vscode-test/**
 .github/**
 .git/**
 .gitignore
@@ -21,6 +22,7 @@ eslint.config.mjs
 **/*.map
 *.vsix
 dist/**/*.map
+test-results/**
 
 # Docs scaffolding (only publish README + LICENSE + dist)
 README.github.md
@@ -37,6 +39,21 @@ playwright.config.ts
 
 # Marketing assets are for the repo / store listing, not the shipped bundle
 marketing/**
+
+# Repo-only docs, agent tooling and test/build output
+README.extension.md
+AGENTS.md
+SUPPORT.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+skills/**
+.claude/**
+test-results/**
+*.zip
+
+# Only the Marketplace icon (PNG) is referenced; screenshots are repo-only
+assets/*.svg
+assets/screen-*.png
 
 # Benchmark / perf outputs
 benchmark-*.json

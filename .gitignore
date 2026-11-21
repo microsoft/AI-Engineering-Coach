@@ -20,5 +20,7 @@ scripts/.parity-out/
 scripts/.parity-tmp-entry.ts
 marketing/
 
+.github/aw/logs/
+
 # Playwright test results
 test-results/

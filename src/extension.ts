@@ -189,11 +189,7 @@ export function activate(context: vscode.ExtensionContext) {
       await ready;
       if (getPending().length > 0) await promptAndReload();
       const { DashboardPanel } = await loadPanelModule();
-      if (DashboardPanel.current) {
-        DashboardPanel.current.reload(true);
-      } else {
-        DashboardPanel.createOrShow(context.extensionUri, context);
-      }
+      DashboardPanel.createOrShow(context.extensionUri, context, true);
     }),
     vscode.commands.registerCommand('aiEngineerCoach.exportSummary', async () => {
       runtimeDebug('extension', 'command-export-summary');

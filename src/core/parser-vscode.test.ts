@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { reconstructFromJsonl } from './parser-vscode-files';
 import { parseCLIEventsFile } from './parser-vscode-cli';
 import {
@@ -19,6 +19,9 @@ import {
   processWorkspaceEntryAsync,
 } from './parser-vscode';
 import { getParseWarningCounts, type ParseContext, resetParseWarnings } from './parser-shared';
+import { parseRawRequest, requestModeFromInfo, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
+import { runDetectors, runEmitters } from './detector-registry';
+import type { Session } from './types';
 
 function withTempFile(name: string, content: string, run: (filePath: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
@@ -131,18 +134,20 @@ describe('parseCLIEventsFile', () => {
     });
   });
 
-  it('returns null when no assistant responses are present', () => {
+  it('retains unanswered human turns as pending sequence boundaries', () => {
     const lines = [
       JSON.stringify({ type: 'session.start', timestamp: '2024-06-10T10:00:00.000Z', data: { sessionId: 'cli-session-2' } }),
       JSON.stringify({ type: 'user.message', timestamp: '2024-06-10T10:00:01.000Z', data: { content: 'Hello' } }),
     ].join('\n');
 
     withTempFile('events-empty.jsonl', lines, (filePath) => {
-      expect(parseCLIEventsFile(filePath, 'ws-2', 'demo-workspace')).toBeNull();
+      expect(parseCLIEventsFile(filePath, 'ws-2', 'demo-workspace')?.requests).toMatchObject([
+        { messageText: 'Hello', endState: 'pending', answerEvidence: 'missing' },
+      ]);
     });
   });
 
-  it('captures session.shutdown modelMetrics into Session.modelUsage', () => {
+  it('captures session.shutdown modelMetrics into Session.modelUsage, with input uncached', () => {
     const lines = [
       JSON.stringify({
         type: 'session.start',
@@ -180,7 +185,8 @@ describe('parseCLIEventsFile', () => {
       expect(session).not.toBeNull();
       expect(session?.modelUsage).toBeDefined();
       expect(session?.modelUsage?.['gpt-5.5']).toMatchObject({
-        inputTokens: 1234,
+        // usage.inputTokens (1234) includes the 800 read from and 100 written to the cache.
+        inputTokens: 334,
         outputTokens: 567,
         cacheReadTokens: 800,
         cacheWriteTokens: 100,
@@ -599,7 +605,202 @@ describe('parseSessionFile — basic VS Code session', () => {
   });
 });
 
+function parseSessionFixture(name: string, content: string): Session {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
+  try {
+    const filePath = path.join(dir, name);
+    fs.writeFileSync(filePath, content, 'utf-8');
+    const session = parseSessionFile(filePath, 'ws', 'wp', 'Local Agent');
+    if (!session) throw new Error('session did not parse');
+    return session;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function noPlanModeFinding(session: Session) {
+  return runDetectors(session.requests, [session], false).find(pattern => pattern.id === 'no-plan-mode');
+}
+
+/** Builders for VS Code session logs whose requests record their own modeInfo. */
+function modeLogFixtures() {
+  const at = new Date(2026, 8, 30, 10).getTime();
+  const builtin = (mode: string) => ({ kind: mode, isBuiltin: true, telemetryModeId: mode, telemetryModeName: mode, permissionLevel: 'default' });
+  // How current VS Code records a request sent with a custom agent, such as Copilot's Plan agent.
+  // telemetryModeName is hashed for user and workspace agents.
+  const customAgent = (name: string, agentPath: string, telemetryName = name) => ({
+    kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: telemetryName, permissionLevel: 'default',
+    modeInstructions: { name, content: 'You are an agent.', toolReferences: [], uri: { $mid: 1, scheme: 'file', path: agentPath } },
+  });
+  let next = 0;
+  const request = (modeInfo?: Record<string, unknown>) => ({
+    requestId: `r${next}`, timestamp: at + 60_000 * next++, message: { text: 'Refactor the parser so it streams events' },
+    response: [{ value: 'Done.' }], agent: { extensionDisplayName: 'GitHub Copilot Chat', id: 'github.copilot.editsAgent' },
+    result: { metadata: {} }, ...(modeInfo ? { modeInfo } : {}),
+  });
+  return {
+    builtin, customAgent, request,
+    PLAN_URI: 'file:///c%3A/Users/test/agents/Plan.agent.md',
+    plan: customAgent('Plan', '/c:/Users/test/agents/Plan.agent.md'),
+    requests: (count: number, modeInfo?: Record<string, unknown>) => Array.from({ length: count }, () => request(modeInfo)),
+    start: (modeId: string) => JSON.stringify({ kind: 0, v: { version: 3, sessionId: 'modes', creationDate: at, initialLocation: 'panel', requests: [], inputState: { mode: { id: modeId, kind: 'agent' } } } }),
+    switchMode: (modeId: string) => JSON.stringify({ kind: 1, k: ['inputState', 'mode'], v: { id: modeId, kind: 'agent' } }),
+    append: (added: unknown[]) => JSON.stringify({ kind: 2, k: ['requests'], v: added }),
+    jsonSession: (added: unknown[]) => JSON.stringify({ sessionId: 'json-modes', inputState: { mode: { id: 'agent', kind: 'agent' } }, requests: added }),
+  };
+}
+
+describe('parseSessionFile — per-request modes', () => {
+  const { builtin, customAgent, request, requests, plan, PLAN_URI, start, switchMode, append, jsonSession } = modeLogFixtures();
+
+  it('keeps a mid-session switch to Plan mode that a JSONL session logs', () => {
+    // The session's saved mode stays at its initial Agent mode; only the request records Plan.
+    const agentTurns = requests(40, builtin('agent'));
+    const switched = parseSessionFixture('switched.jsonl', [
+      start('agent'), append(agentTurns),
+      switchMode(PLAN_URI), append([request(plan)]),
+      switchMode('agent'), append([request(builtin('agent'))]),
+    ].join('\n'));
+    expect(switched.requests.map(r => r.agentMode)).toEqual([...Array<string>(40).fill('agent'), 'plan', 'agent']);
+    expect(noPlanModeFinding(switched)).toBeUndefined();
+
+    expect(noPlanModeFinding(parseSessionFixture('agent-only.jsonl', [start('agent'), append(agentTurns)].join('\n')))?.occurrences).toBe(40);
+  });
+
+  it('counts a custom agent as agentic, not as Plan, when a folder above it is named like plan', () => {
+    const reviewerPath = '/workspace/planetarium/.github/agents/Reviewer.agent.md';
+    const session = parseSessionFixture('reviewer.jsonl', [
+      start('agent'), append(requests(40, builtin('agent'))),
+      switchMode(`file://${reviewerPath}`), append([request(customAgent('Reviewer', reviewerPath, '1395712843'))]),
+    ].join('\n'));
+    expect(session.requests.at(-1)?.agentMode).toBe('Reviewer');
+    expect(noPlanModeFinding(session)?.occurrences).toBe(41);
+  });
+
+  it('counts a custom agent as agentic, not as Plan, when its display name contains "plan"', () => {
+    const agentTurns = requests(40, builtin('agent'));
+    const explainer = customAgent('Code Explanation', '/workspace/.github/agents/Reviewer.agent.md', '1395712843');
+    const named = parseSessionFixture('code-explanation.json', jsonSession([...agentTurns, request(explainer)]));
+    expect(named.requests.at(-1)?.agentMode).toBe('Reviewer');
+    expect(noPlanModeFinding(named)?.occurrences).toBe(41);
+
+    // VS Code 1.106 to 1.110 log a custom agent's name but not its file.
+    const nameOnlyAgent = { kind: 'agent', isBuiltin: false, modeId: 'custom', modeInstructions: { name: 'Code Explanation', content: 'You explain code.', toolReferences: [] } };
+    const nameOnly = parseSessionFixture('code-explanation-1.106.json', jsonSession([...agentTurns, request(nameOnlyAgent)]));
+    expect(nameOnly.requests.at(-1)?.agentMode).toBe('Code Explanation');
+    expect(noPlanModeFinding(nameOnly)?.occurrences).toBe(41);
+  });
+
+  it("reads each request's mode in a JSON session too", () => {
+    const askAndEdit = parseSessionFixture('ask-edit.json', jsonSession([...requests(20, builtin('ask')), ...requests(20, builtin('edit'))]));
+    expect([...new Set(askAndEdit.requests.map(r => r.agentMode))]).toEqual(['ask', 'edit']);
+    expect(runEmitters(askAndEdit.requests, [askAndEdit], false).get('no-plan-mode')).toMatchObject({ count: 0, total: 40 });
+    expect(noPlanModeFinding(askAndEdit)).toBeUndefined();
+
+    const planned = parseSessionFixture('planned.json', jsonSession([...requests(40, builtin('agent')), request(plan)]));
+    expect(planned.requests.at(-1)?.agentMode).toBe('plan');
+    expect(noPlanModeFinding(planned)).toBeUndefined();
+  });
+
+  it("falls back to the session's mode for requests that don't record one", () => {
+    const session = parseSessionFixture('fallback.jsonl', [start(PLAN_URI), append([request(), request(builtin('agent')), request({ telemetryModeId: 'applyCodeBlock' })])].join('\n'));
+    expect(session.requests.map(r => r.agentMode)).toEqual(['plan', 'agent', 'plan']);
+  });
+});
+
+describe('requestModeFromInfo', () => {
+  const customFile = { $mid: 1, scheme: 'file', path: '/c:/Users/test/agents/MERs Agent.agent.md' };
+  const planFile = { $mid: 1, scheme: 'file', path: '/c:/Users/test/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/plan-agent/Plan.agent.md' };
+  const reviewerFile = { $mid: 1, scheme: 'file', path: '/workspace/.github/agents/Reviewer.agent.md' };
+  it.each<[string, RawRequest['modeInfo'], string | undefined]>([
+    ['a built-in mode', { kind: 'ask', isBuiltin: true, telemetryModeId: 'ask', telemetryModeName: 'ask' }, 'ask'],
+    ['the modeId field of VS Code 1.105 to 1.124', { kind: 'edit', isBuiltin: true, modeId: 'edit' }, 'edit'],
+    ['the Plan agent', { kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan' }, 'plan'],
+    ['the Plan agent with a hashed telemetry name', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Plan' } }, 'plan'],
+    ['the Plan agent as VS Code 1.125+ logs it', { kind: 'agent', isBuiltin: false, telemetryModeId: 'custom', telemetryModeName: 'Plan', modeInstructions: { name: 'Plan', uri: planFile } }, 'plan'],
+    ['the Plan agent as VS Code 1.111 to 1.124 log it', { kind: 'agent', isBuiltin: false, modeId: 'custom', modeName: 'Plan', modeInstructions: { name: 'Plan', uri: planFile } }, 'plan'],
+    ['the Plan agent as VS Code 1.106 to 1.110 log it', { kind: 'agent', isBuiltin: false, modeId: 'custom', modeInstructions: { name: 'Plan' } }, 'plan'],
+    ['the Plan agent by the telemetry name of VS Code 1.111 to 1.124', { modeId: 'custom', modeName: 'Plan' }, 'plan'],
+    ['an agent named plan in another case, as Copilot matches it', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'PLAN' } }, 'plan'],
+    ['a custom agent file, named like the session mode', { modeId: 'custom', modeInstructions: { name: 'Reviewer', uri: customFile } }, 'MERs Agent'],
+    ['a custom agent in a folder named like plan', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Reviewer', uri: { $mid: 1, scheme: 'file', path: '/workspace/planetarium/.github/agents/Reviewer.agent.md' } } }, 'Reviewer'],
+    ['a custom agent whose display name contains plan', { telemetryModeId: 'custom', telemetryModeName: '1395712843', modeInstructions: { name: 'Code Explanation', uri: reviewerFile } }, 'Reviewer'],
+    ['an extension agent whose telemetry name contains plan', { telemetryModeId: 'custom', telemetryModeName: 'Code Explanation', modeInstructions: { name: 'Code Explanation', uri: reviewerFile } }, 'Reviewer'],
+    ['a custom agent file whose name contains plan', { modeId: 'custom', modeName: 'Planner', modeInstructions: { name: 'Planner', uri: { $mid: 1, scheme: 'file', path: '/workspace/.github/agents/Planner.agent.md' } } }, 'Planner'],
+    ['a custom agent without a file whose name contains plan', { modeId: 'custom', modeInstructions: { name: 'Code Explanation' } }, 'Code Explanation'],
+    ['a custom agent without a file', { telemetryModeId: 'custom', modeInstructions: { name: 'Reviewer' } }, 'Reviewer'],
+    ['a custom agent without instructions', { telemetryModeId: 'custom', telemetryModeName: '1395712843' }, 'custom'],
+    ['an applied code block', { telemetryModeId: 'applyCodeBlock' }, undefined],
+    ['no mode id', { kind: 'agent' }, undefined],
+    ['no modeInfo', undefined, undefined],
+  ])('reads %s', (_label, modeInfo, expected) => {
+    expect(requestModeFromInfo(modeInfo)).toBe(expected);
+  });
+});
+
+describe('normalizeSessionMode', () => {
+  it.each([
+    ['vscode-userdata:/c%3A/Users/test/plan-agent/Plan.agent.md', 'plan'],
+    ['file:///workspace/planetarium/.github/agents/Reviewer.agent.md', 'Reviewer'],
+    ['file:///c%3A/Users/test/plans%20team/MERs%20Agent.chatmode.md', 'MERs Agent'],
+  ])('judges %s by its file name, not its folders', (modeId, expected) => {
+    expect(normalizeSessionMode(modeId)).toBe(expected);
+  });
+
+  it.each([
+    // Copilot's Plan agent: generated since January 2026, shipped as a file before that, and its October 2025 names.
+    ['file:///c%3A/Users/test/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/plan-agent/Plan.agent.md', 'plan'],
+    ['file:///c%3A/Users/test/.vscode/extensions/github.copilot-chat-0.33.0/assets/agents/Plan.agent.md', 'plan'],
+    ['file:///c%3A/Users/test/.vscode-insiders/extensions/github.copilot-chat-0.33.0/assets/agents/Plan.vscode-agent.md', 'plan'],
+    ['file:///c%3A/Users/test/.vscode/extensions/github.copilot-chat-0.33.0/assets/chatmodes/Plan.chatmode.md', 'plan'],
+    ['file:///workspace/.github/agents/Explanation.agent.md', 'Explanation'],
+    ['file:///workspace/.github/agents/Sprint%20Planner.agent.md', 'Sprint Planner'],
+    ['file:///workspace/.github/agents/Reviewer.vscode-agent.md', 'Reviewer'],
+  ])('reads %s as Plan only when the agent is named Plan', (modeId, expected) => {
+    expect(normalizeSessionMode(modeId)).toBe(expected);
+  });
+});
 describe('scanVsCodeDirs', () => {
+  it.each(['GitHub Copilot CLI', 'Local Agent'])('does not count absent events files as parse failures for %s', async harness => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-empty-'));
+    try {
+      fs.mkdirSync(path.join(logsDir, 'draft'));
+      const ctx: ParseContext = {
+        workspaces: new Map(), sessions: [], editLocIndex: new Map(), sessionSourceIndex: new Map(), aiLoc: 0,
+      };
+      resetParseWarnings();
+      processWorkspaceEntry(logsDir, 'draft', harness, ctx);
+      await processWorkspaceEntryAsync(logsDir, 'draft', harness, ctx);
+      expect(getParseWarningCounts()).toEqual({ skippedFiles: 0, skippedLines: 0 });
+      expect(ctx.sessions).toHaveLength(0);
+      expect(ctx.workspaces.size).toBe(1);
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+      resetParseWarnings();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32').each(['GitHub Copilot CLI', 'Local Agent'])('reports events-file inspection failures for %s', async harness => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-events-'));
+    try {
+      const workspace = path.join(logsDir, 'broken');
+      fs.mkdirSync(workspace);
+      fs.symlinkSync('events.jsonl', path.join(workspace, 'events.jsonl'));
+      const ctx: ParseContext = {
+        workspaces: new Map(), sessions: [], editLocIndex: new Map(), sessionSourceIndex: new Map(), aiLoc: 0,
+      };
+      resetParseWarnings();
+      processWorkspaceEntry(logsDir, 'broken', harness, ctx);
+      await processWorkspaceEntryAsync(logsDir, 'broken', harness, ctx);
+      expect(getParseWarningCounts()).toEqual({ skippedFiles: 2, skippedLines: 0 });
+      expect(ctx.workspaces.size).toBe(1);
+      expect(ctx.sessions).toHaveLength(0);
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+      resetParseWarnings();
+    }
+  });
+
   it('scans directories and returns entries', () => {
     const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-vscode-'));
     try {
@@ -822,6 +1023,31 @@ describe('parseSessionFile — skill detection', () => {
   });
 });
 describe('tool-call metadata extraction (characterization)', () => {
+  it('does not decode irrelevant tool arguments while retaining their tool identities', () => {
+    const commandArgs = '{"command":"npm test","path":"not-a-reference.ts"}';
+    const unknownArgs = '{"url":"https://not-a-source.example"}';
+    const sourceArgs = '{"url":"https://docs.python.org/3/"}';
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      const request = parseRawRequest({
+        message: { text: 'go' }, response: [{ value: 'done' }],
+        result: { metadata: { toolCallRounds: [{ toolCalls: [
+          { name: 'functions.bash', arguments: commandArgs },
+          { name: 'unknown_web_fetch', arguments: unknownArgs },
+          { name: 'functions.web_fetch', arguments: sourceArgs },
+        ] }] } },
+      });
+      expect(parse).not.toHaveBeenCalledWith(commandArgs);
+      expect(parse).not.toHaveBeenCalledWith(unknownArgs);
+      expect(parse).toHaveBeenCalledWith(sourceArgs);
+      expect(request.toolsUsed).toEqual(['functions.bash', 'unknown_web_fetch', 'functions.web_fetch']);
+      expect(request.webDomains).toEqual(['docs.python.org']);
+      expect(request.referencedFiles).toEqual([]);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   function parseRequest(metadata: Record<string, unknown>): ReturnType<typeof parseSessionFile> {
     const data = {
       sessionId: 'tc',
@@ -847,6 +1073,26 @@ describe('tool-call metadata extraction (characterization)', () => {
     expect(session!.requests[0].toolsUsed).toEqual(['read_file', 'apply_patch']);
   });
 
+  it('captures only explicit source hosts from structured and serialized web-tool arguments', () => {
+    const source = parseRequest({ toolCallRounds: [{ toolCalls: [
+      { name: 'web_fetch', arguments: { url: 'https://docs.python.org/3/?private=1' } },
+      { name: 'web_fetch', arguments: '{"url":"https://learn.microsoft.com/typescript"}' },
+      { name: 'web_search', arguments: { query: 'https://not-a-source.example' } },
+    ] }] });
+    expect(source?.requests[0].webDomains).toEqual(['docs.python.org', 'learn.microsoft.com']);
+  });
+
+  it('retains explicit investigation roles from structured and serialized delegation arguments', () => {
+    const session = parseRequest({
+      toolCallRounds: [{ toolCalls: [
+        { name: 'task', arguments: { agent_type: 'research' } },
+        { name: 'Agent', arguments: '{"subagent_type":"Explore"}' },
+        { name: 'spawn_agent', arguments: '{"agent_type":"research"}' },
+        { name: 'task', arguments: { agent_type: 'general-purpose', prompt: 'Research the repository.' } },
+      ] }],
+    });
+    expect(session!.requests[0].investigationDelegations).toEqual(['research', 'explore']);
+  });
   it('collects toolsUsed from the toolCallResults branch too', () => {
     const session = parseRequest({
       toolCallResults: [{ toolCalls: [{ name: 'run_in_terminal' }] }],

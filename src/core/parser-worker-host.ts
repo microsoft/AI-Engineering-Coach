@@ -20,7 +20,7 @@ const RETRY_WORKER_MAX_OLD_SPACE_MB = 6144;
 
 /** child_process.fork, narrowed to what the host uses. Injectable so the orchestration can be
  *  unit-tested against a fake child without spawning a real process. */
-type ForkFn = typeof import('child_process').fork;
+export type ForkFn = (file: string, args: string[], options: import('child_process').ForkOptions) => import('child_process').ChildProcess;
 
 /** A worker failure is retryable (worth a second attempt at a higher heap ceiling) only when it
  *  looks like an out-of-memory / hard-abort death, not a deterministic parse error that would
