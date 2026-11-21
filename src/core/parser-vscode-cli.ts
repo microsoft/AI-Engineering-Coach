@@ -446,37 +446,50 @@ function closeUserWait(state: CLIParseState, key: string, end: number | null, an
   const open = key ? state.openWaits.get(key) : undefined;
   if (!open) return;
   state.openWaits.delete(key);
+  // A recorded answer belongs to this wait alone: a later one that reuses its key starts without it.
+  const { answeredAt, requestId, recorded } = takeHumanResponse(state, key, open);
   if (end === null || end < open.start || automatic) return;
-  const answeredAt = state.humanResponses.get(key);
-  // A recorded answer belongs to this question alone: a later one that reuses its ID doesn't get it.
-  const recorded = state.humanAnswers.get(key);
-  state.humanAnswers.delete(key);
   const text = { ...open.text, ...result, ...(recorded !== undefined && !result.answer ? { answer: recorded } : {}) };
   const wait: UserWait = {
-    start: open.start, end, kind: open.kind, answered: answered || state.humanResponses.has(key), ...(answeredAt != null ? { answeredAt } : {}),
-    ...waitRequestId(state, key, open), ...(Object.keys(text).length ? { text } : {}),
+    start: open.start, end, kind: open.kind, answered: answered || answeredAt !== undefined, ...(answeredAt != null ? { answeredAt } : {}),
+    ...requestId, ...(Object.keys(text).length ? { text } : {}),
   };
   state.closedWaits.set(key, wait);
   attachUserWait(state, wait, open.owner);
 }
 
+/** The record of your answer to the wait `key`, taken as the wait closes. `answeredAt` is undefined without a record,
+ *  null when the record has no time. */
+function takeHumanResponse(state: CLIParseState, key: string, open: OpenUserWait): { answeredAt: number | null | undefined; requestId: Partial<UserWait>; recorded: string | undefined } {
+  const out = {
+    answeredAt: state.humanResponses.has(key) ? state.humanResponses.get(key) ?? null : undefined,
+    requestId: waitRequestId(state, key, open),
+    recorded: state.humanAnswers.get(key),
+  };
+  state.humanResponses.delete(key);
+  state.humanRequestIds.delete(key);
+  state.humanAnswers.delete(key);
+  return out;
+}
+
+/** A record of your answer goes to the wait still open on its key, kept until that closes; else to the wait it
+ *  closed (it can come before or after the result). */
 function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
   const answer = str(recordValue(data.response)?.answer).trim();
   for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
     if (!key) continue;
-    if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
     const requestId = key === str(data.toolCallId) ? str(data.requestId) : '';
-    if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
-    // The answer text goes to the question still open, else to the one it closed; it is kept only until that closes.
-    const open = state.openWaits.has(key);
-    if (answer && (open || !state.closedWaits.has(key))) state.humanAnswers.set(key, answer);
-    const wait = state.closedWaits.get(key);
+    const wait = state.openWaits.has(key) ? undefined : state.closedWaits.get(key);
     if (wait) {
       wait.answered = true;
       if (wait.answeredAt === undefined && at !== null) wait.answeredAt = at;
       if (requestId && wait.kind === 'question') wait.requestId ??= requestId;
-      if (answer && !open && !wait.text?.answer) wait.text = { ...wait.text, answer };
+      if (answer && !wait.text?.answer) wait.text = { ...wait.text, answer };
+      continue;
     }
+    if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
+    if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
+    if (answer) state.humanAnswers.set(key, answer);
   }
 }
 

@@ -541,6 +541,8 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
       { type: 'assistant.message', timestamp: at(8), data: { content: 'done' } },
     ]), 'ws', 'ws');
     expect(session?.requests[0].userWaits?.map(w => [w.text?.ask, w.text?.answer])).toEqual([['Ship it?', 'yes'], ['Tag it?', undefined], ['Notify?', undefined]]);
+    // Nor its record that you answered (code from #381, hardened here): only the first was answered.
+    expect(session?.requests[0].userWaits?.map(w => [w.answered, w.answeredAt])).toEqual([[true, Date.parse(at(3))], [false, undefined], [false, undefined]]);
   });
 
   it('gives a wait to the turn that asked, even when the answer comes during a later turn', () => {
