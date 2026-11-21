@@ -11,7 +11,7 @@
 import * as vscode from 'vscode';
 import { loadSidebarStats } from './core/cache';
 import { runtimeDebug } from './core/runtime-debug';
-import { findChangelogName, latestChangelogDate, shouldAnnounceUpdate } from './core/whats-new';
+import { findChangelogName, isChangelogDate, latestChangelogDate, shouldAnnounceUpdate } from './core/whats-new';
 
 export const SHOW_RELEASE_NOTES_COMMAND = 'aiEngineerCoach.showReleaseNotes';
 export const LAST_SEEN_CHANGES_KEY = 'aiEngineerCoach.lastSeenChangesDate';
@@ -58,6 +58,8 @@ export async function announceUpdate(context: vscode.ExtensionContext, latest?: 
   const hasPriorUse = previous === undefined && loadSidebarStats() !== null;
   const current = latest ?? await readLatestChangesDate(context.extensionUri);
   if (current === undefined || previous === current) return;
+  // An older build keeps the newest date, so going back to the newer build doesn't offer it again.
+  if (previous !== undefined && isChangelogDate(previous) && current < previous) return;
   await context.globalState.update(LAST_SEEN_CHANGES_KEY, current);
   if (!shouldAnnounceUpdate(previous, current, hasPriorUse)) return;
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);

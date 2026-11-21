@@ -12,6 +12,11 @@ export const DATE_BEFORE_TRACKING = '2026-05-06';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** True for a YYYY-MM-DD changelog date. */
+export function isChangelogDate(value: string): boolean {
+  return DATE.test(value);
+}
+
 /** The newest "## YYYY-MM-DD" section of a changelog, or undefined when it has none. */
 export function latestChangelogDate(markdown: string): string | undefined {
   let latest: string | undefined;

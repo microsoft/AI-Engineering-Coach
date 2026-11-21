@@ -168,8 +168,12 @@ describe('announceUpdate', () => {
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it('stays quiet for an older build', async () => {
-    await announceUpdate(fakeContext('2026-11-20').extensionContext, '2026-11-01');
+  it('stays quiet for an older build and keeps the newest date for the next upgrade', async () => {
+    const { context, extensionContext, state } = fakeContext('2026-11-20');
+    await announceUpdate(extensionContext, '2026-11-01');
+    expect(context.globalState.update).not.toHaveBeenCalled();
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-20');
+    await announceUpdate(extensionContext, '2026-11-20');
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
