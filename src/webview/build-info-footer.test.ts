@@ -11,8 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BuildInfo } from '../core/build-info';
 import { mountBuildInfoFooter, setBuildInfoStatus } from './build-info-footer';
 
-const DEV: BuildInfo = { version: '0.2.0', commit: 'def5678', dirty: true, branch: 'feat/stamp', builtAt: '2026-10-31T11:15:02.000Z', dev: true };
-const RELEASE: BuildInfo = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', builtAt: '2026-11-03T09:30:12.345Z', dev: false };
+const EDITED: BuildInfo = { version: '0.2.0', commit: 'def5678', dirty: true, branch: 'feat/stamp', builtAt: '2026-10-31T11:15:02.000Z' };
+const CLEAN: BuildInfo = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: 'main', builtAt: '2026-11-03T09:30:12.345Z' };
 
 let sidebar: HTMLElement;
 
@@ -23,33 +23,31 @@ beforeEach(() => {
 
 describe('mountBuildInfoFooter', () => {
   it('appends the stamp after the filters with the full details in its tooltip', () => {
-    const footer = mountBuildInfoFooter(sidebar, DEV);
+    const footer = mountBuildInfoFooter(sidebar, EDITED);
     expect(sidebar.lastElementChild).toBe(footer);
     expect(footer.id).toBe('build-info');
-    expect(footer.querySelector('.build-info-version')?.textContent).toBe('v0.2.0 dev');
-    expect(footer.querySelector('.build-info-dev')?.textContent).toBe('dev');
+    expect(footer.querySelector('.build-info-version')?.textContent).toBe('v0.2.0');
     expect(footer.querySelector('.build-info-meta')?.textContent).toBe('def5678-dirty · 2026-10-31 11:15 UTC');
     expect(footer.title).toBe(
-      'AI Engineer Coach 0.2.0 (dev build)\nCommit def5678 with uncommitted changes\nBranch feat/stamp\nBuilt 2026-10-31 11:15 UTC');
+      'AI Engineer Coach 0.2.0\nCommit def5678 with uncommitted changes\nBranch feat/stamp\nBuilt 2026-10-31 11:15 UTC');
     expect(document.getElementById('build-info-status')?.hidden).toBe(true);
   });
 
-  it('shows release builds without the dev badge', () => {
-    const footer = mountBuildInfoFooter(sidebar, RELEASE);
+  it('shows a clean commit without the dirty marker', () => {
+    const footer = mountBuildInfoFooter(sidebar, CLEAN);
     expect(footer.querySelector('.build-info-version')?.textContent).toBe('v0.2.0');
-    expect(footer.querySelector('.build-info-dev')).toBeNull();
     expect(footer.querySelector('.build-info-meta')?.textContent).toBe('abc1234 · 2026-11-03 09:30 UTC');
   });
 
   it('replaces an existing footer instead of stacking another one', () => {
-    mountBuildInfoFooter(sidebar, DEV);
-    mountBuildInfoFooter(sidebar, RELEASE);
+    mountBuildInfoFooter(sidebar, EDITED);
+    mountBuildInfoFooter(sidebar, CLEAN);
     expect(sidebar.querySelectorAll('#build-info')).toHaveLength(1);
     expect(sidebar.querySelector('.build-info-meta')?.textContent).toContain('abc1234');
   });
 
   it('renders untrusted values as text', () => {
-    const footer = mountBuildInfoFooter(sidebar, { ...DEV, version: '<img src=x onerror=alert(1)>', commit: '<b>x</b>' });
+    const footer = mountBuildInfoFooter(sidebar, { ...EDITED, version: '<img src=x onerror=alert(1)>', commit: '<b>x</b>' });
     expect(footer.querySelector('img, b')).toBeNull();
     expect(footer.querySelector('.build-info-version')?.textContent).toContain('<img src=x onerror=alert(1)>');
   });
@@ -57,7 +55,7 @@ describe('mountBuildInfoFooter', () => {
 
 describe('setBuildInfoStatus', () => {
   it('shows a notice with one action and hides it again', () => {
-    mountBuildInfoFooter(sidebar, RELEASE);
+    mountBuildInfoFooter(sidebar, CLEAN);
     const onAction = vi.fn();
     setBuildInfoStatus({ text: 'v0.4.0 is available', title: 'Released 2026-12-01', actionLabel: 'Install', onAction });
     const slot = document.getElementById('build-info-status')!;

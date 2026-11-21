@@ -3,64 +3,15 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Pure release helpers: version math, CHANGELOG.md in Keep a Changelog 2.0.0 format (move the
- * [Unreleased] notes into a dated release section, extract one release's notes), and the version
- * fields of package.json and package-lock.json. scripts/release.mjs does the file and git I/O. */
 
-// Semantic Versioning major.minor.patch: numbers without leading zeros, which vsce requires.
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+/* Pure helpers for CHANGELOG.md, which follows Keep a Changelog 2.0.0 but groups changes by the
+ * date they reached main ("## YYYY-MM-DD", newest first) instead of by version. Pull requests add
+ * entries under "## [Unreleased]"; stampUnreleased moves them under a date. scripts/stamp-changelog.mjs
+ * does the file I/O. */
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_REFERENCE = /^\[([^\]]+)\]:\s*\S/;
-
-/**
- * @param {string} version
- * @returns {number[]}
- */
-function parseVersion(version) {
-  const match = VERSION.exec(version);
-  if (!match) throw new Error(`Expected a major.minor.patch version without leading zeros, got "${version}"`);
-  return match.slice(1).map(Number);
-}
-
-/**
- * @param {string} a
- * @param {string} b
- */
-export function compareVersions(a, b) {
-  const left = parseVersion(a);
-  const right = parseVersion(b);
-  for (let i = 0; i < 3; i++) {
-    if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
-  }
-  return 0;
-}
-
-/**
- * The next release version. Only `major.minor.patch` is allowed, because the VS Code
- * Marketplace rejects pre-release suffixes such as `-beta`.
- * @param {string} current
- * @param {string} bump "patch", "minor", "major", or an explicit major.minor.patch version
- */
-export function nextVersion(current, bump) {
-  const [major, minor, patch] = parseVersion(current);
-  /** @type {string} */
-  let next;
-  if (bump === 'major') next = `${major + 1}.0.0`;
-  else if (bump === 'minor') next = `${major}.${minor + 1}.0`;
-  else if (bump === 'patch') next = `${major}.${minor}.${patch + 1}`;
-  else if (VERSION.test(bump)) next = bump;
-  else throw new Error(`Expected patch, minor, major, or a major.minor.patch version without leading zeros, got "${bump}"`);
-  if (compareVersions(next, current) <= 0) throw new Error(`The new version ${next} must be greater than ${current}`);
-  return next;
-}
-
-/**
- * True when the minor version is odd, which marks a pre-release.
- * @param {string} version
- */
-export function isPreRelease(version) {
-  return parseVersion(version)[1] % 2 === 1;
-}
+const TYPE_ORDER = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'];
 
 /** @param {string} title text after "## " */
 function sectionKey(title) {
@@ -81,11 +32,11 @@ function outline(text) {
     if (!LINK_REFERENCE.test(lines[i])) break;
     refsStart = i;
   }
-  /** @type {{ key: string, start: number, end: number }[]} */
+  /** @type {{ key: string, title: string, start: number, end: number }[]} */
   const sections = [];
   for (let i = 0; i < refsStart; i++) {
     const match = /^## (.*)$/.exec(lines[i]);
-    if (match) sections.push({ key: sectionKey(match[1].trim()), start: i, end: refsStart });
+    if (match) sections.push({ key: sectionKey(match[1].trim()), title: match[1].trim(), start: i, end: refsStart });
   }
   for (let i = 0; i + 1 < sections.length; i++) sections[i].end = sections[i + 1].start;
   return { eol, lines, sections, refsStart };
@@ -106,125 +57,103 @@ function trimBlankLines(lines) {
 }
 
 /**
- * Drops "### Type" headings that have no entries, such as an unused "### Deprecated".
+ * Groups a section body by its "### Type" headings; entries before the first heading go under "".
+ * Headings without entries, such as an unused "### Deprecated", are dropped.
  * @param {string[]} lines
+ * @returns {Map<string, string[]>}
  */
-function dropEmptySubsections(lines) {
-  /** @type {string[]} */
-  const kept = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith('### ')) {
-      let next = i + 1;
-      while (next < lines.length && lines[next].trim() === '') next++;
-      if (next === lines.length || lines[next].startsWith('### ')) {
-        i = next - 1;
-        continue;
-      }
+function groupByType(lines) {
+  /** @type {Map<string, string[]>} */
+  const groups = new Map();
+  let type = '';
+  for (const line of lines) {
+    const heading = /^### (.+)$/.exec(line);
+    if (heading) {
+      type = heading[1].trim();
+      continue;
     }
-    kept.push(lines[i]);
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type)?.push(line);
   }
-  return kept;
+  for (const [key, entries] of groups) {
+    const trimmed = trimBlankLines(entries);
+    if (hasEntries(trimmed.join('\n')) || (key === '' && trimmed.length > 0)) groups.set(key, trimmed);
+    else groups.delete(key);
+  }
+  return groups;
 }
 
 /**
- * Notes for one released version: the body of its "## [X.Y.Z]" section, without the heading.
+ * Dated sections in file order, after checking that every "## " heading other than
+ * "[Unreleased]" is a valid YYYY-MM-DD date, used once, newest first.
  * @param {string} text CHANGELOG.md contents
- * @param {string} version
+ * @returns {string[]}
  */
-export function extractReleaseNotes(text, version) {
-  parseVersion(version);
-  const { lines, sections } = outline(text);
-  const section = sections.find(s => s.key === version);
-  if (!section) throw new Error(`CHANGELOG.md has no "## [${version}]" section`);
-  const body = trimBlankLines(lines.slice(section.start + 1, section.end)).join('\n');
-  if (!hasEntries(body)) throw new Error(`The CHANGELOG.md section for ${version} has no entries`);
-  return body;
+export function changelogDates(text) {
+  const dates = [];
+  for (const { key, title } of outline(text).sections) {
+    if (key === 'unreleased') continue;
+    if (!DATE.test(title) || Number.isNaN(Date.parse(`${title}T00:00:00Z`))) {
+      throw new Error(`Expected "## YYYY-MM-DD" or "## [Unreleased]", got "## ${title}"`);
+    }
+    const previous = dates.at(-1);
+    if (previous !== undefined && title >= previous) {
+      throw new Error(`Dated sections must be unique and newest first: "## ${title}" follows "## ${previous}"`);
+    }
+    dates.push(title);
+  }
+  return dates;
 }
 
 /**
- * Moves the [Unreleased] notes into "## [version] - date", leaves an empty [Unreleased]
- * section on top, and points the link references at the new tag.
+ * Moves the [Unreleased] notes under "## date" and leaves an empty [Unreleased] section on top.
+ * When that date already has a section, the notes join it, type by type.
  * @param {string} text CHANGELOG.md contents
- * @param {{ version: string, date: string, repoUrl: string, hasTag?: (tag: string) => boolean }} release
+ * @param {{ date: string }} options
  */
-export function releaseUnreleased(text, { version, date, repoUrl, hasTag = () => false }) {
-  parseVersion(version);
-  if (!DATE.test(date)) throw new Error(`Expected a YYYY-MM-DD date, got "${date}"`);
+export function stampUnreleased(text, { date }) {
+  if (!DATE.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) throw new Error(`Expected a YYYY-MM-DD date, got "${date}"`);
+  const latest = changelogDates(text)[0];
+  if (latest !== undefined && date < latest) throw new Error(`${date} is older than the newest section, ${latest}`);
   const { eol, lines, sections, refsStart } = outline(text);
   const index = sections.findIndex(s => s.key === 'unreleased');
   if (index < 0) throw new Error('CHANGELOG.md has no "## [Unreleased]" section');
-  if (sections.some(s => s.key === version)) throw new Error(`CHANGELOG.md already has a section for ${version}`);
   const unreleased = sections[index];
-  const body = trimBlankLines(dropEmptySubsections(lines.slice(unreleased.start + 1, unreleased.end)));
-  if (!hasEntries(body.join('\n'))) throw new Error('Nothing to release: add entries under "## [Unreleased]" first');
+  const pending = groupByType(lines.slice(unreleased.start + 1, unreleased.end));
+  if (!hasEntries([...pending.values()].flat().join('\n'))) {
+    throw new Error('Nothing to stamp: add entries under "## [Unreleased]" first');
+  }
 
-  const previous = sections.slice(index + 1).map(s => s.key).find(key => VERSION.test(key));
-  const releaseLink = previous && hasTag(`v${previous}`)
-    ? `${repoUrl}/compare/v${previous}...v${version}`
-    : `${repoUrl}/releases/tag/v${version}`;
-  const otherRefs = lines.slice(refsStart).filter(line => {
-    const match = LINK_REFERENCE.exec(line);
-    return match && !['unreleased', version].includes(match[1].toLowerCase());
-  });
-  const olderSections = trimBlankLines(lines.slice(unreleased.end, refsStart));
+  const sameDay = sections.find(s => s.title === date);
+  const merged = sameDay ? groupByType(lines.slice(sameDay.start + 1, sameDay.end)) : new Map();
+  for (const [type, entries] of pending) merged.set(type, [...(merged.get(type) ?? []), ...entries]);
+  const types = [...merged.keys()].sort((a, b) => rank(a) - rank(b));
+  /** @type {string[]} */
+  const dated = [`## ${date}`];
+  for (const type of types) {
+    dated.push('');
+    if (type) dated.push(`### ${type}`, '');
+    dated.push(...(merged.get(type) ?? []));
+  }
 
+  const rest = sections.filter(s => s !== unreleased && s !== sameDay);
+  const older = rest.flatMap(s => ['', ...trimBlankLines(lines.slice(s.start, s.end))]);
+  const refs = trimBlankLines(lines.slice(refsStart));
   return [
-    ...lines.slice(0, unreleased.start),
+    ...trimBlankLines(lines.slice(0, unreleased.start)),
+    '',
     '## [Unreleased]',
     '',
-    `## [${version}] - ${date}`,
-    '',
-    ...body,
-    '',
-    ...(olderSections.length > 0 ? [...olderSections, ''] : []),
-    `[Unreleased]: ${repoUrl}/compare/v${version}...HEAD`,
-    `[${version}]: ${releaseLink}`,
-    ...otherRefs,
+    ...dated,
+    ...older,
+    ...(refs.length > 0 ? ['', ...refs] : []),
     '',
   ].join(eol);
-}
 
-/**
- * The repository web URL from package.json's `repository` field.
- * @param {{ repository?: string | { url?: string } }} pkg
- */
-export function repositoryUrl(pkg) {
-  const raw = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url;
-  if (!raw) throw new Error('package.json has no repository URL');
-  return raw.replace(/^git\+/, '').replace(/\.git$/, '').replace(/\/+$/, '');
-}
-
-/**
- * Changes only the top-level "version" in package.json text. `npm version` would rewrite the
- * whole file and expand its compact one-line objects and arrays.
- * @param {string} text package.json contents
- * @param {string} from expected current version
- * @param {string} to
- */
-export function setManifestVersion(text, from, to) {
-  parseVersion(to);
-  const manifest = JSON.parse(text);
-  if (manifest.version !== from) throw new Error(`package.json version is ${manifest.version}, expected ${from}`);
-  const updated = text.replace(/^(\s*"version"\s*:\s*")([^"]*)(")/m, `$1${to}$3`);
-  if (JSON.stringify(JSON.parse(updated)) !== JSON.stringify({ ...manifest, version: to })) {
-    throw new Error('Could not change only the top-level version in package.json');
+  /** @param {string} type */
+  function rank(type) {
+    if (type === '') return -1;
+    const position = TYPE_ORDER.indexOf(type);
+    return position < 0 ? TYPE_ORDER.length : position;
   }
-  return updated;
-}
-
-/**
- * Changes the root package's two version fields in package-lock.json, keeping npm's formatting.
- * @param {string} text package-lock.json contents
- * @param {string} from expected current version
- * @param {string} to
- */
-export function setLockfileVersion(text, from, to) {
-  parseVersion(to);
-  const lock = JSON.parse(text);
-  const root = lock.packages?.[''];
-  if (lock.version !== from || root?.version !== from) throw new Error(`package-lock.json version is not ${from}`);
-  lock.version = to;
-  root.version = to;
-  const eol = text.includes('\r\n') ? '\r\n' : '\n';
-  return `${JSON.stringify(lock, null, 2)}\n`.replaceAll('\n', eol);
 }

@@ -82,7 +82,7 @@
         "aiEngineerCoach.showReleaseNotesAfterUpdate": {
           "type": "boolean",
           "default": true,
-          "description": "Show a notification that links to the release notes the first time AI Engineer Coach runs after an update to a newer version."
+          "description": "Show a notification that links to the changelog the first time AI Engineer Coach runs a build with newer dated changes."
         }
       }
     },
@@ -326,8 +326,7 @@
     "gen-synth-logs": "npx tsx scripts/generate-synthetic-logs.ts",
     "test:oom-synth": "npx tsx scripts/oom-repro.ts",
     "package": "node scripts/package-readme-swap.mjs",
-    "release:prepare": "node scripts/release.mjs prepare",
-    "release:notes": "node scripts/release.mjs notes",
+    "changelog:stamp": "node scripts/stamp-changelog.mjs",
     "spellcheck": "cspell \"src/**/*.ts\" \"docs/**/*.md\" \"*.md\"",
     "knip": "knip",
     "typecheck": "tsc --noEmit",

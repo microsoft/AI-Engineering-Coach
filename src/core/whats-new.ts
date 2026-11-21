@@ -3,22 +3,33 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Decides when to announce release notes after an update. VS Code glue: src/whats-new-vscode.ts. */
 
-import { compareVersions, parseVersion } from './build-info';
+/* Decides when to announce new changelog entries after an update. CHANGELOG.md groups changes
+ * under "## YYYY-MM-DD" headings, newest first. VS Code glue: src/whats-new-vscode.ts. */
 
-/** The last release before the extension recorded which version a user had seen. */
-export const VERSION_BEFORE_TRACKING = '0.1.0';
+/** The first changelog date, from before the extension recorded which changes a user had seen. */
+export const DATE_BEFORE_TRACKING = '2026-05-06';
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The newest "## YYYY-MM-DD" section of a changelog, or undefined when it has none. */
+export function latestChangelogDate(markdown: string): string | undefined {
+  let latest: string | undefined;
+  for (const match of markdown.matchAll(/^## (\d{4}-\d{2}-\d{2})[ \t]*\r?$/gm)) {
+    if (latest === undefined || match[1] > latest) latest = match[1];
+  }
+  return latest;
+}
 
 /**
- * Announce only real upgrades: never on a fresh install, a downgrade, or a rebuild of the
- * same version. Without a recorded version, earlier use of the dashboard (`hasPriorUse`)
- * means the user upgraded from {@link VERSION_BEFORE_TRACKING}.
+ * Announce only newer changes: never on a fresh install, for an older build, or for a build with
+ * the same changes. Without a recorded date, earlier use of the dashboard (`hasPriorUse`)
+ * means the user last saw the changes of {@link DATE_BEFORE_TRACKING}.
  */
-export function shouldAnnounceUpdate(previous: string | undefined, current: string, hasPriorUse: boolean): boolean {
-  const baseline = previous ?? (hasPriorUse ? VERSION_BEFORE_TRACKING : undefined);
-  if (baseline === undefined || !parseVersion(baseline) || !parseVersion(current)) return false;
-  return compareVersions(current, baseline) > 0;
+export function shouldAnnounceUpdate(previous: string | undefined, current: string | undefined, hasPriorUse: boolean): boolean {
+  const baseline = previous ?? (hasPriorUse ? DATE_BEFORE_TRACKING : undefined);
+  if (baseline === undefined || current === undefined || !DATE.test(baseline) || !DATE.test(current)) return false;
+  return current > baseline;
 }
 
 /** VS Code finds an extension's changelog case-insensitively, and vsce packages it as `changelog.md`. */

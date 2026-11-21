@@ -3,33 +3,51 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+
 import { describe, expect, it } from 'vitest';
-import { findChangelogName, shouldAnnounceUpdate, VERSION_BEFORE_TRACKING } from './whats-new';
+import { DATE_BEFORE_TRACKING, findChangelogName, latestChangelogDate, shouldAnnounceUpdate } from './whats-new';
+
+describe('latestChangelogDate', () => {
+  it('returns the newest dated section and ignores [Unreleased] and dates in text', () => {
+    const changelog = [
+      '# Changelog', '', 'Dated like 2027-01-01 in prose.', '', '## [Unreleased]', '', '- Pending', '',
+      '## 2026-11-01', '', '### Fixed', '', '- A fix', '', '## 2026-11-20', '', '- Out of order', '',
+      '## 2026-05-06', '', '- First',
+    ].join('\r\n');
+    expect(latestChangelogDate(changelog)).toBe('2026-11-20');
+  });
+
+  it('returns undefined when there is no dated section', () => {
+    expect(latestChangelogDate('# Changelog\n\n## [Unreleased]\n\n- Pending\n')).toBeUndefined();
+    expect(latestChangelogDate('## [0.1.0] - 2026-05-06\n')).toBeUndefined();
+  });
+});
 
 describe('shouldAnnounceUpdate', () => {
-  it('announces an upgrade from the recorded version', () => {
-    expect(shouldAnnounceUpdate('0.2.0', '0.2.1', false)).toBe(true);
-    expect(shouldAnnounceUpdate('0.9.0', '0.10.0', false)).toBe(true);
+  it('announces changes newer than the recorded date', () => {
+    expect(shouldAnnounceUpdate('2026-11-01', '2026-11-02', false)).toBe(true);
+    expect(shouldAnnounceUpdate('2026-09-30', '2026-10-01', false)).toBe(true);
   });
 
-  it('stays quiet for rebuilds of the same version and for downgrades', () => {
-    expect(shouldAnnounceUpdate('0.2.0', '0.2.0', true)).toBe(false);
-    expect(shouldAnnounceUpdate('0.4.0', '0.2.0', true)).toBe(false);
+  it('stays quiet for the same changes and for an older build', () => {
+    expect(shouldAnnounceUpdate('2026-11-01', '2026-11-01', true)).toBe(false);
+    expect(shouldAnnounceUpdate('2026-11-20', '2026-11-01', true)).toBe(false);
   });
 
-  it('stays quiet on a fresh install', () => {
-    expect(shouldAnnounceUpdate(undefined, '0.2.0', false)).toBe(false);
+  it('stays quiet on a fresh install and for a changelog without dates', () => {
+    expect(shouldAnnounceUpdate(undefined, '2026-11-01', false)).toBe(false);
+    expect(shouldAnnounceUpdate('2026-11-01', undefined, true)).toBe(false);
   });
 
-  it('treats earlier dashboard use without a recorded version as an upgrade from the untracked release', () => {
-    expect(VERSION_BEFORE_TRACKING).toBe('0.1.0');
-    expect(shouldAnnounceUpdate(undefined, '0.2.0', true)).toBe(true);
-    expect(shouldAnnounceUpdate(undefined, '0.1.0', true)).toBe(false);
+  it('treats earlier dashboard use without a recorded date as having seen the first changes', () => {
+    expect(DATE_BEFORE_TRACKING).toBe('2026-05-06');
+    expect(shouldAnnounceUpdate(undefined, '2026-11-01', true)).toBe(true);
+    expect(shouldAnnounceUpdate(undefined, '2026-05-06', true)).toBe(false);
   });
 
-  it('ignores versions it cannot parse', () => {
-    expect(shouldAnnounceUpdate('garbage', '0.2.0', true)).toBe(false);
-    expect(shouldAnnounceUpdate('0.1.0', 'next', true)).toBe(false);
+  it('ignores dates it cannot parse', () => {
+    expect(shouldAnnounceUpdate('0.1.0', '2026-11-01', true)).toBe(false);
+    expect(shouldAnnounceUpdate('2026-11-01', '01/12/2026', true)).toBe(false);
   });
 });
 

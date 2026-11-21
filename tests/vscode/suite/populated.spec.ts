@@ -144,7 +144,7 @@ describe('Packaged VSIX without GitHub Copilot', () => {
   });
 });
 
-describe('Packaged VSIX release notes', () => {
+describe('Packaged VSIX changelog', () => {
   const dashboard = new Dashboard();
   const { root } = scenarioContext();
 
@@ -158,14 +158,14 @@ describe('Packaged VSIX release notes', () => {
     const line = await dashboard.inActivityBarView(async view =>
       (await view.findWebElement(By.css('p#build-info'))).getText());
     const version = build.version.replaceAll('.', String.raw`\.`);
-    assert.match(line, new RegExp(`^v${version}${build.dev ? String.raw` \(dev\)` : ''} · ${build.commit}${build.dirty ? '-dirty' : ''} · `));
+    assert.match(line, new RegExp(`^v${version} · ${build.commit}${build.dirty ? '-dirty' : ''} · `));
     await dashboard.inActivityBarView(async view => (await view.findWebElement(By.css('#whatsNew'))).click());
     // vsce packages CHANGELOG.md as changelog.md; What's New opens it in the Markdown preview.
     const preview = await dashboard.waitForEditor(/^Preview changelog\.md$/i);
     const headings = await dashboard.markdownPreviewHeadings();
     assert.ok(headings.includes('Changelog'), `Unexpected preview headings: ${headings.join(' | ')}`);
-    assert.ok(headings.some(heading => heading.startsWith(`${build.version} - `)),
-      `The preview has no section for ${build.version}: ${headings.join(' | ')}`);
+    assert.ok(headings.some(heading => /^\d{4}-\d{2}-\d{2}$/.test(heading)),
+      `The preview has no dated section: ${headings.join(' | ')}`);
     await dashboard.snapshot('09-whats-new',
       `What's New: the packaged changelog, and the activity-bar view showing ${line}`);
     await dashboard.closeEditor(preview);

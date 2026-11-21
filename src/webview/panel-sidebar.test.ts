@@ -42,7 +42,7 @@ describe('DashboardSidebarProvider', () => {
   it('shows the build stamp with a detailed tooltip and a What\'s new link', () => {
     const webview = resolveSidebar();
     expect(webview.html).toContain(
-      '<p class="sidebar-note sidebar-build" id="build-info" title="AI Engineer Coach 0.0.0 (dev build)\nCommit unknown">v0.0.0 (dev) · unknown</p>');
+      '<p class="sidebar-note sidebar-build" id="build-info" title="AI Engineer Coach 0.0.0\nCommit unknown">v0.0.0 · unknown</p>');
     expect(webview.html).toContain('<button id="whatsNew" class="link">What\'s new</button>');
     expect(webview.html).toContain("vscode.postMessage({ command: 'aiEngineerCoach.showReleaseNotes' })");
   });

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import {
   announceUpdate,
-  LAST_SEEN_VERSION_KEY,
+  LAST_SEEN_CHANGES_KEY,
   registerWhatsNew,
   SHOW_RELEASE_NOTES_COMMAND,
   showReleaseNotes,
@@ -15,12 +15,13 @@ import {
 
 interface MockState {
   entries: [string, number][];
+  changelog: string;
   setting?: boolean;
   stats: unknown;
 }
 
 const mocks = vi.hoisted(() => {
-  const state: MockState = { entries: [], stats: null };
+  const state: MockState = { entries: [], changelog: '', stats: null };
   return Object.assign(state, {
     executeCommand: vi.fn<(command: string, ...args: unknown[]) => Promise<unknown>>(),
     registerCommand: vi.fn<(command: string, callback: () => unknown) => { dispose(): void }>(),
@@ -42,7 +43,10 @@ vi.mock('vscode', () => ({
     showTextDocument: mocks.showTextDocument,
   },
   workspace: {
-    fs: { readDirectory: () => Promise.resolve(mocks.entries) },
+    fs: {
+      readDirectory: () => Promise.resolve(mocks.entries),
+      readFile: () => Promise.resolve(new TextEncoder().encode(mocks.changelog)),
+    },
     getConfiguration: (section: string) => ({
       get: (key: string, fallback: boolean) => (section === 'aiEngineerCoach' && key === 'showReleaseNotesAfterUpdate'
         ? mocks.setting ?? fallback : fallback),
@@ -57,7 +61,7 @@ const EXTENSION_URI = { path: '/extension' };
 const CHANGELOG_URI = { path: '/extension/changelog.md' };
 
 function fakeContext(previous?: string) {
-  const state = new Map<string, unknown>(previous === undefined ? [] : [[LAST_SEEN_VERSION_KEY, previous]]);
+  const state = new Map<string, unknown>(previous === undefined ? [] : [[LAST_SEEN_CHANGES_KEY, previous]]);
   const context = {
     extensionUri: EXTENSION_URI,
     subscriptions: [] as { dispose(): void }[],
@@ -72,6 +76,7 @@ function fakeContext(previous?: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.entries = [['package.json', 1], ['changelog.md', 1], ['dist', 2]];
+  mocks.changelog = '# Changelog\n\n## [Unreleased]\n\n## 2026-11-20\n\n- Newer\n\n## 2026-11-01\n\n- Older\n';
   mocks.setting = undefined;
   mocks.stats = null;
   mocks.executeCommand.mockResolvedValue(undefined);
@@ -101,81 +106,99 @@ describe('showReleaseNotes', () => {
   it('warns when the build has no changelog', async () => {
     mocks.entries = [['package.json', 1]];
     await showReleaseNotes(EXTENSION_URI as unknown as vscode.Uri);
-    expect(mocks.showWarningMessage).toHaveBeenCalledWith('This AI Engineer Coach build does not include release notes.');
+    expect(mocks.showWarningMessage).toHaveBeenCalledWith('This AI Engineer Coach build does not include a changelog.');
     expect(mocks.executeCommand).not.toHaveBeenCalled();
   });
 });
 
 describe('announceUpdate', () => {
-  it('records the version silently on a fresh install', async () => {
+  it('records the newest date silently on a fresh install', async () => {
     const { extensionContext, state } = fakeContext();
-    await announceUpdate(extensionContext, '0.2.0');
-    expect(state.get(LAST_SEEN_VERSION_KEY)).toBe('0.2.0');
+    await announceUpdate(extensionContext, '2026-11-01');
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-01');
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the version is unchanged', async () => {
-    const { context, extensionContext } = fakeContext('0.2.0');
-    await announceUpdate(extensionContext, '0.2.0');
+  it('does nothing when the newest date is unchanged', async () => {
+    const { context, extensionContext } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext, '2026-11-01');
     expect(context.globalState.update).not.toHaveBeenCalled();
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it('offers the release notes once after an upgrade and opens them on request', async () => {
+  it('offers the changelog once for newer changes and opens it on request', async () => {
     mocks.showInformationMessage.mockResolvedValue("What's New");
-    const { extensionContext, state } = fakeContext('0.2.0');
-    await announceUpdate(extensionContext, '0.4.0');
-    expect(state.get(LAST_SEEN_VERSION_KEY)).toBe('0.4.0');
+    const { extensionContext, state } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext, '2026-11-20');
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-20');
     expect(mocks.showInformationMessage).toHaveBeenCalledWith(
-      'AI Engineer Coach was updated to v0.4.0.', "What's New", "Don't Show Again");
+      'AI Engineer Coach was updated with changes from 2026-11-20.', "What's New", "Don't Show Again");
     expect(mocks.executeCommand).toHaveBeenCalledWith('markdown.showPreview', CHANGELOG_URI);
+  });
+
+  it('reads the newest date from the bundled changelog', async () => {
+    const { extensionContext, state } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext);
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-20');
+    expect(mocks.showInformationMessage).toHaveBeenCalledOnce();
+  });
+
+  it('records nothing when the build has no dated changes', async () => {
+    mocks.changelog = '# Changelog\n\n## [Unreleased]\n\n- Pending\n';
+    const { context, extensionContext } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext);
+    mocks.entries = [['package.json', 1]];
+    await announceUpdate(extensionContext);
+    expect(context.globalState.update).not.toHaveBeenCalled();
+    expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
   it('turns the notification off globally on "Don\'t Show Again"', async () => {
     mocks.showInformationMessage.mockResolvedValue("Don't Show Again");
-    await announceUpdate(fakeContext('0.2.0').extensionContext, '0.4.0');
+    await announceUpdate(fakeContext('2026-11-01').extensionContext, '2026-11-20');
     expect(mocks.updateSetting).toHaveBeenCalledWith('showReleaseNotesAfterUpdate', false, 1);
     expect(mocks.executeCommand).not.toHaveBeenCalled();
   });
 
-  it('respects the setting but still records the version', async () => {
+  it('respects the setting but still records the date', async () => {
     mocks.setting = false;
-    const { extensionContext, state } = fakeContext('0.2.0');
-    await announceUpdate(extensionContext, '0.4.0');
-    expect(state.get(LAST_SEEN_VERSION_KEY)).toBe('0.4.0');
+    const { extensionContext, state } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext, '2026-11-20');
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-20');
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it('stays quiet after a downgrade', async () => {
-    await announceUpdate(fakeContext('0.4.0').extensionContext, '0.2.0');
+  it('stays quiet for an older build', async () => {
+    await announceUpdate(fakeContext('2026-11-20').extensionContext, '2026-11-01');
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it('treats earlier dashboard use without a recorded version as an upgrade from 0.1.0', async () => {
+  it('treats earlier dashboard use without a recorded date as having seen only the first changes', async () => {
     mocks.stats = { harnesses: ['VS Code'], savedAt: 1 };
-    await announceUpdate(fakeContext().extensionContext, '0.2.0');
+    await announceUpdate(fakeContext().extensionContext, '2026-11-01');
     expect(mocks.showInformationMessage).toHaveBeenCalledWith(
-      'AI Engineer Coach was updated to v0.2.0.', "What's New", "Don't Show Again");
+      'AI Engineer Coach was updated with changes from 2026-11-01.', "What's New", "Don't Show Again");
   });
 });
 
 describe('announceUpdate while a dashboard syncs', () => {
-  it('does not count stats that a dashboard writes while the version is being recorded', async () => {
+  it('does not count stats that a dashboard writes while the date is being recorded', async () => {
     const { context, extensionContext } = fakeContext();
     let finishUpdate = () => {};
     context.globalState.update.mockImplementationOnce(() => new Promise<void>(resolve => { finishUpdate = resolve; }));
-    const announcing = announceUpdate(extensionContext, '0.2.0');
+    const announcing = announceUpdate(extensionContext);
+    await vi.waitFor(() => expect(context.globalState.update).toHaveBeenCalled());
     mocks.stats = { harnesses: ['VS Code'], savedAt: 2 }; // A fresh install's first sync finishes meanwhile.
     finishUpdate();
     await announcing;
-    expect(context.globalState.update).toHaveBeenCalledWith(LAST_SEEN_VERSION_KEY, '0.2.0');
+    expect(context.globalState.update).toHaveBeenCalledWith(LAST_SEEN_CHANGES_KEY, '2026-11-20');
     expect(mocks.showInformationMessage).not.toHaveBeenCalled();
   });
 });
 
 describe('registerWhatsNew', () => {
   it('registers the What\'s New command against the extension folder', async () => {
-    const { context, extensionContext } = fakeContext('0.0.0');
+    const { context, extensionContext } = fakeContext('2026-11-20');
     registerWhatsNew(extensionContext);
     expect(context.subscriptions).toHaveLength(1);
     const [command, callback] = mocks.registerCommand.mock.calls[0];

@@ -31,7 +31,6 @@ export function mountBuildInfoFooter(sidebar: HTMLElement, info: BuildInfo = BUI
   footer.title = formatBuildTooltip(info);
 
   const version = element('div', 'build-info-version', `v${info.version}`);
-  if (info.dev) version.append(' ', element('span', 'build-info-dev', 'dev'));
   const meta = element('div', 'build-info-meta', [formatCommit(info), formatBuildTime(info.builtAt)].filter(Boolean).join(' · '));
   const status = element('div', 'build-info-status');
   status.id = 'build-info-status';

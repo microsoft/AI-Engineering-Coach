@@ -57,9 +57,8 @@ code --install-extension ai-engineer-coach-*.vsix
 
 Then **AI Engineer Coach: Open Dashboard** from the command palette.
 
-`code --install-extension` refuses to replace an installed extension with an older version. Add
-`--force` when you go back to an older build, for example one from a branch that predates a
-version bump.
+Every build has the same `version`, so `code --install-extension` reports a new build as already
+installed and keeps the old one. Add `--force` to replace it.
 
 ## Size budgets
 
@@ -86,17 +85,16 @@ npm run check-size
   `npm run analyze:data-inventory` and the esbuild output, then either drop the dep or split it
   into a dynamic import.
 - **Spellcheck or lint fails first** — `npm run check` (typecheck + lint + spellcheck + knip +
-  test) is what CI runs; fix those before packaging if the goal is a release.
+  test) is what CI runs; fix those before packaging.
 
 ## Versioning and build stamps
 
-Don't change `version` when packaging. It changes only in a release pull request made with
-`npm run release:prepare` (see [cut-release](cut-release.md)), so every branch packages the same
-file name. Each build is identified by its stamp instead:
+Don't change `version` when packaging. There are no versioned releases, so every branch packages
+the same file name, and changes are tracked by date in `CHANGELOG.md` (see
+[stamp-changelog](stamp-changelog.md)). Each build is identified by its stamp instead:
 
 - [`scripts/build-info.mjs`](../scripts/build-info.mjs) records `version`, the short `commit`,
-  `dirty` (uncommitted changes to tracked files), the `branch` of a dev build, `builtAt`, and
-  `dev`, which is false only for a clean build of the `v<version>` tag.
+  `dirty` (uncommitted changes to tracked files), the `branch`, and `builtAt`.
 - `esbuild.mjs` gives every bundle the stamp as the global `__AIC_BUILD_INFO__` (read through
   [`src/core/build-info.ts`](../src/core/build-info.ts)) and writes `dist/build-info.json`. A
   plugin injects it as a virtual module, so `npm run watch` restamps after each change and brings
@@ -104,15 +102,15 @@ file name. Each build is identified by its stamp instead:
 
 To find out which build is installed, look at the bottom of the dashboard sidebar or the
 activity-bar view, the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log`
-(`version=… commit=… dirty=… dev=… branch=… builtAt=…`), or `dist/build-info.json` in the
+(`version=… commit=… dirty=… branch=… builtAt=…`), or `dist/build-info.json` in the
 installed extension's folder.
 
 ## Anti-patterns
 
 - Don't run `vsce package` directly — you'll ship `README.md` (the GitHub one with screenshots
   and badges) instead of `README.extension.md`.
-- Don't commit the `.vsix`; it's listed in `.gitignore` style via convention. Attach it to a
-  GitHub Release instead.
+- Don't commit the `.vsix`; it's listed in `.gitignore` style via convention. Share the CI
+  `vsix` artifact instead.
 - Don't disable `--no-dependencies` "to be safe" — it will bloat the package past the 5 MB
   budget and double-ship code that's already bundled.
 - Don't pass a version to vsce (`vsce package 0.2.0`, `vsce package minor`) to tell builds apart:

@@ -20,9 +20,8 @@ export const BUILD_INFO_ENV = 'AIC_BUILD_INFO';
  * @property {string} version  package.json version at build time
  * @property {string} commit   short git commit SHA, or "unknown"
  * @property {boolean} dirty   tracked files had uncommitted changes
- * @property {string} branch   source branch of a dev build; empty for release builds
+ * @property {string} branch   source branch, or empty for a detached checkout outside CI
  * @property {string} builtAt  ISO-8601 build time (UTC)
- * @property {boolean} dev     false only for a clean build of the v<version> tag
  */
 
 /** @param {string} cwd */
@@ -45,7 +44,7 @@ function isBuildInfo(value) {
   if (typeof value !== 'object' || value === null) return false;
   const v = /** @type {Record<string, unknown>} */ (value);
   return typeof v.version === 'string' && typeof v.commit === 'string' && typeof v.dirty === 'boolean'
-    && typeof v.branch === 'string' && typeof v.builtAt === 'string' && typeof v.dev === 'boolean';
+    && typeof v.branch === 'string' && typeof v.builtAt === 'string';
 }
 
 /**
@@ -63,8 +62,8 @@ export function parseBuildInfo(raw) {
     value = undefined;
   }
   if (!isBuildInfo(value)) throw new Error(`${BUILD_INFO_ENV} is not a valid build stamp: ${raw}`);
-  const { version, commit, dirty, branch, builtAt, dev } = value;
-  return { version, commit, dirty, branch, builtAt, dev };
+  const { version, commit, dirty, branch, builtAt } = value;
+  return { version, commit, dirty, branch, builtAt };
 }
 
 /**
@@ -80,25 +79,20 @@ export function computeBuildInfo({ cwd = process.cwd(), env = process.env, now =
   const commit = run(['rev-parse', '--short=7', 'HEAD']) || env.GITHUB_SHA?.slice(0, 7) || 'unknown';
   // Untracked files are ignored: scratch files would otherwise mark every local build dirty.
   const dirty = Boolean(run(['status', '--porcelain', '--untracked-files=no']));
-  const tag = `v${version}`;
-  const tagged = (env.GITHUB_REF_TYPE === 'tag' && env.GITHUB_REF_NAME === tag)
-    || (run(['tag', '--points-at', 'HEAD']) ?? '').split(/\r?\n/).includes(tag);
-  const dev = dirty || !tagged;
   const head = run(['rev-parse', '--abbrev-ref', 'HEAD']);
   const ciBranch = env.GITHUB_HEAD_REF || (env.GITHUB_REF_TYPE === 'branch' ? env.GITHUB_REF_NAME : '') || '';
-  const branch = dev ? (head && head !== 'HEAD' ? head : ciBranch) : '';
-  return { version, commit, dirty, branch, builtAt: now.toISOString(), dev };
+  const branch = head && head !== 'HEAD' ? head : ciBranch;
+  return { version, commit, dirty, branch, builtAt: now.toISOString() };
 }
 
 /**
- * One line for build logs, e.g. "v0.2.0 dev build, commit abc1234-dirty on main, built 2026-10-31T11:15:02.000Z".
+ * One line for build logs, e.g. "v0.1.0, commit abc1234-dirty on main, built 2026-10-31T11:15:02.000Z".
  * @param {BuildInfo} info
  */
 export function describeBuildInfo(info) {
   const commit = info.dirty ? `${info.commit}-dirty` : info.commit;
-  const kind = info.dev ? 'dev build' : 'release build';
   const branch = info.branch ? ` on ${info.branch}` : '';
-  return `v${info.version} ${kind}, commit ${commit}${branch}, built ${info.builtAt}`;
+  return `v${info.version}, commit ${commit}${branch}, built ${info.builtAt}`;
 }
 
 /** The module `inject` adds to every bundle; the stamp plugin serves it from memory. */
@@ -142,7 +136,7 @@ export function buildInfoOptions(stamp, hooks = {}) {
  * @param {BuildInfo} b
  */
 function sameSource(a, b) {
-  return a.version === b.version && a.commit === b.commit && a.dirty === b.dirty && a.branch === b.branch && a.dev === b.dev;
+  return a.version === b.version && a.commit === b.commit && a.dirty === b.dirty && a.branch === b.branch;
 }
 
 /**

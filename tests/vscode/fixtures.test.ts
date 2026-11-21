@@ -154,7 +154,7 @@ describe('desktop test fixtures', () => {
 });
 
 describe('installed build stamp', () => {
-  const stamp = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', builtAt: '2026-11-03T09:30:12.345Z', dev: false };
+  const stamp = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: 'main', builtAt: '2026-11-03T09:30:12.345Z' };
 
   it('reads dist/build-info.json from the one installed extension', async () => {
     const installed = path.join(fixturePaths(root).extensions, 'ai-engineer-coach.ai-engineer-coach-0.2.0');

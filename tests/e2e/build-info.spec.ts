@@ -1,12 +1,13 @@
 import { test, expect, Page } from '@playwright/test';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import { harnessUrl } from './harness-url';
 
-const HARNESS_URL = 'http://localhost:3999/tests/e2e/harness.html';
+const HARNESS_URL = harnessUrl();
 
 // esbuild.mjs writes this from the same stamp it injects into dist/webview/app.js.
 const build = JSON.parse(readFileSync(resolve('dist', 'build-info.json'), 'utf8')) as {
-  version: string; commit: string; dirty: boolean; dev: boolean;
+  version: string; commit: string; dirty: boolean;
 };
 
 async function waitForDashboard(page: Page) {
@@ -22,9 +23,9 @@ test.describe('Build stamp', () => {
     await waitForDashboard(page);
     const footer = page.locator('#sidebar > #build-info');
     await expect(footer).toBeVisible();
-    await expect(footer.locator('.build-info-version')).toHaveText(build.dev ? `v${build.version} dev` : `v${build.version}`);
+    await expect(footer.locator('.build-info-version')).toHaveText(`v${build.version}`);
     await expect(footer.locator('.build-info-meta')).toContainText(build.dirty ? `${build.commit}-dirty` : build.commit);
-    await expect(footer).toHaveAttribute('title', new RegExp(`^AI Engineer Coach ${build.version.replaceAll('.', '\\.')} \\(`));
+    await expect(footer).toHaveAttribute('title', new RegExp(`^AI Engineer Coach ${build.version.replaceAll('.', '\\.')}\\n`));
     await expect(page.locator('#build-info-status')).toBeHidden();
   });
 });

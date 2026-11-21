@@ -1,0 +1,1 @@
+../../skills/stamp-changelog.md

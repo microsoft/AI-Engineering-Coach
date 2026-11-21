@@ -3,32 +3,43 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+
 /* "What's New": the command opens the changelog bundled in the installed extension, and the
- * first activation after an upgrade offers it once. Local only: reads the extension folder
- * and VS Code state, never the network. */
+ * first activation of a build with newer dated changes offers it once. Local only: reads the
+ * extension folder and VS Code state, never the network. */
 
 import * as vscode from 'vscode';
-import { BUILD_INFO } from './core/build-info';
 import { loadSidebarStats } from './core/cache';
 import { runtimeDebug } from './core/runtime-debug';
-import { findChangelogName, shouldAnnounceUpdate } from './core/whats-new';
+import { findChangelogName, latestChangelogDate, shouldAnnounceUpdate } from './core/whats-new';
 
 export const SHOW_RELEASE_NOTES_COMMAND = 'aiEngineerCoach.showReleaseNotes';
-export const LAST_SEEN_VERSION_KEY = 'aiEngineerCoach.lastSeenVersion';
+export const LAST_SEEN_CHANGES_KEY = 'aiEngineerCoach.lastSeenChangesDate';
 const CONFIG_SECTION = 'aiEngineerCoach';
 const SHOW_AFTER_UPDATE_SETTING = 'showReleaseNotesAfterUpdate';
 const WHATS_NEW = "What's New";
 const DONT_SHOW_AGAIN = "Don't Show Again";
 
-/** Opens the bundled changelog in the Markdown preview, or as text when the preview is unavailable. */
-export async function showReleaseNotes(extensionUri: vscode.Uri): Promise<void> {
+async function findChangelog(extensionUri: vscode.Uri): Promise<vscode.Uri | undefined> {
   const entries = await vscode.workspace.fs.readDirectory(extensionUri);
   const name = findChangelogName(entries.filter(([, type]) => type === vscode.FileType.File).map(([entry]) => entry));
-  if (!name) {
-    void vscode.window.showWarningMessage('This AI Engineer Coach build does not include release notes.');
+  return name ? vscode.Uri.joinPath(extensionUri, name) : undefined;
+}
+
+/** The newest dated section of the bundled changelog, or undefined when there is none. */
+async function readLatestChangesDate(extensionUri: vscode.Uri): Promise<string | undefined> {
+  const changelog = await findChangelog(extensionUri);
+  if (!changelog) return undefined;
+  return latestChangelogDate(new TextDecoder().decode(await vscode.workspace.fs.readFile(changelog)));
+}
+
+/** Opens the bundled changelog in the Markdown preview, or as text when the preview is unavailable. */
+export async function showReleaseNotes(extensionUri: vscode.Uri): Promise<void> {
+  const changelog = await findChangelog(extensionUri);
+  if (!changelog) {
+    void vscode.window.showWarningMessage('This AI Engineer Coach build does not include a changelog.');
     return;
   }
-  const changelog = vscode.Uri.joinPath(extensionUri, name);
   try {
     await vscode.commands.executeCommand('markdown.showPreview', changelog);
   } catch (err: unknown) {
@@ -37,19 +48,23 @@ export async function showReleaseNotes(extensionUri: vscode.Uri): Promise<void> 
   }
 }
 
-/** Offers the release notes once after the version increases, and records the version either way. */
-export async function announceUpdate(context: vscode.ExtensionContext, version: string = BUILD_INFO.version): Promise<void> {
-  const previous = context.globalState.get<string>(LAST_SEEN_VERSION_KEY);
-  if (previous === version) return;
+/**
+ * Offers the changelog once when this build has newer dated changes than the user last saw, and
+ * records the newest date either way. `latest` overrides the date read from the bundled changelog.
+ */
+export async function announceUpdate(context: vscode.ExtensionContext, latest?: string): Promise<void> {
+  const previous = context.globalState.get<string>(LAST_SEEN_CHANGES_KEY);
   // Check for earlier use before awaiting: a dashboard opened now may write its stats meanwhile.
   const hasPriorUse = previous === undefined && loadSidebarStats() !== null;
-  await context.globalState.update(LAST_SEEN_VERSION_KEY, version);
-  if (!shouldAnnounceUpdate(previous, version, hasPriorUse)) return;
+  const current = latest ?? await readLatestChangesDate(context.extensionUri);
+  if (current === undefined || previous === current) return;
+  await context.globalState.update(LAST_SEEN_CHANGES_KEY, current);
+  if (!shouldAnnounceUpdate(previous, current, hasPriorUse)) return;
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   if (!config.get<boolean>(SHOW_AFTER_UPDATE_SETTING, true)) return;
-  runtimeDebug('extension', 'whats-new-offered', `from=${previous ?? 'untracked'} to=${version}`);
+  runtimeDebug('extension', 'whats-new-offered', `from=${previous ?? 'untracked'} to=${current}`);
   const choice = await vscode.window.showInformationMessage(
-    `AI Engineer Coach was updated to v${version}.`, WHATS_NEW, DONT_SHOW_AGAIN);
+    `AI Engineer Coach was updated with changes from ${current}.`, WHATS_NEW, DONT_SHOW_AGAIN);
   if (choice === WHATS_NEW) await showReleaseNotes(context.extensionUri);
   else if (choice === DONT_SHOW_AGAIN) await config.update(SHOW_AFTER_UPDATE_SETTING, false, vscode.ConfigurationTarget.Global);
 }

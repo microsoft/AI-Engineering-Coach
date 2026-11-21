@@ -41,35 +41,20 @@ try {
 }
 
 describe('computeBuildInfo', () => {
-  it('stamps a clean branch checkout as a dev build of that branch', () => {
+  it('stamps a clean checkout with its version, commit, and branch', () => {
     expect(stamp(CLEAN_BRANCH)).toEqual({
-      version: VERSION, commit: 'abc1234', dirty: false, branch: 'feature/stamp', builtAt: '2026-10-31T11:15:02.000Z', dev: true,
+      version: VERSION, commit: 'abc1234', dirty: false, branch: 'feature/stamp', builtAt: '2026-10-31T11:15:02.000Z',
     });
   });
 
   it('marks uncommitted changes to tracked files as dirty', () => {
     const info = stamp({ ...CLEAN_BRANCH, 'status --porcelain --untracked-files=no': ' M src/extension.ts' });
-    expect(info).toMatchObject({ dirty: true, dev: true });
+    expect(info).toMatchObject({ dirty: true, branch: 'feature/stamp' });
   });
 
-  it('treats a clean checkout of the version tag as a release build without a branch', () => {
-    const info = stamp({ ...CLEAN_BRANCH, 'tag --points-at HEAD': `other\nv${VERSION}`, 'rev-parse --abbrev-ref HEAD': 'HEAD' });
-    expect(info).toMatchObject({ dirty: false, dev: false, branch: '' });
-  });
-
-  it('keeps a dirty tagged checkout a dev build', () => {
-    const info = stamp({ ...CLEAN_BRANCH, 'tag --points-at HEAD': `v${VERSION}`, 'status --porcelain --untracked-files=no': ' M CHANGELOG.md' });
-    expect(info).toMatchObject({ dirty: true, dev: true, branch: 'feature/stamp' });
-  });
-
-  it('recognizes a GitHub Actions run for the version tag', () => {
-    const info = stamp({ ...CLEAN_BRANCH, 'rev-parse --abbrev-ref HEAD': 'HEAD' }, { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: `v${VERSION}` });
-    expect(info).toMatchObject({ dev: false, branch: '' });
-  });
-
-  it('ignores a GitHub Actions tag that does not match the version', () => {
-    const info = stamp({ ...CLEAN_BRANCH, 'rev-parse --abbrev-ref HEAD': 'HEAD' }, { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'v999.0.0' });
-    expect(info).toMatchObject({ dev: true, branch: '' });
+  it('leaves the branch empty for a detached checkout outside a branch build', () => {
+    const info = stamp({ ...CLEAN_BRANCH, 'rev-parse --abbrev-ref HEAD': 'HEAD' }, { GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'v0.1.0' });
+    expect(info.branch).toBe('');
   });
 
   it('uses the pull request branch for a detached CI checkout', () => {
@@ -84,13 +69,13 @@ describe('computeBuildInfo', () => {
   });
 
   it('falls back to GITHUB_SHA, then "unknown", when git is unavailable', () => {
-    expect(stamp({}, { GITHUB_SHA: 'def5678901234' })).toMatchObject({ commit: 'def5678', dirty: false, dev: true, branch: '' });
-    expect(stamp({})).toMatchObject({ commit: 'unknown', dirty: false, dev: true });
+    expect(stamp({}, { GITHUB_SHA: 'def5678901234' })).toMatchObject({ commit: 'def5678', dirty: false, branch: '' });
+    expect(stamp({})).toMatchObject({ commit: 'unknown', dirty: false });
   });
 
   it('returns the stamp passed through the environment unchanged', () => {
-    const passed = { version: '9.8.7', commit: 'feedbee', dirty: false, branch: '', builtAt: '2026-01-02T03:04:05.000Z', dev: false };
-    const env = { [BUILD_INFO_ENV]: JSON.stringify({ ...passed, extra: 'ignored' }), GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'v0.0.1' };
+    const passed = { version: '9.8.7', commit: 'feedbee', dirty: false, branch: '', builtAt: '2026-01-02T03:04:05.000Z' };
+    const env = { [BUILD_INFO_ENV]: JSON.stringify({ ...passed, extra: 'ignored' }), GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'main' };
     expect(stamp(CLEAN_BRANCH, env)).toEqual(passed);
   });
 
@@ -114,17 +99,17 @@ describe('parseBuildInfo', () => {
 });
 
 describe('describeBuildInfo', () => {
-  it('summarizes dev and release builds for build logs', () => {
-    expect(describeBuildInfo({ version: '0.2.0', commit: 'abc1234', dirty: true, branch: 'main', builtAt: 't', dev: true }))
-      .toBe('v0.2.0 dev build, commit abc1234-dirty on main, built t');
-    expect(describeBuildInfo({ version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', builtAt: 't', dev: false }))
-      .toBe('v0.2.0 release build, commit abc1234, built t');
+  it('summarizes the build for build logs', () => {
+    expect(describeBuildInfo({ version: '0.2.0', commit: 'abc1234', dirty: true, branch: 'main', builtAt: 't' }))
+      .toBe('v0.2.0, commit abc1234-dirty on main, built t');
+    expect(describeBuildInfo({ version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', builtAt: 't' }))
+      .toBe('v0.2.0, commit abc1234, built t');
   });
 });
 
-/** What git reports for a clean checkout of the v0.2.0 tag, and after an uncommitted edit. */
-const CLEAN = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: '', dev: false };
-const EDITED = { ...CLEAN, dirty: true, branch: 'main', dev: true };
+/** What git reports for a clean checkout of main, and after an uncommitted edit. */
+const CLEAN = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: 'main' };
+const EDITED = { ...CLEAN, dirty: true };
 
 /** Evaluates a CommonJS bundle and returns its exports. */
 function evaluate(code) {
@@ -143,7 +128,7 @@ describe('buildInfoOptions', () => {
     const module = evaluate(result.outputFiles[0].text);
     expect(module.BUILD_INFO).toEqual(info);
     expect(module.formatBuildLogFields()).toBe(
-      'version=0.2.0 commit=abc1234 dirty=true dev=true branch=main builtAt=2026-11-03T09:30:07.000Z');
+      'version=0.2.0 commit=abc1234 dirty=true branch=main builtAt=2026-11-03T09:30:07.000Z');
   });
 });
 
@@ -252,7 +237,7 @@ describe('createWatchStamp', () => {
   });
 
   it('restamps every bundle when the source changed after overlapping builds took their stamp', async () => {
-    // On the release tag, reverting the last edit starts a rebuild that stamps the clean source.
+    // Reverting the last edit starts a rebuild that stamps the clean source.
     // A webview-only edit saved before that rebuild finishes starts another that reuses the stamp.
     const { source, generations, published, bundles } = await started(EDITED);
     Object.assign(source, CLEAN);
@@ -264,7 +249,7 @@ describe('createWatchStamp', () => {
       bundle.end();
     }
     await settle();
-    expect(published()).toMatchObject({ dirty: true, dev: true, branch: 'main' });
+    expect(published()).toMatchObject({ dirty: true, branch: 'main' });
     expect(generations()).toEqual([0, 2]); // The clean stamp was never published.
   });
 

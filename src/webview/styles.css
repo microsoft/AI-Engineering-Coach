@@ -253,17 +253,6 @@ body {
   font-weight: 600;
 }
 
-.build-info-dev {
-  padding: 0 5px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
 .build-info-meta {
   overflow: hidden;
   text-overflow: ellipsis;

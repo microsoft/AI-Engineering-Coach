@@ -92,7 +92,7 @@ export function fixturePaths(root: string, platform: NodeJS.Platform = process.p
 }
 
 const buildInfoSchema = z.object({
-  version: z.string(), commit: z.string(), dirty: z.boolean(), branch: z.string(), builtAt: z.string(), dev: z.boolean(),
+  version: z.string(), commit: z.string(), dirty: z.boolean(), branch: z.string(), builtAt: z.string(),
 });
 export type InstalledBuild = z.infer<typeof buildInfoSchema> & { root: string };
 
@@ -106,10 +106,10 @@ export async function readInstalledBuild(root: string): Promise<InstalledBuild> 
   return { ...stamp, root: installedRoot };
 }
 
-/** Matches runtime.log's activate line for this build: "[extension] activate | … | version=… commit=… dirty=… dev=… ". */
+/** Matches runtime.log's activate line for this build: "[extension] activate | … | version=… commit=… dirty=… ". */
 export function activateLinePattern(build: InstalledBuild): RegExp {
   const version = build.version.replaceAll('.', String.raw`\.`);
-  return new RegExp(String.raw`\[extension\] activate \|[^\n]*\| version=${version} commit=${build.commit} dirty=${build.dirty} dev=${build.dev} `);
+  return new RegExp(String.raw`\[extension\] activate \|[^\n]*\| version=${version} commit=${build.commit} dirty=${build.dirty} `);
 }
 
 function scheduledTime(anchor: number, daysAgo: number, hour: number, projectIndex: number): number {

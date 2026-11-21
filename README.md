@@ -111,7 +111,7 @@ code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | S
 
 If the CLI does not work, install it from the VS Code UI: press `Ctrl+Shift+P`, type **Install from VSIX**, then browse to the `.vsix` file and select it.
 
-To go back to an older build after installing a newer version, add `--force`: `code --install-extension` refuses to downgrade without it.
+Every build has the same version, so to replace an installed build with a newer one, add `--force`: without it, `code --install-extension` reports the extension as already installed.
 
 After install:
 
@@ -121,9 +121,9 @@ After install:
 
 ### Which build is installed?
 
-Builds from different branches share the version in `package.json`, so each build is stamped with its version, commit, and build time. The bottom of the dashboard sidebar shows the stamp, marked **dev** unless the build is a tagged release and `-dirty` when it was built from uncommitted changes. The same stamp is on the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log` and in `dist/build-info.json` in the installed extension's folder.
+Builds share the version in `package.json`, so each build is stamped with its version, commit, branch, and build time. The bottom of the dashboard sidebar shows the stamp, with `-dirty` when it was built from uncommitted changes. The same stamp is on the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log` and in `dist/build-info.json` in the installed extension's folder.
 
-Run **AI Engineer Coach: What's New** to read the release notes ([`CHANGELOG.md`](CHANGELOG.md)). After an update to a newer version, a notification offers them once; turn it off with the `aiEngineerCoach.showReleaseNotesAfterUpdate` setting.
+Run **AI Engineer Coach: What's New** to read the changes, grouped by date ([`CHANGELOG.md`](CHANGELOG.md)). The first time a build with newer dated changes runs, a notification offers them once; turn it off with the `aiEngineerCoach.showReleaseNotesAfterUpdate` setting.
 
 ---
 

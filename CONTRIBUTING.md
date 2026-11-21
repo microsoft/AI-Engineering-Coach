@@ -21,7 +21,7 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 5. **Lint**: `npm run lint`
 6. If you've added code, add tests that cover your changes.
 7. If users will notice the change, describe it under `## [Unreleased]` in
-   [`CHANGELOG.md`](CHANGELOG.md). Don't change `version`; see [Releases](#releases).
+   [`CHANGELOG.md`](CHANGELOG.md). Don't change `version`; see [Changelog](#changelog).
 8. Ensure the test suite passes and linting is clean.
 9. Submit a **pull request**.
 
@@ -60,10 +60,10 @@ npm run test:vscode -- --vsix ai-engineer-coach-<version>.vsix
 Use the file name that `npm run package` printed.
 The runner records the package's SHA-256 hash and checks that the artifact did not change.
 It also checks the build stamp: the installed `dist/build-info.json` must match the manifest
-version (and `GITHUB_SHA` in CI), the packaged changelog must have a section for that version,
+version (and `GITHUB_SHA` in CI), the packaged changelog must have a dated section,
 and the dashboard footer and the `runtime.log` activate line must show the same stamp.
-CI and releases pass the exact package path this way; publishing happens only after the
-browser and desktop suites pass, and the release uses that same VSIX.
+CI passes the exact package path this way, so the browser and desktop suites test the same VSIX
+that CI uploads.
 
 By default, desktop tests use the minimum version in `package.json`'s `engines.vscode`.
 Use `--vscode-version 1.125.0` to select an explicit compatible version, or
@@ -152,26 +152,22 @@ ExTester's wrapped stale-outer-frame error. It does not repeat the reload comman
 unexpected driver failures.
 Its TypeScript and fixture tests are included in `npm run check`.
 
-Use the shared [E2E action](.github/actions/e2e/action.yml) for pipeline changes so PR, release,
+Use the shared [E2E action](.github/actions/e2e/action.yml) for pipeline changes so PR, `main`,
 and compatibility runs do not acquire different setup procedures. Investigate failures using
-the saved screenshots and logs; do not bypass the release gate or disable an operating-system
+the saved screenshots and logs; do not bypass the E2E gate or disable an operating-system
 security feature globally to get a green run.
 
-## Releases
+## Changelog
 
-Versions are `major.minor.patch` only, with even minor versions for stable releases and odd minor
-versions for pre-releases. Feature pull requests add their notes under `## [Unreleased]` in
-[`CHANGELOG.md`](CHANGELOG.md) and leave `version` alone. A maintainer cuts a release with
-`npm run release:prepare` in a release pull request, then pushes the `v<version>` tag, which
-publishes the GitHub Release with the VSIX, its SHA-256 checksum, and the notes. See
-[`skills/cut-release.md`](skills/cut-release.md) for the steps.
+There are no versioned releases: the extension is built from source, and `version` stays as it is.
+Feature pull requests add their notes under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md),
+then run `npm run changelog:stamp` just before merging, which moves them under that day's date
+(`## YYYY-MM-DD`, newest first). See [`skills/stamp-changelog.md`](skills/stamp-changelog.md).
 
-Every build is stamped with its version, commit, and build time, so branch builds that share a
-version can still be told apart. The bottom of the dashboard sidebar shows the stamp, marked
-**dev** unless it's a tagged release, and so do the `[extension] activate` line in
-`~/.copilot-analytics-cache/runtime.log` and `dist/build-info.json` in the installed extension.
-`code --install-extension` refuses to replace a newer installed version with an older one; add
-`--force` to go back to an older build.
+Every build is stamped with its version, commit, branch, and build time, so builds that share a
+version can still be told apart. The bottom of the dashboard sidebar shows the stamp, and so do
+the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log` and
+`dist/build-info.json` in the installed extension.
 
 ## Security
 

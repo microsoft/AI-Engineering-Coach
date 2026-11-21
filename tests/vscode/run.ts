@@ -80,7 +80,7 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
   await fs.cp(source, destination, { recursive: true });
 }
 
-/** The installed VSIX ships its bundles, a build stamp from this checkout, and release notes for its version. */
+/** The installed VSIX ships its bundles, a build stamp from this checkout, and a dated changelog. */
 async function assertInstalledPackage(root: string, installedRoot: string, manifestVersion: string): Promise<void> {
   for (const asset of ['extension.js', 'parse-worker.js', 'warm-up-worker.js', 'cache-write-worker.js',
     path.join('webview', 'app.js'), path.join('webview', 'styles.css')]) {
@@ -94,9 +94,9 @@ async function assertInstalledPackage(root: string, installedRoot: string, manif
   const changelog = (await fs.readdir(build.root)).find(name => /^changelog\.md$/i.test(name));
   assert.ok(changelog, 'The packaged extension has no changelog');
   const notes = await fs.readFile(path.join(build.root, changelog), 'utf8');
-  assert.ok(notes.includes(`## [${build.version}]`), `The packaged changelog has no section for ${build.version}`);
+  assert.match(notes, /^## \d{4}-\d{2}-\d{2}\r?$/m, 'The packaged changelog has no dated section');
   console.log(`Installed build: v${build.version} commit ${build.commit}${build.dirty ? '-dirty' : ''}`
-    + `${build.dev ? ' (dev)' : ''}, built ${build.builtAt}`);
+    + `${build.branch ? ` on ${build.branch}` : ''}, built ${build.builtAt}`);
 }
 
 async function runWorker(vsix: string, version: string, scenario: string): Promise<void> {
