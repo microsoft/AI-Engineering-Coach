@@ -37,6 +37,8 @@ export interface SessionSource {
   kind: 'vscode-session-file' | 'cli-events' | 'claude-jsonl' | 'codex-jsonl' | 'opencode-storage' | 'opencode-db' | 'xcode-db';
   filePath: string;
   additionalFilePaths?: string[];
+  /** Claude Code: user line ids an earlier transcript already counted (a fork or resume replays them); left out on reload. */
+  droppedUserEventIds?: string[];
   workspaceId: string;
   workspaceName: string;
   workspaceRootPath?: string;

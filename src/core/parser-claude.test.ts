@@ -13,8 +13,10 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { describe, it, expect } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
+import type { SessionSource } from './cache';
 import { extractClaudeImageReferences, parseClaudeSessions } from './parser-claude';
 import { getParseWarningCounts, getParseWarnings, MAX_FILE_SIZE, resetParseWarnings } from './parser-shared';
+import { loadSourceSession } from './session-images';
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -913,6 +915,23 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
       expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
         ['a-fork', ['u2']], ['f-original', ['u1']],
       ]);
+    });
+  });
+
+  it("leaves a fork's replayed turns out of its reloaded session", () => {
+    withProjects({
+      '-Users-me-proj/original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'original' }), makeAssistant('Done.')],
+      '-Users-me-proj/fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sources = new Map<string, SessionSource>();
+      parseClaudeSessions(projectsDir, undefined, sources);
+      const reloaded = (sessionId: string) => loadSourceSession(sources.get(sessionId)!, sessionId)?.requests.map(request => request.userEventId);
+      expect(reloaded('fork')).toEqual(['u2']);
+      expect(reloaded('original')).toEqual(['u1']);
     });
   });
 });

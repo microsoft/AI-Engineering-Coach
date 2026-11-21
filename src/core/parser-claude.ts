@@ -819,14 +819,19 @@ function transcriptStart(filePath: string): number {
   return Number.isFinite(start) ? start : Number.POSITIVE_INFINITY;
 }
 
-/** Leaves out the requests whose user line was already counted, and records the rest. */
-function dropSeenTurns(session: Session, seenTurns: Set<string>): void {
+/** Leaves out the requests whose user line was already counted, records the rest, and returns the ids left out. */
+function dropSeenTurns(session: Session, seenTurns: Set<string>): string[] {
+  const dropped: string[] = [];
   session.requests = session.requests.filter(request => {
     if (!request.userEventId) return true;
-    if (seenTurns.has(request.userEventId)) return false;
+    if (seenTurns.has(request.userEventId)) {
+      dropped.push(request.userEventId);
+      return false;
+    }
     seenTurns.add(request.userEventId);
     return true;
   });
+  return dropped;
 }
 
 function parseClaudeProjectSessions(
@@ -855,6 +860,11 @@ function parseClaudeProjectSessions(
   const sessionFiles = new Map<string, string[]>();
   const cwds: (string | undefined)[] = [];
   const skippedSessions = new Set<string>();
+  // The user line ids left out of each session, so its detail leaves them out too.
+  const droppedTurns = new Map<string, string[]>();
+  const recordDropped = (sessionId: string, ids: string[]): void => {
+    if (ids.length > 0) droppedTurns.set(sessionId, [...droppedTurns.get(sessionId) ?? [], ...ids]);
+  };
   // Oldest first, so a turn replayed into a fork or resume stays with the transcript it was typed in.
   const transcripts = entries
     .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
@@ -870,8 +880,9 @@ function parseClaudeProjectSessions(
     const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
     cwds.push(session.workspaceRootPath);
-    dropSeenTurns(session, discovery.seenTurns);
+    const dropped = dropSeenTurns(session, discovery.seenTurns);
     if (session.requests.length === 0) continue;
+    recordDropped(session.sessionId, dropped);
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
     sessionFiles.set(session.sessionId, [filePath]);
@@ -917,9 +928,10 @@ function parseClaudeProjectSessions(
         const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
         if (!subSession) continue;
         cwds.push(subSession.workspaceRootPath);
-        dropSeenTurns(subSession, discovery.seenTurns);
+        const dropped = dropSeenTurns(subSession, discovery.seenTurns);
         if (subSession.requests.length === 0) continue;
         const sourceId = parent?.sessionId ?? sessionName;
+        recordDropped(sourceId, dropped);
         const files = sessionFiles.get(sourceId) ?? [];
         files.push(filePath);
         sessionFiles.set(sourceId, files);
@@ -985,10 +997,14 @@ function parseClaudeProjectSessions(
     session.requestCount = session.requests.length;
     const files = sessionFiles.get(session.sessionId);
     if (files?.length) {
+      // A line repeated within the session is kept once, so its id is not one to leave out.
+      const kept = new Set(session.requests.map(request => request.userEventId));
+      const dropped = droppedTurns.get(session.sessionId)?.filter(id => !kept.has(id));
       sessionSourceIndex?.set(session.sessionId, {
         kind: 'claude-jsonl',
         filePath: files[0],
         additionalFilePaths: files.slice(1),
+        droppedUserEventIds: dropped?.length ? dropped : undefined,
         workspaceId,
         workspaceName,
         workspaceRootPath: session.workspaceRootPath,

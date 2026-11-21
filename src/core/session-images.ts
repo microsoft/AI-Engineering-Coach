@@ -43,7 +43,9 @@ export function loadSourceSession(source: SessionSource, sessionId: string): Ses
         .map(file => parseClaudeSessionFile(file, source.workspaceId, source.workspaceName, { subagentFile: isClaudeSubagentFile(file) }))
         .filter((session): session is Session => session !== null);
       if (!sessions[0]) return null;
+      const dropped = new Set(source.droppedUserEventIds);
       const requests = sessions.flatMap(session => session.requests)
+        .filter(request => !request.userEventId || !dropped.has(request.userEventId))
         .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
       const creationDates = sessions.map(session => session.creationDate).filter((date): date is number => date !== null);
       return {
