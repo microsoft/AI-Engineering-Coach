@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Session, SessionRequest } from './types';
-import { assertTrustedPath, MAX_FILE_SIZE, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
+import { assertTrustedPath, MAX_FILE_SIZE, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, recordFailedFile, recordSkippedLines } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
@@ -201,6 +201,8 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
  */
 const CLAUDE_API_REQUEST_LINE = /"type"\s*:\s*"api-request/;
 
+/** Characters of kept lines, after inline base64 data is blanked, parsed from one transcript. */
+const CLAUDE_MAX_KEPT_CHARS = 200 * 1024 * 1024;
 const INLINE_DATA_KEY = '"data"';
 const MIN_INLINE_DATA_CHARS = 1024;
 
@@ -250,25 +252,47 @@ function stripInlineData(line: string): string {
 }
 
 /**
- * Streams a transcript's lines, leaving out raw API request records and inline base64 data. Stops with a warning once
- * the kept lines pass MAX_FILE_SIZE, so a huge transcript is parsed up to that point instead of skipped whole.
+ * Streams a transcript's lines, leaving out raw API request records and inline base64 data. A line over MAX_FILE_SIZE
+ * is skipped while it streams in, and past CLAUDE_MAX_KEPT_CHARS the rest of the transcript is left out; both are
+ * counted as skipped lines and the transcript is reported, so memory stays bounded whatever the file holds and a
+ * transcript that was cut short shows in the dashboard's skipped-history notice.
  */
 function readClaudeLines(filePath: string): ClaudeLine[] {
   const lines: ClaudeLine[] = [];
-  let keptBytes = 0;
-  let truncated = false;
+  let keptChars = 0;
+  let leftOut = 0;
+  let tooLong = 0;
   forEachJsonlLine(filePath, rawLine => {
     if (!rawLine.trim() || CLAUDE_API_REQUEST_LINE.test(rawLine)) return;
+    if (leftOut > 0) {
+      leftOut++;
+      return;
+    }
     const line = stripInlineData(rawLine);
-    keptBytes += line.length;
-    if (keptBytes > MAX_FILE_SIZE) {
-      truncated = true;
+    keptChars += line.length;
+    if (keptChars > CLAUDE_MAX_KEPT_CHARS) {
+      leftOut = 1;
       return;
     }
     const parsed = parseClaudeLine(line);
     if (parsed && !parsed.type.startsWith('api-request')) lines.push(parsed);
-  }, () => truncated);
-  if (truncated) warnCore('parser-claude', `Transcript over ${MAX_FILE_SIZE / 1024 / 1024} MB without API requests; parsed up to there: ${filePath}`);
+  }, undefined, {
+    maxChars: MAX_FILE_SIZE,
+    // An API request record is left out anyway, so dropping one for its length loses nothing.
+    onSkip: start => {
+      if (CLAUDE_API_REQUEST_LINE.test(start)) return;
+      if (leftOut > 0) leftOut++;
+      else tooLong++;
+    },
+  });
+  if (leftOut + tooLong > 0) {
+    const reasons: string[] = [];
+    if (tooLong > 0) reasons.push(`left out ${tooLong} line(s) over ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+    if (leftOut > 0) reasons.push(`parsed the first ${CLAUDE_MAX_KEPT_CHARS / 1024 / 1024} MB of messages and left out the last ${leftOut} line(s)`);
+    // Shown in the dashboard's skipped-history notice and, with the reason, in the output channel.
+    recordSkippedLines(leftOut + tooLong);
+    recordFailedFile('parser-claude', filePath, reasons.join('; '));
+  }
   return lines;
 }
 
@@ -348,6 +372,7 @@ export function extractClaudeImageReferences(
   let images: ImageReference[] = [];
   let found = false;
   let done = false;
+  // The same line limit as readClaudeLines, so request indices match the parsed session's.
   forEachJsonlLine(filePath, raw => {
     if (!firstLine && !raw.includes('"user"')) return;
     const line = parseClaudeLine(raw);
@@ -367,7 +392,7 @@ export function extractClaudeImageReferences(
     }
     const needsRoot = images.some(image => image.path && !path.isAbsolute(image.path) && !/^[a-z][a-z0-9+.-]*:/i.test(image.path));
     done = found && (workspaceRootPath !== undefined || !needsRoot);
-  }, () => done);
+  }, () => done, { maxChars: MAX_FILE_SIZE, onSkip: () => undefined });
   return { images, workspaceRootPath };
 }
 
