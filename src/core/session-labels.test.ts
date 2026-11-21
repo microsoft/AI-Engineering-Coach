@@ -82,9 +82,11 @@ describe('Copilot workspace.yaml', () => {
 
 describe('automatic Copilot titles', () => {
   let dir = '';
-  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
   const write = (lines: string[]) => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-ws-'));
+    dirs.push(dir);
     fs.writeFileSync(path.join(dir, 'workspace.yaml'), lines.join('\n'));
     return dir;
   };
