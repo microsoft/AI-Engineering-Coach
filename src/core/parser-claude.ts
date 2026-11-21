@@ -380,10 +380,19 @@ function getInputPath(input: Record<string, unknown> | undefined, key: string): 
   return typeof value === 'string' ? value : null;
 }
 
+/** File and selection context the VS Code extension adds to a typed prompt. */
+const CLAUDE_IDE_CONTEXT = /<(ide_opened_file|ide_selection)>[\s\S]*?<\/\1>/g;
+
+/** The typed text of a user line, without the IDE context the extension added to it. */
 function getClaudeUserText(line: ClaudeLine): string {
   return toContentArray(line.message?.content)
     .filter(block => block.type === 'text')
-    .map(block => block.text || '')
+    .flatMap(block => {
+      const text = block.text || '';
+      const typed = text.replaceAll(CLAUDE_IDE_CONTEXT, '');
+      if (typed === text) return [text];
+      return typed.trim() ? [typed.trim()] : [];
+    })
     .join('\n');
 }
 

@@ -849,4 +849,16 @@ describe('parseClaudeSessions: who sent a turn', () => {
       expect(requests[1].responseText).toBe('Both done.');
     });
   });
+
+  it('takes IDE context out of the typed text and keeps the turn', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('<ide_opened_file>The user opened the file /Users/me/proj/a.md in the IDE.</ide_opened_file>\nTidy this.', '2025-06-15T10:00:00Z', human),
+      makeAssistant('Tidied.'),
+      makeUser('<ide_selection>The user selected lines 1 to 2.</ide_selection>', '2025-06-15T10:01:00Z', human),
+      makeAssistant('Seen.', '2025-06-15T10:01:02Z'),
+    ], projectsDir => {
+      const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
+      expect(requests.map(request => [request.messageText, request.nonHumanKind])).toEqual([['Tidy this.', undefined], ['', undefined]]);
+    });
+  });
 });
