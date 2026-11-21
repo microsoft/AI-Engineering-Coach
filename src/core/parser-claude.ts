@@ -742,6 +742,8 @@ interface ClaudeDiscovery {
   transcriptRanks: Map<string, number>;
   /** The rank of each parsed session's transcript, filled in while parsing. Sub-agent turns take their parent's. */
   sessionRanks: Map<Session, number>;
+  /** The source each parsed session was given. Sessions in two folders can share an id, and so an index entry. */
+  sessionSources: Map<Session, SessionSource>;
 }
 
 type ClaudeProjectResult = { sessions: Session[]; workspaceId: string; workspaceName: string };
@@ -786,7 +788,7 @@ function readClaudeCwd(filePath: string, size: bigint): string | undefined {
  * Windows file IDs can be too large for a number to tell apart, and a file with one link is not a hard link.
  */
 function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
-  const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map() };
+  const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map(), sessionSources: new Map() };
   const transcripts: { filePath: string; size: bigint; birth: bigint }[] = [];
   const byFile = new Map<string, { dirName: string; filePath: string; size: bigint }[]>();
   for (const dirName of [...dirNames].sort()) {
@@ -869,13 +871,13 @@ export function earliestRequestTime(requests: readonly SessionRequest[]): number
  */
 function keepEachTurnOnce(
   results: ClaudeProjectResult[],
-  sessionRanks: Map<Session, number>,
+  discovery: ClaudeDiscovery,
   sessionSourceIndex?: Map<string, SessionSource>,
 ): ClaudeProjectResult[] {
   const owners = new Map<string, { session: Session; request: SessionRequest; rank: number }>();
   for (const { sessions } of results) {
     for (const session of sessions) {
-      const rank = sessionRanks.get(session) ?? Number.MAX_SAFE_INTEGER;
+      const rank = discovery.sessionRanks.get(session) ?? Number.MAX_SAFE_INTEGER;
       for (const request of session.requests) {
         if (!request.userEventId) continue;
         const owner = owners.get(request.userEventId);
@@ -884,7 +886,19 @@ function keepEachTurnOnce(
     }
   }
   for (const result of results) {
-    result.sessions = result.sessions.filter(session => keepOwnedTurns(session, owners, sessionSourceIndex));
+    result.sessions = result.sessions.filter(session => {
+      const source = discovery.sessionSources.get(session);
+      if (keepOwnedTurns(session, owners, source)) return true;
+      if (source && sessionSourceIndex?.get(session.sessionId) === source) sessionSourceIndex.delete(session.sessionId);
+      return false;
+    });
+  }
+  // A dropped session can have held the index entry of a kept session with the same id, such as a copied folder's.
+  for (const { sessions } of results) {
+    for (const session of sessions) {
+      const source = discovery.sessionSources.get(session);
+      if (source && !sessionSourceIndex?.has(session.sessionId)) sessionSourceIndex?.set(session.sessionId, source);
+    }
   }
   return results.filter(result => result.sessions.length > 0);
 }
@@ -895,7 +909,7 @@ function keepEachTurnOnce(
 function keepOwnedTurns(
   session: Session,
   owners: Map<string, { session: Session; request: SessionRequest }>,
-  sessionSourceIndex?: Map<string, SessionSource>,
+  source?: SessionSource,
 ): boolean {
   const dropped: string[] = [];
   const requests = session.requests.filter(request => {
@@ -909,12 +923,7 @@ function keepOwnedTurns(
   if (requests.length === session.requests.length) return true;
   session.requests = requests;
   session.requestCount = requests.length;
-  const indexed = sessionSourceIndex?.get(session.sessionId);
-  const source = indexed?.workspaceId === session.workspaceId ? indexed : undefined;
-  if (requests.length === 0) {
-    if (source) sessionSourceIndex?.delete(session.sessionId);
-    return false;
-  }
+  if (requests.length === 0) return false;
   session.creationDate = earliestRequestTime(requests) ?? session.creationDate;
   if (source && dropped.length > 0) source.droppedUserEventIds = dropped;
   return true;
@@ -926,7 +935,7 @@ function parseClaudeProjectSessions(
   discovery: ClaudeDiscovery,
   editLocIndex?: EditLocIndex,
   sessionSourceIndex?: Map<string, SessionSource>,
-): { sessions: Session[]; workspaceId: string; workspaceName: string } | null {
+): ClaudeProjectResult | null {
   const projPath = path.join(projectsDir, dirName);
   const workspaceId = `claude-${dirName}`;
   let workspaceName = projectNameFromEncoded(dirName, projectsDir);
@@ -1067,8 +1076,8 @@ function parseClaudeProjectSessions(
     }
     session.requestCount = session.requests.length;
     const files = sessionFiles.get(session.sessionId);
-    if (files?.length) {
-      sessionSourceIndex?.set(session.sessionId, {
+    if (files?.length && sessionSourceIndex) {
+      const source: SessionSource = {
         kind: 'claude-jsonl',
         filePath: files[0],
         additionalFilePaths: files.slice(1),
@@ -1076,7 +1085,9 @@ function parseClaudeProjectSessions(
         workspaceName,
         workspaceRootPath: session.workspaceRootPath,
         harness: session.harness,
-      });
+      };
+      sessionSourceIndex.set(session.sessionId, source);
+      discovery.sessionSources.set(session, source);
     }
   }
 
@@ -1103,7 +1114,7 @@ export function parseClaudeSessions(
     if (result) results.push(result);
   }
 
-  return keepEachTurnOnce(results, discovery.sessionRanks, sessionSourceIndex);
+  return keepEachTurnOnce(results, discovery, sessionSourceIndex);
 }
 
 export async function parseClaudeSessionsAsync(
@@ -1136,7 +1147,7 @@ export async function parseClaudeSessionsAsync(
     if (i % 5 === 0) await new Promise<void>(r => setTimeout(r, 0));
   }
 
-  return keepEachTurnOnce(results, discovery.sessionRanks, sessionSourceIndex);
+  return keepEachTurnOnce(results, discovery, sessionSourceIndex);
 }
 
 function updateClaudeTimestampRange(

@@ -957,6 +957,33 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
     });
   });
 
+  it('keeps the detail source of a session whose folder was copied, when the copy is parsed last', ({ skip }) => {
+    const lines = [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 's1' }), makeAssistant('Done.')];
+    withProjects({ '-Users-me-old/s1.jsonl': lines }, projectsDir => {
+      const original = path.join(projectsDir, '-Users-me-old', 's1.jsonl');
+      const copy = path.join(projectsDir, '-Users-me-new', 's1.jsonl');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      fs.mkdirSync(path.dirname(copy));
+      fs.copyFileSync(original, copy);
+      const birth = (file: string) => fs.statSync(file, { bigint: true }).birthtimeNs;
+      if (!birth(original) || birth(copy) <= birth(original)) skip('this file system does not record distinct birth times');
+      const readdirSync = fs.readdirSync;
+      const lastNew = vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, options?: { withFileTypes: true }) => {
+        const entries = readdirSync(dir, options as { withFileTypes: true });
+        return dir === projectsDir ? entries.sort((a, b) => b.name.localeCompare(a.name)) : entries;
+      }) as typeof fs.readdirSync);
+      try {
+        const sources = new Map<string, SessionSource>();
+        const sessions = parseClaudeSessions(projectsDir, undefined, sources).flatMap(result => result.sessions);
+        expect(sessions.map(session => [session.workspaceId, session.sessionId])).toEqual([['claude--Users-me-old', 's1']]);
+        expect(sources.get('s1')?.filePath).toBe(original);
+        expect(loadSourceSession(sources.get('s1')!, 's1')?.requests.map(request => request.userEventId)).toEqual(['u1']);
+      } finally {
+        lastNew.mockRestore();
+      }
+    });
+  });
+
   it('parses a transcript whose first lines could not be read for ordering', () => {
     withProjects({
       '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
