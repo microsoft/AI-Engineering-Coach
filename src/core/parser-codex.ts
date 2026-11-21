@@ -85,8 +85,10 @@ interface CodexParseState {
   hasUserMessageEvent: boolean;
   imageScan?: CodexImageScan;
   currentAssistantTexts: string[];
-  /** The agent's own messages this turn, without its reasoning: the reply the Timeline shows. */
+  /** The agent's own messages this turn, without its reasoning: the reply the Timeline shows. Codex can log one both as an
+   *  event and as a response item, so each source is kept apart and the reply is read from one. */
   currentReplyTexts: string[];
+  currentReplyItems: string[];
   currentToolsUsed: string[];
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
@@ -208,6 +210,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     hasUserMessageEvent: false,
     currentAssistantTexts: [],
     currentReplyTexts: [],
+    currentReplyItems: [],
     currentToolsUsed: [],
     investigationDelegations: [],
     webDomains: [],
@@ -298,6 +301,11 @@ function commitCodexEdit(state: CodexParseState, pending: PendingCodexEdit): voi
   state.currentEditedFiles.push(...pending.editedFiles);
 }
 
+/** The turn's reply, from its response items when it logged any, else from its events: never both, so once. */
+function codexReply(state: CodexParseState): string {
+  return (state.currentReplyItems.length ? state.currentReplyItems : state.currentReplyTexts).join('\n');
+}
+
 function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
   const hasResponse = state.imageScan ? state.imageScan.hasAssistantText : state.currentAssistantTexts.length > 0;
   if (!state.currentUserMessage && state.currentImageCount === 0 && !hasResponse) return;
@@ -332,7 +340,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     timestamp: state.turnStartTs,
     messageText: state.currentUserMessage,
     responseText,
-    replyText: state.currentReplyTexts.join('\n'),
+    replyText: codexReply(state),
     answerEvidence: state.answerEvidence,
     isCanceled: state.turnCanceled,
     agentName: 'Codex',
@@ -407,6 +415,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.hasUserMessageEvent = false;
   state.currentAssistantTexts = [];
   state.currentReplyTexts = [];
+  state.currentReplyItems = [];
   state.currentToolsUsed = [];
   state.investigationDelegations = [];
   state.webDomains = [];
@@ -727,7 +736,7 @@ function handleAssistantResponseItem(payload: Record<string, unknown>, state: Co
   for (const item of extractContentItems(payload.content)) {
     if (item.type === 'output_text' && item.text) {
       state.currentAssistantTexts.push(item.text);
-      state.currentReplyTexts.push(item.text);
+      state.currentReplyItems.push(item.text);
       if (item.text.trim()) state.answerEvidence = payload.phase === 'final' || payload.channel === 'final' ? 'final'
         : payload.phase == null && payload.channel == null ? 'legacy' : 'missing';
     }

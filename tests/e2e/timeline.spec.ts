@@ -123,6 +123,51 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxShowText')).not.toBeChecked();
   });
 
+  test('a hatched question opens its question with what the agent said before it, and no highlight outlives its click', async ({ page }) => {
+    const text = page.locator('#tlxText');
+    const question = page.locator('.tlx-lane[data-session="tl-notes"] .wait');
+    await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
+    await page.locator('.tlx-lane[data-session="tl-log"] .tlx-lbl').click();
+    await question.click();
+    await expect(page.locator('#tlxDetailName')).toHaveText('Release notes');
+    const focus = text.locator('.tx-item.focus');
+    await expect(focus).toHaveCount(1);
+    await expect(focus).toHaveAttribute('data-text-at', /^w:question:/);
+    await expect(focus).toContainText('Include the beta features?');
+    // The agent's last message before it asked is shown, not folded away.
+    await expect(focus.locator('details')).toHaveAttribute('open', '');
+    await expect(focus).toContainText('I found three beta features.');
+    // A reload of the Timeline keeps the lane open, but not the highlight.
+    await page.locator('[data-page="dashboard"]').first().click();
+    await page.locator('[data-page="timeline"]').first().click();
+    await expect(text.locator('[data-text-at^="w:question:"]')).toBeVisible();
+    await expect(text.locator('.tx-item.focus')).toHaveCount(0);
+    // A click while the text is masked, or turned off, leaves no highlight to find when it shows again.
+    await page.locator('#tlxMask').check();
+    await question.click();
+    await page.locator('#tlxMask').uncheck();
+    await expect(text.locator('[data-text-at^="w:question:"]')).toBeVisible();
+    await expect(text.locator('.tx-item.focus')).toHaveCount(0);
+    await page.locator('#tlxShowText').uncheck();
+    await question.press(' ');
+    await page.locator('#tlxShowText').check();
+    await expect(text.locator('[data-text-at^="w:question:"]')).toBeVisible();
+    await expect(text.locator('.tx-item.focus')).toHaveCount(0);
+    // Space, like Enter, opens it.
+    await question.press(' ');
+    await expect(text.locator('.tx-item.focus')).toHaveAttribute('data-text-at', /^w:question:/);
+  });
+
+  test('says a wait for your next prompt followed a compaction, not that no reply was logged', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as unknown as { mockTimelineTextHook?: (id: string) => unknown }).mockTimelineTextHook = id => ({
+        sessionId: id, waits: [], turns: [{ t: new Date(2026, 4, 3, 14).getTime(), k: 'compaction' }, { t: new Date(2026, 4, 3, 14, 40).getTime(), k: 'you', prompt: 'Go on.' }],
+      });
+    });
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(page.locator('#tlxText [data-text-at^="i:"]')).toContainText('It followed a compaction, whose summary isn’t shown.');
+  });
+
   test('ignores a read of a lane’s text that the Timeline reloaded under', async ({ page }) => {
     type HookWindow = { mockTimelineTextHook?: (id: string) => unknown; releaseText?: () => void };
     const prompts = page.locator('#tlxText [data-text-at^="t:"] > .tx-body');

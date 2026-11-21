@@ -102,6 +102,9 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   if (!root.isConnected) return;
   loaded = { prepared: prepareTimeline(dataset) };
   texts.clear();
+  // A highlight belongs to the click that made it, not to the next load.
+  state.textFocus = null;
+  scrollToText = false;
   state.showText ??= (vscode.getState() as Record<string, unknown> | null)?.[SHOW_TEXT_KEY] !== false;
   rootEl = root;
   root.replaceChildren();
@@ -584,8 +587,10 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
           const key = w.kind === 'idle' ? `i:${w.start}` : `w:${w.kind}:${w.start}`;
           const open = (e?: Event) => {
             e?.stopPropagation();
-            scrollToText = !!state.showText && !state.masked;
-            update({ selected: s.id, textFocus: key });
+            // Shown text only: a highlight set while it is hidden would turn up, stale, when it shows again.
+            const shown = !!state.showText && !state.masked;
+            scrollToText = shown;
+            update({ selected: s.id, textFocus: shown ? key : null });
           };
           const tip = waitTip(ctx, w, l.win);
           return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} data-wait-at=${key}
@@ -875,7 +880,7 @@ function askItem(ctx: ViewContext, w: TimelineTextWait, win: Interval): VNode {
     w.intention ? html`<div class="tx-meta">The agent’s reason: ${w.intention}</div>` as VNode : null,
     decision ? html`<div class="tx-answer"><b>Decision</b> ${decision}</div>` as VNode : null,
   ] : [
-    earlier('What the agent said before it asked', w.before),
+    earlier('What the agent said before it asked', w.before, true),
     quote(w.ask) ?? html`<p class="note">The question’s text wasn’t logged.</p>` as VNode,
     w.choices?.length ? html`<ul class="tx-choices">${w.choices.map(c => html`<li>${c}</li>`)}</ul>` as VNode : null,
     w.answer ? html`<div class="tx-answer"><b>${w.k === 'relay' ? 'Your reply' : 'Your answer'}</b> ${w.answer}</div>` as VNode : null,
@@ -904,7 +909,8 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
     ...l.waits.filter(w => w.kind === 'idle').map(w => {
       const before = w.after && textOf(w.after);
       return [w.start, textItem(`i:${w.start}`, `${textTime(ctx, w.start, l.win)} · Waited ${formatDuration(w.end - w.start)} for your next prompt`, [
-        earlier('End of the agent’s reply before the wait', before?.reply, true) ?? html`<p class="note">No agent reply was logged before it.</p>` as VNode,
+        before?.k === 'compaction' ? html`<p class="note">It followed a compaction, whose summary isn’t shown.</p>` as VNode
+          : earlier('End of the agent’s reply before the wait', before?.reply, true) ?? html`<p class="note">No agent reply was logged before it.</p>` as VNode,
       ])] as [number, VNode];
     }),
   ];
