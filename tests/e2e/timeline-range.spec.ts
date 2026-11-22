@@ -211,6 +211,51 @@ test.describe('Timeline date picker', () => {
   });
 });
 
+test.describe('Timeline day strip', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.clock.setFixedTime(new Date(2026, 4, 3, 12));
+    await openTimeline(page);
+  });
+
+  /** The strip's footer, as the KPI tiles give it: `typed · automated · agent-hours`. */
+  async function kpiFooter(page: Page): Promise<string> {
+    const [typed, turns] = (await kpi(page, 'Turns you typed').innerText()).split(' of ').map(Number);
+    const hours = (await kpi(page, 'Agent time').innerText()).replace(' h', '');
+    return `${typed} typed · ${turns - typed} automated · ${hours} agent-hours`;
+  }
+
+  test('sits above the day’s callouts and KPIs, and counts what the filters show', async ({ page }) => {
+    const above = await page.evaluate(() => {
+      const strip = document.getElementById('tlxStrip')!;
+      return [document.getElementById('tlxInsights'), document.getElementById('tlxKpis')]
+        .every(el => !!el && !!(strip.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+    });
+    expect(above).toBe(true);
+    await expect(page.locator('#tlxStrip .tlx-strip-head')).not.toContainText('before filters');
+    await expect(page.locator('.tlx-lg-end').first()).toContainText(`Selected day 2026-05-03: ${await kpiFooter(page)}`);
+
+    await page.locator('#tlxHarness').selectOption('Claude Code');
+    await expect(kpi(page, 'Turns you typed')).toHaveText('2 of 2');
+    await expect(page.locator('#tlxStrip .tlx-strip-head')).toContainText('only sessions your filters show');
+    await expect(page.locator('.tlx-lg-end').first()).toContainText(`Selected day 2026-05-03: ${await kpiFooter(page)}`);
+    // No Claude Code session on 2 May: an empty bar, and no dot in the calendar.
+    await expect(page.locator('.tlx-strip-bars .d[data-day="2026-05-02"]')).toHaveAttribute('title', /2026-05-02: no session your filters show/);
+    await page.locator('#tlxDateLabel').click();
+    await expect(day(page, '2026-05-02')).toHaveClass(/\ba0\b/);
+    await expect(day(page, '2026-05-03')).toHaveClass(/\ba3\b/);
+  });
+
+  test('gives a filtered range the totals of its KPIs', async ({ page }) => {
+    await page.locator('#tlxYouTyped').check();
+    await page.locator('#tlxDateLabel').click();
+    await page.locator('#tlxCalMode button[data-value="range"]').click();
+    await day(page, '2026-05-02').click();
+    await day(page, '2026-05-03').click();
+    await expect(page.locator('#tlxDateLabel')).toContainText('2 days');
+    await expect(page.locator('.tlx-lg-end').first()).toContainText(`Range 2026-05-02 → 2026-05-03: ${await kpiFooter(page)}`);
+  });
+});
+
 /** Opens the dashboard at a Timeline link, as a copied link would: no click on the sidebar. */
 async function openLink(page: Page, hash: string): Promise<void> {
   await page.goto(HARNESS_URL + hash);

@@ -512,37 +512,104 @@ export function buildLanes(p: PreparedTimeline, from: number, to: number): Timel
   const lanes: TimelineLane[] = [];
   if (start >= end) return lanes;
   for (const s of p.sessions) {
-    if (s.ctx) continue;
-    const turns = s.turns.filter(t => t.t >= start && t.t < end);
-    const segments = clipIntervals(s.work, win);
-    const waits = s.waits.filter(w => w.start < end && w.end > start);
-    // A relay that only delivered a child's answer is no activity of its own.
-    const answers = s.answers.filter(a => a.counted && a.at >= start && a.at < end);
-    if (turns.length === 0 && segments.length === 0 && waits.length === 0 && answers.length === 0) continue;
-    const typed = turns.filter(t => t.k === 'you').length;
-    const waiting = clipIntervals(s.waiting, win);
-    const edges = [...turns.map(t => t.t), ...segments.flat(), ...waiting.flat(), ...answers.map(a => a.at)];
-    lanes.push({
-      s,
-      turns,
-      segments,
-      typed,
-      automated: turns.length - typed,
-      answered: answers.filter(a => a.counted).length,
-      agentMs: intervalsMs(segments),
-      waitMs: intervalsMs(waiting),
-      credits: sum(turns, t => t.cr),
-      tokens: sum(turns, t => t.tok),
-      first: minOf(edges),
-      last: maxOf(edges),
-      subagents: sum(turns, t => t.sub),
-      waits,
-      away: s.away.filter(([, b]) => b >= start && b < end).length,
-      visibleParent: -1,
-      win,
-    });
+    const lane = sessionLane(s, win);
+    if (lane) lanes.push(lane);
   }
   return lanes;
+}
+
+/** The session's lane in `win` (already within the dataset's bounds), or null without activity there. */
+function sessionLane(s: PreparedSession, win: Interval): TimelineLane | null {
+  if (s.ctx) return null;
+  const [start, end] = win;
+  const turns = s.turns.filter(t => t.t >= start && t.t < end);
+  const segments = clipIntervals(s.work, win);
+  const waits = s.waits.filter(w => w.start < end && w.end > start);
+  // A relay that only delivered a child's answer is no activity of its own.
+  const answers = s.answers.filter(a => a.counted && a.at >= start && a.at < end);
+  if (turns.length === 0 && segments.length === 0 && waits.length === 0 && answers.length === 0) return null;
+  const typed = turns.filter(t => t.k === 'you').length;
+  const waiting = clipIntervals(s.waiting, win);
+  const edges = [...turns.map(t => t.t), ...segments.flat(), ...waiting.flat(), ...answers.map(a => a.at)];
+  return {
+    s,
+    turns,
+    segments,
+    typed,
+    automated: turns.length - typed,
+    answered: answers.filter(a => a.counted).length,
+    agentMs: intervalsMs(segments),
+    waitMs: intervalsMs(waiting),
+    credits: sum(turns, t => t.cr),
+    tokens: sum(turns, t => t.tok),
+    first: minOf(edges),
+    last: maxOf(edges),
+    subagents: sum(turns, t => t.sub),
+    waits,
+    away: s.away.filter(([, b]) => b >= start && b < end).length,
+    visibleParent: -1,
+    win,
+  };
+}
+
+/** Each day's totals over the sessions the filters keep, judged as the Day view judges them: a session counts on a
+ *  day when its lane that day passes the filters, so a day's totals equal that day's KPIs. Without filters, the
+ *  prepared totals. `repoLabel` as in `filterLanes`. */
+export function filteredDayTotals(
+  p: PreparedTimeline, f: LaneFilters, repoLabel: (s: PreparedSession) => string = s => s.repo,
+): Map<string, DayTotals> {
+  if (!hasLaneFilters(f)) return p.dayTotals;
+  const totals = new Map<string, DayTotals>();
+  for (const s of p.sessions) {
+    if (s.ctx) continue;
+    const [first, last] = activeSpan(s);
+    if (first > last) continue;
+    // Only the loaded days the session's activity spans.
+    const from = toDateStr(first);
+    const to = toDateStr(last);
+    for (let i = lowerBound(p.days, from); i < p.days.length && p.days[i] <= to; i++) {
+      const [a, b] = timelineWindow('day', p.days[i]);
+      const win: Interval = [Math.max(a, p.bounds[0]), Math.min(b, p.bounds[1])];
+      if (win[0] >= win[1]) continue;
+      const lane = sessionLane(s, win);
+      if (!lane || filterLanes([lane], f, p, repoLabel).length === 0) continue;
+      const day = totals.get(p.days[i]) ?? { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
+      day.typed += lane.typed;
+      day.automated += lane.automated;
+      day.agentMs += lane.agentMs;
+      day.waitMs += lane.waitMs;
+      totals.set(p.days[i], day);
+    }
+  }
+  return totals;
+}
+
+/** The first and last moment of a session's turns, work, waiting, waits and answers. */
+function activeSpan(s: PreparedSession): [number, number] {
+  let first = Infinity;
+  let last = -Infinity;
+  const see = (a: number, b = a) => {
+    if (a < first) first = a;
+    if (b > last) last = b;
+  };
+  for (const t of s.turns) see(t.t);
+  for (const [a, b] of s.work) see(a, b);
+  for (const [a, b] of s.waiting) see(a, b);
+  for (const w of s.waits) see(w.start, w.end);
+  for (const a of s.answers) see(a.at);
+  return [first, last];
+}
+
+/** The index of the first of the sorted `items` not before `value`. */
+function lowerBound(items: readonly string[], value: string): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (items[mid] < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 export interface LaneFilters {

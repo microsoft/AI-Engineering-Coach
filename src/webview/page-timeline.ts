@@ -11,11 +11,11 @@ import type {
   DateFilter, TimelineDataset, TimelineSessionText, TimelineTextSuperseded, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
 } from '../core/types';
 import {
-  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filterLanes,
+  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filteredDayTotals, filterLanes,
   formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, MAX_TEXT_SCOPE_TURNS, neededYou, NO_LANE_FILTERS,
   clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, textScope, textTurnFinder, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
   viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
-  type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
+  type DayTotals, type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
   type TimelineLane, type TimelinePeriod, type TimelineView, type TimelineWait, type ViewFamily,
 } from '../core/timeline-model';
 import {
@@ -336,7 +336,7 @@ function page(data: Loaded): VNode {
   const namer = createNamer(p, state.masked);
   const ctx = state.view === 'families' ? null : viewContext(p, namer);
   return html`
-    ${toolbar(p)}
+    ${toolbar(p, ctx?.dayTotals ?? p.dayTotals)}
     ${rangeNote()}
     ${ctx ? filterBar(p, ctx) : null}
     <div class="tlx-view">${ctx ? timelineView(ctx) : familiesView(data, namer)}</div>
@@ -364,7 +364,7 @@ function segment<T extends string>(id: string, options: [T, string][], current: 
     </span>` as VNode;
 }
 
-function toolbar(p: PreparedTimeline): VNode {
+function toolbar(p: PreparedTimeline, totals: ReadonlyMap<string, DayTotals>): VNode {
   const families = state.view === 'families';
   const [lo, hi] = selectable(p);
   let label: string;
@@ -385,7 +385,7 @@ function toolbar(p: PreparedTimeline): VNode {
   const next = stepped(p, 1);
   const unit = state.view === 'week' ? 'week' : state.view === 'range' ? 'range' : 'day';
   const input: PickerInput = {
-    view: period(), date: state.date, range: state.range, lo, hi, today: toDateStr(Date.now()), activity: dayActivity(p), label,
+    view: period(), date: state.date, range: state.range, lo, hi, today: toDateStr(Date.now()), activity: dayActivity(p, totals), label,
   };
   const actions: PickerActions = {
     pickDate: date => update({ date, view: state.view === 'range' ? 'day' : state.view }),
@@ -410,15 +410,16 @@ function toolbar(p: PreparedTimeline): VNode {
     </div>` as VNode;
 }
 
-/** A day's activity for the calendar: none, or a third of the busiest day's turns, two thirds, or more. */
-function dayActivity(p: PreparedTimeline): PickerInput['activity'] {
+/** A day's activity for the calendar, as the strip counts it: none, or a third of the busiest day's turns, two thirds,
+ *  or more. */
+function dayActivity(p: PreparedTimeline, totals: ReadonlyMap<string, DayTotals>): PickerInput['activity'] {
   const turns = (d: string) => {
-    const x = p.dayTotals.get(d);
+    const x = totals.get(d);
     return x ? x.typed + x.automated : 0;
   };
   const max = Math.max(1, ...p.days.map(turns));
   return date => {
-    const x = p.dayTotals.get(date);
+    const x = totals.get(date);
     if (!x) return { level: 0, text: 'no activity' };
     const n = x.typed + x.automated;
     const level = n === 0 ? 1 : n <= max / 3 ? 1 : n <= 2 * max / 3 ? 2 : 3;
@@ -479,6 +480,8 @@ interface ViewContext {
   r0: number;
   r1: number;
   ticks: [number, string][];
+  /** Each loaded day's totals over the sessions the filters keep, for the strip and the calendar. */
+  dayTotals: ReadonlyMap<string, DayTotals>;
 }
 
 function pct(ctx: ViewContext, t: number): number {
@@ -538,7 +541,20 @@ function viewContext(p: PreparedTimeline, namer: Namer): ViewContext {
   }
   return {
     p, namer, view, all: all.length, inWindow: new Set(all.map(l => l.s.index)), lanes, families, familyOf, ...trackRange(lanes, view, start, end),
+    dayTotals: shownDayTotals(p, namer),
   };
+}
+
+/** The strip's per-day totals: computed again only when the filters, the mask or the data change, not on navigation. */
+let shownTotals: { p: PreparedTimeline; key: string; totals: ReadonlyMap<string, DayTotals> } | null = null;
+
+function shownDayTotals(p: PreparedTimeline, namer: Namer): ReadonlyMap<string, DayTotals> {
+  if (!hasLaneFilters(state.filters)) return p.dayTotals;
+  const key = JSON.stringify([state.filters, state.masked]);
+  if (shownTotals?.p !== p || shownTotals.key !== key) {
+    shownTotals = { p, key, totals: filteredDayTotals(p, state.filters, s => namer.repo(s)) };
+  }
+  return shownTotals.totals;
 }
 
 function kpiCard(value: string, label: string, sub: string, color?: string): VNode {
@@ -551,7 +567,7 @@ function kpiCard(value: string, label: string, sub: string, color?: string): VNo
 function timelineView(ctx: ViewContext): VNode {
   const { p, view, lanes, families } = ctx;
   if (lanes.length === 0) {
-    return html`${dayStrip(p, view)}
+    return html`${dayStrip(ctx)}
       <div class="tlx-empty">${ctx.all > 0
         ? html`No session matches these filters. <button type="button" class="tlx-btn" onClick=${() => update({ filters: { ...NO_LANE_FILTERS } })}>Clear filters</button>`
         : `No sessions in this ${view}.`}</div>` as VNode;
@@ -562,6 +578,7 @@ function timelineView(ctx: ViewContext): VNode {
   const asked = kpis.waits - kpis.idleWaits;
   const typedShare = kpis.turns ? `${Math.round(100 * kpis.typed / kpis.turns)}% from you · ${formatCount(kpis.turns - kpis.typed)} automated` : 'no turn started here';
   return html`
+    ${dayStrip(ctx)}
     <div class="ctx-cache-tips tlx-insights" id="tlxInsights" role="note">
       <div class="ctx-cache-tips-title">What happened ${view === 'week' ? 'this week' : view === 'range' && state.range ? `from ${state.range.from} to ${state.range.to}` : `on ${state.date}`}</div>
       ${insights.map(t => html`<div class="ctx-cache-tip">• ${t}</div>`)}
@@ -574,7 +591,6 @@ function timelineView(ctx: ViewContext): VNode {
       ${kpiCard(formatDuration(kpis.waitMs), 'Waiting on you', `${formatCount(kpis.waits)} ${kpis.waits === 1 ? 'wait' : 'waits'} started${asked ? ` (${formatCount(asked)} on a question or permission)` : ''} · ${formatCount(kpis.longWaits)} of 30 min or more`)}
       ${kpiCard(String(kpis.peak.count), 'Peak parallel sessions', kpis.peak.at != null && kpis.peak.count > 0 ? `doing agent work at ${formatWhen(kpis.peak.at, view)}` : '—')}
     </div>
-    ${dayStrip(p, view)}
     ${legend(view)}
     ${lanesPanel(ctx)}
     <div class="tlx-grid">
@@ -583,32 +599,37 @@ function timelineView(ctx: ViewContext): VNode {
     </div>` as VNode;
 }
 
-function dayStrip(p: PreparedTimeline, view: TimelinePeriod): VNode {
+/** Every loaded day, to pick one: its bars count the sessions the filters keep, as the Day view does; its footer is the
+ *  selected day's or the range's totals, those of the KPIs. */
+function dayStrip(ctx: ViewContext): VNode {
+  const { p, view, dayTotals: totals } = ctx;
+  const filtered = totals !== p.dayTotals;
   const hours = state.strip === 'hours';
+  const none: DayTotals = { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
   const value = (d: string) => {
-    const x = p.dayTotals.get(d)!;
+    const x = totals.get(d) ?? none;
     return hours ? x.agentMs / 3.6e6 : x.typed + x.automated;
   };
   const max = Math.max(1e-9, ...p.days.map(value));
   // The week or range shown is highlighted; in a range, a click opens that day.
   const span = view === 'day' ? null : windowOf(view);
-  const shown = view === 'range' && state.range ? p.days.filter(d => d >= state.range!.from && d <= state.range!.to) : [state.date];
-  const today = shown.reduce((a, d) => {
-    const x = p.dayTotals.get(d);
-    return x ? { typed: a.typed + x.typed, automated: a.automated + x.automated, agentMs: a.agentMs + x.agentMs } : a;
-  }, { typed: 0, automated: 0, agentMs: 0 });
+  // The Day and Range views total their own lanes, as their KPIs do; the Week view gives the selected day's.
+  const footer = view === 'week' ? totals.get(state.date) ?? none
+    : ctx.lanes.reduce((t, l) => ({ ...t, typed: t.typed + l.typed, automated: t.automated + l.automated, agentMs: t.agentMs + l.agentMs }), none);
   const which = view === 'range' && state.range ? `Range ${state.range.from} → ${state.range.to}` : `Selected day ${state.date}`;
   return html`
     <div class="tlx-strip" id="tlxStrip">
       <div class="tlx-strip-head">
-        <span><b>${hours ? 'Agent hours per day' : 'Turns per day'}</b> · ${hours ? 'agent working time' : 'you vs automated'} · every session in range, before filters · ${p.days[0]} → ${p.days[p.days.length - 1]} · click a day</span>
+        <span>Pick a day · <b>${hours ? 'Agent hours per day' : 'Turns per day'}</b> · ${hours ? 'agent working time' : 'you vs automated'} · ${p.days[0]} → ${p.days[p.days.length - 1]}${filtered ? ' · only sessions your filters show' : ''}</span>
         ${segment<StripMode>('tlxStripMode', [['turns', 'Turns'], ['hours', 'Agent hours']], state.strip, v => update({ strip: v }))}
       </div>
       <div class="tlx-strip-bars">
         ${p.days.map(d => {
-          const x = p.dayTotals.get(d)!;
+          const x = totals.get(d) ?? none;
           const inWeek = span != null && dayStart(d) >= span[0] && dayStart(d) < span[1];
-          const tip = `${d}: ${x.typed} typed · ${x.automated} automated · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours · ${formatDuration(x.waitMs)} waiting on you`;
+          const tip = totals.has(d)
+            ? `${d}: ${x.typed} typed · ${x.automated} automated · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours · ${formatDuration(x.waitMs)} waiting on you`
+            : `${d}: no session your filters show`;
           return html`<button type="button" class=${'d' + (d === state.date ? ' sel' : '') + (inWeek ? ' inwk' : '')} data-day=${d} title=${tip} aria-label=${tip}
             onClick=${() => update(view === 'range' ? { view: 'day', date: d } : { date: d })}>
             ${hours
@@ -620,7 +641,7 @@ function dayStrip(p: PreparedTimeline, view: TimelinePeriod): VNode {
       <div class="tlx-lg">
         ${hours ? html`<span><i class="sw h"></i>agent hours</span>`
           : html`<span><i class="sw you"></i>prompts you typed</span><span><i class="sw auto"></i>automated: agents, relays, autopilot</span>`}
-        <span class="tlx-lg-end">${which}: ${today.typed} typed · ${today.automated} automated · ${(today.agentMs / 3.6e6).toFixed(1)} agent-hours</span>
+        <span class="tlx-lg-end">${which}: ${footer.typed} typed · ${footer.automated} automated · ${(footer.agentMs / 3.6e6).toFixed(1)} agent-hours</span>
       </div>
     </div>` as VNode;
 }

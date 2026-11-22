@@ -5,7 +5,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filterLanes, formatDuration, hourTicks,
+  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filteredDayTotals, filterLanes, formatDuration, hourTicks,
   NO_LANE_FILTERS, peakParallel, prepareTimeline, sessionWaits, sessionWork, stepDate, timelineKpis, timelineWindow, turnTimes,
   textScope, verdictText, VERDICTS, viewInsights, type PreparedTimeline,
   waitInWindow,
@@ -353,5 +353,37 @@ describe('a dense session', () => {
     const overview = buildFamilies(p);
     expect(overview.families[0].from).toBe('2024-03-14');
     expect(familiesInsights(overview.totals).length).toBeGreaterThan(0);
+  });
+});
+
+describe('filteredDayTotals', () => {
+  // A types on the 15th only and works alone on the 16th; B, in Claude Code, types on the 16th.
+  const p = prepareTimeline({
+    forkedSessions: 0,
+    sessions: [
+      session('a', [turn(at(9), 30, 'you'), turn(at(10, 0, 16), 20, 'agent'), turn(at(11, 0, 16), 10, 'agent')]),
+      session('b', [turn(at(14, 0, 16), 5, 'you'), turn(at(14, 40, 16), 3, 'you')], { harness: 'Claude Code' }),
+    ],
+  });
+  const dayKpis = (day: string, f = NO_LANE_FILTERS) => {
+    const lanes = filterLanes(buildLanes(p, ...timelineWindow('day', day)), f, p);
+    const k = timelineKpis(lanes, buildViewFamilies(lanes, p));
+    return { typed: k.typed, automated: k.turns - k.typed, agentMs: k.agentMs, waitMs: k.waitMs };
+  };
+  const none = { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
+
+  it('counts each day what the Day view shows with the same filters', () => {
+    for (const f of [{ ...NO_LANE_FILTERS, harness: 'Claude Code' }, { ...NO_LANE_FILTERS, youTyped: true }, { ...NO_LANE_FILTERS, hideOneTurn: true }]) {
+      const totals = filteredDayTotals(p, f);
+      for (const day of p.days) expect([day, totals.get(day) ?? none]).toEqual([day, dayKpis(day, f)]);
+    }
+    // A session counts on a day when its lane that day passes: A typed nothing on the 16th.
+    expect(filteredDayTotals(p, { ...NO_LANE_FILTERS, youTyped: true }).get('2024-03-16')).toMatchObject({ typed: 2, automated: 0 });
+    expect(filteredDayTotals(p, { ...NO_LANE_FILTERS, harness: 'Claude Code' }).has('2024-03-15')).toBe(false);
+  });
+
+  it('is the unfiltered totals without filters', () => {
+    expect(filteredDayTotals(p, NO_LANE_FILTERS)).toBe(p.dayTotals);
+    for (const day of p.days) expect(p.dayTotals.get(day)).toEqual(dayKpis(day));
   });
 });

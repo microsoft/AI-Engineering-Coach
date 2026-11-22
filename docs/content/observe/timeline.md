@@ -52,7 +52,9 @@ Each day, week or range starts with three findings:
 
 ## Day strip
 
-The strip shows every active day in range, before the lane filters: days with a turn, agent work, waiting on you or an answer you gave, stacked as prompts you typed and automated turns. A day that holds only an answer (one logged at midnight, for example) is listed with an empty bar. Switch it to **Agent hours** to see agent working time per day. Click a day to open it in the current view; in the Range view, a click opens that day in the Day view. In the Week and Range views, the days shown are highlighted, and the strip's total is that of the range.
+The strip, right under the filters, lists every active day in range so you can pick one: days with a turn, agent work, waiting on you or an answer you gave, stacked as prompts you typed and automated turns. A day that holds only an answer (one logged at midnight, for example) is listed with an empty bar. Switch it to **Agent hours** to see agent working time per day. Click a day to open it in the current view; in the Range view, a click opens that day in the Day view. In the Week and Range views, the days shown are highlighted.
+
+With a filter on, the bars, their tooltips and the calendar's dots count only the sessions the filters show, each day judged as the Day view judges it: a session counts on a day when its lane that day passes the filters. A day with none keeps its place with an empty bar. The strip's total is that of the day or range shown, the same as its KPIs; in the Week view, that of the selected day.
 
 ## Lanes
 
