@@ -9,7 +9,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { analyzer, end, prompt, removeTimelineSessions, reply, session, start } from '../test/timeline-cli';
 import { buildSummaryExportFromAnalyzer } from './summary-export';
-import { buildLanes, buildViewFamilies, dayStart, hourTicks, prepareTimeline, timelineKpis, timelineWindow, type TimelineKpis } from './timeline-model';
+import { addDays, buildLanes, buildViewFamilies, dayStart, hourTicks, prepareTimeline, timelineKpis, timelineWindow, weekStart, type TimelineKpis } from './timeline-model';
 import {
   clampRange, isDate, MAX_RANGE_DAYS, monthCells, quickRange, rangeDays, rangeTicks, rangeWindow, shiftDate, shiftDateByMonths, shiftMonth,
   stepRange, type DateRange,
@@ -107,6 +107,10 @@ describe('date ranges over daylight-saving changes', () => {
         turns: [{ t: next - 3_600_000, d: 3 * 3_600_000, k: 'you', sub: 0, comp: false, cr: 0, tok: 0 }],
       }] });
       expect([p.dayTotals.get(day)?.agentMs, p.dayTotals.get(shiftDate(day, 1))?.agentMs]).toEqual([3_600_000, 2 * 3_600_000]);
+      // Its week is the same whichever of its days is picked: from that Monday's start to the next Monday's.
+      const weeks = [-3, -2, -1, 0, 1, 2, 3].map(i => timelineWindow('week', shiftDate(day, i)));
+      const monday = weekStart(shiftDate(day, -6));
+      expect(new Set(weeks.filter(w => w[0] <= dayStart(day) && dayStart(day) < w[1]).map(w => w.join()))).toEqual(new Set([[monday, addDays(monday, 7)].join()]));
     }));
   }
 

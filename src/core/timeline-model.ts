@@ -423,10 +423,12 @@ export function addDays(ts: number, days: number): number {
   return d.getTime();
 }
 
-/** Monday 00:00 of the week holding `date`. */
+/** The start of the Monday of the week holding `date` (its midnight, or 1:00 where the clock skips midnight), the same
+ *  whichever of the week's days is given. */
 export function weekStart(date: string): number {
   const d = new Date(date + 'T00:00:00');
   d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
