@@ -91,6 +91,10 @@ interface ClaudeLine {
   subtype?: unknown;
   /** On a `compact_boundary` line: `trigger`, `preTokens`, `postTokens`, `durationMs`. */
   compactMetadata?: unknown;
+  /** Who sent a user line (`{ kind: "human" }` on a typed prompt); see `claudeNonHumanKind`. */
+  origin?: unknown;
+  /** `attachment` lines: context the harness added, such as the instruction files it loaded. */
+  attachment?: unknown;
   message?: ClaudeMessage;
 }
 
@@ -201,6 +205,29 @@ function isClaudeLine(value: unknown): value is ClaudeLine {
   return true;
 }
 
+/**
+ * A prompt the user typed while the agent was busy. Claude delivers it into the running turn and logs it only as a
+ * `queued_command` attachment, with `origin.kind: "human"`, so it becomes a user line here. Task notifications and
+ * messages from other sessions are queued the same way, but stay out, as before.
+ */
+function queuedPromptLine(line: ClaudeLine): ClaudeLine | null {
+  if (line.type !== 'attachment' || !isRecord(line.attachment)) return null;
+  const attachment = line.attachment;
+  if (attachment.type !== 'queued_command' || !isRecord(attachment.origin) || attachment.origin.kind !== 'human') return null;
+  if (attachment.commandMode !== undefined && attachment.commandMode !== 'prompt') return null;
+  const prompt = attachment.prompt;
+  const content = typeof prompt === 'string' ? prompt : Array.isArray(prompt) && prompt.every(isClaudeContentBlock) ? prompt : null;
+  if (content === null) return null;
+  return {
+    ...line,
+    type: 'user',
+    origin: attachment.origin,
+    isMeta: undefined,
+    attachment: undefined,
+    message: { role: 'user', content },
+  };
+}
+
 function parseClaudeLine(rawLine: string): ClaudeLine | null {
   try {
     const parsed: unknown = JSON.parse(rawLine);
@@ -209,7 +236,7 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
     if (typeof record.uuid === 'number') record.uuid = String(record.uuid);
     if (typeof record.parentUuid === 'number') record.parentUuid = String(record.parentUuid);
     if (typeof record.timestamp === 'number') record.timestamp = new Date(record.timestamp).toISOString();
-    return parsed;
+    return queuedPromptLine(parsed) ?? parsed;
   } catch {
     return null;
   }
@@ -353,10 +380,19 @@ function getInputPath(input: Record<string, unknown> | undefined, key: string): 
   return typeof value === 'string' ? value : null;
 }
 
+/** File and selection context the VS Code extension adds to a typed prompt. */
+const CLAUDE_IDE_CONTEXT = /<(ide_opened_file|ide_selection)>[\s\S]*?<\/\1>/g;
+
+/** The typed text of a user line, without the IDE context the extension added to it. */
 function getClaudeUserText(line: ClaudeLine): string {
   return toContentArray(line.message?.content)
     .filter(block => block.type === 'text')
-    .map(block => block.text || '')
+    .flatMap(block => {
+      const text = block.text || '';
+      const typed = text.replaceAll(CLAUDE_IDE_CONTEXT, '');
+      if (typed === text) return [text];
+      return typed.trim() ? [typed.trim()] : [];
+    })
     .join('\n');
 }
 
@@ -394,7 +430,7 @@ export function extractClaudeImageReferences(
   let done = false;
   // The same line limit as readClaudeLines, so request indices match the parsed session's.
   forEachJsonlLine(filePath, raw => {
-    if (!firstLine && !raw.includes('"user"')) return;
+    if (!firstLine && !raw.includes('"user"') && !raw.includes('"queued_command"')) return;
     const line = parseClaudeLine(raw);
     if (!line) return;
     if (firstLine) {
