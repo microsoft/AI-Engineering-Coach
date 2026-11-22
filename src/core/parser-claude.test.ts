@@ -891,6 +891,20 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
     });
   });
 
+  it('parses a hard-linked transcript over the size limit from its working folder', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, () => ({ type: 'api-request', body: blob }));
+    withProjects({
+      '-Users-me-proj/s1.jsonl': [makeUser('Why?', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 's1' }), ...apiRequests, makeAssistant('Because.')],
+    }, projectsDir => {
+      fs.mkdirSync(path.join(projectsDir, '-Users-me-notes'));
+      fs.linkSync(path.join(projectsDir, '-Users-me-proj', 's1.jsonl'), path.join(projectsDir, '-Users-me-notes', 's1.jsonl'));
+      expect(fs.statSync(path.join(projectsDir, '-Users-me-notes', 's1.jsonl')).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.workspaceId, session.sessionId, session.requests.length])).toEqual([['claude--Users-me-proj', 's1', 1]]);
+    });
+  });
+
   it('counts a turn replayed into a forked transcript once', () => {
     withProjects({
       '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
@@ -998,6 +1012,47 @@ describe('parseClaudeSessions: each transcript and turn counted once', () => {
       } finally {
         openSync.mockRestore();
       }
+    });
+  });
+
+  it('keeps a turn in a transcript over the size limit that a later fork replays', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, () => ({ type: 'api-request', body: blob }));
+    withProjects({
+      '-Users-me-proj/f-original.jsonl': [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'f-original' }), ...apiRequests, makeAssistant('Done.'),
+      ],
+      '-Users-me-proj/a-fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'a-fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      expect(fs.statSync(path.join(projectsDir, '-Users-me-proj', 'f-original.jsonl')).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-fork', ['u2']], ['f-original', ['u1']],
+      ]);
+    });
+  });
+
+  it('orders a transcript by its first timestamp after a line over the size limit', { timeout: 60_000 }, () => {
+    withProjects({
+      '-Users-me-proj/f-original.jsonl': [
+        // Left out, so its later timestamp doesn't date the transcript after the fork.
+        { type: 'api-request', timestamp: '2025-06-15T12:00:00Z', body: 'x'.repeat(MAX_FILE_SIZE + 1) },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'f-original' }), makeAssistant('Done.'),
+      ],
+      '-Users-me-proj/a-fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'a-fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-fork', ['u2']], ['f-original', ['u1']],
+      ]);
     });
   });
 

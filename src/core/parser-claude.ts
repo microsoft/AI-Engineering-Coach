@@ -755,26 +755,25 @@ function discoveryKey(dirName: string, sessionName: string): string {
   return `${dirName}\0${sessionName}`;
 }
 
-/** Hands a transcript's first 200 lines to `onLine` until it returns true. A file too large to parse is not read,
- *  and a file that can't be read is left to the parse. */
-function readClaudeHead(filePath: string, size: bigint, onLine: (raw: string) => boolean): void {
-  if (size > BigInt(MAX_FILE_SIZE)) return;
+/** Hands a transcript's first 200 lines to `onLine` until it returns true, whatever the file's size. A line over
+ *  MAX_FILE_SIZE is left out but counts towards the 200, and a file that can't be read is left to the parse. */
+function readClaudeHead(filePath: string, onLine: (raw: string) => boolean): void {
   let read = 0;
   let done = false;
   try {
     forEachJsonlLine(filePath, raw => {
       read++;
       done = onLine(raw);
-    }, () => done || read >= 200);
+    }, () => done || read >= 200, { maxChars: MAX_FILE_SIZE, onSkip: () => { read++; } });
   } catch {
     // Left to parseClaudeSessionFile, which reads the file again.
   }
 }
 
 /** The first `cwd` a transcript records. */
-function readClaudeCwd(filePath: string, size: bigint): string | undefined {
+function readClaudeCwd(filePath: string): string | undefined {
   let cwd: string | undefined;
-  readClaudeHead(filePath, size, raw => {
+  readClaudeHead(filePath, raw => {
     if (raw.includes('"cwd"')) cwd = parseClaudeLine(raw)?.cwd || undefined;
     return cwd !== undefined;
   });
@@ -789,8 +788,8 @@ function readClaudeCwd(filePath: string, size: bigint): string | undefined {
  */
 function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
   const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map(), sessionSources: new Map() };
-  const transcripts: { filePath: string; size: bigint; birth: bigint }[] = [];
-  const byFile = new Map<string, { dirName: string; filePath: string; size: bigint }[]>();
+  const transcripts: { filePath: string; birth: bigint }[] = [];
+  const byFile = new Map<string, { dirName: string; filePath: string }[]>();
   for (const dirName of [...dirNames].sort()) {
     let entries: fs.Dirent[];
     try {
@@ -807,20 +806,20 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
         stat = fs.statSync(filePath, { bigint: true });
         // A file system that doesn't record birth times reports 0: order those files after the rest. Where statx isn't
         // available, libuv reports the change time instead, which moves on append; it only decides equal starts.
-        transcripts.push({ filePath, size: stat.size, birth: stat.birthtimeNs || UNKNOWN_BIRTH });
+        transcripts.push({ filePath, birth: stat.birthtimeNs || UNKNOWN_BIRTH });
         if (stat.nlink < 2n) continue;
         key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
       } catch {
         continue;
       }
       const copies = byFile.get(key) ?? [];
-      copies.push({ dirName, filePath, size: stat.size });
+      copies.push({ dirName, filePath });
       byFile.set(key, copies);
     }
   }
   for (const copies of byFile.values()) {
     if (copies.length < 2) continue;
-    const cwd = readClaudeCwd(copies[0].filePath, copies[0].size);
+    const cwd = readClaudeCwd(copies[0].filePath);
     const kept = copies.find(copy => cwd !== undefined && cwdMatchesProjectDir(cwd, copy.dirName)) ?? copies[0];
     for (const copy of copies) {
       if (copy === kept) continue;
@@ -836,7 +835,7 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
   // first line can carry the original's timestamp, so equal starts go by when the file was created, then by name.
   const ordered = transcripts
     .filter(({ filePath }) => !discovery.skipFiles.has(filePath))
-    .map(({ filePath, size, birth }) => ({ filePath, birth, start: transcriptStart(filePath, size) }))
+    .map(({ filePath, birth }) => ({ filePath, birth, start: transcriptStart(filePath) }))
     .sort((a, b) => a.start - b.start || Number(a.birth - b.birth)
       || path.basename(a.filePath).localeCompare(path.basename(b.filePath)) || a.filePath.localeCompare(b.filePath));
   for (const [rank, { filePath }] of ordered.entries()) discovery.transcriptRanks.set(filePath, rank);
@@ -845,9 +844,9 @@ function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): 
 
 /** When a transcript was started: its first line's timestamp. A fork, or a copy of a session in another project
  *  folder, replays older turns, but its own first line is normally written when it starts. */
-function transcriptStart(filePath: string, size: bigint): number {
+function transcriptStart(filePath: string): number {
   let start = Number.POSITIVE_INFINITY;
-  readClaudeHead(filePath, size, raw => {
+  readClaudeHead(filePath, raw => {
     const ts = raw.includes('"timestamp"') ? parseClaudeLine(raw)?.timestamp : undefined;
     if (ts) start = Date.parse(ts);
     return Number.isFinite(start);
