@@ -557,25 +557,49 @@ function sessionLane(s: PreparedSession, win: Interval): TimelineLane | null {
 
 /** Each day's totals over the sessions the filters keep, judged as the Day view judges them: a session counts on a
  *  day when its lane that day passes the filters, so a day's totals equal that day's KPIs. Without filters, the
- *  prepared totals. `repoLabel` as in `filterLanes`. */
+ *  prepared totals. `repoLabel` as in `filterLanes`. Each session's activity is sorted into its days once, so a
+ *  long, busy session costs its size, not its size times its days. */
 export function filteredDayTotals(
   p: PreparedTimeline, f: LaneFilters, repoLabel: (s: PreparedSession) => string = s => s.repo,
 ): Map<string, DayTotals> {
   if (!hasLaneFilters(f)) return p.dayTotals;
+  const wins = p.days.map((d): Interval => {
+    const [a, b] = timelineWindow('day', d);
+    return [Math.max(a, p.bounds[0]), Math.min(b, p.bounds[1])];
+  });
+  const starts = wins.map(w => w[0]);
+  // The day holding `t`, or -1.
+  const dayOf = (t: number) => {
+    const i = upperBound(starts, t) - 1;
+    return i >= 0 && t < wins[i][1] ? i : -1;
+  };
   const totals = new Map<string, DayTotals>();
   for (const s of p.sessions) {
     if (s.ctx) continue;
-    const [first, last] = activeSpan(s);
-    if (first > last) continue;
-    // Only the loaded days the session's activity spans.
-    const from = toDateStr(first);
-    const to = toDateStr(last);
-    for (let i = lowerBound(p.days, from); i < p.days.length && p.days[i] <= to; i++) {
-      const [a, b] = timelineWindow('day', p.days[i]);
-      const win: Interval = [Math.max(a, p.bounds[0]), Math.min(b, p.bounds[1])];
-      if (win[0] >= win[1]) continue;
-      const lane = sessionLane(s, win);
-      if (!lane || filterLanes([lane], f, p, repoLabel).length === 0) continue;
+    const days = new Map<number, Pick<PreparedSession, 'turns' | 'work' | 'waiting' | 'waits' | 'answers' | 'away'>>();
+    const bucket = (i: number) => {
+      let b = days.get(i);
+      if (!b) days.set(i, b = { turns: [], work: [], waiting: [], waits: [], answers: [], away: [] });
+      return b;
+    };
+    const at = (t: number, add: (i: number) => void) => {
+      const i = dayOf(t);
+      if (i >= 0) add(i);
+    };
+    // Every day an interval overlaps (half-open), as `clipIntervals` and the lane's wait test read it.
+    const over = (a: number, b: number, add: (i: number) => void) => {
+      for (let i = Math.max(0, upperBound(starts, a) - 1); i < wins.length && wins[i][0] < b; i++) if (wins[i][1] > a) add(i);
+    };
+    for (const t of s.turns) at(t.t, i => bucket(i).turns.push(t));
+    for (const w of s.work) over(w[0], w[1], i => bucket(i).work.push(w));
+    for (const w of s.waiting) over(w[0], w[1], i => bucket(i).waiting.push(w));
+    for (const w of s.waits) over(w.start, w.end, i => bucket(i).waits.push(w));
+    for (const a of s.answers) at(a.at, i => bucket(i).answers.push(a));
+    for (const w of s.away) at(w[1], i => bucket(i).away.push(w));
+    for (const [i, part] of days) {
+      if (wins[i][0] >= wins[i][1]) continue;
+      const lane = sessionLane({ ...s, ...part }, wins[i]);
+      if (!lane || filterLanes([{ ...lane, s }], f, p, repoLabel).length === 0) continue;
       const day = totals.get(p.days[i]) ?? { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
       day.typed += lane.typed;
       day.automated += lane.automated;
@@ -587,29 +611,13 @@ export function filteredDayTotals(
   return totals;
 }
 
-/** The first and last moment of a session's turns, work, waiting, waits and answers. */
-function activeSpan(s: PreparedSession): [number, number] {
-  let first = Infinity;
-  let last = -Infinity;
-  const see = (a: number, b = a) => {
-    if (a < first) first = a;
-    if (b > last) last = b;
-  };
-  for (const t of s.turns) see(t.t);
-  for (const [a, b] of s.work) see(a, b);
-  for (const [a, b] of s.waiting) see(a, b);
-  for (const w of s.waits) see(w.start, w.end);
-  for (const a of s.answers) see(a.at);
-  return [first, last];
-}
-
-/** The index of the first of the sorted `items` not before `value`. */
-function lowerBound(items: readonly string[], value: string): number {
+/** The index of the first of the sorted `items` after `value`. */
+function upperBound(items: readonly number[], value: number): number {
   let lo = 0;
   let hi = items.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (items[mid] < value) lo = mid + 1;
+    if (items[mid] <= value) lo = mid + 1;
     else hi = mid;
   }
   return lo;

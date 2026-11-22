@@ -382,6 +382,20 @@ describe('filteredDayTotals', () => {
     expect(filteredDayTotals(p, { ...NO_LANE_FILTERS, harness: 'Claude Code' }).has('2024-03-15')).toBe(false);
   });
 
+  it('reads a long, busy session once, not once per day', () => {
+    // 300,000 turns over 209 days; preparing them is linear, and so must be filtering them.
+    const turns = Array.from({ length: 300_000 }, (_, i) => turn(at(0) + i * 60_000, i % 2 ? 0.5 : 0, i % 2 ? 'agent' : 'you'));
+    const data: TimelineDataset = { forkedSessions: 0, sessions: [session('busy', turns)] };
+    let started = performance.now();
+    const busy = prepareTimeline(data);
+    const prepareMs = performance.now() - started;
+    started = performance.now();
+    const totals = filteredDayTotals(busy, { ...NO_LANE_FILTERS, youTyped: true });
+    expect(performance.now() - started).toBeLessThan(prepareMs);
+    expect(totals.size).toBe(busy.days.length);
+    expect(totals.get(busy.days[1])).toEqual(busy.dayTotals.get(busy.days[1]));
+  });
+
   it('is the unfiltered totals without filters', () => {
     expect(filteredDayTotals(p, NO_LANE_FILTERS)).toBe(p.dayTotals);
     for (const day of p.days) expect(p.dayTotals.get(day)).toEqual(dayKpis(day));
