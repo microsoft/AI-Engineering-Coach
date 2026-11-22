@@ -9,7 +9,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { analyzer, end, prompt, removeTimelineSessions, reply, session, start } from '../test/timeline-cli';
 import { buildSummaryExportFromAnalyzer } from './summary-export';
-import { buildLanes, buildViewFamilies, hourTicks, prepareTimeline, timelineKpis, timelineWindow, type TimelineKpis } from './timeline-model';
+import { buildLanes, buildViewFamilies, dayStart, hourTicks, prepareTimeline, timelineKpis, timelineWindow, type TimelineKpis } from './timeline-model';
 import {
   clampRange, isDate, MAX_RANGE_DAYS, monthCells, quickRange, rangeDays, rangeTicks, rangeWindow, shiftDate, shiftDateByMonths, shiftMonth,
   stepRange, type DateRange,
@@ -91,6 +91,24 @@ describe('date ranges over daylight-saving changes', () => {
     const day = timelineWindow('day', '2026-10-04');
     expect(hourTicks(day[0], day[1], 1).map(t => new Date(t).getHours())).toEqual([0, 1, ...Array.from({ length: 21 }, (_, i) => i + 3)]);
   }));
+
+  // Where the clock springs forward at midnight, the day starts at 1:00: it keeps its date marker there.
+  for (const [zone, day] of [['America/Santiago', '2026-09-06'], ['America/Havana', '2026-03-08'], ['Asia/Beirut', '2026-03-29']] as const) {
+    it(`names every day on a short range's axis when ${zone} skips midnight`, () => inZone(zone, () => {
+      const r = { from: shiftDate(day, -1), to: shiftDate(day, 1) };
+      const named = rangeTicks(...rangeWindow(r)).filter(([, label]) => !label.endsWith(':00'));
+      expect(named.map(([t]) => t)).toEqual([0, 1, 2].map(i => dayStart(shiftDate(r.from, i))));
+      expect(new Date(named[1][0]).getHours()).toBe(1);
+      // That day ends at the next midnight, not at 1:00 the day after: its window, a range ending on it, its share of work.
+      const next = dayStart(shiftDate(day, 1));
+      expect([timelineWindow('day', day)[1], rangeWindow({ from: day, to: day })[1]]).toEqual([next, next]);
+      const p = prepareTimeline({ forkedSessions: 0, sessions: [{
+        id: 'late', name: 'late', branch: '', repo: 'r', harness: 'Copilot CLI', model: 'm', parent: -1, via: null,
+        turns: [{ t: next - 3_600_000, d: 3 * 3_600_000, k: 'you', sub: 0, comp: false, cr: 0, tok: 0 }],
+      }] });
+      expect([p.dayTotals.get(day)?.agentMs, p.dayTotals.get(shiftDate(day, 1))?.agentMs]).toEqual([3_600_000, 2 * 3_600_000]);
+    }));
+  }
 
   for (const [zone, spring, autumn] of [['Europe/Berlin', '2026-03-29', '2026-10-25'], ['America/New_York', '2026-03-08', '2026-11-01']] as const) {
     it(`steps whole calendar days over daylight-saving changes in ${zone}`, () => inZone(zone, () => {

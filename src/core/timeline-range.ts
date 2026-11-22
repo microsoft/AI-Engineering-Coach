@@ -99,14 +99,18 @@ export function shiftDateByMonths(date: string, n: number): string {
   return isDate(day) && day <= last ? day : last;
 }
 
-/** Axis ticks for a range of two days or more: every 6 hours over up to 3 days (midnights named by their day), each day
+/** Axis ticks for a range of two days or more: every 6 hours over up to 3 days (each day's start named by its day), each day
  *  up to 2 weeks, every other day up to a month, then each Monday. Few enough to draw in every lane. */
 export function rangeTicks(start: number, end: number): [number, string][] {
   const days = dayTicks(start, end);
   const dayName = (t: number) => new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
   const dateName = (t: number) => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
   if (days.length <= 3) {
-    return hourTicks(start, end, 6).map((t): [number, string] => [t, new Date(t).getHours() === 0 ? dayName(t) : `${new Date(t).getHours()}:00`]);
+    // Each day is named at its start: midnight, or 1:00 where the clock springs forward at midnight.
+    const starts = new Set(days);
+    const hours = hourTicks(start, end, 6).filter(t => !starts.has(t) && new Date(t).getHours() !== 0);
+    return [...days.map((t): [number, string] => [t, dayName(t)]), ...hours.map((t): [number, string] => [t, `${new Date(t).getHours()}:00`])]
+      .sort((a, b) => a[0] - b[0]);
   }
   if (days.length <= 14) return days.map((t): [number, string] => [t, dayName(t)]);
   if (days.length <= 31) return days.filter((_, i) => i % 2 === 0).map((t): [number, string] => [t, dateName(t)]);

@@ -413,10 +413,13 @@ export function dayStart(date: string): number {
   return new Date(date + 'T00:00:00').getTime();
 }
 
-/** `days` calendar days later, at the same local clock time (not `days × 24 h`, which daylight saving breaks). */
+/** The start of the day `days` calendar days after the one holding `ts` (not `days × 24 h`, which daylight saving
+ *  breaks): its midnight, or 1:00 where the clock springs forward at midnight. Read from the date, not carried from
+ *  `ts`, so a day that started at 1:00 is followed by one that starts at midnight. */
 export function addDays(ts: number, days: number): number {
   const d = new Date(ts);
   d.setDate(d.getDate() + days);
+  d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
