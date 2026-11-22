@@ -15,11 +15,15 @@
  * type=event_msg:       payload.type = user_message|agent_reasoning|function_call|function_call_output|
  *                                      task_started|task_complete|token_count|turn_aborted|error|assistant_message
  * type=response_item:   payload.role, payload.content[]
+ * type=compacted:       a compaction (also a `compaction` response item, a `context_compacted` event or a
+ *                       `ContextCompaction` item; see `agent-compaction.ts`)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { ModelUsage, Session, SessionRequest } from './types';
+import { CompactionEvent, ModelUsage, Session, SessionRequest } from './types';
+import { codexCompaction, requestCompactionFields } from './agent-compaction';
+import { addTurnCompaction } from './cli-compaction';
 import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, extractSkillPathsFromText } from './parser-shared';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
@@ -113,6 +117,18 @@ interface CodexParseState {
   pendingToolEdits: Map<string, PendingCodexEdit>;
   /** The latest `total_token_usage` logged `cached_input_tokens`; without it the cached count is a default 0. */
   curTotalCachedReported: boolean;
+  /** Compactions logged during the current turn, in order. */
+  turnCompactions: CompactionEvent[];
+  /** Prompt tokens and `model_context_window` of the session's latest main-agent call; 0 and `null` before one. */
+  lastPromptTokens: number;
+  lastContextWindow: number | null;
+  /** A compaction was recorded since the latest model call: Codex logs one compaction in several records. */
+  compactionOpen: boolean;
+  /** The current task has a user message or model work; `null` before any task event (older Codex). A manual
+   *  compact runs as a task of its own with no prompt and no other work; any other compaction is automatic. */
+  taskActive: boolean | null;
+  /** A compaction recorded as manual in the current task, until a prompt or model work shows it was automatic. */
+  tentativeManual: CompactionEvent | null;
 }
 
 interface PendingCodexEdit {
@@ -211,6 +227,12 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     editLocIndex,
     pendingToolEdits: new Map(),
     curTotalCachedReported: false,
+    turnCompactions: [],
+    lastPromptTokens: 0,
+    lastContextWindow: null,
+    compactionOpen: false,
+    taskActive: null,
+    tentativeManual: null,
   };
 }
 
@@ -320,6 +342,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
     ...(contextUsage ? { contextUsage } : {}),
+    ...requestCompactionFields(state.turnCompactions),
   }));
   mergeRequestEditLoc(state.editLocIndex, requestId, state.currentEditLocs);
 
@@ -344,6 +367,7 @@ function resetCodexTurn(state: CodexParseState): void {
   state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
+  state.turnCompactions = [];
   state.currentEditLocs = new Map();
   state.answerEvidence = 'missing';
   if (state.imageScan) {
@@ -474,6 +498,8 @@ function prepareCodexUserTurn(
   recordType: 'event' | 'response',
   imageCount: number,
 ): void {
+  // Before the flush: a compaction earlier in this task belongs to the turn being flushed.
+  noteTaskActivity(state);
   const hasTurn = state.currentUserMessage.length > 0 || state.currentImageCount > 0;
   const hasImages = imageCount > 0 || state.currentImageCount > 0;
   const mirror = recordType === 'event'
@@ -554,12 +580,19 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   const last = recordValue(info?.last_token_usage);
   const lastInput = tokenCount(last?.input_tokens);
   if (newCall && lastInput != null) {
-    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window), model: state.turnModel || undefined });
+    const window = tokenCount(info?.model_context_window);
+    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
+    // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
+    if (lastInput > 0) {
+      state.lastPromptTokens = lastInput;
+      state.lastContextWindow = window;
+      state.compactionOpen = false;
+    }
   }
 }
 
-/** Response items that are the agent's work: logged after the task completed, they extend the turn. */
-const CODEX_LATE_WORK_ITEMS: ReadonlySet<string> = new Set(['reasoning', 'function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call']);
+/** Response items that are the agent's work: reasoning or a tool call. Logged after the task completed, they extend the turn. */
+const CODEX_WORK_ITEMS: ReadonlySet<string> = new Set(['reasoning', 'function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call']);
 
 /** Work logged after the task completed: the turn ends with that work instead. */
 function extendCodexTurnEnd(state: CodexParseState, ts: number | null): void {
@@ -574,6 +607,45 @@ function trackCodexTaskEnd(eventType: string, state: CodexParseState, ts: number
   if (eventType !== 'task_complete' && eventType !== 'turn_aborted') return;
   if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
   state.turnEndTs = ts;
+}
+
+function isCompactionEvent(eventType: string, payload: Record<string, unknown>): boolean {
+  return eventType === 'context_compacted' || (eventType === 'item_completed' && recordValue(payload.item)?.type === 'ContextCompaction');
+}
+
+/** Record a compaction once, however many records Codex logs for it. One before any model call of the file is
+ *  history a forked thread inherited, not a compaction of this session. */
+function recordCodexCompaction(state: CodexParseState): void {
+  if (state.compactionOpen || state.lastPromptTokens <= 0) return;
+  state.compactionOpen = true;
+  const trigger = state.taskActive === null ? undefined : state.taskActive ? 'auto' : 'manual';
+  const compaction = codexCompaction(state.lastPromptTokens, state.lastContextWindow, trigger);
+  if (trigger === 'manual') state.tentativeManual = compaction;
+  addTurnCompaction(state.turnCompactions, compaction);
+}
+
+/** A user message or model work in the current task: a compaction in it is automatic, also one logged before. */
+function noteTaskActivity(state: CodexParseState): void {
+  if (state.taskActive === false) state.taskActive = true;
+  if (state.tentativeManual) state.tentativeManual.trigger = 'auto';
+  state.tentativeManual = null;
+}
+
+const CODEX_WORK_EVENTS: ReadonlySet<string> = new Set(['agent_message', 'assistant_message', 'agent_reasoning', 'function_call']);
+
+/** Model work: an assistant message, reasoning or a tool call (not token counts or compaction records). */
+function isCodexModelWork(line: CodexLine): boolean {
+  const payload = line.payload ?? {};
+  const type = stringValue(payload.type);
+  if (line.type === 'event_msg') return CODEX_WORK_EVENTS.has(type);
+  if (line.type !== 'response_item') return false;
+  return (payload.role === 'assistant' && type === 'message') || CODEX_WORK_ITEMS.has(type);
+}
+
+/** A task starts or ends: a manual compaction in the previous task stays manual. */
+function onCodexTaskBoundary(state: CodexParseState, starts: boolean): void {
+  state.tentativeManual = null;
+  if (starts) state.taskActive = false;
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
@@ -599,6 +671,11 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     handleTokenCount(payload, state);
     return;
   }
+  if (isCompactionEvent(eventType, payload)) {
+    recordCodexCompaction(state);
+    return;
+  }
+  if (eventType === 'task_started' || eventType === 'task_complete' || eventType === 'turn_aborted') onCodexTaskBoundary(state, eventType === 'task_started');
   if (eventType === 'function_call_output' || eventType === 'custom_tool_call_output') {
     handleCodexToolOutput(payload, state);
     return;
@@ -674,12 +751,13 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
     handleUserResponseItem(payload, state, ts, defaultModel);
     return;
   }
-  if (role === 'assistant' || CODEX_LATE_WORK_ITEMS.has(itemType)) extendCodexTurnEnd(state, ts);
+  if (role === 'assistant' || CODEX_WORK_ITEMS.has(itemType)) extendCodexTurnEnd(state, ts);
   if (role === 'assistant' && itemType === 'message') {
     handleAssistantResponseItem(payload, state);
     return;
   }
-  if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
+  if (itemType === 'compaction' || itemType === 'compaction_summary') recordCodexCompaction(state);
+  else if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
   else if (itemType === 'custom_tool_call') handleCustomToolCallResponseItem(payload, state);
   else if (itemType === 'function_call_output' || itemType === 'custom_tool_call_output') {
     handleCodexToolOutput(payload, state);
@@ -708,6 +786,7 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
     handleCodexImageLine(line, state, meta, state.imageScan);
     return;
   }
+  if (isCodexModelWork(line)) noteTaskActivity(state);
 
   if (line.type === 'event_msg') {
     handleEventMsg(line.payload || {}, state, ts, meta.model);
@@ -715,6 +794,10 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
   }
   if (line.type === 'turn_context') {
     handleTurnContext(line.payload || {}, state);
+    return;
+  }
+  if (line.type === 'compacted') {
+    recordCodexCompaction(state);
     return;
   }
   if (line.type === 'response_item') handleResponseItem(line.payload || {}, state, ts, meta.model);
