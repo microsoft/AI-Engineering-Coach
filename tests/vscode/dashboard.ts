@@ -7,6 +7,18 @@ import { ActivityBar, By, EditorView, error, until, VSBrowser, WebView, WebviewV
 import { saveSnapshot } from './snapshots';
 
 const READY_TIMEOUT = 60_000;
+const STALE_OUTER_FRAME = 'WebviewMixin.switchToFrame: outer iframe became stale during frame switch.';
+
+/**
+ * Errors from a webview frame that VS Code replaced or hasn't finished loading; polling again
+ * reacquires it. ExTester rethrows a stale outer frame as a plain Error, matched by its message.
+ * Anything else, such as a disconnected driver, is a real failure.
+ */
+function isTransientFrameError(err: unknown): boolean {
+  return err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchFrameError
+    || err instanceof error.NoSuchElementError
+    || (err instanceof Error && err.message.startsWith(STALE_OUTER_FRAME));
+}
 
 export class Dashboard {
   private currentWebview: WebView | undefined;
@@ -43,11 +55,7 @@ export class Dashboard {
         this.currentWebview = webview;
         return true;
       } catch (err: unknown) {
-        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchFrameError
-          || err instanceof error.NoSuchElementError
-          || (err instanceof Error && err.message.startsWith('WebviewMixin.switchToFrame: outer iframe became stale during frame switch.'))) {
-          return false;
-        }
+        if (isTransientFrameError(err)) return false;
         throw err;
       }
     }, READY_TIMEOUT, previousDocumentId
@@ -111,20 +119,24 @@ export class Dashboard {
 
   /**
    * Runs `action` inside `view`'s frame once it contains `marker`, then returns to the workbench.
-   * Retries while frames load: until a webview is ready, another one can be the only ready frame.
+   * Retries while frames load (until a webview is ready, another one can be the only ready frame)
+   * and when VS Code replaces the frame, within one overall deadline. `action` may run again after
+   * a transient error, so it must be safe to repeat.
    */
   private async inFrame<T>(view: WebView | WebviewView, marker: string, action: () => Promise<T>, what: string): Promise<T> {
     const driver = VSBrowser.instance.driver;
+    const deadline = Date.now() + READY_TIMEOUT;
     let result: { value: T } | undefined;
     await driver.wait(async () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
       try {
-        await view.switchToFrame(READY_TIMEOUT);
+        await view.switchToFrame(remaining);
         await view.findWebElement(By.css(marker));
         result = { value: await action() };
         return true;
       } catch (err: unknown) {
-        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError
-          || err instanceof error.NoSuchFrameError) return false;
+        if (isTransientFrameError(err)) return false;
         throw err;
       } finally {
         await driver.switchTo().defaultContent();

@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   executeScript: vi.fn<() => Promise<string>>(),
   saveSnapshot: vi.fn<typeof import('./snapshots')['saveSnapshot']>(),
   wait: vi.fn<(condition: () => Promise<boolean>, timeout: number, message?: string) => Promise<boolean>>(),
+  findWebElement: vi.fn<() => Promise<unknown>>(),
+  findWebElements: vi.fn<() => Promise<{ getText(): Promise<string> }[]>>(),
 }));
 
 vi.mock('vscode-extension-tester', async importOriginal => {
@@ -31,7 +33,11 @@ vi.mock('vscode-extension-tester', async importOriginal => {
       wait: mocks.wait,
     } } },
     Workbench: class { executeCommand = mocks.executeCommand; },
-    WebView: class { switchToFrame = mocks.switchToFrame; },
+    WebView: class {
+      switchToFrame = mocks.switchToFrame;
+      findWebElement = mocks.findWebElement;
+      findWebElements = mocks.findWebElements;
+    },
     until: { ...actual.until, elementLocated: () => mocks.editorReady },
   };
 });
@@ -48,6 +54,8 @@ beforeEach(() => {
   mocks.takeScreenshot.mockResolvedValue('captured-image');
   mocks.executeScript.mockResolvedValue('[]');
   mocks.saveSnapshot.mockResolvedValue();
+  mocks.findWebElement.mockResolvedValue({});
+  mocks.findWebElements.mockResolvedValue([{ getText: () => Promise.resolve('Changelog') }]);
   mocks.wait.mockImplementation(async (condition, _timeout, message) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (await condition()) return true;
@@ -107,6 +115,35 @@ describe('desktop webview synchronization', () => {
     await new Dashboard().open();
 
     expect(mocks.switchToFrame.mock.calls).toEqual([[60_000], [59_900]]);
+  });
+});
+
+describe('reading another webview, such as the What\'s New preview', () => {
+  it.each([
+    ['wrapped stale outer frame', new Error('WebviewMixin.switchToFrame: outer iframe became stale during frame switch. See the upstream issue.')],
+    ['stale frame', new error.StaleElementReferenceError('The preview was replaced')],
+    ['missing marker', new error.NoSuchElementError('The preview is still rendering')],
+  ])('retries a %s and returns to the workbench in between', async (_name, failure) => {
+    mocks.switchToFrame.mockRejectedValueOnce(failure);
+    expect(await new Dashboard().markdownPreviewHeadings()).toEqual(['Changelog']);
+    expect(mocks.switchToFrame).toHaveBeenCalledTimes(2);
+    expect(mocks.defaultContent.mock.invocationCallOrder.some(order =>
+      order > mocks.switchToFrame.mock.invocationCallOrder[0] && order < mocks.switchToFrame.mock.invocationCallOrder[1])).toBe(true);
+  });
+
+  it('gives each attempt only the remaining deadline', async () => {
+    mocks.switchToFrame.mockRejectedValueOnce(new error.StaleElementReferenceError());
+    vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1000).mockReturnValue(1100);
+    await new Dashboard().markdownPreviewHeadings();
+    expect(mocks.switchToFrame.mock.calls).toEqual([[60_000], [59_900]]);
+  });
+
+  it('does not retry unexpected driver failures', async () => {
+    const failure = new Error('Driver session disconnected');
+    mocks.switchToFrame.mockRejectedValueOnce(failure);
+    await expect(new Dashboard().markdownPreviewHeadings()).rejects.toBe(failure);
+    expect(mocks.switchToFrame).toHaveBeenCalledTimes(1);
+    expect(mocks.defaultContent).toHaveBeenCalled();
   });
 });
 
