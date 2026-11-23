@@ -219,3 +219,24 @@ it('reports reading progress inside a large CLI session on a cached load', async
   expect(reading[0].pct).toBe(26);
   for (let i = 1; i < progress.length; i++) expect(progress[i].pct).toBeGreaterThanOrEqual(progress[i - 1].pct);
 });
+
+it('shows a workspace opened in the home folder as "~" while reading and when it has no sessions', async () => {
+  vi.mocked(scanVsCodeDirs).mockReturnValue({
+    entries: [{ logsDir: '/logs/vscode', dirEntries: [dirEntry('ws-home')] }],
+    totalDirs: 1,
+  });
+  vi.mocked(processWorkspaceEntryAsync).mockImplementation((...args: Parameters<typeof processWorkspaceEntryAsync>) => {
+    const [, wsId, , ctx, onWorkspaceProgress] = args;
+    // The parser resolves only the folder name, which for the home folder is the user name.
+    const name = path.basename(os.homedir());
+    ctx.workspaceRoots?.set(wsId, os.homedir());
+    onWorkspaceProgress?.({ wsName: name, rootPath: os.homedir(), detail: 'chat 1/1', completed: 1, total: 1 });
+    return Promise.resolve(name);
+  });
+  const progress: ProgressUpdate[] = [];
+
+  await parseAllLogsAsyncDetailed(['/logs/vscode'], update => { progress.push({ ...update }); });
+
+  const items = progress.filter(update => update.item).map(update => `${update.item!.status} ${update.item!.folder} ${update.item!.path}`);
+  expect(items).toEqual(['reading ~ ~', 'parsed ~ ~']);
+});
