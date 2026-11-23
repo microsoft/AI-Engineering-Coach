@@ -221,8 +221,10 @@ function onDataReady(currentWorkspace: string, skipped?: { skippedFiles: number;
   // A slow load shows a short "ready" summary first; a cache hit goes straight to the page.
   const holdMs = showLoadingReady();
   const holdDone = new Promise<void>(resolve => window.setTimeout(resolve, holdMs));
-  // Badge counts don't wait for the summary to leave: the data is ready now.
+  // Badge counts and the sidebar don't wait for the summary to leave: the data is ready now.
+  // The sidebar animates its width, so it must settle before a page draws its charts.
   refreshNavBadges(currentFilter);
+  setShellLoadingMode(false);
   void rpc<{ id: string; name: string; recent?: boolean; harnesses?: string[] }[]>('getWorkspaces').then((wss) => {
     wsOptions = wss;
     for (const ws of wss) {
@@ -246,7 +248,6 @@ function onDataReady(currentWorkspace: string, skipped?: { skippedFiles: number;
   void Promise.allSettled([refreshGitHubAppSnapshot(), loadCapabilities(), holdDone]).then(async () => {
     if (holdMs > 0) await leaveLoadingScreen();
     disposeLoadingScreen();
-    setShellLoadingMode(false);
     navigateTo(currentPage);
     if (holdMs > 0) document.getElementById('content')?.classList.add('content-enter');
     maybeShowSkippedBanner();

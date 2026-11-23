@@ -206,6 +206,15 @@ test.describe('loading screen redesign', () => {
     await expect(page.locator('#load-index')).toHaveAttribute('data-state', 'ready');
     await expect(page.locator('#badge-sessions')).not.toHaveText('');
   });
+  test('shows the sidebar as soon as data is ready, so pages never render mid-resize', async ({ page }) => {
+    await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
+    await expect(page.locator('#app')).toHaveClass(/loading-mode/);
+    const stillLoading = await page.evaluate(() => {
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'dataReady' } }));
+      return document.getElementById('app')!.classList.contains('loading-mode');
+    });
+    expect(stillLoading).toBe(false);
+  });
   test('keeps the hidden sidebar out of the tab order while loading', async ({ page }) => {
     await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
     await expect(page.locator('#sidebar')).toBeHidden();
