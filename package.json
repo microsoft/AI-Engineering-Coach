@@ -351,7 +351,7 @@
     "lint-staged": "17.4.1",
     "lockfile-lint": "5.0.1",
     "mocha": "12.0.3",
-    "preact-render-to-string": "6.7.0",
+    "preact-render-to-string": "6.8.3",
     "serve": "14.2.8",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
@@ -359,12 +359,12 @@
     "vscode-extension-tester": "8.28.1"
   },
   "dependencies": {
-    "chart.js": "4.5.1",
+    "chart.js": "4.6.1",
     "chartjs-chart-treemap": "4.2.2",
-    "compromise": "14.18.0",
+    "compromise": "14.20.0",
     "htm": "3.1.1",
     "leo-profanity": "1.9.0",
-    "preact": "11.0.1",
+    "preact": "11.2.0",
     "zod": "4.6.7"
   },
   "overrides": {
