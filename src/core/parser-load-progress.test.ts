@@ -168,3 +168,27 @@ it('never puts the home folder in progress sent during a cold parse', async () =
   })]);
   expect(progress.find(update => update.item?.status === 'reading')?.detail).toBe(`workspace 1/1: ${path.join('~', 'source', 'my-api')} — chat 1/1`);
 });
+
+it('uses the source index for the folder of VS Code chat sessions, so same-named folders stay distinct', async () => {
+  vi.mocked(scanVsCodeDirs).mockReturnValue({
+    entries: [{ logsDir: '/logs/vscode', dirEntries: [dirEntry('ws-a'), dirEntry('ws-b')] }],
+    totalDirs: 2,
+  });
+  vi.mocked(processWorkspaceEntryAsync).mockImplementation((...args: Parameters<typeof processWorkspaceEntryAsync>) => {
+    const [, wsId, , ctx] = args;
+    // Chat sessions keep their root in the source index, not on the session, and the parser
+    // resolves only the folder name.
+    ctx.sessions.push(makeSession({ sessionId: wsId }));
+    ctx.sessionSourceIndex.set(wsId, {
+      kind: 'vscode-session-file', filePath: `/logs/vscode/${wsId}/chat.json`, workspaceId: wsId, workspaceName: 'api', harness: 'VS Code',
+      workspaceRootPath: path.join(os.homedir(), wsId === 'ws-a' ? 'team-a' : 'team-b', 'api'),
+    });
+    return Promise.resolve('api');
+  });
+  const progress: ProgressUpdate[] = [];
+
+  await parseAllLogsAsyncDetailed(['/logs/vscode'], update => { progress.push({ ...update }); });
+
+  const done = progress.filter(update => update.item && update.item.status !== 'reading').map(update => update.item!.path);
+  expect(done).toEqual([path.join('~', 'team-a', 'api'), path.join('~', 'team-b', 'api')]);
+});

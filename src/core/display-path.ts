@@ -30,7 +30,8 @@ function escapeRegExp(s: string): string {
  *  inside `/home/anna`. */
 function homePattern(home: string): RegExp | null {
   const trimmed = normalizeSeparators(home).replace(/\/+$/, '');
-  if (trimmed.length < 2) return null;
+  // An empty, root or bare-drive home would match every path on the disk.
+  if (trimmed.length < 2 || /^[A-Za-z]:$/.test(trimmed)) return null;
   const parts = trimmed.split('/').map(escapeRegExp);
   return new RegExp(`${parts.join('[\\\\/]')}(?=[\\\\/]|$|[\\s'"),;:])`, 'gi');
 }

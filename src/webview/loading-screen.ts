@@ -188,7 +188,8 @@ export function recordLoadingProgress(msg: LoadingProgress, now = Date.now()): v
   if (shown.phase >= 0) s.phases.enter(shown.phase, now);
   for (const f of STAT_FIELDS) {
     const v = msg[f.key];
-    if (typeof v === 'number' && v > 0) s.totals[f.key] = v;
+    // A reported 0 is a real count; omitted counters stay unknown (shown as a dash).
+    if (typeof v === 'number' && v >= 0) s.totals[f.key] = v;
   }
   if (msg.telemetry) s.telemetry = msg.telemetry;
   if (msg.item) {

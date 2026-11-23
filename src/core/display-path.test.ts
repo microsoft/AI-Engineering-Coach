@@ -42,9 +42,11 @@ describe('redactHomePaths', () => {
     expect(redactHomePaths('/home/devops/x and /home/dev/y', '/home/dev')).toBe('/home/devops/x and ~/y');
   });
 
-  it('ignores an empty or root home', () => {
+  it('ignores an empty, root or bare-drive home', () => {
     expect(redactHomePaths('/a/b', '/')).toBe('/a/b');
     expect(redactHomePaths('', '/home/dev')).toBe('');
+    expect(redactHomePaths('C:\\work\\api', 'C:\\')).toBe('C:\\work\\api');
+    expect(shortenHomePath('C:\\work\\api', 'C:')).toBe('C:\\work\\api');
   });
 });
 

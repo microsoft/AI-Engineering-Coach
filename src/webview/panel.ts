@@ -14,6 +14,7 @@ import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
+import { createProgressThrottle } from './panel-progress-throttle';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
 import { isCopilotModelAvailable } from './panel-llm-model';
@@ -155,10 +156,7 @@ export class DashboardPanel {
     runtimeDebug('panel', 'loadData-start');
     const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-    // Throttle progress messages to the webview: at most once per 250ms.
-    let lastProgressTime = 0;
-    let pendingProgress: Parameters<typeof sendRaw>[0] | undefined;
-    let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
+    // Throttle progress messages to the webview: at most once per 250ms, structural ones at once.
     const sendRaw = (progress: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string }) => {
       if (this.disposed) return;
       this.lastProgress = progress;
@@ -168,36 +166,13 @@ export class DashboardPanel {
         // Webview may have been disposed between the flag check and the call.
       }
     };
+    const throttle = createProgressThrottle(sendRaw);
     const sendProgress = (progress: Parameters<typeof sendRaw>[0]) => {
       if (this.disposed) {
-        clearTimeout(progressFlushTimer);
+        throttle.dispose();
         return;
       }
-      const now = Date.now();
-      // Always send immediately for phase changes, workspace grid updates, and the final "Ready".
-      if (progress.phase !== pendingProgress?.phase || progress.workspacePlan || progress.workspaceDone || progress.pct >= 100) {
-        clearTimeout(progressFlushTimer);
-        progressFlushTimer = undefined;
-        sendRaw(progress);
-        lastProgressTime = now;
-        pendingProgress = progress;
-        return;
-      }
-      pendingProgress = progress;
-      if (now - lastProgressTime >= 250) {
-        clearTimeout(progressFlushTimer);
-        progressFlushTimer = undefined;
-        sendRaw(progress);
-        lastProgressTime = now;
-      } else if (!progressFlushTimer) {
-        progressFlushTimer = setTimeout(() => {
-          progressFlushTimer = undefined;
-          if (pendingProgress && !this.disposed) {
-            sendRaw(pendingProgress);
-            lastProgressTime = Date.now();
-          }
-        }, 250 - (now - lastProgressTime));
-      }
+      throttle.push(progress);
     };
 
     const safePost = (msg: Record<string, unknown>) => {
@@ -308,7 +283,7 @@ export class DashboardPanel {
         try { this.panel.webview.html = getErrorHtml(error instanceof Error ? error.message : 'Failed to load data'); } catch { /* disposed */ }
       }
     } finally {
-      clearTimeout(progressFlushTimer);
+      throttle.dispose();
       this.loading = false;
       this.loadCompletedAt = Date.now();
     }

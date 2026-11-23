@@ -338,11 +338,17 @@ function volatilePlanKeys(plan: VolatilePlan, startOrder: number): string[] {
   return plan.items.map((item, i) => makeWorkspaceProgressKey(item.workspaceKey, item.name, startOrder + i));
 }
 
-/** The path to show for a processed entry: the project folder of the sessions it added, else
- *  the name the parser resolved. */
-function entryDisplaySource(sessions: import('./types').Session[], before: number, wsName: string): string {
-  for (let i = before; i < sessions.length; i++) {
-    const root = sessions[i].workspaceRootPath;
+/** The path to show for a processed entry: the project folder of the sessions it added (CLI
+ *  sessions carry it; VS Code chat sessions keep it in the source index), else the name the
+ *  parser resolved. */
+function entryDisplaySource(
+  parsed: { sessions: import('./types').Session[]; sessionSourceIndex: Map<string, SessionSource> },
+  before: number,
+  wsName: string,
+): string {
+  for (let i = before; i < parsed.sessions.length; i++) {
+    const session = parsed.sessions[i];
+    const root = session.workspaceRootPath ?? parsed.sessionSourceIndex.get(session.sessionId)?.workspaceRootPath;
     if (root) return root;
   }
   return wsName;
@@ -381,7 +387,7 @@ async function collectVolatileHarnesses(
     const wsName = await processWorkspaceEntryAsync(logsDir, name, harness, ctx);
     for (let s = before; s < result.sessions.length; s++) running.add(result.sessions[s]);
     if (onProgress) {
-      const item = loadItem('cli-session', { index: i + 1, total }, entryDisplaySource(result.sessions, before, wsName || name), {
+      const item = loadItem('cli-session', { index: i + 1, total }, entryDisplaySource(result, before, wsName || name), {
         ms: Date.now() - start,
         sessions: result.sessions.length - before,
         skipped: getParseWarningCounts().skippedFiles > skippedBefore,
@@ -654,7 +660,7 @@ async function processWorkspaces(
           {
             processed,
             totalDirs,
-            displaySource: entryDisplaySource(ctx.sessions, before, lastWsName),
+            displaySource: entryDisplaySource(ctx, before, lastWsName),
             elapsed,
             sessions: ctx.sessions.length,
             added: ctx.sessions.length - before,
@@ -865,7 +871,7 @@ export async function parseAllLogsAsyncDetailed(
       const skippedBefore = getParseWarningCounts().skippedFiles;
       const wsName = await processWorkspaceEntryAsync(logsDir, wsId, harness, { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex, aiLoc: 0 });
       done++;
-      const item = loadItem('workspace', { index: done, total: stalePaths.length }, entryDisplaySource(freshSessions, before, wsName || wsId), {
+      const item = loadItem('workspace', { index: done, total: stalePaths.length }, entryDisplaySource({ sessions: freshSessions, sessionSourceIndex: freshSessionSourceIndex }, before, wsName || wsId), {
         ms: Date.now() - start,
         sessions: freshSessions.length - before,
         skipped: getParseWarningCounts().skippedFiles > skippedBefore,

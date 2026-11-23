@@ -106,6 +106,18 @@ describe('status card', () => {
     expect(document.getElementById('loading-step-2')!.dataset.state).toBe('done');
     expect(document.getElementById('loading-step-3')!.dataset.state).toBe('active');
   });
+});
+
+describe('status card counters and timing', () => {
+  it('shows a reported zero as 0 and keeps "—" for counters never reported', () => {
+    mountLoadingScreen(content, memoryStore(), 0);
+    recordLoadingProgress({ phase: 2, pct: 40, sessions: 3, toolCalls: 7 }, 100);
+    recordLoadingProgress({ phase: 3, pct: 85, sessions: 3, requests: 4, toolCalls: 0, linesOfCode: 0 }, 200);
+    renderLoadingScreen(200);
+    expect(text('loading-stat-tools')).toBe('0');
+    expect(text('loading-stat-loc')).toBe('0');
+    expect(text('loading-stat-files')).toBe('\u2014');
+  });
 
   it('shows the health chip with heap use and skipped files at the warn threshold', () => {
     mountLoadingScreen(content, memoryStore(), 0);
