@@ -119,7 +119,8 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   state.textFocusEnd = null;
   scrollToText = false;
   closePicker();
-  state.showText ??= (vscode.getState() as Record<string, unknown> | null)?.[SHOW_TEXT_KEY] !== false;
+  // Off until you turn it on: then your choice is kept for the panel.
+  state.showText ??= (vscode.getState() as Record<string, unknown> | null)?.[SHOW_TEXT_KEY] === true;
   rootEl = root;
   root.replaceChildren();
   applyNavHint(consumeNavHint() ?? firstLoadLink(), loaded.prepared);

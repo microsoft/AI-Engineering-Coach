@@ -16,6 +16,9 @@ async function openTimeline(page: Page): Promise<void> {
 const kpi = (page: Page, label: string) => page.locator('#tlxKpis .ctx-comp-kpi')
   .filter({ has: page.locator('.ctx-comp-kpi-label', { hasText: new RegExp(`^${label}$`, 'i') }) }).locator('.ctx-comp-kpi-value');
 
+/** Turns on Show prompts and questions in the open lane's details: it starts off. */
+const showText = (page: Page) => page.locator('#tlxShowText').check();
+
 test.describe('Timeline', () => {
   test.beforeEach(async ({ page }) => {
     await openTimeline(page);
@@ -98,7 +101,10 @@ test.describe('Timeline', () => {
   test('shows the prompts and questions behind a lane, hides them when masked, and jumps to a wait', async ({ page }) => {
     const text = page.locator('#tlxText');
     await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
-    await expect(page.locator('#tlxShowText')).toBeChecked();
+    // Off until you turn it on: nothing is read before that.
+    await expect(page.locator('#tlxShowText')).not.toBeChecked();
+    await expect(text.locator('.tx-list')).toHaveCount(0);
+    await showText(page);
     await expect(text).toContainText('2 prompts this day, read again from the session’s log on this machine');
     await expect(text.locator('[data-text-at^="t:"] > .tx-body')).toHaveText(['Why is the checkout test flaky?', 'Fix it with a fake clock.']);
     await expect(text.locator('[data-text-at^="i:"]')).toContainText('Waited 35 min for your next prompt');
@@ -155,6 +161,7 @@ test.describe('Timeline', () => {
     const question = page.locator('.tlx-lane[data-session="tl-notes"] .wait');
     await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
     await page.locator('.tlx-lane[data-session="tl-log"] .tlx-lbl').click();
+    await showText(page);
     await question.click();
     await expect(page.locator('#tlxDetailName')).toHaveText('Release notes');
     const focus = text.locator('.tx-item.focus');
@@ -196,6 +203,8 @@ test.describe('Timeline', () => {
       });
     });
     await page.locator('.tlx-strip-bars [data-day="2026-05-02"]').click();
+    await page.locator('.tlx-lane[data-session="tl-notes"] .tlx-lbl').click();
+    await showText(page);
     await page.locator('.tlx-lane[data-session="tl-notes"] .wait').click();
     const focus = page.locator('#tlxText .tx-item.focus');
     await expect(focus).toHaveCount(1);
@@ -208,6 +217,7 @@ test.describe('Timeline', () => {
       (window as unknown as { mockTimelineTextHook?: () => unknown }).mockTimelineTextHook = () => (calls++ === 0 ? { superseded: true } : undefined);
     });
     await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await showText(page);
     await expect(page.locator('#tlxText [data-text-at^="t:"] > .tx-body').first()).toHaveText('Why is the checkout test flaky?');
   });
 
@@ -218,6 +228,7 @@ test.describe('Timeline', () => {
       });
     });
     await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await showText(page);
     const turn = page.locator('#tlxText [data-text-at^="t:"]').first();
     await expect(turn).toContainText('The message that started it isn’t shown: it is a summary or a harness message, not an instruction.');
     await expect(turn).toContainText('The background build finished green.');
@@ -230,6 +241,7 @@ test.describe('Timeline', () => {
       });
     });
     await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await showText(page);
     await expect(page.locator('#tlxText [data-text-at^="i:"]')).toContainText('It followed a compaction, whose summary isn’t shown.');
   });
 
@@ -242,6 +254,7 @@ test.describe('Timeline', () => {
       w.mockTimelineTextHook = id => gate.then(() => ({ sessionId: id, waits: [], turns: [{ t: new Date(2026, 4, 3, 14).getTime(), k: 'you', prompt: 'Stale prompt' }] }));
     });
     await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await showText(page);
     await expect(page.locator('#tlxText')).toContainText('Reading this session’s log');
     // The Timeline reloads while that read is pending, and reads the lane again.
     await page.evaluate(() => { (window as unknown as HookWindow).mockTimelineTextHook = undefined; });
