@@ -15,11 +15,15 @@
  * type=event_msg:       payload.type = user_message|agent_reasoning|function_call|function_call_output|
  *                                      task_started|task_complete|token_count|turn_aborted|error|assistant_message
  * type=response_item:   payload.role, payload.content[]
+ * type=compacted:       a compaction (also a `compaction` response item, a `context_compacted` event or a
+ *                       `ContextCompaction` item; see `agent-compaction.ts`)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { ModelUsage, Session, SessionRequest } from './types';
+import { CompactionEvent, ModelUsage, Session, SessionRequest } from './types';
+import { codexCompaction, requestCompactionFields } from './agent-compaction';
+import { addTurnCompaction } from './cli-compaction';
 import { assertTrustedPath, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, extractSkillPathsFromText } from './parser-shared';
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
@@ -98,9 +102,11 @@ interface CodexParseState {
   turnModel: string;
   turnEffort: 'max' | 'high' | 'medium' | 'low' | null;
   turnStartTs: number | null;
-  /** Latest line of the turn that the agent or harness logged (not the next prompt): where the turn's work ended. */
+  /** Where the turn's work ended (`recordCodexTurnEnd`); later lines until the next prompt are idle time. */
   turnEndTs: number | null;
-  /** The turn logged its completion (`task_complete`) or abort (`turn_aborted`): `turnEndTs` is final. */
+  /** The turn logged its completion (`task_complete`) or abort (`turn_aborted`). */
+  turnCompleted: boolean;
+  /** A task started after the turn completed: nothing more belongs to this turn. */
   turnEnded: boolean;
   turnCanceled: boolean;
   answerEvidence: 'final' | 'legacy' | 'missing';
@@ -138,6 +144,18 @@ interface CodexParseState {
   fork: CodexForkUsage;
   /** The latest snapshot's `total_tokens`, to tell a new model call from a repeated snapshot. */
   lastSnapshotTotal: number | null;
+  /** Compactions logged during the current turn, in order. */
+  turnCompactions: CompactionEvent[];
+  /** Prompt tokens and `model_context_window` of the session's latest main-agent call; 0 and `null` before one. */
+  lastPromptTokens: number;
+  lastContextWindow: number | null;
+  /** A compaction was recorded since the latest model call: Codex logs one compaction in several records. */
+  compactionOpen: boolean;
+  /** The current task has a user message or model work; `null` before any task event (older Codex). A manual
+   *  compact runs as a task of its own with no prompt and no other work; any other compaction is automatic. */
+  taskActive: boolean | null;
+  /** A compaction recorded as manual in the current task, until a prompt or model work shows it was automatic. */
+  tentativeManual: CompactionEvent | null;
 }
 
 interface PendingCodexEdit {
@@ -198,6 +216,18 @@ function projectNameFromCwd(cwd: string): string {
   return cwd.replaceAll('\\', '/').replace(/\/+$/, '').split('/').pop() || 'unknown';
 }
 
+/** Turn IDs and fork usage, before any line is read. */
+function newCodexForkState(): Pick<CodexParseState, 'forked' | 'inherited' | 'turnId' | 'nextTurnId' | 'fork' | 'lastSnapshotTotal'> {
+  return {
+    forked: false,
+    inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
+    turnId: '',
+    nextTurnId: '',
+    fork: new CodexForkUsage(),
+    lastSnapshotTotal: null,
+  };
+}
+
 function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): CodexParseState {
   return {
     requests: [],
@@ -221,6 +251,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     turnEffort: null,
     turnStartTs: null,
     turnEndTs: null,
+    turnCompleted: false,
     turnEnded: false,
     turnCanceled: false,
     answerEvidence: 'missing',
@@ -238,12 +269,13 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     editLocIndex,
     pendingToolEdits: new Map(),
     curTotalCachedReported: false,
-    forked: false,
-    inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
-    turnId: '',
-    nextTurnId: '',
-    fork: new CodexForkUsage(),
-    lastSnapshotTotal: null,
+    ...newCodexForkState(),
+    turnCompactions: [],
+    lastPromptTokens: 0,
+    lastContextWindow: null,
+    compactionOpen: false,
+    taskActive: null,
+    tentativeManual: null,
   };
 }
 
@@ -358,6 +390,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
     ...(contextUsage ? { contextUsage } : {}),
+    ...requestCompactionFields(state.turnCompactions),
   }));
   mergeRequestEditLoc(state.editLocIndex, requestId, state.currentEditLocs);
   noteForkTurn(state);
@@ -424,9 +457,11 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
   state.turnEndTs = null;
+  state.turnCompleted = false;
   state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
+  state.turnCompactions = [];
   state.currentEditLocs = new Map();
   state.answerEvidence = 'missing';
   state.turnId = state.nextTurnId;
@@ -559,6 +594,8 @@ function prepareCodexUserTurn(
   recordType: 'event' | 'response',
   imageCount: number,
 ): void {
+  // Before the flush: a compaction earlier in this task belongs to the turn being flushed.
+  noteTaskActivity(state);
   const hasTurn = state.currentUserMessage.length > 0 || state.currentImageCount > 0;
   const hasImages = imageCount > 0 || state.currentImageCount > 0;
   const mirror = recordType === 'event'
@@ -659,8 +696,17 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   state.hasTokenData = true;
 
   const lastInput = tokenCount(last?.input_tokens);
-  if (newCall && lastInput != null) {
-    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: tokenCount(info?.model_context_window), model: state.turnModel || undefined });
+  if (newCall && lastInput != null) noteMainCall(state, lastInput, tokenCount(info?.model_context_window));
+}
+
+/** A new main-agent model call, with its prompt tokens and context window. */
+function noteMainCall(state: CodexParseState, lastInput: number, window: number | null): void {
+  state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
+  // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
+  if (lastInput > 0) {
+    state.lastPromptTokens = lastInput;
+    state.lastContextWindow = window;
+    state.compactionOpen = false;
   }
 }
 
@@ -676,6 +722,48 @@ function handleTokenUsageRecord(payload: Record<string, unknown>, state: CodexPa
   if (!state.forked) return;
   if (typeof usage.cached_input_tokens === 'number') state.curTotalCachedReported = true;
   state.fork.noteRecord(payload, turnKey(state));
+}
+
+/** Response items that are the agent's work: reasoning or a tool call. Logged after the task completed, they extend the turn. */
+const CODEX_WORK_ITEMS: ReadonlySet<string> = new Set(['reasoning', 'function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call']);
+
+function isCompactionEvent(eventType: string, payload: Record<string, unknown>): boolean {
+  return eventType === 'context_compacted' || (eventType === 'item_completed' && recordValue(payload.item)?.type === 'ContextCompaction');
+}
+
+/** Record a compaction once, however many records Codex logs for it. One before any model call of the file is
+ *  history a forked thread inherited, not a compaction of this session. */
+function recordCodexCompaction(state: CodexParseState): void {
+  if (state.compactionOpen || state.lastPromptTokens <= 0) return;
+  state.compactionOpen = true;
+  const trigger = state.taskActive === null ? undefined : state.taskActive ? 'auto' : 'manual';
+  const compaction = codexCompaction(state.lastPromptTokens, state.lastContextWindow, trigger);
+  if (trigger === 'manual') state.tentativeManual = compaction;
+  addTurnCompaction(state.turnCompactions, compaction);
+}
+
+/** A user message or model work in the current task: a compaction in it is automatic, also one logged before. */
+function noteTaskActivity(state: CodexParseState): void {
+  if (state.taskActive === false) state.taskActive = true;
+  if (state.tentativeManual) state.tentativeManual.trigger = 'auto';
+  state.tentativeManual = null;
+}
+
+const CODEX_WORK_EVENTS: ReadonlySet<string> = new Set(['agent_message', 'assistant_message', 'agent_reasoning', 'function_call']);
+
+/** Model work: an assistant message, reasoning or a tool call (not token counts or compaction records). */
+function isCodexModelWork(line: CodexLine): boolean {
+  const payload = line.payload ?? {};
+  const type = stringValue(payload.type);
+  if (line.type === 'event_msg') return CODEX_WORK_EVENTS.has(type);
+  if (line.type !== 'response_item') return false;
+  return (payload.role === 'assistant' && type === 'message') || CODEX_WORK_ITEMS.has(type);
+}
+
+/** A task starts or ends: a manual compaction in the previous task stays manual. */
+function onCodexTaskBoundary(state: CodexParseState, starts: boolean): void {
+  state.tentativeManual = null;
+  if (starts) state.taskActive = false;
 }
 
 function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState, ts: number | null, defaultModel: string): void {
@@ -700,6 +788,11 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     handleTokenCount(payload, state);
     return;
   }
+  if (isCompactionEvent(eventType, payload)) {
+    recordCodexCompaction(state);
+    return;
+  }
+  if (eventType === 'task_started' || eventType === 'task_complete' || eventType === 'turn_aborted') onCodexTaskBoundary(state, eventType === 'task_started');
   if (eventType === 'function_call_output' || eventType === 'custom_tool_call_output') {
     handleCodexToolOutput(payload, state);
     return;
@@ -782,7 +875,8 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
     handleAssistantResponseItem(payload, state);
     return;
   }
-  if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
+  if (itemType === 'compaction' || itemType === 'compaction_summary') recordCodexCompaction(state);
+  else if (itemType === 'function_call') handleFunctionCallResponseItem(payload, state);
   else if (itemType === 'custom_tool_call') handleCustomToolCallResponseItem(payload, state);
   else if (itemType === 'function_call_output' || itemType === 'custom_tool_call_output') {
     handleCodexToolOutput(payload, state);
@@ -814,6 +908,7 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
     handleCodexImageLine(line, state, meta, state.imageScan);
     return;
   }
+  if (isCodexModelWork(line)) noteTaskActivity(state);
 
   if (line.type === 'event_msg') {
     handleEventMsg(line.payload || {}, state, ts, meta.model);
@@ -823,20 +918,30 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
     handleResponseItem(line.payload || {}, state, ts, meta.model);
   } else if (line.type === 'token_usage_record') {
     handleTokenUsageRecord(line.payload || {}, state, meta.sessionId);
+  } else if (line.type === 'compacted') {
+    recordCodexCompaction(state);
   }
-  recordTurnEnd(line, state, ts);
+  recordCodexTurnEnd(line, state, ts);
 }
 
 /** Lines that set up the next turn rather than doing work in this one. */
 const CODEX_SETUP_EVENTS = new Set(['user_message', 'task_started', 'thread_settings_applied']);
 
-/** Move the turn's end to the line if it is turn work. A turn that logged its completion or abort ends there: later
- *  lines (the next turn's start, settings or context) belong to the next turn. */
-function recordTurnEnd(line: CodexLine, state: CodexParseState, ts: number | null): void {
-  if (!ts || state.turnEnded || !isTurnWork(line)) return;
-  if (!state.turnEndTs || ts > state.turnEndTs) state.turnEndTs = ts;
+/**
+ * Where the turn's work ended; time from there to the next prompt is the user's, not the agent's. Until the turn
+ * completes, it ends at its latest work line, so a turn without a `task_complete` (older Codex) still doesn't run to the
+ * next prompt. A `task_complete` or `turn_aborted` completes it; after that only model work Codex logs late extends it,
+ * and a task that starts (a manual `/compact`, the next turn) closes it. A line before the prompt, stamped before it, or
+ * unreadable is ignored.
+ */
+function recordCodexTurnEnd(line: CodexLine, state: CodexParseState, ts: number | null): void {
   const type = line.type === 'event_msg' ? stringValue(line.payload?.type) : '';
-  if (type === 'task_complete' || type === 'turn_aborted') state.turnEnded = true;
+  if (type === 'task_started' && state.turnCompleted) state.turnEnded = true;
+  if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
+  const ends = type === 'task_complete' || type === 'turn_aborted';
+  if (state.turnCompleted ? !isCodexModelWork(line) : !ends && !isTurnWork(line)) return;
+  if (state.turnEndTs === null || ts > state.turnEndTs) state.turnEndTs = ts;
+  if (ends) state.turnCompleted = true;
 }
 
 /** A line the agent or harness logged while working on the turn: not a prompt, and not the next turn's settings or

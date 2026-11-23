@@ -18,11 +18,13 @@ jobs:
     name: ${{ matrix.os }} / VS Code ${{ matrix.version || 'minimum' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # Insiders is an early warning: its failures show on the cell without failing the run.
+    continue-on-error: ${{ matrix.version == 'insiders' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        version: ['', latest]
+        version: ['', latest, insiders]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
