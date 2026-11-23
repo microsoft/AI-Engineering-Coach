@@ -88,7 +88,9 @@ function isSessionSourceRequest(value: object): value is SessionSourceRequest {
     && (source.workspaceRootPath === undefined || typeof source.workspaceRootPath === 'string')
     && ['vscode-session-file', 'cli-events', 'claude-jsonl', 'codex-jsonl', 'opencode-storage', 'opencode-db', 'xcode-db'].includes(source.kind)
     && (source.additionalFilePaths === undefined || (Array.isArray(source.additionalFilePaths)
-      && source.additionalFilePaths.every(file => typeof file === 'string')));
+      && source.additionalFilePaths.every(file => typeof file === 'string')))
+    && (source.droppedUserEventIds === undefined || (Array.isArray(source.droppedUserEventIds)
+      && source.droppedUserEventIds.every(id => typeof id === 'string')));
 }
 
 function onMessage(handler: (msg: ParseWorkerRequest) => void | Promise<void>): void {

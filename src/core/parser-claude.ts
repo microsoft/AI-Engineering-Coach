@@ -729,12 +729,212 @@ function workspaceNameFromCwd(cwds: (string | undefined)[], dirName: string): st
   return undefined;
 }
 
+/**
+ * What to leave out across project folders. A transcript can be hard-linked into a second project folder, and a fork,
+ * or a copy of a session in another project folder, replays earlier turns with the same `uuid`; each is counted once.
+ */
+interface ClaudeDiscovery {
+  /** Top-level transcripts to skip: hard links of one parsed from another project folder. */
+  skipFiles: Set<string>;
+  /** `subagents/` folders beside skipped transcripts, by the project folder and session id they merge into. */
+  extraSubagentDirs: Map<string, string[]>;
+  /** Each parsed top-level transcript's place when all of them are ordered by when they started, oldest first. */
+  transcriptRanks: Map<string, number>;
+  /** The rank of each parsed session's transcript, filled in while parsing. Sub-agent turns take their parent's. */
+  sessionRanks: Map<Session, number>;
+  /** The source each parsed session was given. Sessions in two folders can share an id, and so an index entry. */
+  sessionSources: Map<Session, SessionSource>;
+}
+
+type ClaudeProjectResult = { sessions: Session[]; workspaceId: string; workspaceName: string };
+
+/** Sorts after any real birth time, in nanoseconds since 1970. */
+const UNKNOWN_BIRTH = 2n ** 63n;
+
+function discoveryKey(dirName: string, sessionName: string): string {
+  return `${dirName}\0${sessionName}`;
+}
+
+/** Hands a transcript's first 200 lines to `onLine` until it returns true, whatever the file's size. A line over
+ *  MAX_FILE_SIZE is left out but counts towards the 200, and a file that can't be read is left to the parse. */
+function readClaudeHead(filePath: string, onLine: (raw: string) => boolean): void {
+  let read = 0;
+  let done = false;
+  try {
+    forEachJsonlLine(filePath, raw => {
+      read++;
+      done = onLine(raw);
+    }, () => done || read >= 200, { maxChars: MAX_FILE_SIZE, onSkip: () => { read++; } });
+  } catch {
+    // Left to parseClaudeSessionFile, which reads the file again.
+  }
+}
+
+/** The first `cwd` a transcript records. */
+function readClaudeCwd(filePath: string): string | undefined {
+  let cwd: string | undefined;
+  readClaudeHead(filePath, raw => {
+    if (raw.includes('"cwd"')) cwd = parseClaudeLine(raw)?.cwd || undefined;
+    return cwd !== undefined;
+  });
+  return cwd;
+}
+
+/**
+ * Finds transcripts that are one file under two project folders (the same device and inode). The copy in the folder
+ * Claude Code would use for the transcript's working folder is parsed, or the first by folder name; the others are
+ * skipped, and their `subagents/` folders merge into the parsed copy's session. The stat is read as `bigint`, because
+ * Windows file IDs can be too large for a number to tell apart, and a file with one link is not a hard link.
+ */
+function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
+  const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map(), sessionSources: new Map() };
+  const transcripts: { filePath: string; birth: bigint }[] = [];
+  const byFile = new Map<string, { dirName: string; filePath: string }[]>();
+  for (const dirName of [...dirNames].sort()) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(projectsDir, dirName), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      const filePath = path.join(projectsDir, dirName, entry.name);
+      let stat: fs.BigIntStats;
+      let key: string;
+      try {
+        stat = fs.statSync(filePath, { bigint: true });
+        // A file system that doesn't record birth times reports 0: order those files after the rest. Where statx isn't
+        // available, libuv reports the change time instead, which moves on append; it only decides equal starts.
+        transcripts.push({ filePath, birth: stat.birthtimeNs || UNKNOWN_BIRTH });
+        if (stat.nlink < 2n) continue;
+        key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
+      } catch {
+        continue;
+      }
+      const copies = byFile.get(key) ?? [];
+      copies.push({ dirName, filePath });
+      byFile.set(key, copies);
+    }
+  }
+  for (const copies of byFile.values()) {
+    if (copies.length < 2) continue;
+    const cwd = readClaudeCwd(copies[0].filePath);
+    const kept = copies.find(copy => cwd !== undefined && cwdMatchesProjectDir(cwd, copy.dirName)) ?? copies[0];
+    for (const copy of copies) {
+      if (copy === kept) continue;
+      discovery.skipFiles.add(copy.filePath);
+      const sessionName = path.basename(copy.filePath, '.jsonl');
+      const key = discoveryKey(kept.dirName, sessionName);
+      const dirs = discovery.extraSubagentDirs.get(key) ?? [];
+      dirs.push(path.join(path.dirname(copy.filePath), sessionName, 'subagents'));
+      discovery.extraSubagentDirs.set(key, dirs);
+    }
+  }
+  // Oldest first, so a turn stays with the transcript it was typed in, whichever folder its copies are in. A copy's
+  // first line can carry the original's timestamp, so equal starts go by when the file was created, then by name.
+  const ordered = transcripts
+    .filter(({ filePath }) => !discovery.skipFiles.has(filePath))
+    .map(({ filePath, birth }) => ({ filePath, birth, start: transcriptStart(filePath) }))
+    .sort((a, b) => a.start - b.start || Number(a.birth - b.birth)
+      || path.basename(a.filePath).localeCompare(path.basename(b.filePath)) || a.filePath.localeCompare(b.filePath));
+  for (const [rank, { filePath }] of ordered.entries()) discovery.transcriptRanks.set(filePath, rank);
+  return discovery;
+}
+
+/** When a transcript was started: its first line's timestamp. A fork, or a copy of a session in another project
+ *  folder, replays older turns, but its own first line is normally written when it starts. */
+function transcriptStart(filePath: string): number {
+  let start = Number.POSITIVE_INFINITY;
+  readClaudeHead(filePath, raw => {
+    const ts = raw.includes('"timestamp"') ? parseClaudeLine(raw)?.timestamp : undefined;
+    if (ts) start = Date.parse(ts);
+    return Number.isFinite(start);
+  });
+  return Number.isFinite(start) ? start : Number.POSITIVE_INFINITY;
+}
+
+/** The earliest timestamp among the requests. */
+export function earliestRequestTime(requests: readonly SessionRequest[]): number | null {
+  let earliest: number | null = null;
+  for (const { timestamp } of requests) {
+    if (timestamp && (earliest === null || timestamp < earliest)) earliest = timestamp;
+  }
+  return earliest;
+}
+
+/**
+ * Keeps each user line in the session whose transcript started first, across every project folder, and leaves it out
+ * of the others: a fork, or a copy of a session in another project folder, replays earlier turns with the same `uuid`.
+ * A session left with no requests is dropped.
+ */
+function keepEachTurnOnce(
+  results: ClaudeProjectResult[],
+  discovery: ClaudeDiscovery,
+  sessionSourceIndex?: Map<string, SessionSource>,
+): ClaudeProjectResult[] {
+  const owners = new Map<string, { session: Session; request: SessionRequest; rank: number }>();
+  for (const { sessions } of results) {
+    for (const session of sessions) {
+      const rank = discovery.sessionRanks.get(session) ?? Number.MAX_SAFE_INTEGER;
+      for (const request of session.requests) {
+        if (!request.userEventId) continue;
+        const owner = owners.get(request.userEventId);
+        if (!owner || rank < owner.rank) owners.set(request.userEventId, { session, request, rank });
+      }
+    }
+  }
+  for (const result of results) {
+    result.sessions = result.sessions.filter(session => {
+      const source = discovery.sessionSources.get(session);
+      if (keepOwnedTurns(session, owners, source)) return true;
+      if (source && sessionSourceIndex?.get(session.sessionId) === source) sessionSourceIndex.delete(session.sessionId);
+      return false;
+    });
+  }
+  // A dropped session can have held the index entry of a kept session with the same id, such as a copied folder's.
+  for (const { sessions } of results) {
+    for (const session of sessions) {
+      const source = discovery.sessionSources.get(session);
+      if (source && !sessionSourceIndex?.has(session.sessionId)) sessionSourceIndex?.set(session.sessionId, source);
+    }
+  }
+  return results.filter(result => result.sessions.length > 0);
+}
+
+/** Leaves out a session's turns that another session owns, or that it repeats. A session that loses turns is dated
+ *  from its earliest kept turn, as `parseClaudeSessionFile` dates every session, and its source records the ids
+ *  another session owns, so its detail leaves them out too. Returns whether the session still has requests. */
+function keepOwnedTurns(
+  session: Session,
+  owners: Map<string, { session: Session; request: SessionRequest }>,
+  source?: SessionSource,
+): boolean {
+  const dropped: string[] = [];
+  const requests = session.requests.filter(request => {
+    const id = request.userEventId;
+    if (!id) return true;
+    const owner = owners.get(id);
+    if (!owner || owner.request === request) return true;
+    if (owner.session !== session) dropped.push(id);
+    return false;
+  });
+  if (requests.length === session.requests.length) return true;
+  session.requests = requests;
+  session.requestCount = requests.length;
+  if (requests.length === 0) return false;
+  session.creationDate = earliestRequestTime(requests) ?? session.creationDate;
+  if (source && dropped.length > 0) source.droppedUserEventIds = dropped;
+  return true;
+}
+
 function parseClaudeProjectSessions(
   projectsDir: string,
   dirName: string,
+  discovery: ClaudeDiscovery,
   editLocIndex?: EditLocIndex,
   sessionSourceIndex?: Map<string, SessionSource>,
-): { sessions: Session[]; workspaceId: string; workspaceName: string } | null {
+): ClaudeProjectResult | null {
   const projPath = path.join(projectsDir, dirName);
   const workspaceId = `claude-${dirName}`;
   let workspaceName = projectNameFromEncoded(dirName, projectsDir);
@@ -753,12 +953,18 @@ function parseClaudeProjectSessions(
   const sessions: Session[] = [];
   const sessionFiles = new Map<string, string[]>();
   const cwds: (string | undefined)[] = [];
+  const skippedSessions = new Set<string>();
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const filePath = path.join(projPath, entry.name);
+    if (discovery.skipFiles.has(filePath)) {
+      skippedSessions.add(path.basename(entry.name, '.jsonl'));
+      continue;
+    }
     const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
     cwds.push(session.workspaceRootPath);
+    discovery.sessionRanks.set(session, discovery.transcriptRanks.get(filePath) ?? Number.MAX_SAFE_INTEGER);
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
     sessionFiles.set(session.sessionId, [filePath]);
@@ -770,66 +976,79 @@ function parseClaudeProjectSessions(
   // session. Orphans (subagent dir whose parent session is missing) become
   // standalone programmatic sessions — they're still GHCP-spawned work.
   // Either way, every call in the file is sub-agent work, marked or not.
+  // The folders beside a skipped hard-linked transcript merge into its parsed copy instead.
+  const subagentDirs = new Map<string, string[]>();
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const subagentDir = path.join(projPath, entry.name, 'subagents');
-    let subagentEntries: fs.Dirent[];
-    try {
-      subagentEntries = fs.readdirSync(subagentDir, { withFileTypes: true });
-    } catch {
-      continue; // no subagents/ folder under this session — fine
-    }
+    if (!entry.isDirectory() || skippedSessions.has(entry.name)) continue;
+    subagentDirs.set(entry.name, [path.join(projPath, entry.name, 'subagents')]);
+  }
+  const prefix = discoveryKey(dirName, '');
+  for (const [key, dirs] of discovery.extraSubagentDirs) {
+    if (!key.startsWith(prefix)) continue;
+    const sessionName = key.slice(prefix.length);
+    subagentDirs.set(sessionName, [...(subagentDirs.get(sessionName) ?? []), ...dirs]);
+  }
 
-    const parent = sessionsById.get(entry.name);
+  for (const [sessionName, dirs] of subagentDirs) {
+    const parent = sessionsById.get(sessionName);
     const orphanRequests: SessionRequest[] = [];
     let orphanFirstTs: number | null = null;
     let orphanLastTs: number | null = null;
     let orphanEntrypoint: string | undefined;
 
-    for (const subEntry of subagentEntries) {
-      if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
-      const filePath = path.join(subagentDir, subEntry.name);
-      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
-      if (!subSession) continue;
-      cwds.push(subSession.workspaceRootPath);
-      const sourceId = parent?.sessionId ?? entry.name;
-      const files = sessionFiles.get(sourceId) ?? [];
-      files.push(filePath);
-      sessionFiles.set(sourceId, files);
+    for (const subagentDir of dirs) {
+      let subagentEntries: fs.Dirent[];
+      try {
+        subagentEntries = fs.readdirSync(subagentDir, { withFileTypes: true });
+      } catch {
+        continue; // no subagents/ folder under this session — fine
+      }
 
-      if (parent) {
-        // Merge subagent requests into parent. Sorting happens after all
-        // subagents are collected, below.
-        for (const r of subSession.requests) parent.requests.push(r);
-        // Extend parent's last-message timestamp if the subagent ran longer.
-        if (subSession.lastMessageDate &&
-            (!parent.lastMessageDate || subSession.lastMessageDate > parent.lastMessageDate)) {
-          parent.lastMessageDate = subSession.lastMessageDate;
+      for (const subEntry of subagentEntries) {
+        if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
+        const filePath = path.join(subagentDir, subEntry.name);
+        const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
+        if (!subSession) continue;
+        cwds.push(subSession.workspaceRootPath);
+        const sourceId = parent?.sessionId ?? sessionName;
+        const files = sessionFiles.get(sourceId) ?? [];
+        files.push(filePath);
+        sessionFiles.set(sourceId, files);
+
+        if (parent) {
+          // Merge subagent requests into parent. Sorting happens after all
+          // subagents are collected, below.
+          for (const r of subSession.requests) parent.requests.push(r);
+          // Extend parent's last-message timestamp if the subagent ran longer.
+          if (subSession.lastMessageDate &&
+              (!parent.lastMessageDate || subSession.lastMessageDate > parent.lastMessageDate)) {
+            parent.lastMessageDate = subSession.lastMessageDate;
+          }
+        } else {
+          for (const r of subSession.requests) orphanRequests.push(r);
+          if (subSession.creationDate &&
+              (!orphanFirstTs || subSession.creationDate < orphanFirstTs)) {
+            orphanFirstTs = subSession.creationDate;
+          }
+          if (subSession.lastMessageDate &&
+              (!orphanLastTs || subSession.lastMessageDate > orphanLastTs)) {
+            orphanLastTs = subSession.lastMessageDate;
+          }
+          if (!orphanEntrypoint && subSession.entrypoint) orphanEntrypoint = subSession.entrypoint;
         }
-      } else {
-        for (const r of subSession.requests) orphanRequests.push(r);
-        if (subSession.creationDate &&
-            (!orphanFirstTs || subSession.creationDate < orphanFirstTs)) {
-          orphanFirstTs = subSession.creationDate;
-        }
-        if (subSession.lastMessageDate &&
-            (!orphanLastTs || subSession.lastMessageDate > orphanLastTs)) {
-          orphanLastTs = subSession.lastMessageDate;
-        }
-        if (!orphanEntrypoint && subSession.entrypoint) orphanEntrypoint = subSession.entrypoint;
       }
     }
 
     if (parent) continue;
 
     if (orphanRequests.length > 0) {
-      warnCore('parser-claude', `subagent dir without parent session: ${entry.name}`, {
+      warnCore('parser-claude', `subagent dir without parent session: ${sessionName}`, {
         requestCount: orphanRequests.length,
       });
       orphanRequests.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
       const launcherKind: 'interactive' | 'programmatic' = 'programmatic';
       const orphan = createSession({
-        sessionId: entry.name,
+        sessionId: sessionName,
         workspaceId,
         workspaceName,
         location: 'terminal',
@@ -856,8 +1075,8 @@ function parseClaudeProjectSessions(
     }
     session.requestCount = session.requests.length;
     const files = sessionFiles.get(session.sessionId);
-    if (files?.length) {
-      sessionSourceIndex?.set(session.sessionId, {
+    if (files?.length && sessionSourceIndex) {
+      const source: SessionSource = {
         kind: 'claude-jsonl',
         filePath: files[0],
         additionalFilePaths: files.slice(1),
@@ -865,7 +1084,9 @@ function parseClaudeProjectSessions(
         workspaceName,
         workspaceRootPath: session.workspaceRootPath,
         harness: session.harness,
-      });
+      };
+      sessionSourceIndex.set(session.sessionId, source);
+      discovery.sessionSources.set(session, source);
     }
   }
 
@@ -886,12 +1107,13 @@ export function parseClaudeSessions(
     return results;
   }
 
+  const discovery = planClaudeDiscovery(projectsDir, projectDirs.map(dir => dir.name));
   for (const projDir of projectDirs) {
-    const result = parseClaudeProjectSessions(projectsDir, projDir.name, editLocIndex, sessionSourceIndex);
+    const result = parseClaudeProjectSessions(projectsDir, projDir.name, discovery, editLocIndex, sessionSourceIndex);
     if (result) results.push(result);
   }
 
-  return results;
+  return keepEachTurnOnce(results, discovery, sessionSourceIndex);
 }
 
 export async function parseClaudeSessionsAsync(
@@ -911,9 +1133,10 @@ export async function parseClaudeSessionsAsync(
     return results;
   }
 
+  const discovery = planClaudeDiscovery(projectsDir, projectDirs);
   for (let i = 0; i < projectDirs.length; i++) {
     const dirName = projectDirs[i];
-    const result = parseClaudeProjectSessions(projectsDir, dirName, editLocIndex, sessionSourceIndex);
+    const result = parseClaudeProjectSessions(projectsDir, dirName, discovery, editLocIndex, sessionSourceIndex);
     if (result) results.push(result);
 
     // Report after parsing, so the progress detail shows the name taken from the recorded cwd.
@@ -923,7 +1146,7 @@ export async function parseClaudeSessionsAsync(
     if (i % 5 === 0) await new Promise<void>(r => setTimeout(r, 0));
   }
 
-  return results;
+  return keepEachTurnOnce(results, discovery, sessionSourceIndex);
 }
 
 function updateClaudeTimestampRange(

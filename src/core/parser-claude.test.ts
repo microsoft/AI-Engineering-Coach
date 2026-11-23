@@ -11,10 +11,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
+import type { SessionSource } from './cache';
 import { extractClaudeImageReferences, parseClaudeSessions } from './parser-claude';
 import { getParseWarningCounts, getParseWarnings, MAX_FILE_SIZE, resetParseWarnings } from './parser-shared';
+import { loadSourceSession } from './session-images';
+
+vi.mock('fs', async importOriginal => ({ ...await importOriginal<typeof import('fs')>() }));
 
 /** os.tmpdir() on Windows often returns 8.3 short names (e.g. TAMASB~1)
  *  that don't match readdirSync output. Resolve to the long form so
@@ -859,6 +863,232 @@ describe('parseClaudeSessions: who sent a turn', () => {
     ], projectsDir => {
       const requests = parseClaudeSessions(projectsDir)[0].sessions[0].requests;
       expect(requests.map(request => [request.messageText, request.nonHumanKind])).toEqual([['Tidy this.', undefined], ['', undefined]]);
+    });
+  });
+});
+
+describe('parseClaudeSessions: each transcript and turn counted once', () => {
+  function withProjects(files: Record<string, object[]>, run: (projectsDir: string) => void): void {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-parser-test-'));
+    const projectsDir = path.join(root, 'projects');
+    for (const [relative, lines] of Object.entries(files)) {
+      const file = path.join(projectsDir, ...relative.split('/'));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+    }
+    try { run(projectsDir); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
+  it('parses a transcript hard-linked into two project folders once, from its working folder', () => {
+    withProjects({
+      '-Users-me-proj/s1.jsonl': [makeUser('Why?', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 's1' }), makeAssistant('Because.')],
+      '-Users-me-notes/s1/subagents/agent-a.jsonl': [makeUser('Find it.', '2025-06-15T10:00:05Z', { uuid: 'sub1', sessionId: 's1' }), makeAssistant('Found.')],
+    }, projectsDir => {
+      fs.linkSync(path.join(projectsDir, '-Users-me-proj', 's1.jsonl'), path.join(projectsDir, '-Users-me-notes', 's1.jsonl'));
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.workspaceId, session.sessionId])).toEqual([['claude--Users-me-proj', 's1']]);
+      expect(sessions[0].requests.map(request => [request.userEventId, request.nonHumanKind])).toEqual([['u1', undefined], ['sub1', 'subagent']]);
+    });
+  });
+
+  it('parses a hard-linked transcript over the size limit from its working folder', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, () => ({ type: 'api-request', body: blob }));
+    withProjects({
+      '-Users-me-proj/s1.jsonl': [makeUser('Why?', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 's1' }), ...apiRequests, makeAssistant('Because.')],
+    }, projectsDir => {
+      fs.mkdirSync(path.join(projectsDir, '-Users-me-notes'));
+      fs.linkSync(path.join(projectsDir, '-Users-me-proj', 's1.jsonl'), path.join(projectsDir, '-Users-me-notes', 's1.jsonl'));
+      expect(fs.statSync(path.join(projectsDir, '-Users-me-notes', 's1.jsonl')).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.workspaceId, session.sessionId, session.requests.length])).toEqual([['claude--Users-me-proj', 's1', 1]]);
+    });
+  });
+
+  it('counts a turn replayed into a forked transcript once', () => {
+    withProjects({
+      '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
+      '-Users-me-proj/b.jsonl': [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'b' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:00Z', { uuid: 'u2', sessionId: 'b' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const requests = parseClaudeSessions(projectsDir).flatMap(result => result.sessions).flatMap(session => session.requests);
+      expect(requests.map(request => request.userEventId).sort()).toEqual(['u1', 'u2']);
+    });
+  });
+
+  it('keeps a turn in the transcript it was typed in, even when the fork sorts first by name', () => {
+    withProjects({
+      '-Users-me-proj/f-original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'f-original' }), makeAssistant('Done.')],
+      '-Users-me-proj/a-fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'a-fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-fork', ['u2']], ['f-original', ['u1']],
+      ]);
+    });
+  });
+
+  it('keeps a turn in the transcript it was typed in when a copy in another project folder is parsed first', () => {
+    withProjects({
+      '-Users-me-proj/original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'original' }), makeAssistant('Done.')],
+      '-Users-me-a/copy.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'copy' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'copy' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'copy' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.workspaceId, session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['claude--Users-me-a', 'copy', ['u2']], ['claude--Users-me-proj', 'original', ['u1']],
+      ]);
+    });
+  });
+
+  it('keeps a turn in the older file when a copy starts at the same time and sorts first by name', ({ skip }) => {
+    withProjects({
+      '-Users-me-proj/z-original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'z-original' }), makeAssistant('Done.')],
+    }, projectsDir => {
+      const original = path.join(projectsDir, '-Users-me-proj', 'z-original.jsonl');
+      const copy = path.join(projectsDir, '-Users-me-proj', 'a-copy.jsonl');
+      // Made later, and its first line keeps the original's timestamp.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      fs.writeFileSync(copy, [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-copy' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-copy' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ].map(l => JSON.stringify(l)).join('\n'), 'utf-8');
+      const birth = (file: string) => fs.statSync(file, { bigint: true }).birthtimeNs;
+      if (!birth(original) || birth(copy) <= birth(original)) skip('this file system does not record distinct birth times');
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-copy', ['u2']], ['z-original', ['u1']],
+      ]);
+    });
+  });
+
+  it('keeps the detail source of a session whose folder was copied, when the copy is parsed last', ({ skip }) => {
+    const lines = [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 's1' }), makeAssistant('Done.')];
+    withProjects({ '-Users-me-old/s1.jsonl': lines }, projectsDir => {
+      const original = path.join(projectsDir, '-Users-me-old', 's1.jsonl');
+      const copy = path.join(projectsDir, '-Users-me-new', 's1.jsonl');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      fs.mkdirSync(path.dirname(copy));
+      fs.copyFileSync(original, copy);
+      const birth = (file: string) => fs.statSync(file, { bigint: true }).birthtimeNs;
+      if (!birth(original) || birth(copy) <= birth(original)) skip('this file system does not record distinct birth times');
+      const readdirSync = fs.readdirSync;
+      const lastNew = vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: fs.PathLike, options?: { withFileTypes: true }) => {
+        const entries = readdirSync(dir, options as { withFileTypes: true });
+        return dir === projectsDir ? entries.sort((a, b) => b.name.localeCompare(a.name)) : entries;
+      }) as typeof fs.readdirSync);
+      try {
+        const sources = new Map<string, SessionSource>();
+        const sessions = parseClaudeSessions(projectsDir, undefined, sources).flatMap(result => result.sessions);
+        expect(sessions.map(session => [session.workspaceId, session.sessionId])).toEqual([['claude--Users-me-old', 's1']]);
+        expect(sources.get('s1')?.filePath).toBe(original);
+        expect(loadSourceSession(sources.get('s1')!, 's1')?.requests.map(request => request.userEventId)).toEqual(['u1']);
+      } finally {
+        lastNew.mockRestore();
+      }
+    });
+  });
+
+  it('parses a transcript whose first lines could not be read for ordering', () => {
+    withProjects({
+      '-Users-me-proj/a.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.')],
+    }, projectsDir => {
+      // Only the first open fails: the read that orders the transcript, not the parse that follows.
+      const openSync = vi.spyOn(fs, 'openSync').mockImplementationOnce(() => {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      });
+      try {
+        const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+        expect(sessions.map(session => session.sessionId)).toEqual(['a']);
+      } finally {
+        openSync.mockRestore();
+      }
+    });
+  });
+
+  it('keeps a turn in a transcript over the size limit that a later fork replays', { timeout: 60_000 }, () => {
+    const blob = 'x'.repeat(1024 * 1024);
+    const apiRequests = Array.from({ length: Math.ceil(MAX_FILE_SIZE / blob.length) + 2 }, () => ({ type: 'api-request', body: blob }));
+    withProjects({
+      '-Users-me-proj/f-original.jsonl': [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'f-original' }), ...apiRequests, makeAssistant('Done.'),
+      ],
+      '-Users-me-proj/a-fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'a-fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      expect(fs.statSync(path.join(projectsDir, '-Users-me-proj', 'f-original.jsonl')).size).toBeGreaterThan(MAX_FILE_SIZE);
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-fork', ['u2']], ['f-original', ['u1']],
+      ]);
+    });
+  });
+
+  it('orders a transcript by its first timestamp after a line over the size limit', { timeout: 60_000 }, () => {
+    withProjects({
+      '-Users-me-proj/f-original.jsonl': [
+        // Left out, so its later timestamp doesn't date the transcript after the fork.
+        { type: 'api-request', timestamp: '2025-06-15T12:00:00Z', body: 'x'.repeat(MAX_FILE_SIZE + 1) },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'f-original' }), makeAssistant('Done.'),
+      ],
+      '-Users-me-proj/a-fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'a-fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a-fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'a-fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sessions = parseClaudeSessions(projectsDir).flatMap(result => result.sessions);
+      expect(sessions.map(session => [session.sessionId, session.requests.map(request => request.userEventId)]).sort()).toEqual([
+        ['a-fork', ['u2']], ['f-original', ['u1']],
+      ]);
+    });
+  });
+
+  it('counts and shows a user line repeated within a transcript once', () => {
+    withProjects({
+      '-Users-me-proj/a.jsonl': [
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.'),
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'a' }), makeAssistant('Done.'),
+      ],
+    }, projectsDir => {
+      const sources = new Map<string, SessionSource>();
+      const [session] = parseClaudeSessions(projectsDir, undefined, sources).flatMap(result => result.sessions);
+      expect(session.requests.map(request => request.userEventId)).toEqual(['u1']);
+      expect(loadSourceSession(sources.get('a')!, 'a')?.requests.map(request => request.userEventId)).toEqual(['u1']);
+    });
+  });
+
+  it("leaves a fork's replayed turns out of its reloaded session", () => {
+    withProjects({
+      '-Users-me-proj/original.jsonl': [makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'original' }), makeAssistant('Done.')],
+      '-Users-me-proj/fork.jsonl': [
+        { type: 'queue-operation', timestamp: '2025-06-15T11:00:00Z', sessionId: 'fork' },
+        makeUser('First.', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'fork' }), makeAssistant('Done.'),
+        makeUser('Second.', '2025-06-15T11:00:01Z', { uuid: 'u2', sessionId: 'fork' }), makeAssistant('Done.', '2025-06-15T11:00:02Z'),
+      ],
+    }, projectsDir => {
+      const sources = new Map<string, SessionSource>();
+      const parsed = parseClaudeSessions(projectsDir, undefined, sources).flatMap(result => result.sessions);
+      const reloaded = (sessionId: string) => loadSourceSession(sources.get(sessionId)!, sessionId);
+      expect(reloaded('fork')?.requests.map(request => request.userEventId)).toEqual(['u2']);
+      expect(reloaded('original')?.requests.map(request => request.userEventId)).toEqual(['u1']);
+      // Each is dated from its own first turn, not from the turn the fork replays.
+      for (const [sessionId, start] of [['fork', '2025-06-15T11:00:01Z'], ['original', '2025-06-15T10:00:00Z']]) {
+        expect(parsed.find(session => session.sessionId === sessionId)?.creationDate).toBe(Date.parse(start));
+        expect(reloaded(sessionId)?.creationDate).toBe(Date.parse(start));
+      }
     });
   });
 });
