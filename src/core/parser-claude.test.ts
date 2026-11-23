@@ -14,8 +14,9 @@ import { execSync } from 'child_process';
 import { describe, it, expect, vi } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import type { SessionSource } from './cache';
-import { extractClaudeImageReferences, parseClaudeSessions } from './parser-claude';
+import { extractClaudeImageReferences, parseClaudeSessionFile, parseClaudeSessions } from './parser-claude';
 import { withInheritedTurnsRemoved } from './fork-ownership';
+import { Analyzer } from './analyzer';
 import { getParseWarningCounts, getParseWarnings, MAX_FILE_SIZE, resetParseWarnings } from './parser-shared';
 import { loadSourceSession } from './session-images';
 
@@ -135,7 +136,10 @@ describe('parseClaudeSessions', () => {
       makeUser('new prompt', '2025-06-15T10:10:01Z', { uuid: 'u2', sessionId: 'fork-1' }),
       makeAssistant('new answer', '2025-06-15T10:10:05Z'),
     ], (projectsDir) => {
-      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.historyLeadMs)).toEqual([600_000, undefined]);
+      const file = path.join(projectsDir, '-Users-me-proj', 'fork.jsonl');
+      expect(parseClaudeSessionFile(file, 'ws', 'proj')?.requests.map(r => r.historyLeadMs)).toEqual([600_000, undefined]);
+      // Ten minutes older than the transcript: a copy even with its source not loaded, so the parse leaves it out.
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0]).toMatchObject({ requestCount: 1, inheritedTurns: 1 });
     });
     withProjectsDir('plain.jsonl', [
       { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'plain-1' },
@@ -213,6 +217,50 @@ describe('parseClaudeSessions', () => {
       expect(sessions.find(s => s.sessionId === 'fork')?.requests.map(r => r.loggedLive)).toEqual([true]);
       const fork = withInheritedTurnsRemoved(sessions).find(s => s.sessionId === 'fork');
       expect([fork?.requests.map(r => r.messageText), fork?.forkedFromId, fork?.inheritedTurns]).toEqual([['mine'], 'src', 1]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a fork that holds only copied turns, from its transcript to the Sessions list', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fork-copies-only-'));
+    try {
+      const projDir = path.join(root, 'projects', '-Users-me-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const line = (o: object, sessionId: string) => JSON.stringify({ ...o, sessionId });
+      const shared = [makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }), makeAssistant('one', '2025-06-15T10:00:05Z')];
+      fs.writeFileSync(path.join(projDir, 'src.jsonl'), [{ type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', operation: 'enqueue' }, shared[0],
+        { type: 'api-request', timestamp: '2025-06-15T10:00:01Z' }, shared[1]].map(o => line(o, 'src')).join('\n'));
+      fs.writeFileSync(path.join(projDir, 'fork.jsonl'), shared.map(o => line(o, 'fork')).join('\n'));
+      const sessions = parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions);
+      expect(sessions.find(s => s.sessionId === 'fork')).toMatchObject({ requestCount: 0, inheritedTurns: 1, forkedFromId: 'src' });
+      const listed = new Analyzer(sessions, new Map()).getSessions(1, 50).sessions.map(s => [s.sessionId, s.requestCount]);
+      expect(listed.sort()).toEqual([['fork', 0], ['src', 1]]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('links no source when two transcripts logged the copied history live, and still counts each turn once', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fork-two-sources-'));
+    try {
+      const projDir = path.join(root, 'projects', '-Users-me-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const line = (o: object, sessionId: string) => JSON.stringify({ ...o, sessionId });
+      const queue = (ts: string) => ({ type: 'queue-operation', timestamp: ts, operation: 'enqueue' });
+      const liveTurn = (text: string, ts: string, uuid: string) => [queue(ts), makeUser(text, ts, { uuid }), { type: 'api-request', timestamp: ts }, makeAssistant('ok', ts)];
+      const sharedLive = [...liveTurn('first', '2025-06-15T10:00:00Z', 'u1'), ...liveTurn('second', '2025-06-15T10:05:00Z', 'u2')];
+      fs.writeFileSync(path.join(projDir, 'a.jsonl'), [...sharedLive, ...liveTurn('in a', '2025-06-15T10:30:00Z', 'ua')].map(o => line(o, 'a')).join('\n'));
+      fs.writeFileSync(path.join(projDir, 'b.jsonl'), [...sharedLive, ...liveTurn('in b', '2025-06-15T10:31:00Z', 'ub')].map(o => line(o, 'b')).join('\n'));
+      fs.writeFileSync(path.join(projDir, 'fork.jsonl'), [makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }), makeAssistant('ok', '2025-06-15T10:00:00Z'),
+        makeUser('second', '2025-06-15T10:05:00Z', { uuid: 'u2' }), makeAssistant('ok', '2025-06-15T10:05:00Z'),
+        ...liveTurn('mine', '2025-06-15T10:20:00Z', 'u4')].map(o => line(o, 'fork')).join('\n'));
+      const sessions = parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions);
+      const fork = sessions.find(s => s.sessionId === 'fork');
+      expect([fork?.requests.map(r => r.messageText), fork?.inheritedTurns, fork?.forkedFromId, fork?.forkSourceAmbiguous]).toEqual([['mine'], 2, undefined, true]);
+      const ids = sessions.flatMap(s => s.requests.map(r => r.userEventId)).sort();
+      expect(ids).toEqual(['u1', 'u2', 'u4', 'ua', 'ub']);
+      expect(sessions.filter(s => s.forkedFromId)).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
