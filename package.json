@@ -336,7 +336,7 @@
     "@playwright/test": "1.65.1",
     "@types/mocha": "10.0.10",
     "@types/node": "26.6.6",
-    "@types/vscode": "1.125.0",
+    "@types/vscode": "1.146.0",
     "@vitest/coverage-v8": "4.1.11",
     "@vscode/vsce": "3.9.2",
     "cspell": "10.5.1",
