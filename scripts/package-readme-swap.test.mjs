@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { withPackagedFiles } from './package-readme-swap.mjs';
+import { buildChangelog } from './build-changelog.mjs';
+import { packageExtension, withPackagedFiles } from './package-readme-swap.mjs';
 
 const ORIGINAL = { 'README.md': 'GitHub README with uncommitted edits\n', 'CHANGELOG.md': '# Changelog\n\n## 2026-05-06\n' };
 let root;
@@ -58,7 +59,7 @@ describe('withPackagedFiles', () => {
     expect(files()).toEqual(['README.extension.md', 'README.md']);
   });
 
-  it('repairs a run that was killed while vsce ran, instead of overwriting the parked originals', () => {
+  it('repairs a killed run instead of overwriting the parked originals', () => {
     // What a killed run leaves: originals parked, replacements and a staged file in place.
     for (const [name, backup] of [['README.md', 'README.github.md'], ['CHANGELOG.md', 'CHANGELOG.github.md']]) {
       writeFileSync(join(root, backup), read(name));
@@ -66,7 +67,7 @@ describe('withPackagedFiles', () => {
     }
     writeFileSync(join(root, 'CHANGELOG.md.aic-staging'), 'partial');
     const logs = [];
-    withPackagedFiles({ root, changelog: 'x', run: () => {}, log: message => logs.push(message) });
+    packageExtension({ root, computeStamp: () => ({}), computeChangelog: () => 'x', run: () => {}, log: message => logs.push(message) });
     expectOriginals();
     expect(logs).toEqual([
       'Restored README.md from README.github.md, left by an interrupted npm run package.',
@@ -91,3 +92,32 @@ describe('withPackagedFiles', () => {
     expect(existsSync(join(root, 'CHANGELOG.md.aic-staging'))).toBe(false);
   });
 });
+
+describe('packageExtension', () => {
+  /** Leaves what a run killed while vsce ran leaves: originals parked, replacements in place. */
+  function killedRun(/** @type {string} */ replacementChangelog) {
+    writeFileSync(join(root, 'README.github.md'), read('README.md'));
+    writeFileSync(join(root, 'README.md'), 'Marketplace README\n');
+    writeFileSync(join(root, 'CHANGELOG.github.md'), read('CHANGELOG.md'));
+    writeFileSync(join(root, 'CHANGELOG.md'), replacementChangelog);
+  }
+
+  it.each([
+    ['an [Unreleased] section, which the changelog build rejects', '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Pending (#1)\n'],
+    ['only dated sections, which would merge fragments twice', '# Changelog\n\n## 2026-11-23\n\n### Added\n\n- Merged (#1)\n\n## 2026-05-06\n'],
+  ])('repairs a killed run before reading files, when the replacement changelog has %s', (_name, replacement) => {
+    killedRun(replacement);
+    const seen = {};
+    packageExtension({
+      root,
+      log: () => {},
+      computeStamp: () => { seen.readmeAtStamp = read('README.md'); return { version: '0.1.0' }; },
+      run: () => { seen.packaged = read('CHANGELOG.md'); },
+    });
+    expect(seen.readmeAtStamp).toBe(ORIGINAL['README.md']);
+    expect(seen.packaged).toBe(buildChangelog({ root, warn: () => {} }));
+    expect(seen.packaged).toBe(ORIGINAL['CHANGELOG.md']);
+    expectOriginals();
+  });
+});
+

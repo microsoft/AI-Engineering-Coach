@@ -40,11 +40,11 @@ export function restoreInterrupted(root, log) {
 }
 
 /**
- * Runs `run` with README.md and CHANGELOG.md replaced, then restores the originals.
- * @param {{ root: string, changelog: string, run: () => void, log?: (message: string) => void }} options
+ * Runs `run` with README.md and CHANGELOG.md replaced, then restores the originals. Call
+ * {@link restoreInterrupted} first, before reading either file.
+ * @param {{ root: string, changelog: string, run: () => void }} options
  */
-export function withPackagedFiles({ root, changelog, run, log = console.warn }) {
-  restoreInterrupted(root, log);
+export function withPackagedFiles({ root, changelog, run }) {
   const at = (/** @type {string} */ name) => join(root, name);
   // Stage first: a failed copy or write must not leave an original missing or truncated.
   const staged = SWAPS.map(({ file }) => at(file + STAGED_SUFFIX));
@@ -87,16 +87,35 @@ export function withPackagedFiles({ root, changelog, run, log = console.warn }) 
   if (failure !== undefined) throw failure;
 }
 
+/**
+ * The whole of npm run package. A killed run is repaired first, because both the build stamp and
+ * the dated changelog read README.md and CHANGELOG.md: a leftover replacement would make the stamp
+ * dirty and the changelog either fail to build or list fragments twice. Both are then computed
+ * before the swap, so the swap itself doesn't mark the build dirty.
+ * @param {{
+ *   root: string,
+ *   run: (buildInfo: unknown) => void,
+ *   log?: (message: string) => void,
+ *   computeStamp?: () => unknown,
+ *   computeChangelog?: () => string,
+ * }} options
+ */
+export function packageExtension({
+  root, run, log = console.warn,
+  computeStamp = () => computeBuildInfo({ cwd: root }),
+  computeChangelog = () => buildChangelog({ root }),
+}) {
+  restoreInterrupted(root, log);
+  const buildInfo = computeStamp();
+  const changelog = computeChangelog();
+  withPackagedFiles({ root, changelog, run: () => run(buildInfo) });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const root = join(import.meta.dirname, "..");
-  // Stamp the build and date the changelog before swapping files: the swapped files would
-  // otherwise mark every packaged build as having uncommitted changes.
-  const buildInfo = computeBuildInfo({ cwd: root });
-  const changelog = buildChangelog({ root });
-  withPackagedFiles({
+  packageExtension({
     root,
-    changelog,
-    run: () => execSync("vsce package --allow-missing-repository --no-dependencies", {
+    run: buildInfo => execSync("vsce package --allow-missing-repository --no-dependencies", {
       cwd: root,
       stdio: "inherit",
       env: { ...process.env, [BUILD_INFO_ENV]: JSON.stringify(buildInfo) },
