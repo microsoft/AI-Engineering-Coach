@@ -69,7 +69,14 @@
 .tlx-btn-quiet { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); }
 .tlx-btn:disabled { opacity: 0.45; cursor: default; }
 .tlx-empty { color: var(--text-muted); padding: 24px; text-align: center; }
-.tlx-foot { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; margin-top: 16px; }
+.tlx-how { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; margin-top: 16px; max-width: 760px; }
+.tlx-how summary { cursor: pointer; width: fit-content; border-radius: 3px; }
+.tlx-how summary:hover { color: var(--text); }
+.tlx-how summary:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 2px; }
+.tlx-how ul { margin: 6px 0 4px; padding-left: 18px; }
+.tlx-how li { margin: 2px 0; }
+.tlx-how b { color: var(--text); font-weight: 600; }
+.tlx-how p { margin: 4px 0 0; }
 .tlx-insights { margin-top: 0; }
 .tlx-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .tlx-kpis .ctx-comp-kpi { min-width: 0; }

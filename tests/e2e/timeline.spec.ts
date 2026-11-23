@@ -46,6 +46,33 @@ test.describe('Timeline', () => {
     await expect(page.locator('#tlxImpact tr[data-family="tl-flaky"] td').last()).toHaveText('0.0%');
   });
 
+  test('explains its numbers in a collapsed box, and what its text controls show in their tooltips', async ({ page }) => {
+    const how = page.locator('#tlxHow');
+    const summary = how.locator('summary');
+    await expect(summary).toHaveText('How these numbers are measured');
+    await expect(how).toHaveJSProperty('open', false);
+    await expect(how.locator('li').first()).toBeHidden();
+    await summary.focus();
+    await page.keyboard.press('Enter');
+    await expect(how).toHaveJSProperty('open', true);
+    await expect(how.locator('li')).toHaveCount(6);
+    await expect(how.locator('li').first()).toBeVisible();
+    await expect(how).toContainText('Full definitions: the Timeline page of the AI Engineer Coach docs');
+    await page.keyboard.press('Space');
+    await expect(how).toHaveJSProperty('open', false);
+    await page.keyboard.press('Space');
+    await expect(how).toHaveJSProperty('open', true);
+    // Its state survives the page drawing again.
+    await page.locator('#tlxGroup button[data-value="flat"]').click();
+    await expect(how).toHaveJSProperty('open', true);
+
+    await expect(page.locator('label.tlx-mask')).toHaveAttribute('title', /model names.*on this page only, not the sidebar/);
+    await expect(page.locator('#tlxMask')).toHaveAccessibleDescription(/on this page only, not the sidebar/);
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(page.locator('label.tlx-text-toggle')).toHaveAttribute('title', /log on this machine.*nothing of it leaves this page/);
+    await expect(page.locator('#tlxShowText')).toHaveAccessibleDescription(/secret-like tokens, your home folder and your names are replaced/);
+  });
+
   test('shows the selected session’s turns and links its family', async ({ page }) => {
     await expect(page.locator('#tlxDetailName')).toHaveText('Payment API tests');
     await page.locator('.tlx-lane[data-session="tl-lint"]').click();

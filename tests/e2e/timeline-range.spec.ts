@@ -155,7 +155,8 @@ test.describe('Timeline date picker', () => {
   test('returns focus to the date after a click outside, unless the click focused something else', async ({ page }) => {
     await page.locator('#tlxDateLabel').click();
     await expect(day(page, '2026-05-03')).toBeFocused();
-    await page.locator('.tlx-foot').click();
+    // A click on plain text, which takes no focus.
+    await page.locator('#tlxKpis .ctx-comp-kpi-sub').first().click();
     await expect(page.locator('#tlxCal')).toHaveCount(0);
     await expect(page.locator('#tlxDateLabel')).toBeFocused();
     await page.locator('#tlxDateLabel').click();

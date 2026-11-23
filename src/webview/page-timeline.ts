@@ -328,6 +328,13 @@ function shortDate(date: string | undefined, year = false): string {
 
 /* ---- page ---- */
 
+/** The privacy notes of the two controls that change what text the page shows: their tooltip and accessible description. */
+const MASK_HELP = 'Hides session names, branches, repositories, model names, search text and the prompts and questions text, '
+  + 'on this page only, not the sidebar: for example before taking a screenshot.';
+const SHOW_TEXT_HELP = 'Reads this session’s prompts, questions, answers and permission requests again from its log on this machine '
+  + 'when you open the lane. Links, email addresses, secret-like tokens, your home folder and your names are replaced, and '
+  + 'nothing of it leaves this page.';
+
 function page(data: Loaded): VNode {
   const p = data.prepared;
   if (!p.sessions.some(s => !s.ctx)) {
@@ -340,20 +347,28 @@ function page(data: Loaded): VNode {
     ${rangeNote()}
     ${ctx ? filterBar(p, ctx) : null}
     <div class="tlx-view">${ctx ? timelineView(ctx) : familiesView(data, namer)}</div>
-    <p class="tlx-foot">Agent time is, for each turn, the time from its prompt to its last logged agent activity, less the time that
-      turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
-      gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
-      answered (from the request to its result; none when your answer was recorded before the request), once per session where they overlap;
-      an answer is dated by Copilot’s record of it when
-      logged; permissions a policy decided aren’t counted. A Range is whole days, from the first day’s midnight to the midnight after
-      the last, measured by the same rules as a day, so its time and counts are those of its days added up. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
-      Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
-      create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
-      session that relayed its first message. The lanes, cards and callouts show counts, timings, model, harness and repository names and
-      the session names you gave (never automatic titles, nor a name that repeats your first prompt or its first words). Show prompts and questions, in a lane’s
-      details, reads that session’s prompts, questions, answers and permission requests again from its log on this machine when you open
-      the lane; links, email addresses, secret-like tokens, your home folder and your names are replaced, and nothing of it leaves this page.
-      Mask names hides names, branches, repositories, model names, search text and that text on this page only, not the sidebar.</p>` as VNode;
+    ${howMeasured()}` as VNode;
+}
+
+/** How the page's numbers are measured, collapsed: the full rules are on the Timeline page of the docs. */
+function howMeasured(): VNode {
+  return html`
+    <details class="tlx-how" id="tlxHow">
+      <summary>How these numbers are measured</summary>
+      <ul>
+        <li><b>Agent time</b>: from each prompt to the agent’s last activity in that turn, less the time it was stopped on a
+          question or a permission prompt; turns that overlap count once.</li>
+        <li><b>Waiting on you</b>: gaps of 2 to 120 min before your next prompt, plus the questions and permission prompts you
+          answered; permissions a policy decided aren’t counted.</li>
+        <li>A <b>range</b> is its whole days added up.</li>
+        <li>A turn is <b>yours</b> unless the harness marked it as automated or another session sent it.</li>
+        <li><b>Credits</b> are logged by Copilot only; other harnesses show time and turns.</li>
+        <li>A <b>child session</b> is linked when its parent started it (create session, open PR or open issue), Codex or
+          OpenCode logged its parent, or the parent relayed its first message.</li>
+      </ul>
+      <p>Session names are the ones you gave, never automatic titles or a name that repeats your first prompt. Full
+        definitions: the Timeline page of the AI Engineer Coach docs, under Definitions.</p>
+    </details>` as VNode;
 }
 
 function segment<T extends string>(id: string, options: [T, string][], current: T, onPick: (v: T) => void, disabled = false): VNode {
@@ -403,10 +418,12 @@ function toolbar(p: PreparedTimeline, totals: ReadonlyMap<string, DayTotals>): V
       ${segment<Group>('tlxGroup', [['tree', 'Session tree'], ['flat', 'Flat']], state.group, v => update({ group: v }), families)}
       <span class=${'tlx-seg-l' + (families ? ' disabled' : '')}>Color</span>
       ${segment<Color>('tlxColor', [['family', 'Family'], ['harness', 'Harness']], state.color, v => update({ color: v }), families)}
-      <label class="tlx-mask" title="Hide session names, branches, repositories and search text on this page, for example before taking a screenshot">
-        <input type="checkbox" id="tlxMask" checked=${state.masked} onChange=${(e: Event) => setMasked((e.target as HTMLInputElement).checked)} />
+      <label class="tlx-mask" title=${MASK_HELP}>
+        <input type="checkbox" id="tlxMask" checked=${state.masked} aria-describedby="tlxMaskHelp"
+          onChange=${(e: Event) => setMasked((e.target as HTMLInputElement).checked)} />
         Mask names
       </label>
+      <span id="tlxMaskHelp" hidden>${MASK_HELP}</span>
     </div>` as VNode;
 }
 
@@ -1101,8 +1118,9 @@ function focusedAsks(asks: readonly TimelineTextWait[]): Set<TimelineTextWait> {
  *  and each wait for your next prompt with the message it followed: local text, read when the lane is opened. */
 function textSection(ctx: ViewContext, l: TimelineLane): VNode {
   const on = !!state.showText && !state.masked;
-  const toggle = html`<label class="tlx-text-toggle"><input type="checkbox" id="tlxShowText" checked=${on} disabled=${state.masked}
-    onChange=${(e: Event) => setShowText((e.target as HTMLInputElement).checked)} /> Show prompts and questions</label>`;
+  const toggle = html`<label class="tlx-text-toggle" title=${SHOW_TEXT_HELP}><input type="checkbox" id="tlxShowText" checked=${on}
+    disabled=${state.masked} aria-describedby="tlxShowTextHelp" onChange=${(e: Event) => setShowText((e.target as HTMLInputElement).checked)} />
+    Show prompts and questions</label><span id="tlxShowTextHelp" hidden>${SHOW_TEXT_HELP}</span>`;
   const wrap = (...body: (VNode | null)[]) => html`<div class="tlx-text" id="tlxText">${toggle}${body}</div>` as VNode;
   if (state.masked) return wrap(html`<p class="note">Hidden while names are masked.</p>` as VNode);
   if (!on) return wrap();
