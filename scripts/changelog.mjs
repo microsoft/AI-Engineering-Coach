@@ -84,9 +84,14 @@ function groupByType(lines) {
   return groups;
 }
 
-/** @param {string} value */
-function isDate(value) {
-  return DATE.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+/**
+ * A real YYYY-MM-DD calendar date; Date.parse alone would roll 2026-02-30 over to March 2.
+ * @param {string} value
+ */
+export function isDate(value) {
+  if (!DATE.test(value)) return false;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === value;
 }
 
 /**
@@ -116,7 +121,11 @@ export function changelogDates(text) {
  * @returns {Map<string, string[]>} entries by type
  */
 export function parseFragment(name, text) {
-  const groups = groupByType(text.split(/\r?\n/));
+  const lines = text.split(/\r?\n/);
+  // Any other heading, such as "## 2099-01-01", would become a section of its own in the changelog.
+  const heading = lines.find(line => /^#{1,6}\s/.test(line) && !/^### \S/.test(line));
+  if (heading !== undefined) throw new Error(`${name}: only "### Type" headings are allowed, found "${heading.trim()}"`);
+  const groups = groupByType(lines);
   if (groups.has('')) throw new Error(`${name}: put every entry under a "### Type" heading (${CHANGE_TYPES.join(', ')})`);
   for (const type of groups.keys()) {
     if (!CHANGE_TYPES.includes(type)) throw new Error(`${name}: unknown type "### ${type}"; use ${CHANGE_TYPES.join(', ')}`);

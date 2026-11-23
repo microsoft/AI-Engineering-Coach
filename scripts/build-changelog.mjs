@@ -75,18 +75,24 @@ export function listFragments(root) {
 
 /**
  * The dated changelog for the checkout at `root`.
- * @param {{ root?: string, run?: (args: string[]) => string | undefined, warn?: (message: string) => void }} [options]
+ * A git date after the build date can only come from a wrong commit clock; it is clamped to the
+ * build date with a warning, because a future date would hide later changes in What's New.
+ * @param {{ root?: string, run?: (args: string[]) => string | undefined, warn?: (message: string) => void, now?: Date }} [options]
  */
-export function buildChangelog({ root = join(import.meta.dirname, '..'), run = gitRunner(root), warn = console.warn } = {}) {
+export function buildChangelog({ root = join(import.meta.dirname, '..'), run = gitRunner(root), warn = console.warn, now = new Date() } = {}) {
   const names = listFragments(root);
   const { dates, reason } = names.length > 0 ? fragmentDates(run) : { dates: new Map() };
   if (reason) warn(`Changelog fragments are listed as [Unreleased]: ${reason}.`);
+  const today = now.toISOString().slice(0, 10);
+  /** @param {string} name */
+  const dateOf = name => {
+    const date = dates.get(`${FRAGMENT_DIR}/${name}`);
+    if (date === undefined || date <= today) return date;
+    warn(`${FRAGMENT_DIR}/${name} was committed on ${date}, after today (${today}); listing it under ${today}.`);
+    return today;
+  };
   const fragments = names
-    .map(name => ({
-      name,
-      text: readFileSync(join(root, FRAGMENT_DIR, name), 'utf8'),
-      date: dates.get(`${FRAGMENT_DIR}/${name}`),
-    }))
+    .map(name => ({ name, text: readFileSync(join(root, FRAGMENT_DIR, name), 'utf8'), date: dateOf(name) }))
     .sort((a, b) => (a.date ?? '9999').localeCompare(b.date ?? '9999') || a.name.localeCompare(b.name));
   return renderChangelog(readFileSync(join(root, 'CHANGELOG.md'), 'utf8'), fragments);
 }

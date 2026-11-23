@@ -75,6 +75,8 @@ function fakeContext(previous?: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-23T10:00:00Z'));
   mocks.entries = [['package.json', 1], ['changelog.md', 1], ['dist', 2]];
   mocks.changelog = '# Changelog\n\n## [Unreleased]\n\n## 2026-11-20\n\n- Newer\n\n## 2026-11-01\n\n- Older\n';
   mocks.setting = undefined;
@@ -182,6 +184,34 @@ describe('announceUpdate', () => {
     await announceUpdate(fakeContext().extensionContext, '2026-11-01');
     expect(mocks.showInformationMessage).toHaveBeenCalledWith(
       'AI Engineer Coach was updated with changes from 2026-11-01.', "What's New", "Don't Show Again");
+  });
+});
+
+describe('announceUpdate with untrusted dates', () => {
+  it('never records a future date from the changelog, so later updates are still offered', async () => {
+    mocks.changelog = '# Changelog\n\n## 2099-01-01\n\n## 2026-11-20\n\n- Newer\n\n## 2026-11-01\n\n- Older\n';
+    const { extensionContext, state } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext);
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-20');
+    await announceUpdate(extensionContext, '2026-11-22');
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-22');
+    expect(mocks.showInformationMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces a future date recorded earlier instead of keeping it forever', async () => {
+    mocks.stats = { harnesses: ['VS Code'], savedAt: 1 };
+    const { extensionContext, state } = fakeContext('2099-01-01');
+    await announceUpdate(extensionContext, '2026-11-20');
+    expect(state.get(LAST_SEEN_CHANGES_KEY)).toBe('2026-11-20');
+    expect(mocks.showInformationMessage).toHaveBeenCalledWith(
+      'AI Engineer Coach was updated with changes from 2026-11-20.', "What's New", "Don't Show Again");
+  });
+
+  it('records nothing for an untrusted date passed in', async () => {
+    const { context, extensionContext } = fakeContext('2026-11-01');
+    await announceUpdate(extensionContext, '2026-02-30');
+    await announceUpdate(extensionContext, '2099-01-01');
+    expect(context.globalState.update).not.toHaveBeenCalled();
   });
 });
 

@@ -5,7 +5,22 @@
 
 
 import { describe, expect, it } from 'vitest';
-import { DATE_BEFORE_TRACKING, findChangelogName, latestChangelogDate, shouldAnnounceUpdate } from './whats-new';
+import { DATE_BEFORE_TRACKING, findChangelogName, isChangelogDate, latestChangelogDate, shouldAnnounceUpdate } from './whats-new';
+
+const NOW = new Date('2026-11-23T10:00:00Z');
+
+describe('isChangelogDate', () => {
+  it('accepts real dates up to tomorrow in UTC', () => {
+    expect(isChangelogDate('2026-05-06', NOW)).toBe(true);
+    expect(isChangelogDate('2026-11-24', NOW)).toBe(true); // A build from a time zone ahead of the user's clock
+  });
+
+  it('rejects impossible and future dates', () => {
+    for (const value of ['2026-02-30', '2026-13-01', '2026-11-25', '2099-01-01', '2026-1-2', '']) {
+      expect(isChangelogDate(value, NOW), value).toBe(false);
+    }
+  });
+});
 
 describe('latestChangelogDate', () => {
   it('returns the newest dated section and ignores [Unreleased] and dates in text', () => {
@@ -14,7 +29,12 @@ describe('latestChangelogDate', () => {
       '## 2026-11-01', '', '### Fixed', '', '- A fix', '', '## 2026-11-20', '', '- Out of order', '',
       '## 2026-05-06', '', '- First',
     ].join('\r\n');
-    expect(latestChangelogDate(changelog)).toBe('2026-11-20');
+    expect(latestChangelogDate(changelog, NOW)).toBe('2026-11-20');
+  });
+
+  it('ignores future and impossible dates, which would otherwise hide every later update', () => {
+    expect(latestChangelogDate('## 2099-01-01\n\n## 2026-02-30\n\n## 2026-11-20\n', NOW)).toBe('2026-11-20');
+    expect(latestChangelogDate('## 2099-01-01\n', NOW)).toBeUndefined();
   });
 
   it('returns undefined when there is no dated section', () => {
@@ -45,9 +65,10 @@ describe('shouldAnnounceUpdate', () => {
     expect(shouldAnnounceUpdate(undefined, '2026-05-06', true)).toBe(false);
   });
 
-  it('ignores dates it cannot parse', () => {
-    expect(shouldAnnounceUpdate('0.1.0', '2026-11-01', true)).toBe(false);
-    expect(shouldAnnounceUpdate('2026-11-01', '01/12/2026', true)).toBe(false);
+  it('ignores dates it cannot parse or trust', () => {
+    expect(shouldAnnounceUpdate('0.1.0', '2026-11-01', true, NOW)).toBe(false);
+    expect(shouldAnnounceUpdate('2026-11-01', '01/12/2026', true, NOW)).toBe(false);
+    expect(shouldAnnounceUpdate('2026-11-01', '2099-01-01', true, NOW)).toBe(false);
   });
 });
 

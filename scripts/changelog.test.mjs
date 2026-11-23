@@ -111,6 +111,12 @@ describe('parseFragment', () => {
     expect(() => parseFragment('typo.md', '### Fixes\n\n- Typo (#1)\n')).toThrow('typo.md: unknown type "### Fixes"');
     expect(() => parseFragment('empty.md', '### Added\n')).toThrow('empty.md: has no entries');
   });
+
+  it('rejects other headings, which would become sections of their own, such as a future date', () => {
+    expect(() => parseFragment('date.md', '### Added\n\n- Feature (#1)\n\n## 2099-01-01\n')).toThrow(
+      'date.md: only "### Type" headings are allowed, found "## 2099-01-01"');
+    expect(() => parseFragment('h4.md', '### Added\n\n#### Details\n\n- Feature (#1)\n')).toThrow('only "### Type" headings');
+  });
 });
 
 describe('changelogDates', () => {
@@ -123,13 +129,17 @@ describe('changelogDates', () => {
     expect(() => changelogDates('## [0.1.0] - 2026-05-06\n')).toThrow('Expected "## YYYY-MM-DD"');
     expect(() => changelogDates('## 2026-05-06\n\n## 2026-05-06\n')).toThrow('newest first');
     expect(() => changelogDates('## 2026-05-06\n\n## 2026-11-01\n')).toThrow('newest first');
+    expect(() => changelogDates('## 2026-02-30\n')).toThrow('Expected "## YYYY-MM-DD"');
   });
 });
 
 describe('this repository', () => {
   it('keeps a dated history and only valid fragments', () => {
     const history = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
-    expect(changelogDates(history).length).toBeGreaterThan(0);
+    const dates = changelogDates(history);
+    expect(dates.length).toBeGreaterThan(0);
+    // What's New never trusts a future date, so one here would hide those changes.
+    expect(dates[0] <= new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)).toBe(true);
     for (const name of listFragments(ROOT)) {
       expect(() => parseFragment(name, readFileSync(join(ROOT, 'changelog.d', name), 'utf8'))).not.toThrow();
     }

@@ -27,10 +27,10 @@ async function findChangelog(extensionUri: vscode.Uri): Promise<vscode.Uri | und
 }
 
 /** The newest dated section of the bundled changelog, or undefined when there is none. */
-async function readLatestChangesDate(extensionUri: vscode.Uri): Promise<string | undefined> {
+async function readLatestChangesDate(extensionUri: vscode.Uri, now: Date): Promise<string | undefined> {
   const changelog = await findChangelog(extensionUri);
   if (!changelog) return undefined;
-  return latestChangelogDate(new TextDecoder().decode(await vscode.workspace.fs.readFile(changelog)));
+  return latestChangelogDate(new TextDecoder().decode(await vscode.workspace.fs.readFile(changelog)), now);
 }
 
 /** Opens the bundled changelog in the Markdown preview, or as text when the preview is unavailable. */
@@ -51,17 +51,21 @@ export async function showReleaseNotes(extensionUri: vscode.Uri): Promise<void> 
 /**
  * Offers the changelog once when this build has newer dated changes than the user last saw, and
  * records the newest date either way. `latest` overrides the date read from the bundled changelog.
+ * Only real dates up to tomorrow are trusted, so a bad date never hides later updates; a bad
+ * recorded date is replaced as if none had been recorded.
  */
-export async function announceUpdate(context: vscode.ExtensionContext, latest?: string): Promise<void> {
-  const previous = context.globalState.get<string>(LAST_SEEN_CHANGES_KEY);
+export async function announceUpdate(context: vscode.ExtensionContext, latest?: string, now: Date = new Date()): Promise<void> {
+  const stored = context.globalState.get<string>(LAST_SEEN_CHANGES_KEY);
+  const previous = stored !== undefined && isChangelogDate(stored, now) ? stored : undefined;
   // Check for earlier use before awaiting: a dashboard opened now may write its stats meanwhile.
   const hasPriorUse = previous === undefined && loadSidebarStats() !== null;
-  const current = latest ?? await readLatestChangesDate(context.extensionUri);
-  if (current === undefined || previous === current) return;
+  const current = latest ?? await readLatestChangesDate(context.extensionUri, now);
+  if (current === undefined || !isChangelogDate(current, now) || stored === current) return;
   // An older build keeps the newest date, so going back to the newer build doesn't offer it again.
-  if (previous !== undefined && isChangelogDate(previous) && current < previous) return;
+  if (previous !== undefined && current < previous) return;
   await context.globalState.update(LAST_SEEN_CHANGES_KEY, current);
-  if (!shouldAnnounceUpdate(previous, current, hasPriorUse)) return;
+  if (stored !== undefined && previous === undefined) runtimeDebug('extension', 'whats-new-reset', `untrusted=${stored} to=${current}`);
+  if (!shouldAnnounceUpdate(previous, current, hasPriorUse, now)) return;
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   if (!config.get<boolean>(SHOW_AFTER_UPDATE_SETTING, true)) return;
   runtimeDebug('extension', 'whats-new-offered', `from=${previous ?? 'untracked'} to=${current}`);

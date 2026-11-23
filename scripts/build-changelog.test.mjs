@@ -121,6 +121,17 @@ describe('buildChangelog with git', () => {
     expect(warnings).toEqual([]);
   });
 
+  it('lists a fragment committed with a future clock under the build date, with a warning', () => {
+    fragment('12.md', '### Added\n\n- Feature (#12)\n');
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'Feature (#12)'], '2099-01-01T00:00:00Z');
+    const warnings = [];
+    const changelog = buildChangelog({ root, warn: message => warnings.push(message), now: new Date('2026-11-23T10:00:00Z') });
+    expect(changelog).toContain('## 2026-11-23\n\n### Added\n\n- Feature (#12)');
+    expect(changelog).not.toContain('2099');
+    expect(warnings).toEqual(['changelog.d/12.md was committed on 2099-01-01, after today (2026-11-23); listing it under 2026-11-23.']);
+  });
+
   it('warns and lists fragments as unreleased in a clone without a main branch', () => {
     git(['branch', '-q', '-m', 'main', 'trunk']);
     fragment('12.md', '### Added\n\n- Feature (#12)\n');
