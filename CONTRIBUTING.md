@@ -67,10 +67,12 @@ that CI uploads.
 
 By default, desktop tests use the minimum version in `package.json`'s `engines.vscode`.
 Use `--vscode-version 1.125.0` to select an explicit compatible version, or
-`--vscode-version latest` to check the current stable release. An incompatible pinned version
+`--vscode-version latest` to check the current stable release, or `--vscode-version insiders`
+for the latest Insiders build. An incompatible pinned version
 fails before launching. The [compatibility workflow](.github/workflows/vscode-compatibility.yml)
-runs the minimum and latest versions on Linux, Windows, and macOS weekly, on manual dispatch,
-and on PRs that change the desktop harness, its fixtures, or the shared E2E action.
+runs the minimum, latest and Insiders versions on Linux, Windows, and macOS weekly, on manual
+dispatch, and on PRs that change the desktop harness, its fixtures, or the shared E2E action.
+Insiders failures are reported as an early warning and don't fail the workflow.
 
 The desktop runner uses [ExTester](https://github.com/redhat-developer/vscode-extension-tester).
 Its actively tested editor-version window moves with new releases; older versions are

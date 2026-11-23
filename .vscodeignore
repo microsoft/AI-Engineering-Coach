@@ -12,6 +12,8 @@ eslint.config.mjs
 .vscode/**
 .vscode-test/**
 .github/**
+.apm/**
+apm.yml
 .git/**
 .gitignore
 .eslintignore
