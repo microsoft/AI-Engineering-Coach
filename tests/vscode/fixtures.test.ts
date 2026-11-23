@@ -11,7 +11,7 @@ import {
   addReloadFixture, assertFixturesUnchanged, exportFixtureDataset, fixtureDatasetSchema,
   fixtureFiles, fixturePaths, isolatedEnvironment, prepareFixtures,
 } from './fixtures';
-import { discoverSuites, vscodeVersion } from './run';
+import { discoverSuites, vscodeRelease, vscodeVersion } from './run';
 
 const timestamp = Date.UTC(2026, 0, 15, 12);
 let root: string;
@@ -159,6 +159,13 @@ describe('desktop VS Code version selection', () => {
     expect(vscodeVersion('^1.125.0', 'latest')).toBe('latest');
   });
 
+  it('runs insiders as the latest build of the Insider stream', () => {
+    expect(vscodeVersion('^1.125.0', 'insiders')).toBe('insiders');
+    expect(vscodeRelease('insiders')).toEqual({ quality: 'insider', version: 'latest' });
+    expect(vscodeRelease('latest')).toEqual({ quality: 'stable', version: 'latest' });
+    expect(vscodeRelease('1.125.0')).toEqual({ quality: 'stable', version: '1.125.0' });
+  });
+
   describe('desktop suite discovery', () => {
     it('automatically includes new source suites but never stale compiled files', async () => {
       for (const file of ['populated.spec.ts', 'new-feature.spec.ts', 'helper.ts', 'deleted.spec.js']) {
@@ -173,7 +180,7 @@ describe('desktop VS Code version selection', () => {
   });
 
   it('rejects incompatible versions and malformed input', () => {
-    for (const version of ['1.124.0', '2.0.0', '../Code', 'stable']) {
+    for (const version of ['1.124.0', '2.0.0', '../Code', 'stable', 'insider']) {
       expect(() => vscodeVersion('^1.125.0', version)).toThrow();
     }
     expect(() => vscodeVersion('>=1.125.0')).toThrow();
