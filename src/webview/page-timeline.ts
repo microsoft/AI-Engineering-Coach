@@ -1124,7 +1124,7 @@ function textSection(ctx: ViewContext, l: TimelineLane): VNode {
     Show prompts and questions</label><span id="tlxShowTextHelp" hidden>${SHOW_TEXT_HELP}</span>`;
   const wrap = (...body: (VNode | null)[]) => html`<div class="tlx-text" id="tlxText">${toggle}${body}</div>` as VNode;
   if (state.masked) return wrap(html`<p class="note">Hidden while names are masked.</p>` as VNode);
-  if (!on) return wrap();
+  if (!on) return wrap(html`<span class="tx-off" id="tlxTextOff">Off: turn it on to read this lane’s prompts, questions and answers from its log.</span>` as VNode);
   const entry = sessionText(l);
   if (entry.status === 'loading') return wrap(html`<p class="note">Reading this session’s log…</p>` as VNode);
   if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);

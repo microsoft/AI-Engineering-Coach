@@ -186,6 +186,7 @@
 .tlx-trk .wait:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 1px; z-index: 2; }
 .tlx-text { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .tlx-text-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.tlx-text .tx-off { color: var(--text-muted); font-size: 11.5px; margin-left: 10px; }
 .tlx-text .tx-list { display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow: auto; margin-top: 6px; }
 .tlx-text .tx-item { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 .tlx-text .tx-item.focus { border-color: var(--accent-blue); box-shadow: 0 0 0 1px var(--accent-blue); }

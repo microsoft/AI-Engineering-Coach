@@ -359,6 +359,37 @@ test.describe('Timeline', () => {
   });
 });
 
+test.describe('Timeline prompts and questions, off until you turn them on', () => {
+  type ReadWindow = { textReads: number; mockTimelineTextHook?: () => unknown; mockWebviewState?: Record<string, unknown> };
+
+  test('reads nothing from the log on first load, and says how to show it', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as ReadWindow;
+      w.textReads = 0;
+      w.mockTimelineTextHook = () => { w.textReads++; return undefined; };
+    });
+    await openTimeline(page);
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .wait').click();
+    await expect(page.locator('#tlxShowText')).not.toBeChecked();
+    await expect(page.locator('#tlxTextOff')).toHaveText('Off: turn it on to read this lane’s prompts, questions and answers from its log.');
+    await expect(page.locator('#tlxText .tx-list')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as ReadWindow).textReads)).toBe(0);
+    await showText(page);
+    await expect(page.locator('#tlxTextOff')).toHaveCount(0);
+    await expect(page.locator('#tlxText [data-text-at^="t:"]').first()).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as ReadWindow).textReads)).toBeGreaterThan(0);
+  });
+
+  test('keeps it on when you turned it on before', async ({ page }) => {
+    await page.addInitScript(() => { (window as unknown as ReadWindow).mockWebviewState = { timelineShowText: true }; });
+    await openTimeline(page);
+    await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
+    await expect(page.locator('#tlxShowText')).toBeChecked();
+    await expect(page.locator('#tlxText [data-text-at^="t:"]').first()).toBeVisible();
+  });
+});
+
 test.describe('Timeline navigation from Families', () => {
   test('says 1 session, not 1 sessions, when one session and no family are in range', async ({ page }) => {
     await page.addInitScript(() => {
