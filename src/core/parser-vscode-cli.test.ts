@@ -545,6 +545,26 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     expect(session?.requests[0].userWaits?.map(w => [w.answered, w.answeredAt])).toEqual([[true, Date.parse(at(3))], [false, undefined], [false, undefined]]);
   });
 
+  it('keeps a recorded answer for a later request that reused the tool call ID, even when it comes before that question', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 10, m)).toISOString();
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: at(0), data: { content: 'go' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Ship it?' } } },
+      { type: 'human_response.recorded', timestamp: at(3), data: { toolCallId: 'q1', requestId: 'r1', response: { answer: 'yes' } } },
+      { type: 'tool.execution_complete', timestamp: at(3), data: { toolCallId: 'q1', success: true, result: { content: '' } } },
+      // The second question's record is logged before its own start entry.
+      { type: 'human_response.recorded', timestamp: at(5), data: { toolCallId: 'q1', requestId: 'r2', response: { answer: 'no' } } },
+      { type: 'tool.execution_start', timestamp: at(5), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Tag it?' } } },
+      { type: 'tool.execution_complete', timestamp: at(7), data: { toolCallId: 'q1', success: true, result: { content: '' } } },
+      { type: 'assistant.message', timestamp: at(8), data: { content: 'done' } },
+    ]), 'ws', 'ws');
+    expect(session?.requests[0].userWaits?.map(w => [w.text?.ask, w.text?.answer, w.answered, w.answeredAt, w.requestId])).toEqual([
+      ['Ship it?', 'yes', true, Date.parse(at(3)), 'r1'],
+      ['Tag it?', 'no', true, Date.parse(at(5)), 'r2'],
+    ]);
+  });
+
   it('gives a wait to the turn that asked, even when the answer comes during a later turn', () => {
     const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 10, m)).toISOString();
     const session = parseCLIEventsFile(writeEvents([

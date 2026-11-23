@@ -472,14 +472,23 @@ function takeHumanResponse(state: CLIParseState, key: string, open: OpenUserWait
   return out;
 }
 
+/** The closed wait a record of your answer on `key` belongs to: none while a wait is open on the key, or when the record
+ *  is for another request than the closed wait's (a later wait reusing the key, logged before that wait's own entry). */
+function closedWaitFor(state: CLIParseState, key: string, requestId: string): UserWait | undefined {
+  if (state.openWaits.has(key)) return undefined;
+  const closed = state.closedWaits.get(key);
+  return closed && !(requestId && closed.requestId && closed.requestId !== requestId) ? closed : undefined;
+}
+
 /** A record of your answer goes to the wait still open on its key, kept until that closes; else to the wait it
- *  closed (it can come before or after the result). */
+ *  closed (it can come before or after the result). A record for another request than the closed wait's is kept for
+ *  the later wait it belongs to (`closedWaitFor`). */
 function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
   const answer = str(recordValue(data.response)?.answer).trim();
   for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
     if (!key) continue;
     const requestId = key === str(data.toolCallId) ? str(data.requestId) : '';
-    const wait = state.openWaits.has(key) ? undefined : state.closedWaits.get(key);
+    const wait = closedWaitFor(state, key, requestId);
     if (wait) {
       wait.answered = true;
       if (wait.answeredAt === undefined && at !== null) wait.answeredAt = at;

@@ -74,8 +74,9 @@ const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');
 /** Bump when a parser change alters what a cached session holds. 32: Copilot waits keep the time of your answer's own
  *  record and the request it answered (`answeredAt`, `requestId`); sessions from Copilot logs beside editor chats are
  *  cached with their workspace, and an older entry would date their answers by the result. 33: a record of your answer
- *  marks only the question it answered, not a later one that reused its tool call ID. */
-const CACHE_VERSION = 33;
+ *  marks only the question it answered, not a later one that reused its tool call ID. 34: nor a question a record for
+ *  another request was logged before. */
+const CACHE_VERSION = 34;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */
