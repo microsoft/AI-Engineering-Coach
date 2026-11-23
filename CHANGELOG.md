@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix AI features such as Generate Quiz, Slop or Not, and Skill Finder reporting "LLM returned
+  invalid JSON after 3 attempts" when GitHub Copilot returned an empty response (#91): empty
+  replies are now reported as "GitHub Copilot returned an empty response"
 - Fix VS Code re-parsing every log on each launch: the parse worker is stopped as soon as it
   reports its result, which also killed the parse-cache write still in progress, so the cache was
   never saved. The worker now waits (up to 30 seconds) for the write to finish first, and the
