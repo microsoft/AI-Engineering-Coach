@@ -246,6 +246,8 @@ async function collectWorkspaceSessionTiles(
 
 type ReportProgress = (p: Partial<LoadProgress> & { phase: number }) => void;
 
+type WorkspaceEntryProgress = NonNullable<Parameters<typeof processWorkspaceEntryAsync>[4]>;
+
 type CacheHitResult = { result: ParseResult; dirMetas: DirMetas };
 
 const VOLATILE_HARNESS_SET = new Set([
@@ -354,6 +356,28 @@ function entryDisplaySource(
   return wsName;
 }
 
+/** Progress while one re-read session streams (a large `events.jsonl` can take seconds): a
+ *  `reading` item, with the percentage moved within that session's share of the step. */
+function readingReporter(
+  onProgress: ProgressCallback | undefined,
+  result: ParseResult,
+  position: { index: number; total: number },
+  at: (fraction: number) => number,
+): WorkspaceEntryProgress | undefined {
+  if (!onProgress) return undefined;
+  return (progress) => {
+    const item = loadItem('cli-session', position, progress.wsName);
+    const within = progress.total > 0 ? progress.completed / progress.total : 0;
+    onProgress({
+      phase: 2,
+      detail: `${itemDetail(item)} — ${progress.detail}`,
+      pct: at((position.index - 1 + within) / position.total),
+      sessions: result.sessions.length,
+      item,
+    });
+  };
+}
+
 /** Re-read the volatile sessions with countable progress inside phase 2. `range` is the slice
  *  of phase 2 this step fills, so a step that follows other phase-2 work never moves the
  *  percentage backwards. */
@@ -384,7 +408,7 @@ async function collectVolatileHarnesses(
     const start = Date.now();
     const before = result.sessions.length;
     const skippedBefore = getParseWarningCounts().skippedFiles;
-    const wsName = await processWorkspaceEntryAsync(logsDir, name, harness, ctx);
+    const wsName = await processWorkspaceEntryAsync(logsDir, name, harness, ctx, readingReporter(onProgress, result, { index: i + 1, total }, at));
     for (let s = before; s < result.sessions.length; s++) running.add(result.sessions[s]);
     if (onProgress) {
       const item = loadItem('cli-session', { index: i + 1, total }, entryDisplaySource(result, before, wsName || name), {

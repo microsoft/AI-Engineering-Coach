@@ -20,6 +20,8 @@ describe('shortenHomePath', () => {
   it('only matches the home folder as a whole path prefix', () => {
     expect(shortenHomePath('/home/devops/api', '/home/dev')).toBe('/home/devops/api');
     expect(shortenHomePath('/srv/home/dev/api', '/home/dev')).toBe('/srv/home/dev/api');
+    expect(shortenHomePath('/home/dev team/api', '/home/dev')).toBe('/home/dev team/api');
+    expect(shortenHomePath('C:\\Users\\Dev (old)\\api', 'C:\\Users\\Dev')).toBe('C:\\Users\\Dev (old)\\api');
   });
 
   it('decodes file URIs before shortening', () => {

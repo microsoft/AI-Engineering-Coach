@@ -373,6 +373,7 @@ describe('parseAllLogsAsyncDetailed', () => {
       'fresh-cli',
       'VS Code',
       expect.any(Object),
+      undefined, // no progress listener, so no in-session reporter
     );
     expect(parseXcodeDatabasesAsync).toHaveBeenCalledWith(XCODE_DIR, parsed.result.editLocIndex, parsed.result.sessionSourceIndex);
   });

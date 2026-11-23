@@ -6,7 +6,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoadItem } from '../core/load-phases';
 import {
   disposeLoadingScreen,
@@ -183,5 +183,23 @@ describe('details drawer measurements', () => {
     renderLoadingScreen(1300);
     // One session in the last three seconds, not ten items relabelled as sessions.
     expect(text('tg-rate')).toBe('0.3 sessions/s');
+  });
+});
+
+describe('details drawer clock', () => {
+  it('keeps the running step time moving between progress messages', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      mountLoadingScreen(content, memoryStore(true), 0);
+      recordLoadingProgress({ phase: 4, pct: 90, detail: 'Computing analytics' }, 0);
+      renderLoadingScreen(0);
+      expect(text('loading-phase-ms-4')).toBe('0 ms');
+      vi.advanceTimersByTime(3000);
+      expect(text('loading-phase-ms-4')).toBe('3.0s');
+    } finally {
+      disposeLoadingScreen();
+      vi.useRealTimers();
+    }
   });
 });

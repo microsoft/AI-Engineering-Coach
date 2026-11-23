@@ -192,3 +192,30 @@ it('uses the source index for the folder of VS Code chat sessions, so same-named
   const done = progress.filter(update => update.item && update.item.status !== 'reading').map(update => update.item!.path);
   expect(done).toEqual([path.join('~', 'team-a', 'api'), path.join('~', 'team-b', 'api')]);
 });
+
+it('reports reading progress inside a large CLI session on a cached load', async () => {
+  const cliDir = path.join(os.homedir(), '.copilot', 'session-state');
+  vi.mocked(loadCacheData).mockResolvedValue({ result: makeResult(), dirMetas: {} });
+  vi.mocked(scanVsCodeDirs).mockReturnValue({
+    entries: [{ logsDir: cliDir, dirEntries: [dirEntry('cli-a'), dirEntry('cli-b')] }],
+    totalDirs: 2,
+  });
+  vi.mocked(processWorkspaceEntryAsync).mockImplementation((...args: Parameters<typeof processWorkspaceEntryAsync>) => {
+    const [, wsId, , ctx, onWorkspaceProgress] = args;
+    onWorkspaceProgress?.({ wsName: `repo-${wsId}`, detail: 'events.jsonl 50%', completed: 1, total: 2 });
+    ctx.sessions.push(makeSession({ sessionId: wsId, harness: 'GitHub Copilot CLI' }));
+    return Promise.resolve(`repo-${wsId}`);
+  });
+  const progress: ProgressUpdate[] = [];
+
+  await parseAllLogsAsyncDetailed([cliDir], update => { progress.push({ ...update }); });
+
+  const reading = progress.filter(update => update.item?.status === 'reading');
+  expect(reading.map(update => `${update.item!.kind} ${update.item!.index}/${update.item!.total} ${update.detail}`)).toEqual([
+    'cli-session 1/2 session 1/2: repo-cli-a — events.jsonl 50%',
+    'cli-session 2/2 session 2/2: repo-cli-b — events.jsonl 50%',
+  ]);
+  // Half way through the first of two sessions is a quarter of the way through phase 2 (10–75%).
+  expect(reading[0].pct).toBe(26);
+  for (let i = 1; i < progress.length; i++) expect(progress[i].pct).toBeGreaterThanOrEqual(progress[i - 1].pct);
+});

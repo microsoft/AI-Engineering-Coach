@@ -228,6 +228,9 @@ function tickClock(now = Date.now()): void {
     if (left > 0.5) text += ` · ${formatTimeLeft(left)}`;
   }
   setText('loading-time', text);
+  // The running step's time moves even when no message arrives (analytics reports only its
+  // start and end).
+  if (byId('loading-details')?.hidden === false) renderPhaseList(s, now);
 }
 
 function nowLine(s: ScreenState): { text: string; folder?: string } {

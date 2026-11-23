@@ -6,7 +6,9 @@
 /* External harness collection registry for parser orchestration. */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import { Workspace, Session } from './types';
+import { displayFolderName, shortenHomePath } from './display-path';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
@@ -48,8 +50,11 @@ const EXTERNAL_HARNESSES: ExternalHarnessCollector[] = [
     },
     async collectAsync(ctx, reportDetail) {
       for (const claudeDir of findClaudeDirs()) {
-        const results = await parseClaudeSessionsAsync(claudeDir, (idx, total, name) => {
-          reportDetail?.(`${idx}/${total}: ${name}`);
+        const results = await parseClaudeSessionsAsync(claudeDir, (idx, total, name, rootPath) => {
+          // Shown on the loading screen: a project opened in the home folder reads "~", not the
+          // home folder's name (usually the user name).
+          const shown = rootPath ? displayFolderName(shortenHomePath(rootPath, os.homedir())) : name;
+          reportDetail?.(`${idx}/${total}: ${shown}`);
         }, ctx.editLocIndex, ctx.sessionSourceIndex);
         for (const { sessions } of results) {
           for (const session of sessions) addSession(ctx.workspaces, ctx.sessions, session, claudeDir);

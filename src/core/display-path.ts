@@ -44,7 +44,11 @@ export function shortenHomePath(p: string, home: string): string {
   pattern.lastIndex = 0;
   const match = pattern.exec(decoded);
   if (!match || match.index !== 0) return decoded;
-  return `~${decoded.slice(match[0].length)}`;
+  // A whole path: the home folder must end at a separator or the end, so `/home/dev team`
+  // is not under `/home/dev`.
+  const rest = decoded.slice(match[0].length);
+  if (rest !== '' && rest[0] !== '/' && rest[0] !== '\\') return decoded;
+  return `~${rest}`;
 }
 
 /** Every occurrence of the home folder in free text replaced by `~` (progress details can embed
