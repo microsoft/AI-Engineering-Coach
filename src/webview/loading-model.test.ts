@@ -153,6 +153,18 @@ describe('createPhaseTimer', () => {
 });
 
 describe('createRateSeries', () => {
+  it('catches up after a long gap in bounded time', () => {
+    const rate = createRateSeries(1000, 60);
+    rate.add(0);
+    const started = performance.now();
+    rate.add(100_000_000); // ~28 hours later, e.g. a webview that was hidden (was ~1 s of work)
+    const series = rate.series(100_000_500);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(series).toHaveLength(60);
+    expect(series.reduce((a, b) => a + b, 0)).toBe(1);
+    expect(rate.recent(100_000_500)).toBeCloseTo(1 / 3, 5);
+  });
+
   it('buckets events per second and reports the recent rate', () => {
     const rate = createRateSeries(1000, 5);
     for (const t of [0, 100, 200, 1100, 2500, 2600, 2700, 2800]) rate.add(t);

@@ -224,22 +224,29 @@ export function createRateSeries(bucketMs = 1000, maxBuckets = 60): { add(nowMs:
   let start: number | undefined;
   const reach = (nowMs: number): number => {
     const base = start ?? nowMs;
-    const index = Math.floor((nowMs - base) / bucketMs);
-    while (counts.length <= index) counts.push(0);
-    let last = index;
-    while (counts.length > maxBuckets) {
-      counts.shift();
-      start = (start ?? base) + bucketMs;
-      last--;
+    let index = Math.floor((nowMs - base) / bucketMs);
+    // Drop whole buckets that fall out of the window in one step, so a long gap (a hidden
+    // webview) costs at most maxBuckets of work instead of one shift per elapsed bucket.
+    const overflow = index + 1 - maxBuckets;
+    if (overflow > 0) {
+      if (overflow >= counts.length) counts.length = 0;
+      else counts.splice(0, overflow);
+      start = base + overflow * bucketMs;
+      index -= overflow;
     }
-    return last;
+    while (counts.length <= index) counts.push(0);
+    return index;
   };
   return {
     add(nowMs: number): void {
       if (start === undefined) start = nowMs;
       counts[reach(nowMs)]++;
       events.push(nowMs);
-      while (events.length > 0 && (events[0] < nowMs - 10_000 || events.length > 5000)) events.shift();
+      const cutoff = nowMs - 10_000;
+      let drop = 0;
+      while (drop < events.length && events[drop] < cutoff) drop++;
+      drop = Math.max(drop, events.length - 5000);
+      if (drop > 0) events.splice(0, drop);
     },
     series(nowMs: number): number[] {
       if (start === undefined) return [];
