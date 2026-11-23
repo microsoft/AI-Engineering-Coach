@@ -498,7 +498,11 @@ describe('rule-engine', () => {
         suggestion: 'Add context to reduce the 40% short-prompt rate.',
         examples: ['short prompt'],
       });
-      expect(result.templateVars).toEqual({ count: 2, total: 5, ratio: 0.4, pct: '40%', extra: { avgGap: 1.25 } });
+      // Thresholds are template variables too, as on the detector-registry path.
+      expect(result.templateVars).toEqual({
+        count: 2, total: 5, ratio: 0.4, pct: '40%',
+        extra: { ...rule.thresholds, avgGap: 1.25 }, thresholds: rule.thresholds,
+      });
     });
 
     it('respects dynamic severity from the emission', () => {

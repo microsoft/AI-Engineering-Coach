@@ -67,8 +67,8 @@ Some rules read fields that only some harnesses log, so they count only those ha
 Evaluates how efficiently your sessions use the context window:
 
 - **Context Window Saturation** -- Sessions where the context window is nearly full
-- **Compaction Storms** -- Frequent auto-compactions indicating sessions that run too long
-- **Runaway Growth** -- Context size growing steadily without resolution
+- **Compaction Storms** -- Frequent compactions indicating sessions that run too long
+- **Runaway Growth** -- Context size growing steadily without resolution, measured from the session's last compaction
 
 ## Findings
 

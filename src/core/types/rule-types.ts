@@ -110,6 +110,7 @@ export interface RuleTemplateVars {
   ratio: number;           // count / total (0-1)
   pct: string;             // ratio formatted as percentage string
   extra: Record<string, unknown>;  // additional rule-specific vars
+  thresholds?: Record<string, number>;  // the rule's thresholds, for {{thresholds.X}} in templates
 }
 
 /**
@@ -139,7 +140,8 @@ export interface DetectionRule {
   description: string;
 
   /** Template for the problem description shown when triggered.
-   *  Supports {{count}}, {{total}}, {{pct}}, {{extra.xxx}} placeholders. */
+   *  Supports {{count}}, {{total}}, {{pct}}, {{extra.xxx}} and {{thresholds.xxx}} placeholders.
+   *  Non-integer numbers render with one decimal. */
   descriptionTemplate: string;
 
   /** Template for the suggestion shown when triggered */

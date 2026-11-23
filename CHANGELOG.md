@@ -11,6 +11,14 @@ Each pull request describes its user-visible changes in its own file in
 packaged extension (**AI Engineer Coach: What's New**) merge them into this history under the
 date each one was merged, read from git. Changes not yet merged show under `[Unreleased]`.
 
+## 2026-11-23
+
+### Fixed
+
+- Fix AI features such as Generate Quiz, Slop or Not, and Skill Finder reporting "LLM returned
+  invalid JSON after 3 attempts" when GitHub Copilot returned an empty response (#91, #253): empty
+  replies are now reported as "GitHub Copilot returned an empty response"
+
 ## 2026-11-01
 
 ### Fixed
