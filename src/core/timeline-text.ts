@@ -77,18 +77,20 @@ export function timelineSessionText(session: Session, labels: ScrubContext, scop
   const waits = scope
     ? allWaits.filter(w => waitInWindow({ s: w.start, e: w.end, k: w.kind, a: w.answered, ...(w.answeredAt != null ? { at: w.answeredAt } : {}) }, scope.from, scope.to))
     : allWaits;
+  // Each turn's predecessor among the turns read, found once: a search per turn is quadratic on a long range's lane.
+  const before = new Map(requests.map((r, i) => [r, requests[i - 1]]));
   return {
     sessionId: session.sessionId,
-    turns: shown.map(x => textTurn(x.r, x.t, labels, answersSecretRequest(x.r, requests))).sort((a, b) => a.t - b.t),
+    turns: shown.map(x => textTurn(x.r, x.t, labels, answersSecretRequest(x.r, before.get(x.r)))).sort((a, b) => a.t - b.t),
     waits: waits.map(w => waitText(w, labels)).sort((a, b) => a.s - b.s),
   };
 }
 
-/** A lone word you sent right after the agent asked for a credential (`Please paste the API key.`): taken for one. */
-function answersSecretRequest(r: SessionRequest, requests: readonly SessionRequest[]): boolean {
+/** A lone word you sent right after the agent asked for a credential (`Please paste the API key.`): taken for one.
+ *  `before` is the turn read just before `r`. */
+function answersSecretRequest(r: SessionRequest, before: SessionRequest | undefined): boolean {
   const prompt = r.messageText.trim();
   if (r.nonHumanKind || !prompt || prompt.length > 200 || /\s/.test(prompt)) return false;
-  const before = requests[requests.indexOf(r) - 1];
   return !!before && asksForSecret((before.replyText ?? before.responseText).slice(-400));
 }
 

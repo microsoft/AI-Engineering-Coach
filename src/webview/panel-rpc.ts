@@ -8,6 +8,7 @@
 import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
 import { loadSessionFromDisk, loadTimelineTextFromDisk } from '../core/cache';
+import { MAX_TEXT_SCOPE_TURNS } from '../core/timeline-model';
 import { turnIdentity, withAnalyzedTurns } from '../core/fork-ownership';
 import { localScrubContext } from '../core/session-workspace-meta';
 import type { TimelineTextScope } from '../core/types/timeline-types';
@@ -132,13 +133,10 @@ export function validateDateFilter(p: Record<string, unknown>): DateFilter | und
   return Object.keys(f).length > 0 ? f : undefined;
 }
 
-/** Most turns one lane's scope lists: more than any day or week shows. */
-const MAX_SCOPE_TURNS = 5000;
-
 /** A lane's text scope from the webview: a finite window and its turns, else nothing is read. */
 function validateTimelineTextScope(raw: unknown): TimelineTextScope | null {
   if (!isRecord(raw) || !isNumber(raw.from) || !isNumber(raw.to) || !Number.isFinite(raw.from) || !Number.isFinite(raw.to)
-    || raw.to <= raw.from || !Array.isArray(raw.turns) || raw.turns.length > MAX_SCOPE_TURNS) return null;
+    || raw.to <= raw.from || !Array.isArray(raw.turns) || raw.turns.length > MAX_TEXT_SCOPE_TURNS) return null;
   const turns: TimelineTextScope['turns'] = [];
   for (const t of raw.turns) {
     if (!isRecord(t) || !isNumber(t.t) || !Number.isFinite(t.t) || !isOptionalString(t.id)) return null;

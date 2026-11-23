@@ -23,7 +23,7 @@
  *   Family             a coordinator session and every session it started, directly or through its children. */
 
 import { toDateStr } from './helpers';
-import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
+import type { TimelineDataset, TimelineSessionRecord, TimelineTextScope, TimelineTurn, TimelineTurnWait } from './types/timeline-types';
 
 export const WAIT_MIN_MS = 2 * 60_000;
 export const WAIT_MAX_MS = 120 * 60_000;
@@ -35,7 +35,10 @@ export const WIDE_FAN_OUT = 8;
 const UNATTENDED_CALLOUT_MS = 5 * 60_000;
 const MAX_DEPTH = 64;
 
-export type TimelineView = 'day' | 'week' | 'families';
+export type TimelineView = 'day' | 'week' | 'range' | 'families';
+
+/** The views that draw lanes over a period: a day, a Monday-to-Sunday week, or a custom range of days. */
+export type TimelinePeriod = Exclude<TimelineView, 'families'>;
 
 export type Interval = [number, number];
 
@@ -282,6 +285,23 @@ export function textTurnFinder<T extends { t: number; id?: string }>(turns: read
   return t => (t.id ? byId.get(t.id) : undefined) ?? byTime.get(t.t) ?? undefined;
 }
 
+/** Most turns one lane's text read can list: a Range view of up to 92 days can hold far more than a day or a week. The
+ *  host reads no scope longer than this, and the lane says so instead. */
+export const MAX_TEXT_SCOPE_TURNS = 50_000;
+
+/** A lane's text scope: its window and the turns it lists, each once (a wait's preceding turn is often a listed one). */
+export function textScope(win: Interval, turns: readonly Pick<TimelineTurn, 't' | 'id'>[]): TimelineTextScope {
+  const seen = new Set<string>();
+  const listed: TimelineTextScope['turns'] = [];
+  for (const t of turns) {
+    const key = `${t.t}|${t.id ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    listed.push({ t: t.t, ...(t.id ? { id: t.id } : {}) });
+  }
+  return { from: win[0], to: win[1], turns: listed };
+}
+
 /** A question or permission prompt that belongs to the window [`from`, `to`): asked in it, its measured wait
  *  overlapping it (half-open), or answered in it. */
 export function waitInWindow(w: TimelineTurnWait, from: number, to: number): boolean {
@@ -393,17 +413,22 @@ export function dayStart(date: string): number {
   return new Date(date + 'T00:00:00').getTime();
 }
 
-/** `days` calendar days later, at the same local clock time (not `days × 24 h`, which daylight saving breaks). */
+/** The start of the day `days` calendar days after the one holding `ts` (not `days × 24 h`, which daylight saving
+ *  breaks): its midnight, or 1:00 where the clock springs forward at midnight. Read from the date, not carried from
+ *  `ts`, so a day that started at 1:00 is followed by one that starts at midnight. */
 export function addDays(ts: number, days: number): number {
   const d = new Date(ts);
   d.setDate(d.getDate() + days);
+  d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
-/** Monday 00:00 of the week holding `date`. */
+/** The start of the Monday of the week holding `date` (its midnight, or 1:00 where the clock skips midnight), the same
+ *  whichever of the week's days is given. */
 export function weekStart(date: string): number {
   const d = new Date(date + 'T00:00:00');
   d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
@@ -433,13 +458,18 @@ export function dayTicks(start: number, end: number): number[] {
   return ticks;
 }
 
-/** Each local full hour from `start` up to `end`, in steps of `step` hours of the clock. */
+/** Each local full hour from `start` up to `end`, in steps of `step` hours of the clock. An hour the clock repeats gets
+ *  its tick twice; after a half-hour change, ticks go back onto the clock's whole hours. */
 export function hourTicks(start: number, end: number, step: number): number[] {
   const ticks: number[] = [];
   const d = new Date(start);
   d.setMinutes(0, 0, 0);
   if (d.getTime() < start) d.setHours(d.getHours() + 1);
   for (; d.getTime() < end && ticks.length < 400; d.setTime(d.getTime() + 3_600_000)) {
+    if (d.getMinutes() !== 0) {
+      d.setMinutes(60, 0, 0);
+      if (d.getTime() >= end) break;
+    }
     if (d.getHours() % step === 0) ticks.push(d.getTime());
   }
   return ticks;
@@ -487,37 +517,112 @@ export function buildLanes(p: PreparedTimeline, from: number, to: number): Timel
   const lanes: TimelineLane[] = [];
   if (start >= end) return lanes;
   for (const s of p.sessions) {
-    if (s.ctx) continue;
-    const turns = s.turns.filter(t => t.t >= start && t.t < end);
-    const segments = clipIntervals(s.work, win);
-    const waits = s.waits.filter(w => w.start < end && w.end > start);
-    // A relay that only delivered a child's answer is no activity of its own.
-    const answers = s.answers.filter(a => a.counted && a.at >= start && a.at < end);
-    if (turns.length === 0 && segments.length === 0 && waits.length === 0 && answers.length === 0) continue;
-    const typed = turns.filter(t => t.k === 'you').length;
-    const waiting = clipIntervals(s.waiting, win);
-    const edges = [...turns.map(t => t.t), ...segments.flat(), ...waiting.flat(), ...answers.map(a => a.at)];
-    lanes.push({
-      s,
-      turns,
-      segments,
-      typed,
-      automated: turns.length - typed,
-      answered: answers.filter(a => a.counted).length,
-      agentMs: intervalsMs(segments),
-      waitMs: intervalsMs(waiting),
-      credits: sum(turns, t => t.cr),
-      tokens: sum(turns, t => t.tok),
-      first: Math.min(...edges),
-      last: Math.max(...edges),
-      subagents: sum(turns, t => t.sub),
-      waits,
-      away: s.away.filter(([, b]) => b >= start && b < end).length,
-      visibleParent: -1,
-      win,
-    });
+    const lane = sessionLane(s, win);
+    if (lane) lanes.push(lane);
   }
   return lanes;
+}
+
+/** The session's lane in `win` (already within the dataset's bounds), or null without activity there. */
+function sessionLane(s: PreparedSession, win: Interval): TimelineLane | null {
+  if (s.ctx) return null;
+  const [start, end] = win;
+  const turns = s.turns.filter(t => t.t >= start && t.t < end);
+  const segments = clipIntervals(s.work, win);
+  const waits = s.waits.filter(w => w.start < end && w.end > start);
+  // A relay that only delivered a child's answer is no activity of its own.
+  const answers = s.answers.filter(a => a.counted && a.at >= start && a.at < end);
+  if (turns.length === 0 && segments.length === 0 && waits.length === 0 && answers.length === 0) return null;
+  const typed = turns.filter(t => t.k === 'you').length;
+  const waiting = clipIntervals(s.waiting, win);
+  const edges = [...turns.map(t => t.t), ...segments.flat(), ...waiting.flat(), ...answers.map(a => a.at)];
+  return {
+    s,
+    turns,
+    segments,
+    typed,
+    automated: turns.length - typed,
+    answered: answers.filter(a => a.counted).length,
+    agentMs: intervalsMs(segments),
+    waitMs: intervalsMs(waiting),
+    credits: sum(turns, t => t.cr),
+    tokens: sum(turns, t => t.tok),
+    first: minOf(edges),
+    last: maxOf(edges),
+    subagents: sum(turns, t => t.sub),
+    waits,
+    away: s.away.filter(([, b]) => b >= start && b < end).length,
+    visibleParent: -1,
+    win,
+  };
+}
+
+/** Each day's totals over the sessions the filters keep, judged as the Day view judges them: a session counts on a
+ *  day when its lane that day passes the filters, so a day's totals equal that day's KPIs. Without filters, the
+ *  prepared totals. `repoLabel` as in `filterLanes`. Each session's activity is sorted into its days once, so a
+ *  long, busy session costs its size, not its size times its days. */
+export function filteredDayTotals(
+  p: PreparedTimeline, f: LaneFilters, repoLabel: (s: PreparedSession) => string = s => s.repo,
+): Map<string, DayTotals> {
+  if (!hasLaneFilters(f)) return p.dayTotals;
+  const wins = p.days.map((d): Interval => {
+    const [a, b] = timelineWindow('day', d);
+    return [Math.max(a, p.bounds[0]), Math.min(b, p.bounds[1])];
+  });
+  const starts = wins.map(w => w[0]);
+  // The day holding `t`, or -1.
+  const dayOf = (t: number) => {
+    const i = upperBound(starts, t) - 1;
+    return i >= 0 && t < wins[i][1] ? i : -1;
+  };
+  const totals = new Map<string, DayTotals>();
+  for (const s of p.sessions) {
+    if (s.ctx) continue;
+    const days = new Map<number, Pick<PreparedSession, 'turns' | 'work' | 'waiting' | 'waits' | 'answers' | 'away'>>();
+    const bucket = (i: number) => {
+      let b = days.get(i);
+      if (!b) days.set(i, b = { turns: [], work: [], waiting: [], waits: [], answers: [], away: [] });
+      return b;
+    };
+    const at = (t: number, add: (i: number) => void) => {
+      const i = dayOf(t);
+      if (i >= 0) add(i);
+    };
+    // Every day an interval overlaps (half-open), as `clipIntervals` and the lane's wait test read it.
+    const over = (a: number, b: number, add: (i: number) => void) => {
+      for (let i = Math.max(0, upperBound(starts, a) - 1); i < wins.length && wins[i][0] < b; i++) if (wins[i][1] > a) add(i);
+    };
+    for (const t of s.turns) at(t.t, i => bucket(i).turns.push(t));
+    for (const w of s.work) over(w[0], w[1], i => bucket(i).work.push(w));
+    for (const w of s.waiting) over(w[0], w[1], i => bucket(i).waiting.push(w));
+    for (const w of s.waits) over(w.start, w.end, i => bucket(i).waits.push(w));
+    for (const a of s.answers) at(a.at, i => bucket(i).answers.push(a));
+    for (const w of s.away) at(w[1], i => bucket(i).away.push(w));
+    for (const [i, part] of days) {
+      if (wins[i][0] >= wins[i][1]) continue;
+      const lane = sessionLane({ ...s, ...part }, wins[i]);
+      if (!lane || filterLanes([{ ...lane, s }], f, p, repoLabel).length === 0) continue;
+      const day = totals.get(p.days[i]) ?? { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
+      day.typed += lane.typed;
+      day.automated += lane.automated;
+      day.agentMs += lane.agentMs;
+      day.waitMs += lane.waitMs;
+      totals.set(p.days[i], day);
+    }
+  }
+  return totals;
+}
+
+/** The index of the first of the sorted `items` after `value`. */
+function upperBound(items: readonly number[], value: number): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (items[mid] <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 export interface LaneFilters {
@@ -580,7 +685,7 @@ export interface ViewFamily {
 
 /** The family's longest unattended stretch inside the window. */
 export function familyUnattendedMs(p: PreparedTimeline, root: number, win: Interval): number {
-  return Math.max(0, ...(p.stretches.get(root) ?? []).map(([a, b]) => overlap(a, b, Math.max(win[0], p.bounds[0]), Math.min(win[1], p.bounds[1]))));
+  return Math.max(0, maxOf((p.stretches.get(root) ?? []).map(([a, b]) => overlap(a, b, Math.max(win[0], p.bounds[0]), Math.min(win[1], p.bounds[1])))));
 }
 
 /** Most sessions doing agent work at once inside the lanes' window, and when that first happened. */
@@ -641,7 +746,7 @@ export function buildViewFamilies(lanes: TimelineLane[], p: PreparedTimeline): V
       root,
       lanes: members,
       ordered,
-      first: Math.min(...members.map(l => l.first)),
+      first: minOf(members.map(l => l.first)),
       size: p.familySize.get(root) ?? members.length,
       typed: sum(members, l => l.typed),
       automated: sum(members, l => l.automated),
@@ -705,7 +810,7 @@ export function timelineKpis(lanes: readonly TimelineLane[], families: readonly 
     answered: sum(lanes, l => l.answered),
     agentMs,
     agentMsPerPrompt: typed > 0 ? agentMs / typed : null,
-    unattendedMs: Math.max(0, ...families.map(f => f.unattendedMs)),
+    unattendedMs: Math.max(0, maxOf(families.map(f => f.unattendedMs))),
     waits: started.length,
     idleWaits: started.filter(w => w.kind === 'idle').length,
     waitMs: sum(lanes, l => l.waitMs),
@@ -788,11 +893,11 @@ export function formatClock(ts: number): string {
   return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** Clock time in a day view, weekday and clock time in a week view. */
-export function formatWhen(ts: number, view: 'day' | 'week'): string {
-  return view === 'week'
-    ? `${new Date(ts).toLocaleDateString(undefined, { weekday: 'short' })} ${formatClock(ts)}`
-    : formatClock(ts);
+/** Clock time in a day view, weekday and clock time in a week view, and the date too in a custom range. */
+export function formatWhen(ts: number, view: TimelinePeriod): string {
+  if (view === 'day') return formatClock(ts);
+  const day = new Date(ts).toLocaleDateString(undefined, view === 'week' ? { weekday: 'short' } : { weekday: 'short', day: 'numeric', month: 'short' });
+  return `${day} ${formatClock(ts)}`;
 }
 
 /** Whole AI credits, `1,234`. */
@@ -820,11 +925,11 @@ const them = (n: number) => (n === 1 ? 'it' : 'them');
 
 /* ---- coaching callouts (H) ---- */
 
-/** The three findings of a day or week, as plain sentences: only what the logs show. */
+/** The three findings of a day, week or range, as plain sentences: only what the logs show. */
 export function viewInsights(
-  lanes: readonly TimelineLane[], families: readonly ViewFamily[], namer: Namer, period: 'day' | 'week', p?: PreparedTimeline,
+  lanes: readonly TimelineLane[], families: readonly ViewFamily[], namer: Namer, period: TimelinePeriod, p?: PreparedTimeline,
 ): string[] {
-  const when = period === 'week' ? 'this week' : 'on this day';
+  const when = period === 'week' ? 'this week' : period === 'range' ? 'in this range' : 'on this day';
   return [unattendedInsight(families, namer, when, p), creditsInsight(lanes, namer, when), waitsInsight(lanes, when)];
 }
 
@@ -1031,8 +1136,8 @@ function familyNode(s: PreparedSession, depth: number, bounds: Interval): Family
     agentMs: intervalsMs(work),
     credits: sum(s.turns, t => t.cr),
     tokens: sum(s.turns, t => t.tok),
-    first: starts.length ? Math.min(...starts) : 0,
-    last: ends.length ? Math.max(...ends) : 0,
+    first: starts.length ? minOf(starts) : 0,
+    last: ends.length ? maxOf(ends) : 0,
     subagents: sum(s.turns, t => t.sub),
   };
 }
@@ -1091,8 +1196,8 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     members: nodes.length,
     sessions: counted.length,
     children: kids.length,
-    depth: Math.max(0, ...counted.map(n => n.depth)),
-    fanOut: Math.max(0, ...nodes.map(activeKids)),
+    depth: Math.max(0, maxOf(counted.map(n => n.depth))),
+    fanOut: Math.max(0, maxOf(nodes.map(activeKids))),
     repos: new Set(counted.map(n => n.s.repo)).size,
     // The repository named first: the coordinator's when it has activity in range, else the first active member's.
     repoSession: (counted[0] ?? coordinator).s,
@@ -1113,9 +1218,9 @@ function summarizeFamily(root: PreparedSession, kidsOf: Map<number, PreparedSess
     perChild: kids.length > 0 ? childCredits / kids.length : 0,
     verdict: steppedInto > 0 ? 'needed' : 'alone',
     wide: kids.length >= WIDE_FAN_OUT,
-    from: firsts.length > 0 ? toDateStr(Math.min(...firsts)) : '',
-    to: lasts.length > 0 ? toDateStr(Math.max(...lasts)) : '',
-    busiest: busiestDayOf(counted) || (firsts.length > 0 ? toDateStr(Math.min(...firsts)) : ''),
+    from: firsts.length > 0 ? toDateStr(minOf(firsts)) : '',
+    to: lasts.length > 0 ? toDateStr(maxOf(lasts)) : '',
+    busiest: busiestDayOf(counted) || (firsts.length > 0 ? toDateStr(minOf(firsts)) : ''),
     rank: 0,
   };
 }
@@ -1148,8 +1253,8 @@ function familiesTotals(p: PreparedTimeline, families: FamilySummary[]): Familie
     childTyped: sum(families, f => f.childTyped),
     childAnswered: sum(families, f => f.childAnswered),
     childrenNeedingYou: sum(families, f => f.steppedInto),
-    maxDepth: Math.max(0, ...families.map(f => f.depth)),
-    maxFanOut: Math.max(0, ...families.map(f => f.fanOut)),
+    maxDepth: Math.max(0, maxOf(families.map(f => f.depth))),
+    maxFanOut: Math.max(0, maxOf(families.map(f => f.fanOut))),
     top3Share: sum(families.slice(0, 3), f => f.creditShare),
     alone: group(families.filter(f => f.verdict === 'alone')),
     needed: group(families.filter(f => f.verdict === 'needed')),
@@ -1210,6 +1315,20 @@ export function familiesInsights(t: FamiliesTotals): string[] {
     ? `${plural(t.wide.families, 'family', 'families')} started ${WIDE_FAN_OUT} or more child sessions at any depth (wide fan-out)${t.totalCredits > 0 ? ` and used ${t.wide.creditShare.toFixed(0)}% of all credits` : ''}.`
     : `No family started ${WIDE_FAN_OUT} or more children.`);
   return tips;
+}
+
+/** The smallest of `values`: a loop, since spreading a dense lane's values into `Math.min` overflows the call stack. */
+function minOf(values: readonly number[]): number {
+  let min = Infinity;
+  for (const v of values) if (v < min) min = v;
+  return min;
+}
+
+/** The largest of `values` (see `minOf`). */
+function maxOf(values: readonly number[]): number {
+  let max = -Infinity;
+  for (const v of values) if (v > max) max = v;
+  return max;
 }
 
 function sum<T>(items: readonly T[], value: (item: T) => number): number {

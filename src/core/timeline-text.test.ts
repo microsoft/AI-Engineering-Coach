@@ -9,13 +9,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { formatTimeline } from '../mcp/formatters';
 import { Analyzer } from './analyzer';
 import { parseCLIEventsFile } from './parser-vscode-cli';
 import { buildSummaryExportFromAnalyzer } from './summary-export';
 import { MAX_TEXT, timelineSessionText } from './timeline-text';
 import { textTurnFinder } from './timeline-model';
+import { createRequest, createSession } from './parser-shared';
 import type { Session } from './types';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-timeline-text-'));
@@ -215,6 +216,29 @@ describe('timelineSessionText kinds and boundaries', () => {
     for (const out of [an.getTimelineData(day), formatTimeline(an, day, '2026-11-17'), buildSummaryExportFromAnalyzer(an, day)]) {
       const json = JSON.stringify(out);
       for (const secret of ['Which size', '256 MB', 'Read the docs', 'Two cache sizes', 'Benchmark the cache']) expect(json).not.toContain(secret);
+    }
+  });
+});
+
+describe('timelineSessionText at the scope limit', () => {
+  it('finds each turn’s predecessor without searching, still hiding a word sent after a request for a key', () => {
+    const t0 = new Date(2026, 10, 17, 10).getTime();
+    const n = 20_000;
+    const requests = Array.from({ length: n }, (_, i) => createRequest({
+      requestId: `r${i}`, timestamp: t0 + i * 1_000, messageText: i === n - 1 ? 'hunter2' : 'continue',
+      responseText: i === n - 2 ? 'Please paste the new API key.' : 'Done',
+    }));
+    const session = createSession({ sessionId: 'long', workspaceId: 'ws', workspaceName: 'Project', harness: 'GitHub Copilot CLI', requests });
+    const scope = { from: t0, to: t0 + n * 1_000, turns: requests.map(r => ({ t: r.timestamp! })) };
+    // A search per one-word prompt is quadratic: at the 50,000-turn scope limit, 1.25 billion comparisons.
+    const searches = vi.spyOn(Array.prototype, 'indexOf');
+    try {
+      const text = timelineSessionText(session, labels, scope);
+      expect(searches.mock.calls.length).toBeLessThan(n / 10);
+      expect(text.turns).toHaveLength(n);
+      expect(text.turns.map(t => t.prompt).slice(-3)).toEqual(['continue', 'continue', '[secret]']);
+    } finally {
+      searches.mockRestore();
     }
   });
 });
