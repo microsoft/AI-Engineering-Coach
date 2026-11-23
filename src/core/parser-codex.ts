@@ -212,6 +212,18 @@ function projectNameFromCwd(cwd: string): string {
   return cwd.replaceAll('\\', '/').replace(/\/+$/, '').split('/').pop() || 'unknown';
 }
 
+/** Turn IDs and fork usage, before any line is read. */
+function newCodexForkState(): Pick<CodexParseState, 'forked' | 'inherited' | 'turnId' | 'nextTurnId' | 'fork' | 'lastSnapshotTotal'> {
+  return {
+    forked: false,
+    inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
+    turnId: '',
+    nextTurnId: '',
+    fork: new CodexForkUsage(),
+    lastSnapshotTotal: null,
+  };
+}
+
 function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): CodexParseState {
   return {
     requests: [],
@@ -251,12 +263,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     editLocIndex,
     pendingToolEdits: new Map(),
     curTotalCachedReported: false,
-    forked: false,
-    inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
-    turnId: '',
-    nextTurnId: '',
-    fork: new CodexForkUsage(),
-    lastSnapshotTotal: null,
+    ...newCodexForkState(),
     turnCompactions: [],
     lastPromptTokens: 0,
     lastContextWindow: null,
@@ -674,15 +681,17 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   state.hasTokenData = true;
 
   const lastInput = tokenCount(last?.input_tokens);
-  if (newCall && lastInput != null) {
-    const window = tokenCount(info?.model_context_window);
-    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
-    // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
-    if (lastInput > 0) {
-      state.lastPromptTokens = lastInput;
-      state.lastContextWindow = window;
-      state.compactionOpen = false;
-    }
+  if (newCall && lastInput != null) noteMainCall(state, lastInput, tokenCount(info?.model_context_window));
+}
+
+/** A new main-agent model call, with its prompt tokens and context window. */
+function noteMainCall(state: CodexParseState, lastInput: number, window: number | null): void {
+  state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
+  // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
+  if (lastInput > 0) {
+    state.lastPromptTokens = lastInput;
+    state.lastContextWindow = window;
+    state.compactionOpen = false;
   }
 }
 
