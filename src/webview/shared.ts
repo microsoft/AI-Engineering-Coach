@@ -388,16 +388,25 @@ export function createChart(
   type: ChartType,
   data: { labels: (string | number)[]; datasets: Record<string, unknown>[] },
   options?: Record<string, unknown>,
-): Chart {
+): Chart | null {
   return createChartFrom(canvasId, { type, data, options });
 }
 
-export function createChartFrom(canvasId: string, spec: ChartSpec): Chart {
+export function createChartFrom(canvasId: string, spec: ChartSpec): Chart | null {
+  const el = document.getElementById(canvasId) as HTMLCanvasElement | null;
+  if (!el) {
+    // The canvas isn't in the live DOM — most likely a stale async render
+    // (the user navigated away, switched tabs, or re-triggered a load
+    // before this chart's data finished fetching). Skip it instead of
+    // letting Chart.js dereference a null element and crash the page.
+    console.warn(`createChart: canvas '${canvasId}' not in DOM (stale render?)`);
+    return null;
+  }
   const defaults: Record<string, unknown> = {
     responsive: true,
     maintainAspectRatio: false,
   };
-  const c = new Chart(document.getElementById(canvasId) as HTMLCanvasElement, {
+  const c = new Chart(el, {
     type: spec.type,
     data: spec.data as never,
     options: { ...defaults, ...spec.options },
