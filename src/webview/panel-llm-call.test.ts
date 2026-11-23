@@ -261,4 +261,35 @@ describe('callLlmJson', () => {
     expect(options.justification).toContain('AI Engineer Coach');
     expect(options.modelOptions).toHaveProperty('response_format');
   });
+
+  it('reports empty replies as empty instead of invalid JSON', async () => {
+    mocks.sendRequest.mockImplementation(() => Promise.resolve(reply('  ', '\n')));
+
+    await expect(callLlmJson(prompt(), { name: 'test_schema', schema: { type: 'object' } }))
+      .rejects.toThrow('GitHub Copilot returned an empty response');
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it('still reports a reply that is not JSON as invalid JSON', async () => {
+    mocks.sendRequest.mockImplementation(() => Promise.resolve(reply('Sorry, I cannot help with that.')));
+
+    await expect(callLlmJson(prompt(), { name: 'test_schema', schema: { type: 'object' } }))
+      .rejects.toThrow('LLM returned invalid JSON after 3 attempts');
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries an empty reply in plain mode with the JSON hint', async () => {
+    mocks.sendRequest
+      .mockResolvedValueOnce(reply(''))
+      .mockResolvedValueOnce(reply('{"items":[1]}'));
+
+    await expect(callLlmJson<{ items: number[] }>(prompt(), { name: 'test_schema', schema: { type: 'object' } }))
+      .resolves.toEqual({ items: [1] });
+
+    expect(mocks.sendRequest).toHaveBeenCalledTimes(2);
+    const [messages, options] = mocks.sendRequest.mock.calls[1] as [vscode.LanguageModelChatMessage[], vscode.LanguageModelChatRequestOptions];
+    expect(options.modelOptions).toBeUndefined();
+    expect(messages).toHaveLength(2);
+    expect(JSON.stringify(messages[1].content)).toContain('not valid JSON');
+  });
 });

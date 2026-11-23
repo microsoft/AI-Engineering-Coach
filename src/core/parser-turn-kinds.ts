@@ -247,6 +247,10 @@ interface ClaudeTurnLine {
   isSidechain?: boolean;
   isMeta?: boolean;
   isCompactSummary?: boolean;
+  /** Who sent the line: `{ kind: "human" }` on a typed prompt, `task-notification` or `peer` for other senders. */
+  origin?: unknown;
+  /** `system` on a line the harness sent, such as a scheduled run. */
+  promptSource?: unknown;
   message?: { content?: unknown };
 }
 
@@ -275,21 +279,42 @@ function expandsTypedCommand(lines: readonly ClaudeTurnLine[], index: number): b
   return false;
 }
 
+/** The `<system-reminder>` blocks Claude adds to a turn. */
+const CLAUDE_REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+
+/** True when the text is only `<system-reminder>` blocks. */
+function onlyReminders(start: string): boolean {
+  return start.startsWith('<system-reminder>') && start.replaceAll(CLAUDE_REMINDER, '').trim() === '';
+}
+
+function claudeOriginKind(line: ClaudeTurnLine): string {
+  return isRecord(line.origin) ? text(line.origin.kind) : '';
+}
+
 /**
  * Claude marks sub-agent transcripts `isSidechain` (and `parseClaudeSessionFile` marks every turn of a file under
  * `subagents/`, with or without that field), the turn that replays a compacted conversation
  * `isCompactSummary`, and lines it wrote itself `isMeta` (the local-command caveat, skill bodies). A typed prompt
  * command is the exception: Claude logs the `<command-name>` line, then the expanded prompt as an `isMeta` line,
- * which is the user's turn. Background task results arrive as `<task-notification>` lines.
+ * which is the user's turn. Background task results arrive as `<task-notification>` lines, and a line made only of
+ * `<system-reminder>` blocks is context Claude added.
+ *
+ * Newer builds also record the sender. `origin` is `human` on a typed prompt, `task-notification` or `peer` for
+ * other senders, and `promptSource` is `system` on a line the harness sent without `origin`, such as a scheduled
+ * run. A line with neither keeps the rules above: a missing `origin` alone doesn't say that someone else sent it.
  */
 export function claudeNonHumanKind(lines: readonly ClaudeTurnLine[], index: number): NonHumanKind | undefined {
   const line = lines[index];
   if (line.isSidechain) return 'subagent';
   if (line.isCompactSummary) return 'compaction';
   const start = claudeText(line).trimStart();
-  if (start.startsWith('<task-notification>')) return 'system';
+  const origin = claudeOriginKind(line);
+  if (origin === 'task-notification' || start.startsWith('<task-notification>')) return 'system';
   if (CLAUDE_COMMAND_OUTPUT.test(start)) return 'output';
+  if (origin === 'peer') return 'relayed';
+  if (origin ? origin !== 'human' : line.promptSource === 'system') return 'system';
   if (line.isMeta && !expandsTypedCommand(lines, index)) return 'meta';
+  if (onlyReminders(start)) return 'meta';
   return undefined;
 }
 

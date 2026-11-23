@@ -6,7 +6,7 @@ inputs:
     description: Exact VSIX produced by the caller's packaging step.
     required: true
   vscode-version:
-    description: Exact VS Code version or latest; empty uses engines.vscode's minimum.
+    description: Exact VS Code version, latest, or insiders (latest Insiders build); empty uses engines.vscode's minimum.
     default: ''
   browser-tests:
     description: Also run the browser-only Playwright suite.
@@ -19,7 +19,7 @@ runs:
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: .vscode-test/cache
-        key: vscode-${{ runner.os }}-${{ runner.arch }}-${{ inputs.vscode-version || 'minimum' }}-${{ hashFiles('package.json', 'package-lock.json') }}-${{ inputs.vscode-version == 'latest' && github.run_id || 'pinned' }}
+        key: vscode-${{ runner.os }}-${{ runner.arch }}-${{ inputs.vscode-version || 'minimum' }}-${{ hashFiles('package.json', 'package-lock.json') }}-${{ (inputs.vscode-version == 'latest' || inputs.vscode-version == 'insiders') && github.run_id || 'pinned' }}
         restore-keys: |
           vscode-${{ runner.os }}-${{ runner.arch }}-${{ inputs.vscode-version || 'minimum' }}-${{ hashFiles('package.json', 'package-lock.json') }}-
 

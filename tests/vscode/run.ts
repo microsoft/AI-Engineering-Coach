@@ -36,10 +36,10 @@ export async function discoverSuites(directory: string): Promise<string[]> {
 }
 
 export function vscodeVersion(engine: string, override?: string): string {
-  if (override === 'latest') return override;
+  if (override === 'latest' || override === 'insiders') return override;
   const version = override ?? /^\^(\d+\.\d+\.\d+)$/.exec(engine)?.[1];
   if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error('Expected an exact VS Code version or "latest"; the default requires a ^x.y.z manifest engine.');
+    throw new Error('Expected an exact VS Code version, "latest" or "insiders"; the default requires a ^x.y.z manifest engine.');
   }
   const minimum = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(engine);
   if (!minimum) throw new Error(`Unsupported VS Code engine range: ${engine}`);
@@ -49,6 +49,11 @@ export function vscodeVersion(engine: string, override?: string): string {
     throw new Error(`VS Code ${version} does not satisfy ${engine}`);
   }
   return version;
+}
+
+/** Maps a selected target to vscode-extension-tester's release stream and version. */
+export function vscodeRelease(version: string): { quality: 'stable' | 'insider'; version: string } {
+  return version === 'insiders' ? { quality: 'insider', version: 'latest' } : { quality: 'stable', version };
 }
 
 async function execute(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
@@ -121,11 +126,14 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
   // Import only in the child, after its home/profile environment has been isolated.
   const { ExTester, ReleaseQuality } = await import('vscode-extension-tester');
   const extensions = path.join(root, 'extensions');
-  const tester = new ExTester(storage, ReleaseQuality.Stable, extensions);
+  const release = vscodeRelease(version);
+  const quality = release.quality === 'insider' ? ReleaseQuality.Insider : ReleaseQuality.Stable;
+  const tester = new ExTester(storage, quality, extensions);
   try {
-    await primeCodeVersion(tester, storage, version);
-    await tester.downloadCode(version);
-    await tester.downloadChromeDriver(version);
+    // Insiders means the newest build, so a cached one isn't taken as current.
+    if (release.quality === 'stable') await primeCodeVersion(tester, storage, release.version);
+    await tester.downloadCode(release.version);
+    await tester.downloadChromeDriver(release.version);
     await tester.installVsix({ vsixFile: vsix, installDependencies: false });
     const manifest = manifestSchema.parse(JSON.parse(await fs.readFile(path.join(PROJECT, 'package.json'), 'utf8')));
     const installed = (await fs.readdir(extensions, { withFileTypes: true })).filter(entry => entry.isDirectory());
@@ -139,7 +147,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     }
     const suite = path.join(__dirname, 'suite', `${scenario}.spec.js`).replaceAll('\\', '/');
     const code = await tester.runTests(suite, {
-      vscodeVersion: version, offline: true, config, settings, locale: 'en',
+      vscodeVersion: release.version, offline: true, config, settings, locale: 'en',
       resources: [fixturePaths(root).workspace],
     });
     if (code !== 0) throw new Error(`${scenario} VS Code smoke tests failed (${code})`);

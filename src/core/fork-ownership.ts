@@ -6,7 +6,9 @@
 /* One owner per conversation turn. A Claude Code fork (`--fork-session`) starts its transcript with its source's
  * messages, copied with their message IDs and their original, older times. Counting them in both sessions would count
  * the same work twice on every tab, so they are removed from the fork before analysis: the session where a message
- * isn't a copy owns it. A copy shows as a prompt older than the fork's first line or, when those lines are missing, as\n * the ordered history the fork shares with its source. Browser-safe: no Node imports. */
+ * isn't a copy owns it. When both transcripts are loaded, `parseClaudeSessions` already leaves the copies out and links
+ * the fork (`keepEachTurnOnce`); this pass removes the rest. A copy shows as a prompt older than the fork's first line
+ * or, when those lines are missing, as\n * the ordered history the fork shares with its source. Browser-safe: no Node imports. */
 
 import type { Session, SessionRequest } from './types/session-types';
 
@@ -133,7 +135,7 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
       ...s,
       requests,
       requestCount: requests.length,
-      inheritedTurns: inherited.length,
+      inheritedTurns: (s.inheritedTurns ?? 0) + inherited.length,
       ...(starts.length ? { creationDate: Math.min(...starts) } : {}),
       ...(s.forkedFromId || !source ? {} : { forkedFromId: source.sessionId }),
       ...(ambiguous && !s.forkedFromId ? { forkSourceAmbiguous: true } : {}),
