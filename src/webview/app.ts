@@ -221,6 +221,8 @@ function onDataReady(currentWorkspace: string, skipped?: { skippedFiles: number;
   // A slow load shows a short "ready" summary first; a cache hit goes straight to the page.
   const holdMs = showLoadingReady();
   const holdDone = new Promise<void>(resolve => window.setTimeout(resolve, holdMs));
+  // Badge counts don't wait for the summary to leave: the data is ready now.
+  refreshNavBadges(currentFilter);
   void rpc<{ id: string; name: string; recent?: boolean; harnesses?: string[] }[]>('getWorkspaces').then((wss) => {
     wsOptions = wss;
     for (const ws of wss) {
@@ -247,7 +249,6 @@ function onDataReady(currentWorkspace: string, skipped?: { skippedFiles: number;
     setShellLoadingMode(false);
     navigateTo(currentPage);
     if (holdMs > 0) document.getElementById('content')?.classList.add('content-enter');
-    refreshNavBadges(currentFilter);
     maybeShowSkippedBanner();
   });
 }

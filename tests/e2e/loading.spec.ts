@@ -195,6 +195,17 @@ test.describe('loading screen redesign', () => {
     expect(await calls()).toBe(duringHold * 2);
   });
 
+  test('fills the sidebar badges while the ready summary is still showing', async ({ page }) => {
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 60_000));
+    await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
+    await send(page, { type: 'progress', phase: 4, pct: 95, detail: 'Computing analytics', sessions: 12 });
+    await page.clock.runFor(2000);
+    await send(page, { type: 'dataReady' });
+    await page.clock.runFor(100);
+    await expect(page.locator('#load-index')).toHaveAttribute('data-state', 'ready');
+    await expect(page.locator('#badge-sessions')).not.toHaveText('');
+  });
   test('keeps the hidden sidebar out of the tab order while loading', async ({ page }) => {
     await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
     await expect(page.locator('#sidebar')).toBeHidden();
