@@ -414,6 +414,89 @@ describe('forEachJsonlLine (sync streaming reader)', () => {
   });
 });
 
+function collectWithLimit(fp: string, maxChars: number): { lines: string[]; skips: number } {
+  const lines: string[] = [];
+  let skips = 0;
+  forEachJsonlLine(fp, line => { lines.push(line); }, undefined, { maxChars, onSkip: () => { skips++; } });
+  return { lines, skips };
+}
+
+describe('forEachJsonlLine with a line limit', () => {
+  it.each([
+    ['a short line', 4, 'x'.repeat(5)],
+    ['a line spanning several chunks', READ_CHUNK, 'x'.repeat(READ_CHUNK * 2 + 10)],
+  ])('skips %s over the limit in the middle of the file', (_name, maxChars, long) => {
+    withTempFile('mid.jsonl', `one\n${long}\ntwo\n`, fp => {
+      expect(collectWithLimit(fp, maxChars)).toEqual({ lines: ['one', 'two'], skips: 1 });
+    });
+  });
+
+  it.each([
+    ['a short line', 4, 'x'.repeat(5)],
+    ['a line spanning several chunks', READ_CHUNK, 'x'.repeat(READ_CHUNK * 2 + 10)],
+  ])('skips %s over the limit at the end of the file without a newline', (_name, maxChars, long) => {
+    withTempFile('end.jsonl', `one\n${long}`, fp => {
+      expect(collectWithLimit(fp, maxChars)).toEqual({ lines: ['one'], skips: 1 });
+    });
+  });
+
+});
+
+describe('forEachJsonlLine with a line limit at chunk boundaries', () => {
+  it('skips a line that starts and ends in the middle of a chunk', () => {
+    const head = 'a'.repeat(READ_CHUNK / 2);
+    withTempFile('mid-chunk.jsonl', `${head}\n${'x'.repeat(READ_CHUNK * 2)}\nb\n\nc`, fp => {
+      expect(collectWithLimit(fp, READ_CHUNK)).toEqual({ lines: [head, 'b', '', 'c'], skips: 1 });
+    });
+  });
+
+  it.each([
+    ['its newline is the last byte of a chunk', READ_CHUNK * 2 - 1],
+    ['its newline is the first byte of a chunk', READ_CHUNK * 2],
+  ])('skips a line that ends at a chunk boundary when %s', (_name, length) => {
+    withTempFile('boundary.jsonl', `${'x'.repeat(length)}\nnext\n`, fp => {
+      // The limit is passed at the end of the first chunk, so the line is dropped while it streams in.
+      expect(collectWithLimit(fp, READ_CHUNK / 2)).toEqual({ lines: ['next'], skips: 1 });
+    });
+  });
+
+});
+
+describe('forEachJsonlLine with a line limit, more cases', () => {
+  afterEach(() => prefetchCache.clear());
+
+  it('skips each of two long lines in a row', () => {
+    const long = 'x'.repeat(READ_CHUNK + 10);
+    withTempFile('two.jsonl', `${long}\n${long}\nlast`, fp => {
+      expect(collectWithLimit(fp, READ_CHUNK)).toEqual({ lines: ['last'], skips: 2 });
+    });
+  });
+
+  it('keeps a line exactly at the limit', () => {
+    withTempFile('exact.jsonl', 'abcd\nabcde\n', fp => {
+      expect(collectWithLimit(fp, 4)).toEqual({ lines: ['abcd'], skips: 1 });
+    });
+  });
+
+  it('applies the limit to a prefetched file', () => {
+    withTempFile('p.jsonl', 'unused\n', fp => {
+      prefetchCache.set(fp, 'one\nlonger\ntwo\nlongest');
+      expect(collectWithLimit(fp, 4)).toEqual({ lines: ['one', 'two'], skips: 2 });
+    });
+  });
+
+  it('passes onSkip the start of the dropped line', () => {
+    const long = `{"type":"api-request","body":"${'x'.repeat(READ_CHUNK * 2)}"}`;
+    withTempFile('start.jsonl', `one\n${long}\n`, fp => {
+      const starts: string[] = [];
+      forEachJsonlLine(fp, () => undefined, undefined, { maxChars: READ_CHUNK, onSkip: start => { starts.push(start); } });
+      expect(starts).toHaveLength(1);
+      expect(starts[0].length).toBeGreaterThan(READ_CHUNK);
+      expect(long.startsWith(starts[0])).toBe(true);
+    });
+  });
+});
+
 describe('forEachJsonlLineAsync (async streaming reader)', () => {
   afterEach(() => prefetchCache.clear());
 

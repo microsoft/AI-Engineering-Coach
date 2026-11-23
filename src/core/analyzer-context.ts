@@ -37,6 +37,7 @@ import {
   sessionUtilization,
 } from './context-window';
 import { cacheHitPct } from './prompt-cache-usage';
+import { compactionKind } from './cli-compaction';
 import { sessionTokenTypes } from './analyzer-token-types';
 import {
   CONTEXT_OPTIMAL_UTILIZATION,
@@ -52,6 +53,12 @@ const ADAPTIVE_CONTEXT_THRESHOLD_MIN_SAMPLES = 20;
 
 function formatTokensK(tokens: number): string {
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(Math.round(tokens));
+}
+
+/** A compaction counts against the context verdict and score unless you started it: one logged as manual
+ *  (`/compact`) doesn't. Automatic ones, other logged triggers and compactions with no logged trigger still count. */
+function countsAgainstVerdict(compaction: CompactionEvent): boolean {
+  return compactionKind(compaction.trigger) !== 'manual';
 }
 
 /** Short chart label: the context size before and after when logged (Copilot CLI), otherwise the mode. */
@@ -188,6 +195,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       .map(analysis => analysis.workspace)
       .sort((a, b) => a.score - b.score);
     const totalCompactions = workspaceAnalyses.reduce((sum, analysis) => sum + analysis.compactionCount, 0);
+    const verdictCompactions = workspaceAnalyses.reduce((sum, analysis) => sum + analysis.verdictCompactions, 0);
     const fullCompactions = workspaceAnalyses.reduce((sum, analysis) => sum + analysis.fullCompactions, 0);
     const simpleCompactions = workspaceAnalyses.reduce((sum, analysis) => sum + analysis.simpleCompactions, 0);
     const sessionsWithTokenData = workspaceAnalyses.reduce((sum, analysis) => sum + analysis.sessionCount, 0);
@@ -200,7 +208,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     // Composition counts requests in range, so it can have data when no session's last activity falls
     // in range; skip utilization advice then rather than coaching on a score of 0.
     const tips = [
-      ...(sessions.length > 0 ? this.generateTips(workspaces, totalCompactions, overallScore, thresholds) : []),
+      ...(sessions.length > 0 ? this.generateTips(workspaces, totalCompactions, verdictCompactions, overallScore, thresholds) : []),
       ...composition.tips,
     ];
 
@@ -249,6 +257,8 @@ export class ContextAnalyzer extends AnalyzerBase {
     workspace: WorkspaceContextScore;
     sessionCount: number;
     compactionCount: number;
+    /** Compactions that count against the verdict (`countsAgainstVerdict`). */
+    verdictCompactions: number;
     fullCompactions: number;
     simpleCompactions: number;
   } | null {
@@ -256,8 +266,12 @@ export class ContextAnalyzer extends AnalyzerBase {
     const utilizationSamples: number[] = [];
     const windowSources = new Set<ContextWindowSource | 'mixed'>();
     let compactionCount = 0;
+    let verdictCompactions = 0;
     let fullCompactions = 0;
     let simpleCompactions = 0;
+    // The score's compaction penalty, by mode, over the compactions that count against the verdict.
+    let penaltyFull = 0;
+    let penaltySimple = 0;
     let sessionCount = 0;
 
     for (const session of sessions) {
@@ -287,6 +301,10 @@ export class ContextAnalyzer extends AnalyzerBase {
           compactionCount++;
           if (compaction.mode === 'full') fullCompactions++;
           else simpleCompactions++;
+          if (!countsAgainstVerdict(compaction)) continue;
+          verdictCompactions++;
+          if (compaction.mode === 'full') penaltyFull++;
+          else penaltySimple++;
         }
       }
     }
@@ -299,7 +317,7 @@ export class ContextAnalyzer extends AnalyzerBase {
     const peakUtil = Math.max(...utilizationSamples);
     const saturatedCount = utilizationSamples.filter(u => u >= CONTEXT_SATURATION_THRESHOLD).length;
     const saturation = Math.round((saturatedCount / utilizationSamples.length) * 1000) / 10;
-    const verdict = this.computeVerdict(avgUtil, peakUtil, saturation, compactionCount, effectiveTokens.length, thresholds);
+    const verdict = this.computeVerdict(avgUtil, peakUtil, saturation, verdictCompactions, effectiveTokens.length, thresholds);
 
     return {
       workspace: {
@@ -315,12 +333,13 @@ export class ContextAnalyzer extends AnalyzerBase {
         saturation,
         compactionCount,
         costEfficiency: null,
-        score: this.computeContextScore(avgUtil, saturation, fullCompactions, simpleCompactions, thresholds),
+        score: this.computeContextScore(avgUtil, saturation, penaltyFull, penaltySimple, thresholds),
         verdict,
         windowSource: windowSources.size > 1 ? 'mixed' : windowSources.values().next().value ?? 'estimated',
       },
       sessionCount,
       compactionCount,
+      verdictCompactions,
       fullCompactions,
       simpleCompactions,
     };
@@ -500,6 +519,9 @@ export class ContextAnalyzer extends AnalyzerBase {
       const window = sessionContextWindow(s);
       for (let i = 0; i < s.requests.length; i++) {
         for (const compaction of requestCompactions(s.requests[i])) {
+          // Claude Code logs no window, and an estimate sized from the session's own peak
+          // puts every compaction near "full". Only a logged limit can show it.
+          if (compaction.tokenLimit == null && s.harness === 'Claude' && requestContextLimit(s.requests[i]) == null) continue;
           const limit = compaction.tokenLimit ?? window.perRequest[i];
           if (compaction.contextLengthBefore > 0 && (compaction.contextLengthBefore / limit) * 100 > 85) {
             events.push({ session: s, tokensBefore: compaction.contextLengthBefore });
@@ -606,10 +628,12 @@ export class ContextAnalyzer extends AnalyzerBase {
       });
     }
 
-    // 4. Runaway Context Growth — sessions where token count grows steadily without stabilizing
-    const runawayEntries: { session: Session; first: number; last: number }[] = [];
+    // 4. Runaway Context Growth — sessions where token count grows steadily without stabilizing. A compaction
+    // resets the context, so only the requests after the session's last compaction count.
+    const runawayEntries: { session: Session; first: number; last: number; requests: number }[] = [];
     for (const s of sessions) {
-      const sessionTokens = this.estimateSessionTokens(s);
+      const start = requestsAfterLastCompaction(s);
+      const sessionTokens = this.estimateSessionTokens(s).slice(start);
       if (sessionTokens.length < CONTEXT_GROWING_SESSION_MIN_REQS) continue;
       let increasing = 0;
       for (let i = 1; i < sessionTokens.length; i++) {
@@ -617,7 +641,12 @@ export class ContextAnalyzer extends AnalyzerBase {
       }
       const growthRate = increasing / (sessionTokens.length - 1);
       if (growthRate > CONTEXT_GROWING_SESSION_GROWTH_RATE) {
-        runawayEntries.push({ session: s, first: sessionTokens[0], last: sessionTokens[sessionTokens.length - 1] });
+        runawayEntries.push({
+          session: s,
+          first: sessionTokens[0],
+          last: sessionTokens[sessionTokens.length - 1],
+          requests: start === 0 ? s.requestCount : sessionTokens.length,
+        });
       }
     }
     if (runawayEntries.length > 0) {
@@ -628,7 +657,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         message: `${Math.round(r.first / 1000)}K \u2192 ${Math.round(r.last / 1000)}K tokens`,
         model: '',
         kind: 'session' as const,
-        stats: { startK: Math.round(r.first / 1000), endK: Math.round(r.last / 1000), requests: r.session.requestCount },
+        stats: { startK: Math.round(r.first / 1000), endK: Math.round(r.last / 1000), requests: r.requests },
       }));
       patterns.push({
         id: 'runaway-context',
@@ -698,7 +727,7 @@ export class ContextAnalyzer extends AnalyzerBase {
         tokenCurve: session.requests.map(() => null),
         saturation: 0,
         costEfficiency: null,
-        verdict: compactionCount > 0 ? 'degraded' : 'optimal',
+        verdict: this.countVerdictCompactions(session) > 0 ? 'degraded' : 'optimal',
         events: this.buildSessionTimelineEvents(session),
         requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
         hasPerRequestTokens: false,
@@ -733,7 +762,7 @@ export class ContextAnalyzer extends AnalyzerBase {
       tokenCurve: sessionTokens.map(t => t > 0 ? t : null),
       saturation,
       costEfficiency: null,
-      verdict: this.computeVerdict(avgUtil, peakUtil, saturation, compactionCount, tokensWithData.length, thresholds),
+      verdict: this.computeVerdict(avgUtil, peakUtil, saturation, this.countVerdictCompactions(session), tokensWithData.length, thresholds),
       events: this.buildSessionTimelineEvents(session),
       requestQueries: session.requests.map(r => this.getRequestQueryPreview(r.messageText)),
       hasPerRequestTokens: true,
@@ -747,6 +776,10 @@ export class ContextAnalyzer extends AnalyzerBase {
 
   private countCompactions(session: Session): number {
     return session.requests.reduce((sum, request) => sum + requestCompactions(request).length, 0);
+  }
+
+  private countVerdictCompactions(session: Session): number {
+    return session.requests.reduce((sum, request) => sum + requestCompactions(request).filter(countsAgainstVerdict).length, 0);
   }
 
   /** Per-turn reported limits, peaks, main-agent calls and cache hit ratios for the drill-down, when the
@@ -851,13 +884,18 @@ export class ContextAnalyzer extends AnalyzerBase {
   private generateTips(
     workspaces: WorkspaceContextScore[],
     totalCompactions: number,
+    verdictCompactions: number,
     overallScore: number,
     thresholds: ContextVerdictThresholds,
   ): string[] {
     const tips: string[] = [];
+    const manualCompactions = totalCompactions - verdictCompactions;
+    const manualNote = manualCompactions > 0 ? ` (${manualCompactions} manual)` : '';
 
     if (overallScore >= 80) {
-      tips.push('Excellent context management. Sessions stay within optimal utilization and avoid auto-compaction.');
+      tips.push(verdictCompactions === 0
+        ? 'Excellent context management. Sessions stay within optimal utilization and avoid auto-compaction.'
+        : 'Excellent context management. Sessions stay within optimal utilization.');
     } else if (overallScore >= 60) {
       tips.push(`Good context hygiene. A few workspaces could start fresh sessions earlier to stay under ${thresholds.optimalUtilization}% utilization.`);
     } else if (overallScore >= 40) {
@@ -877,10 +915,10 @@ export class ContextAnalyzer extends AnalyzerBase {
       tips.push(`${highSaturation.length} workspace(s) spend >30% of requests near the context ceiling. Even if averages look acceptable, sustained high utilization degrades quality.`);
     }
 
-    if (totalCompactions > 10) {
-      tips.push(`${totalCompactions} compaction events detected. Auto-compaction means sessions ran too long — and mid-task compaction loses important context. Manually compact (or start a fresh session) at natural breakpoints: after a major research phase, a completed feature, or before switching focus.`);
+    if (verdictCompactions > 10) {
+      tips.push(`${totalCompactions} compaction events detected${manualNote}. Auto-compaction means sessions ran too long — and mid-task compaction loses important context. Manually compact (or start a fresh session) at natural breakpoints: after a major research phase, a completed feature, or before switching focus.`);
     } else if (totalCompactions > 0) {
-      tips.push(`${totalCompactions} compaction event(s) detected. Monitor whether key instructions survive compaction.`);
+      tips.push(`${totalCompactions} compaction event(s) detected${manualNote}. Monitor whether key instructions survive compaction.`);
     }
 
     const optimal = workspaces.filter(w => w.verdict === 'optimal');
@@ -967,6 +1005,15 @@ export class ContextAnalyzer extends AnalyzerBase {
     }
     return { rangesWithTokens: result, matchingSessions, sessionsWithRequestTokens, harnessesWithoutRequestTokens };
   }
+}
+
+/** Index of the first request after the session's last successful compaction; 0 when it never compacted. The
+ *  request that logged the compaction is left out: its last prompt can be from either side of it. */
+function requestsAfterLastCompaction(session: Session): number {
+  for (let i = session.requests.length - 1; i >= 0; i--) {
+    if (requestCompactions(session.requests[i]).some(compaction => compaction.outcome !== 'failed')) return i + 1;
+  }
+  return 0;
 }
 
 /** Adds the timestamps of the session's requests that carry composition but no per-request tokens. They add a

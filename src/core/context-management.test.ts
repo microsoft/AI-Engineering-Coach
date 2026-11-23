@@ -600,6 +600,19 @@ describe('anti-pattern: context-bloat', () => {
     expect(bloat!.occurrences).toBe(1);
   });
 
+  it('does not flag amnesia from an estimated Claude Code window', () => {
+    const compacted = (harness: string) => {
+      const requests = flatTokenRequests(CONTEXT_MIN_TOKEN_REQUESTS + 1, 400_000);
+      requests[3].compaction = {
+        mode: 'full', numRounds: 1, numRoundsSinceLastSummarization: 1, contextLengthBefore: 400_000,
+        durationMs: 1, model: 'm', outcome: 'success',
+      };
+      return getCtxMgmt([sess({ harness, requests })]).antiPatterns.find(p => p.id === 'context-amnesia');
+    };
+    expect(compacted('Claude')).toBeUndefined();
+    expect(compacted('Codex')).toBeDefined();
+  });
+
   it('does not trigger for optimal sessions', () => {
     const sessions = [
       sess({ requests: flatTokenRequests(CONTEXT_MIN_TOKEN_REQUESTS + 1, 30_000) }),
@@ -751,6 +764,35 @@ describe('anti-pattern: runaway-context', () => {
     const runaway = data.antiPatterns.find(p => p.id === 'runaway-context');
     expect(runaway).toBeUndefined();
   });
+
+  it('treats a compaction as a reset: growth before it does not count', () => {
+    // Steady growth for 10 requests, a compaction, then 4 more growing requests: too few after the reset.
+    const reqs = [
+      ...linearTokenRequests(10, 10_000, 5_000),
+      ...linearTokenRequests(4, 8_000, 2_000, BASE_TS + 10 * 60_000).map((r, i) => ({ ...r, requestId: `after-${i}` })),
+    ];
+    reqs[9] = { ...reqs[9], compaction: compaction({ contextLengthBefore: 55_000, contextLengthAfter: 6_000, trigger: 'auto' }) };
+    const data = getCtxMgmt([sess({ requests: reqs })]);
+    expect(data.antiPatterns.find(p => p.id === 'runaway-context')).toBeUndefined();
+  });
+
+  it('still flags steady growth after the last compaction, measured from the reset', () => {
+    const before = linearTokenRequests(3, 50_000, 10_000);
+    before[2] = { ...before[2], compaction: compaction({ contextLengthBefore: 70_000, contextLengthAfter: 8_000 }) };
+    const after = linearTokenRequests(CONTEXT_GROWING_SESSION_MIN_REQS + 1, 10_000, 5_000, BASE_TS + 3 * 60_000)
+      .map((r, i) => ({ ...r, requestId: `after-${i}` }));
+    const data = getCtxMgmt([sess({ requests: [...before, ...after] })]);
+    const runaway = data.antiPatterns.find(p => p.id === 'runaway-context');
+    expect(runaway?.occurrences).toBe(1);
+    expect(runaway?.details?.[0].stats).toEqual({ startK: 10, endK: 50, requests: CONTEXT_GROWING_SESSION_MIN_REQS + 1 });
+  });
+
+  it('ignores a failed compaction', () => {
+    const reqs = linearTokenRequests(CONTEXT_GROWING_SESSION_MIN_REQS + 2, 10_000, 5_000);
+    reqs[5] = { ...reqs[5], compaction: compaction({ outcome: 'failed' }) };
+    const data = getCtxMgmt([sess({ requests: reqs })]);
+    expect(data.antiPatterns.find(p => p.id === 'runaway-context')?.occurrences).toBe(1);
+  });
 });
 
 /* ── Tips generation ─────────────────────────────────────────────── */
@@ -772,6 +814,67 @@ describe('tips generation', () => {
     reqs[2] = req({ requestId: 'c1', timestamp: BASE_TS + 120_000, promptTokens: 50_000, compaction: compaction() });
     const data = getCtxMgmt([sess({ requests: reqs })]);
     expect(data.tips.some(t => t.includes('compaction'))).toBe(true);
+  });
+});
+
+/* ── Manual compactions ─────────────────────────────────────────── */
+
+describe('manual compactions', () => {
+  /** Ten requests at about 16% of the window, with a compaction of the given trigger on each listed request. */
+  function workspaceWith(trigger: string | undefined, at: number[]): Session {
+    const reqs = flatTokenRequests(10, 20_000);
+    for (const i of at) {
+      reqs[i] = req({ requestId: `c-${i}`, timestamp: BASE_TS + i * 60_000, promptTokens: 20_000, compaction: compaction({ trigger }) });
+    }
+    return sess({ sessionId: 's-manual', workspaceName: 'compact-project', requests: reqs });
+  }
+
+  it('a manual compaction leaves the verdict and the session verdict optimal', () => {
+    const session = workspaceWith('manual', [2]);
+    const data = getCtxMgmt([session]);
+    expect(data.totalCompactions).toBe(1);
+    expect(data.workspaces[0].compactionCount).toBe(1);
+    expect(data.workspaces[0].verdict).toBe('optimal');
+    const detail = new Analyzer([session]).getWorkspaceContextSessions('compact-project');
+    expect(detail.sessions[0].verdict).toBe('optimal');
+  });
+
+  it('a manual compaction does not lower the workspace score', () => {
+    const none = getCtxMgmt([workspaceWith('manual', [])]);
+    const manual = getCtxMgmt([workspaceWith('manual', [2])]);
+    const automatic = getCtxMgmt([workspaceWith('auto', [2])]);
+    expect(none.workspaces[0].score).toBe(100);
+    expect(manual.workspaces[0].score).toBe(100);
+    expect(manual.overallScore).toBe(100);
+    expect(automatic.workspaces[0].score).toBe(95);
+  });
+
+  it('manual compactions do not make a workspace limited by their rate', () => {
+    expect(getCtxMgmt([workspaceWith('manual', [1, 3, 5])]).workspaces[0].verdict).toBe('optimal');
+    expect(getCtxMgmt([workspaceWith('auto', [1, 3, 5])]).workspaces[0].verdict).toBe('limited');
+  });
+
+  it('automatic compactions, other triggers and unknown triggers still degrade the verdict', () => {
+    for (const trigger of ['auto', 'threshold', 'budget', undefined]) {
+      const session = workspaceWith(trigger, [2]);
+      expect(getCtxMgmt([session]).workspaces[0].verdict).toBe('degraded');
+      expect(new Analyzer([session]).getWorkspaceContextSessions('compact-project').sessions[0].verdict).toBe('degraded');
+    }
+  });
+
+  it('tips do not claim no auto-compaction when one happened, and name manual ones', () => {
+    const manual = getCtxMgmt([workspaceWith('manual', [2])]).tips;
+    expect(manual).toContain('Excellent context management. Sessions stay within optimal utilization and avoid auto-compaction.');
+    expect(manual.some(t => t.startsWith('1 compaction event(s) detected (1 manual).'))).toBe(true);
+
+    const automatic = getCtxMgmt([workspaceWith(undefined, [2])]).tips;
+    expect(automatic.some(t => t.includes('avoid auto-compaction'))).toBe(false);
+    expect(automatic.some(t => t.startsWith('1 compaction event(s) detected. Monitor'))).toBe(true);
+  });
+
+  it('manual compactions still count toward a Compaction Storm', () => {
+    const data = getCtxMgmt([workspaceWith('manual', [0, 1, 2, 3])]);
+    expect(data.antiPatterns.find(p => p.id === 'compaction-storm')).toBeDefined();
   });
 });
 

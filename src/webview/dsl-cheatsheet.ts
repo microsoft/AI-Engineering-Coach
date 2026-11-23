@@ -27,7 +27,8 @@ thresholds:
 What this rule detects.
 
 # When Triggered
-{{count}} ... out of {{total}} ({{pct}}). Use {{extra.keyName}} for reduce values.
+{{count}} ... out of {{total}} ({{pct}}). Use {{extra.keyName}} for reduce values and {{thresholds.key}} for thresholds.
+Non-integer numbers print with one decimal.
 
 # How to Improve
 Actionable advice.

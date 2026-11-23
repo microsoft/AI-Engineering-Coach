@@ -18,8 +18,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { Session, SessionRequest, UserWait, UserWaitText } from './types';
-import { assertTrustedPath, readFileSafe, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath } from './parser-shared';
+import { CompactionEvent, Session, SessionRequest, UserWait, UserWaitText } from './types';
+import { assertTrustedPath, MAX_FILE_SIZE, createRequest, createSession, detectDevcontainerFromRequests, extractSkillNameFromPath, recordFailedFile, recordSkippedLines } from './parser-shared';
 import { extractReasoningEffortFromModelId } from './helpers';
 import { warnCore } from './log';
 import { EditLocIndex } from './edit-loc-diff';
@@ -36,6 +36,8 @@ import { imageReferencesFromContent, type ImageReference, type ImageRequestMatch
 import { ClaudeResponseAccumulator, type ClaudeRequestUsage } from './parser-claude-responses';
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
+import { readClaudeCompaction, requestCompactionFields } from './agent-compaction';
+import { addTurnCompaction } from './cli-compaction';
 
 interface ClaudeContentBlock {
   type: string;
@@ -85,6 +87,14 @@ interface ClaudeLine {
   /** Subagent identifier on `subagents/` files. Present alongside
    *  `isSidechain: true`. Not used for billing math; surfaced for diagnostics. */
   agentId?: string;
+  /** `system` lines: `compact_boundary` marks a compaction. */
+  subtype?: unknown;
+  /** On a `compact_boundary` line: `trigger`, `preTokens`, `postTokens`, `durationMs`. */
+  compactMetadata?: unknown;
+  /** Who sent a user line (`{ kind: "human" }` on a typed prompt); see `claudeNonHumanKind`. */
+  origin?: unknown;
+  /** `attachment` lines: context the harness added, such as the instruction files it loaded. */
+  attachment?: unknown;
   message?: ClaudeMessage;
 }
 
@@ -124,6 +134,20 @@ interface ClaudeAssistantData {
   webDomains: string[];
   /** `AskUserQuestion` calls: from the question to your answer (the tool result). */
   userWaits: UserWait[];
+  /** Compactions logged during the request (`compact_boundary` lines), in order. */
+  compactions: CompactionEvent[];
+}
+
+/** A `compact_boundary` line's compaction, or `null` for any other line. */
+function claudeCompaction(line: ClaudeLine): CompactionEvent | null {
+  return line.type === 'system' && line.subtype === 'compact_boundary' ? readClaudeCompaction(line.compactMetadata) : null;
+}
+
+/** Put compactions logged before the request's prompt ahead of its own, within the cap. */
+function prependCompactions(data: ClaudeAssistantData, earlier: CompactionEvent[]): void {
+  if (earlier.length === 0) return;
+  const own = data.compactions.splice(0);
+  for (const compaction of [...earlier, ...own]) addTurnCompaction(data.compactions, compaction);
 }
 interface ClaudeCacheState {
   sawMain: boolean;
@@ -183,6 +207,29 @@ function isClaudeLine(value: unknown): value is ClaudeLine {
   return true;
 }
 
+/**
+ * A prompt the user typed while the agent was busy. Claude delivers it into the running turn and logs it only as a
+ * `queued_command` attachment, with `origin.kind: "human"`, so it becomes a user line here. Task notifications and
+ * messages from other sessions are queued the same way, but stay out, as before.
+ */
+function queuedPromptLine(line: ClaudeLine): ClaudeLine | null {
+  if (line.type !== 'attachment' || !isRecord(line.attachment)) return null;
+  const attachment = line.attachment;
+  if (attachment.type !== 'queued_command' || !isRecord(attachment.origin) || attachment.origin.kind !== 'human') return null;
+  if (attachment.commandMode !== undefined && attachment.commandMode !== 'prompt') return null;
+  const prompt = attachment.prompt;
+  const content = typeof prompt === 'string' ? prompt : Array.isArray(prompt) && prompt.every(isClaudeContentBlock) ? prompt : null;
+  if (content === null) return null;
+  return {
+    ...line,
+    type: 'user',
+    origin: attachment.origin,
+    isMeta: undefined,
+    attachment: undefined,
+    message: { role: 'user', content },
+  };
+}
+
 function parseClaudeLine(rawLine: string): ClaudeLine | null {
   try {
     const parsed: unknown = JSON.parse(rawLine);
@@ -191,18 +238,120 @@ function parseClaudeLine(rawLine: string): ClaudeLine | null {
     if (typeof record.uuid === 'number') record.uuid = String(record.uuid);
     if (typeof record.parentUuid === 'number') record.parentUuid = String(record.parentUuid);
     if (typeof record.timestamp === 'number') record.timestamp = new Date(record.timestamp).toISOString();
-    return parsed;
+    return queuedPromptLine(parsed) ?? parsed;
   } catch {
     return null;
   }
 }
 
-function parseClaudeLines(raw: string): ClaudeLine[] {
+/**
+ * Raw API request records: most of a large transcript's bytes, and nothing the parser reads but their presence. Matched
+ * wherever `type` sits among the keys. Quotes inside JSON string values are escaped, so a prompt that mentions the text
+ * cannot match.
+ */
+const CLAUDE_API_REQUEST_LINE = /"type"\s*:\s*"api-request/;
+/** A turn's own `api-request` record (not its `-shape` or `-blob` companions): kept as a bare `{ type }` marker, unparsed,
+ *  because `claudeLoggedLive` reads it as a sign the turn was logged live rather than copied by a fork. */
+const CLAUDE_TURN_API_REQUEST_LINE = /"type"\s*:\s*"api-request"/;
+
+/** Characters of kept lines, after inline base64 data is blanked, parsed from one transcript. */
+const CLAUDE_MAX_KEPT_CHARS = 200 * 1024 * 1024;
+const INLINE_DATA_KEY = '"data"';
+const MIN_INLINE_DATA_CHARS = 1024;
+
+function isJsonSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+}
+
+function isBase64Char(code: number): boolean {
+  return (code >= 0x41 && code <= 0x5a) // A-Z
+    || (code >= 0x61 && code <= 0x7a) // a-z
+    || (code >= 0x30 && code <= 0x39) // 0-9
+    || code === 0x2b || code === 0x2f || code === 0x3d; // + / =
+}
+
+/**
+ * Blanks long base64 `data` values (inline images and documents): most of an image-heavy transcript, and nothing the
+ * analytics read (image counts come from the block type; image bytes are read from the file on demand). Only a value
+ * made entirely of base64 characters is blanked, so a value with escapes or other text is left as it is and the JSON
+ * stays valid. A scan, not a regex: on multi-MB values V8's regex engine overflows its stack.
+ */
+function stripInlineData(line: string): string {
+  if (!line.includes('"base64"')) return line;
+  let out = '';
+  let copied = 0;
+  let at = line.indexOf(INLINE_DATA_KEY);
+  while (at >= 0) {
+    // Outside strings only: inside a JSON string every quote is escaped, so `"data"` cannot occur there.
+    let i = at + INLINE_DATA_KEY.length;
+    while (isJsonSpace(line.charCodeAt(i))) i++;
+    if (line.charCodeAt(i) === 0x3a /* : */) {
+      i++;
+      while (isJsonSpace(line.charCodeAt(i))) i++;
+      if (line.charCodeAt(i) === 0x22 /* " */) {
+        const start = i + 1;
+        let end = start;
+        while (isBase64Char(line.charCodeAt(end))) end++;
+        if (end - start >= MIN_INLINE_DATA_CHARS && line.charCodeAt(end) === 0x22) {
+          out += line.slice(copied, start);
+          copied = end;
+        }
+        i = end;
+      }
+    }
+    at = line.indexOf(INLINE_DATA_KEY, i);
+  }
+  return copied === 0 ? line : out + line.slice(copied);
+}
+
+/**
+ * Streams a transcript's lines, leaving out raw API request records and inline base64 data. A line over MAX_FILE_SIZE
+ * is skipped while it streams in, and past CLAUDE_MAX_KEPT_CHARS the rest of the transcript is left out; both are
+ * counted as skipped lines and the transcript is reported, so memory stays bounded whatever the file holds and a
+ * transcript that was cut short shows in the dashboard's skipped-history notice.
+ */
+function readClaudeLines(filePath: string): ClaudeLine[] {
   const lines: ClaudeLine[] = [];
-  for (const rawLine of raw.split('\n')) {
-    if (!rawLine.trim()) continue;
-    const parsed = parseClaudeLine(rawLine);
-    if (parsed) lines.push(parsed);
+  let keptChars = 0;
+  let leftOut = 0;
+  let tooLong = 0;
+  forEachJsonlLine(filePath, rawLine => {
+    if (!rawLine.trim()) return;
+    if (CLAUDE_API_REQUEST_LINE.test(rawLine)) {
+      if (leftOut === 0 && CLAUDE_TURN_API_REQUEST_LINE.test(rawLine)) lines.push({ type: 'api-request' });
+      return;
+    }
+    if (leftOut > 0) {
+      leftOut++;
+      return;
+    }
+    const line = stripInlineData(rawLine);
+    keptChars += line.length;
+    if (keptChars > CLAUDE_MAX_KEPT_CHARS) {
+      leftOut = 1;
+      return;
+    }
+    const parsed = parseClaudeLine(line);
+    if (parsed && !parsed.type.startsWith('api-request')) lines.push(parsed);
+  }, undefined, {
+    maxChars: MAX_FILE_SIZE,
+    // An API request record is left out anyway, so dropping one for its length loses nothing.
+    onSkip: start => {
+      if (CLAUDE_API_REQUEST_LINE.test(start)) {
+        if (leftOut === 0 && CLAUDE_TURN_API_REQUEST_LINE.test(start)) lines.push({ type: 'api-request' });
+        return;
+      }
+      if (leftOut > 0) leftOut++;
+      else tooLong++;
+    },
+  });
+  if (leftOut + tooLong > 0) {
+    const reasons: string[] = [];
+    if (tooLong > 0) reasons.push(`left out ${tooLong} line(s) over ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+    if (leftOut > 0) reasons.push(`parsed the first ${CLAUDE_MAX_KEPT_CHARS / 1024 / 1024} MB of messages and left out the last ${leftOut} line(s)`);
+    // Shown in the dashboard's skipped-history notice and, with the reason, in the output channel.
+    recordSkippedLines(leftOut + tooLong);
+    recordFailedFile('parser-claude', filePath, reasons.join('; '));
   }
   return lines;
 }
@@ -244,10 +393,19 @@ function getInputPath(input: Record<string, unknown> | undefined, key: string): 
   return typeof value === 'string' ? value : null;
 }
 
+/** File and selection context the VS Code extension adds to a typed prompt. */
+const CLAUDE_IDE_CONTEXT = /<(ide_opened_file|ide_selection)>[\s\S]*?<\/\1>/g;
+
+/** The typed text of a user line, without the IDE context the extension added to it. */
 function getClaudeUserText(line: ClaudeLine): string {
   return toContentArray(line.message?.content)
     .filter(block => block.type === 'text')
-    .map(block => block.text || '')
+    .flatMap(block => {
+      const text = block.text || '';
+      const typed = text.replaceAll(CLAUDE_IDE_CONTEXT, '');
+      if (typed === text) return [text];
+      return typed.trim() ? [typed.trim()] : [];
+    })
     .join('\n');
 }
 
@@ -283,8 +441,9 @@ export function extractClaudeImageReferences(
   let images: ImageReference[] = [];
   let found = false;
   let done = false;
+  // The same line limit as readClaudeLines, so request indices match the parsed session's.
   forEachJsonlLine(filePath, raw => {
-    if (!firstLine && !raw.includes('"user"')) return;
+    if (!firstLine && !raw.includes('"user"') && !raw.includes('"queued_command"')) return;
     const line = parseClaudeLine(raw);
     if (!line) return;
     if (firstLine) {
@@ -302,7 +461,7 @@ export function extractClaudeImageReferences(
     }
     const needsRoot = images.some(image => image.path && !path.isAbsolute(image.path) && !/^[a-z][a-z0-9+.-]*:/i.test(image.path));
     done = found && (workspaceRootPath !== undefined || !needsRoot);
-  }, () => done);
+  }, () => done, { maxChars: MAX_FILE_SIZE, onSkip: () => undefined });
   return { images, workspaceRootPath };
 }
 
@@ -482,6 +641,7 @@ function collectClaudeAssistantData(
     investigationDelegations: [],
     webDomains: [],
     userWaits: [],
+    compactions: [],
   };
 
   const toolResults = collectClaudeToolResults(lines, startIndex);
@@ -489,6 +649,8 @@ function collectClaudeAssistantData(
   while (i < lines.length) {
     const next = lines[i];
     if (next.type === 'user' && userHasText(next)) break;
+    const compaction = claudeCompaction(next);
+    if (compaction) addTurnCompaction(data.compactions, compaction);
     if (next.type === 'assistant') {
       const blocks = toContentArray(next.message?.content);
       const hasText = blocks.some(block => block.type === 'text' && block.text?.trim());
@@ -655,12 +817,238 @@ function workspaceNameFromCwd(cwds: (string | undefined)[], dirName: string): st
   return undefined;
 }
 
+/**
+ * What to leave out across project folders. A transcript can be hard-linked into a second project folder, and a fork,
+ * or a copy of a session in another project folder, replays earlier turns with the same `uuid`; each is counted once.
+ */
+interface ClaudeDiscovery {
+  /** Top-level transcripts to skip: hard links of one parsed from another project folder. */
+  skipFiles: Set<string>;
+  /** `subagents/` folders beside skipped transcripts, by the project folder and session id they merge into. */
+  extraSubagentDirs: Map<string, string[]>;
+  /** Each parsed top-level transcript's place when all of them are ordered by when they started, oldest first. */
+  transcriptRanks: Map<string, number>;
+  /** The rank of each parsed session's transcript, filled in while parsing. Sub-agent turns take their parent's. */
+  sessionRanks: Map<Session, number>;
+  /** The source each parsed session was given. Sessions in two folders can share an id, and so an index entry. */
+  sessionSources: Map<Session, SessionSource>;
+}
+
+type ClaudeProjectResult = { sessions: Session[]; workspaceId: string; workspaceName: string };
+
+/** Sorts after any real birth time, in nanoseconds since 1970. */
+const UNKNOWN_BIRTH = 2n ** 63n;
+
+function discoveryKey(dirName: string, sessionName: string): string {
+  return `${dirName}\0${sessionName}`;
+}
+
+/** Hands a transcript's first 200 lines to `onLine` until it returns true, whatever the file's size. A line over
+ *  MAX_FILE_SIZE is left out but counts towards the 200, and a file that can't be read is left to the parse. */
+function readClaudeHead(filePath: string, onLine: (raw: string) => boolean): void {
+  let read = 0;
+  let done = false;
+  try {
+    forEachJsonlLine(filePath, raw => {
+      read++;
+      done = onLine(raw);
+    }, () => done || read >= 200, { maxChars: MAX_FILE_SIZE, onSkip: () => { read++; } });
+  } catch {
+    // Left to parseClaudeSessionFile, which reads the file again.
+  }
+}
+
+/** The first `cwd` a transcript records. */
+function readClaudeCwd(filePath: string): string | undefined {
+  let cwd: string | undefined;
+  readClaudeHead(filePath, raw => {
+    if (raw.includes('"cwd"')) cwd = parseClaudeLine(raw)?.cwd || undefined;
+    return cwd !== undefined;
+  });
+  return cwd;
+}
+
+/**
+ * Finds transcripts that are one file under two project folders (the same device and inode). The copy in the folder
+ * Claude Code would use for the transcript's working folder is parsed, or the first by folder name; the others are
+ * skipped, and their `subagents/` folders merge into the parsed copy's session. The stat is read as `bigint`, because
+ * Windows file IDs can be too large for a number to tell apart, and a file with one link is not a hard link.
+ */
+function planClaudeDiscovery(projectsDir: string, dirNames: readonly string[]): ClaudeDiscovery {
+  const discovery: ClaudeDiscovery = { skipFiles: new Set(), extraSubagentDirs: new Map(), transcriptRanks: new Map(), sessionRanks: new Map(), sessionSources: new Map() };
+  const transcripts: { filePath: string; birth: bigint }[] = [];
+  const byFile = new Map<string, { dirName: string; filePath: string }[]>();
+  for (const dirName of [...dirNames].sort()) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(projectsDir, dirName), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      const filePath = path.join(projectsDir, dirName, entry.name);
+      let stat: fs.BigIntStats;
+      let key: string;
+      try {
+        stat = fs.statSync(filePath, { bigint: true });
+        // A file system that doesn't record birth times reports 0: order those files after the rest. Where statx isn't
+        // available, libuv reports the change time instead, which moves on append; it only decides equal starts.
+        transcripts.push({ filePath, birth: stat.birthtimeNs || UNKNOWN_BIRTH });
+        if (stat.nlink < 2n) continue;
+        key = stat.ino ? `${stat.dev}:${stat.ino}` : fs.realpathSync(filePath);
+      } catch {
+        continue;
+      }
+      const copies = byFile.get(key) ?? [];
+      copies.push({ dirName, filePath });
+      byFile.set(key, copies);
+    }
+  }
+  for (const copies of byFile.values()) {
+    if (copies.length < 2) continue;
+    const cwd = readClaudeCwd(copies[0].filePath);
+    const kept = copies.find(copy => cwd !== undefined && cwdMatchesProjectDir(cwd, copy.dirName)) ?? copies[0];
+    for (const copy of copies) {
+      if (copy === kept) continue;
+      discovery.skipFiles.add(copy.filePath);
+      const sessionName = path.basename(copy.filePath, '.jsonl');
+      const key = discoveryKey(kept.dirName, sessionName);
+      const dirs = discovery.extraSubagentDirs.get(key) ?? [];
+      dirs.push(path.join(path.dirname(copy.filePath), sessionName, 'subagents'));
+      discovery.extraSubagentDirs.set(key, dirs);
+    }
+  }
+  // Oldest first, so a turn stays with the transcript it was typed in, whichever folder its copies are in. A copy's
+  // first line can carry the original's timestamp, so equal starts go by when the file was created, then by name.
+  const ordered = transcripts
+    .filter(({ filePath }) => !discovery.skipFiles.has(filePath))
+    .map(({ filePath, birth }) => ({ filePath, birth, start: transcriptStart(filePath) }))
+    .sort((a, b) => a.start - b.start || Number(a.birth - b.birth)
+      || path.basename(a.filePath).localeCompare(path.basename(b.filePath)) || a.filePath.localeCompare(b.filePath));
+  for (const [rank, { filePath }] of ordered.entries()) discovery.transcriptRanks.set(filePath, rank);
+  return discovery;
+}
+
+/** When a transcript was started: its first line's timestamp. A fork, or a copy of a session in another project
+ *  folder, replays older turns, but its own first line is normally written when it starts. */
+function transcriptStart(filePath: string): number {
+  let start = Number.POSITIVE_INFINITY;
+  readClaudeHead(filePath, raw => {
+    const ts = raw.includes('"timestamp"') ? parseClaudeLine(raw)?.timestamp : undefined;
+    if (ts) start = Date.parse(ts);
+    return Number.isFinite(start);
+  });
+  return Number.isFinite(start) ? start : Number.POSITIVE_INFINITY;
+}
+
+/** The earliest timestamp among the requests. */
+export function earliestRequestTime(requests: readonly SessionRequest[]): number | null {
+  let earliest: number | null = null;
+  for (const { timestamp } of requests) {
+    if (timestamp && (earliest === null || timestamp < earliest)) earliest = timestamp;
+  }
+  return earliest;
+}
+
+/** How strongly a turn says it was typed in its transcript: a prompt older than the transcript's first line was copied
+ *  there (`historyLeadMs`); one logged live (`loggedLive`) was typed there; otherwise nothing says. */
+function claudeTurnWitness(request: SessionRequest): number {
+  if ((request.historyLeadMs ?? 0) > 0) return 0;
+  return request.loggedLive ? 2 : 1;
+}
+
+/**
+ * Keeps each user line in one session across every project folder, and leaves it out of the others: a fork, or a copy
+ * of a session in another project folder, replays earlier turns with the same `uuid`. The owner is the session whose
+ * copy says it was typed there (`claudeTurnWitness`: a fork's copies are older than its first line, and carry only the
+ * conversation lines, not the queue, API request and cost records beside them), else the one whose transcript started
+ * first. A session left with no requests is dropped.
+ */
+function keepEachTurnOnce(
+  results: ClaudeProjectResult[],
+  discovery: ClaudeDiscovery,
+  sessionSourceIndex?: Map<string, SessionSource>,
+): ClaudeProjectResult[] {
+  const owners = new Map<string, { session: Session; request: SessionRequest; rank: number }>();
+  for (const { sessions } of results) {
+    for (const session of sessions) {
+      const rank = discovery.sessionRanks.get(session) ?? Number.MAX_SAFE_INTEGER;
+      for (const request of session.requests) {
+        if (!request.userEventId) continue;
+        const owner = owners.get(request.userEventId);
+        const witness = claudeTurnWitness(request);
+        if (!owner) {
+          owners.set(request.userEventId, { session, request, rank });
+          continue;
+        }
+        const ownerWitness = claudeTurnWitness(owner.request);
+        if (witness > ownerWitness || (witness === ownerWitness && rank < owner.rank)) owners.set(request.userEventId, { session, request, rank });
+      }
+    }
+  }
+  for (const result of results) {
+    result.sessions = result.sessions.filter(session => {
+      const source = discovery.sessionSources.get(session);
+      if (keepOwnedTurns(session, owners, source)) return true;
+      if (source && sessionSourceIndex?.get(session.sessionId) === source) sessionSourceIndex.delete(session.sessionId);
+      return false;
+    });
+  }
+  // A dropped session can have held the index entry of a kept session with the same id, such as a copied folder's.
+  for (const { sessions } of results) {
+    for (const session of sessions) {
+      const source = discovery.sessionSources.get(session);
+      if (source && !sessionSourceIndex?.has(session.sessionId)) sessionSourceIndex?.set(session.sessionId, source);
+    }
+  }
+  return results.filter(result => result.sessions.length > 0);
+}
+
+/** Leaves out a session's turns that another session owns, or that it repeats. A session that loses turns is dated
+ *  from its earliest kept turn, as `parseClaudeSessionFile` dates every session, and its source records the ids
+ *  another session owns, so its detail leaves them out too. Turns another session owns were inherited: the session
+ *  counts them (`inheritedTurns`) and, unless it already names one, links to the owner of the latest as its fork
+ *  source (the direct source, for a fork of a fork). Returns whether the session still has requests. */
+function keepOwnedTurns(
+  session: Session,
+  owners: Map<string, { session: Session; request: SessionRequest }>,
+  source?: SessionSource,
+): boolean {
+  const dropped: string[] = [];
+  let latest: { session: Session; timestamp: number } | undefined;
+  const requests = session.requests.filter(request => {
+    const id = request.userEventId;
+    if (!id) return true;
+    const owner = owners.get(id);
+    if (!owner || owner.request === request) return true;
+    if (owner.session !== session) {
+      dropped.push(id);
+      const timestamp = request.timestamp ?? 0;
+      if (!latest || timestamp >= latest.timestamp) latest = { session: owner.session, timestamp };
+    }
+    return false;
+  });
+  if (requests.length === session.requests.length) return true;
+  session.requests = requests;
+  session.requestCount = requests.length;
+  if (requests.length === 0) return false;
+  session.creationDate = earliestRequestTime(requests) ?? session.creationDate;
+  if (dropped.length > 0) {
+    session.inheritedTurns = dropped.length;
+    if (!session.forkedFromId && latest && latest.session.sessionId !== session.sessionId) session.forkedFromId = latest.session.sessionId;
+  }
+  if (source && dropped.length > 0) source.droppedUserEventIds = dropped;
+  return true;
+}
+
 function parseClaudeProjectSessions(
   projectsDir: string,
   dirName: string,
+  discovery: ClaudeDiscovery,
   editLocIndex?: EditLocIndex,
   sessionSourceIndex?: Map<string, SessionSource>,
-): { sessions: Session[]; workspaceId: string; workspaceName: string } | null {
+): ClaudeProjectResult | null {
   const projPath = path.join(projectsDir, dirName);
   const workspaceId = `claude-${dirName}`;
   let workspaceName = projectNameFromEncoded(dirName, projectsDir);
@@ -679,12 +1067,18 @@ function parseClaudeProjectSessions(
   const sessions: Session[] = [];
   const sessionFiles = new Map<string, string[]>();
   const cwds: (string | undefined)[] = [];
+  const skippedSessions = new Set<string>();
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const filePath = path.join(projPath, entry.name);
+    if (discovery.skipFiles.has(filePath)) {
+      skippedSessions.add(path.basename(entry.name, '.jsonl'));
+      continue;
+    }
     const session = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex });
     if (!session) continue;
     cwds.push(session.workspaceRootPath);
+    discovery.sessionRanks.set(session, discovery.transcriptRanks.get(filePath) ?? Number.MAX_SAFE_INTEGER);
     sessions.push(session);
     sessionsById.set(session.sessionId, session);
     sessionFiles.set(session.sessionId, [filePath]);
@@ -696,66 +1090,79 @@ function parseClaudeProjectSessions(
   // session. Orphans (subagent dir whose parent session is missing) become
   // standalone programmatic sessions — they're still GHCP-spawned work.
   // Either way, every call in the file is sub-agent work, marked or not.
+  // The folders beside a skipped hard-linked transcript merge into its parsed copy instead.
+  const subagentDirs = new Map<string, string[]>();
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const subagentDir = path.join(projPath, entry.name, 'subagents');
-    let subagentEntries: fs.Dirent[];
-    try {
-      subagentEntries = fs.readdirSync(subagentDir, { withFileTypes: true });
-    } catch {
-      continue; // no subagents/ folder under this session — fine
-    }
+    if (!entry.isDirectory() || skippedSessions.has(entry.name)) continue;
+    subagentDirs.set(entry.name, [path.join(projPath, entry.name, 'subagents')]);
+  }
+  const prefix = discoveryKey(dirName, '');
+  for (const [key, dirs] of discovery.extraSubagentDirs) {
+    if (!key.startsWith(prefix)) continue;
+    const sessionName = key.slice(prefix.length);
+    subagentDirs.set(sessionName, [...(subagentDirs.get(sessionName) ?? []), ...dirs]);
+  }
 
-    const parent = sessionsById.get(entry.name);
+  for (const [sessionName, dirs] of subagentDirs) {
+    const parent = sessionsById.get(sessionName);
     const orphanRequests: SessionRequest[] = [];
     let orphanFirstTs: number | null = null;
     let orphanLastTs: number | null = null;
     let orphanEntrypoint: string | undefined;
 
-    for (const subEntry of subagentEntries) {
-      if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
-      const filePath = path.join(subagentDir, subEntry.name);
-      const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
-      if (!subSession) continue;
-      cwds.push(subSession.workspaceRootPath);
-      const sourceId = parent?.sessionId ?? entry.name;
-      const files = sessionFiles.get(sourceId) ?? [];
-      files.push(filePath);
-      sessionFiles.set(sourceId, files);
+    for (const subagentDir of dirs) {
+      let subagentEntries: fs.Dirent[];
+      try {
+        subagentEntries = fs.readdirSync(subagentDir, { withFileTypes: true });
+      } catch {
+        continue; // no subagents/ folder under this session — fine
+      }
 
-      if (parent) {
-        // Merge subagent requests into parent. Sorting happens after all
-        // subagents are collected, below.
-        for (const r of subSession.requests) parent.requests.push(r);
-        // Extend parent's last-message timestamp if the subagent ran longer.
-        if (subSession.lastMessageDate &&
-            (!parent.lastMessageDate || subSession.lastMessageDate > parent.lastMessageDate)) {
-          parent.lastMessageDate = subSession.lastMessageDate;
+      for (const subEntry of subagentEntries) {
+        if (!subEntry.isFile() || !subEntry.name.endsWith('.jsonl')) continue;
+        const filePath = path.join(subagentDir, subEntry.name);
+        const subSession = parseClaudeSessionFile(filePath, workspaceId, workspaceName, { editLocIndex, subagentFile: true });
+        if (!subSession) continue;
+        cwds.push(subSession.workspaceRootPath);
+        const sourceId = parent?.sessionId ?? sessionName;
+        const files = sessionFiles.get(sourceId) ?? [];
+        files.push(filePath);
+        sessionFiles.set(sourceId, files);
+
+        if (parent) {
+          // Merge subagent requests into parent. Sorting happens after all
+          // subagents are collected, below.
+          for (const r of subSession.requests) parent.requests.push(r);
+          // Extend parent's last-message timestamp if the subagent ran longer.
+          if (subSession.lastMessageDate &&
+              (!parent.lastMessageDate || subSession.lastMessageDate > parent.lastMessageDate)) {
+            parent.lastMessageDate = subSession.lastMessageDate;
+          }
+        } else {
+          for (const r of subSession.requests) orphanRequests.push(r);
+          if (subSession.creationDate &&
+              (!orphanFirstTs || subSession.creationDate < orphanFirstTs)) {
+            orphanFirstTs = subSession.creationDate;
+          }
+          if (subSession.lastMessageDate &&
+              (!orphanLastTs || subSession.lastMessageDate > orphanLastTs)) {
+            orphanLastTs = subSession.lastMessageDate;
+          }
+          if (!orphanEntrypoint && subSession.entrypoint) orphanEntrypoint = subSession.entrypoint;
         }
-      } else {
-        for (const r of subSession.requests) orphanRequests.push(r);
-        if (subSession.creationDate &&
-            (!orphanFirstTs || subSession.creationDate < orphanFirstTs)) {
-          orphanFirstTs = subSession.creationDate;
-        }
-        if (subSession.lastMessageDate &&
-            (!orphanLastTs || subSession.lastMessageDate > orphanLastTs)) {
-          orphanLastTs = subSession.lastMessageDate;
-        }
-        if (!orphanEntrypoint && subSession.entrypoint) orphanEntrypoint = subSession.entrypoint;
       }
     }
 
     if (parent) continue;
 
     if (orphanRequests.length > 0) {
-      warnCore('parser-claude', `subagent dir without parent session: ${entry.name}`, {
+      warnCore('parser-claude', `subagent dir without parent session: ${sessionName}`, {
         requestCount: orphanRequests.length,
       });
       orphanRequests.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
       const launcherKind: 'interactive' | 'programmatic' = 'programmatic';
       const orphan = createSession({
-        sessionId: entry.name,
+        sessionId: sessionName,
         workspaceId,
         workspaceName,
         location: 'terminal',
@@ -782,8 +1189,8 @@ function parseClaudeProjectSessions(
     }
     session.requestCount = session.requests.length;
     const files = sessionFiles.get(session.sessionId);
-    if (files?.length) {
-      sessionSourceIndex?.set(session.sessionId, {
+    if (files?.length && sessionSourceIndex) {
+      const source: SessionSource = {
         kind: 'claude-jsonl',
         filePath: files[0],
         additionalFilePaths: files.slice(1),
@@ -791,7 +1198,9 @@ function parseClaudeProjectSessions(
         workspaceName,
         workspaceRootPath: session.workspaceRootPath,
         harness: session.harness,
-      });
+      };
+      sessionSourceIndex.set(session.sessionId, source);
+      discovery.sessionSources.set(session, source);
     }
   }
 
@@ -812,12 +1221,13 @@ export function parseClaudeSessions(
     return results;
   }
 
+  const discovery = planClaudeDiscovery(projectsDir, projectDirs.map(dir => dir.name));
   for (const projDir of projectDirs) {
-    const result = parseClaudeProjectSessions(projectsDir, projDir.name, editLocIndex, sessionSourceIndex);
+    const result = parseClaudeProjectSessions(projectsDir, projDir.name, discovery, editLocIndex, sessionSourceIndex);
     if (result) results.push(result);
   }
 
-  return results;
+  return keepEachTurnOnce(results, discovery, sessionSourceIndex);
 }
 
 export async function parseClaudeSessionsAsync(
@@ -837,9 +1247,10 @@ export async function parseClaudeSessionsAsync(
     return results;
   }
 
+  const discovery = planClaudeDiscovery(projectsDir, projectDirs);
   for (let i = 0; i < projectDirs.length; i++) {
     const dirName = projectDirs[i];
-    const result = parseClaudeProjectSessions(projectsDir, dirName, editLocIndex, sessionSourceIndex);
+    const result = parseClaudeProjectSessions(projectsDir, dirName, discovery, editLocIndex, sessionSourceIndex);
     if (result) results.push(result);
 
     // Report after parsing, so the progress detail shows the name taken from the recorded cwd.
@@ -849,7 +1260,7 @@ export async function parseClaudeSessionsAsync(
     if (i % 5 === 0) await new Promise<void>(r => setTimeout(r, 0));
   }
 
-  return results;
+  return keepEachTurnOnce(results, discovery, sessionSourceIndex);
 }
 
 function updateClaudeTimestampRange(
@@ -915,6 +1326,7 @@ function buildClaudeRequest(
     ...(usage.promptCache ? { promptCache: usage.promptCache } : {}),
     ...(usage.callRowsWithoutCacheData ? { callRowsWithoutCacheData: usage.callRowsWithoutCacheData } : {}),
     ...(usage.contextUsage ? { contextUsage: usage.contextUsage } : {}),
+    ...requestCompactionFields(assistantData.compactions),
   });
   if (assistantData.userWaits.length) request.userWaits = assistantData.userWaits;
   mergeRequestEditLoc(editLocIndex, requestId, assistantData.editLocs);
@@ -940,16 +1352,12 @@ export function parseClaudeSessionFile(
   { editLocIndex, subagentFile = false }: { editLocIndex?: EditLocIndex; subagentFile?: boolean } = {},
 ): Session | null {
   assertTrustedPath(filePath);
-  let raw: string;
+  let lines: ClaudeLine[];
   try {
-    const content = readFileSafe(filePath);
-    if (content === null) return null;
-    raw = content;
+    lines = readClaudeLines(filePath);
   } catch {
     return null;
   }
-
-  const lines = parseClaudeLines(raw);
   if (lines.length === 0) return null;
 
   const sessionId = lines[0].sessionId || path.basename(filePath, '.jsonl');
@@ -964,11 +1372,15 @@ export function parseClaudeSessionFile(
   let lastTs: number | null = null;
   let entrypoint: string | undefined;
   const questions = indexClaudeQuestionResults(lines);
+  // Compactions logged before the first prompt go to the first request.
+  const earlyCompactions: CompactionEvent[] = [];
   let i = 0;
 
   while (i < lines.length) {
     const line = lines[i];
     if (line.type !== 'user' || !userHasText(line)) {
+      const compaction = requests.length === 0 ? claudeCompaction(line) : null;
+      if (compaction) addTurnCompaction(earlyCompactions, compaction);
       i++;
       continue;
     }
@@ -981,6 +1393,7 @@ export function parseClaudeSessionFile(
     ({ firstTs, lastTs } = updateClaudeTimestampRange(userTs, firstTs, lastTs));
 
     const assistantData = collectClaudeAssistantData(lines, i, lastTs, cacheState, questions);
+    if (requests.length === 0) prependCompactions(assistantData, earlyCompactions);
     lastTs = assistantData.lastTs;
     const requestId = claudeRequestId(line, sessionId, requests.length, transcriptKey);
     const request = buildClaudeRequest(line, assistantData, userTs, requestId, editLocIndex);

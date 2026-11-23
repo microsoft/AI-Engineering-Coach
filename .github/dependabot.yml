@@ -1,5 +1,7 @@
 updates:
 - directory: /
+  cooldown:
+    default-days: 7
   groups:
     dev-dependencies:
       dependency-type: development
@@ -12,6 +14,7 @@ updates:
       - minor
       - patch
   ignore:
+  - dependency-name: "@types/vscode" # Bumped together with engines.vscode; vsce rejects types newer than the engine floor.
   - dependency-name: typescript
     versions:
     - ">=7.0.0 <8.0.0" # typescript-eslint requires TypeScript below 6.1.
