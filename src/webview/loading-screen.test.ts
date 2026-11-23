@@ -162,3 +162,26 @@ describe('ready summary', () => {
     expect(document.getElementById('load-index')!.dataset.state).toBe('loading');
   });
 });
+
+describe('details drawer measurements', () => {
+  const tel = (heapUsedMB: number) => ({ rssMB: 900, heapUsedMB, heapLimitMB: 4096, fileBufMB: 20, cpuPct: 80 });
+
+  it('keeps the heap peak from every snapshot, not only the ones that reach a frame', () => {
+    mountLoadingScreen(content, memoryStore(), 0);
+    recordLoadingProgress({ phase: 2, pct: 30, telemetry: tel(2048) }, 100);
+    recordLoadingProgress({ phase: 2, pct: 31, telemetry: tel(300) }, 110);
+    renderLoadingScreen(120);
+    expect(loadingDiagnostics(120)).toContain('heap 300 MB of 4.0 GB (peak 2.0 GB)');
+  });
+
+  it('restarts the throughput rate when the step switches from workspaces to sessions', () => {
+    mountLoadingScreen(content, memoryStore(true), 0);
+    for (let i = 1; i <= 9; i++) {
+      recordLoadingProgress({ phase: 2, pct: 10 + i, item: { kind: 'workspace', index: i, total: 9, folder: 'api', path: '~/api', status: 'parsed', ms: 5, sessions: 1 } }, 1000 + i * 10);
+    }
+    recordLoadingProgress({ phase: 2, pct: 40, item: cli(1, 50) }, 1200);
+    renderLoadingScreen(1300);
+    // One session in the last three seconds, not ten items relabelled as sessions.
+    expect(text('tg-rate')).toBe('0.3 sessions/s');
+  });
+});

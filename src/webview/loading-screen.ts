@@ -82,6 +82,8 @@ interface ScreenState {
   etaSeconds: number | undefined;
   etaAt: number;
   rateUnit: string;
+  /** Highest heap use in any snapshot received, including ones no frame rendered. */
+  heapPeakMB: number;
   ready: boolean;
   readyAt: number;
   timer: number;
@@ -136,6 +138,7 @@ export function mountLoadingScreen(content: HTMLElement, store: DetailsStore, no
     etaSeconds: undefined,
     etaAt: now,
     rateUnit: 'workspaces',
+    heapPeakMB: 0,
     ready: false,
     readyAt: 0,
     timer: window.setInterval(() => tickClock(), 1000),
@@ -191,12 +194,18 @@ export function recordLoadingProgress(msg: LoadingProgress, now = Date.now()): v
     // A reported 0 is a real count; omitted counters stay unknown (shown as a dash).
     if (typeof v === 'number' && v >= 0) s.totals[f.key] = v;
   }
-  if (msg.telemetry) s.telemetry = msg.telemetry;
+  if (msg.telemetry) {
+    s.telemetry = msg.telemetry;
+    s.heapPeakMB = Math.max(s.heapPeakMB, msg.telemetry.heapUsedMB);
+  }
   if (msg.item) {
     s.item = msg.item;
     if (s.log.add(msg.item, now - s.startedAt)) {
+      // One unit per series: an incremental load reads workspaces, then sessions.
+      const unit = msg.item.kind === 'cli-session' ? 'sessions' : 'workspaces';
+      if (unit !== s.rateUnit && s.log.counts().done > 1) s.rate = createRateSeries();
+      s.rateUnit = unit;
       s.rate.add(now);
-      s.rateUnit = msg.item.kind === 'cli-session' ? 'sessions' : 'workspaces';
       s.logVersion++;
     }
   }
@@ -400,7 +409,7 @@ export function loadingDiagnostics(now = Date.now()): string {
     telemetry: t ? {
       heapUsedMB: t.heapUsedMB,
       heapLimitMB: t.heapLimitMB,
-      heapPeakMB: Math.max(heapPeakMB(), t.heapUsedMB),
+      heapPeakMB: Math.max(s.heapPeakMB, heapPeakMB(), t.heapUsedMB),
       rssMB: t.rssMB,
       fileBufMB: t.fileBufMB,
       cpuPct: t.cpuPct,

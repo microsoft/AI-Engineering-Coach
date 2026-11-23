@@ -65,6 +65,8 @@ body {
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
+  /* Out of the tab order too, so keyboard users can't open a page behind the loading screen. */
+  visibility: hidden;
 }
 
 #app.loading-mode #content {

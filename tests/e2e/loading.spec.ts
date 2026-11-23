@@ -160,6 +160,47 @@ test.describe('loading screen redesign', () => {
     await expect(page.locator('#loading-activity')).not.toContainText(/Users|home/);
   });
 
+  test('keeps the ready summary when a page is chosen during it, then opens that page once', async ({ page }) => {
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 60_000));
+    await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
+    await page.evaluate(() => {
+      const w = window as unknown as { getMockData: (m: string, p: unknown) => unknown; curiosityCalls: number };
+      const original = w.getMockData;
+      w.curiosityCalls = 0;
+      w.getMockData = (method, params) => { if (method === 'getCuriosity') w.curiosityCalls++; return original(method, params); };
+    });
+    await send(page, { type: 'progress', phase: 4, pct: 95, detail: 'Computing analytics', sessions: 12 });
+    await page.clock.runFor(2000);
+    await send(page, { type: 'dataReady' });
+    await page.clock.runFor(100);
+    await expect(page.locator('#load-index')).toHaveAttribute('data-state', 'ready');
+
+    await page.evaluate(() => document.querySelector<HTMLAnchorElement>('[data-page="curiosity"]')?.click());
+    await page.clock.runFor(100);
+    await expect(page.locator('#load-index')).toHaveAttribute('data-state', 'ready');
+
+    await page.clock.runFor(1000);
+    await expect(page.locator('#content')).toContainText('Sessions with inquiry');
+    await expect(page.locator('#load-index')).toHaveCount(0);
+    // One render: the same number of requests a normal visit to the page makes.
+    const calls = () => page.evaluate(() => (window as unknown as { curiosityCalls: number }).curiosityCalls);
+    const duringHold = await calls();
+    await page.locator('[data-page="dashboard"]').first().click();
+    await page.clock.runFor(300);
+    await page.locator('[data-page="curiosity"]').first().click();
+    await page.clock.runFor(300);
+    await expect(page.locator('#content')).toContainText('Sessions with inquiry');
+    expect(duringHold).toBeGreaterThan(0);
+    expect(await calls()).toBe(duringHold * 2);
+  });
+
+  test('keeps the hidden sidebar out of the tab order while loading', async ({ page }) => {
+    await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));
+    await expect(page.locator('#sidebar')).toBeHidden();
+    await expect(page.locator('#sidebar [data-page="curiosity"]').first()).not.toBeVisible();
+  });
+
   test('turns off transitions and glow when the user prefers reduced motion', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(harnessUrl('tests/e2e/harness?mode=manual-loading'));

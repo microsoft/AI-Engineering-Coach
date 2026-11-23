@@ -447,7 +447,9 @@ if (harnessFilter) {
 function renderPage(page: string): void {
   page = normalizePageForFeatureFlags(page);
   currentPage = page;
-  if (!_dataIsReady) {
+  // Remember the page and keep the loading screen (also its short ready summary): onDataReady
+  // renders `currentPage` once, when the screen leaves.
+  if (!_dataIsReady || isLoadingScreenMounted()) {
     ensureLoadingUI();
     return;
   }
