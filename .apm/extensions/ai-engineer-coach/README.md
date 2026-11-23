@@ -20,7 +20,9 @@ Edit the canvas logic here, not in the forwarding stub.
 
 ## Setup flow
 
-The canvas needs Node.js on `PATH` and the project to be built first. It starts the parse and analytics workers with `node`, even when the canvas provider runs under the packaged Copilot CLI. The dashboard shows one progress screen until parsing and background analytics finish. If analytics fail, the canvas shows the error; reload the canvas to try again. When you open it on a fresh clone, it shows a setup card with one command:
+The canvas needs Node.js 22 or 24 (LTS) as the first `node` on `PATH`, and the project to be built first. It starts the parse and analytics workers with `node`, even when the canvas provider runs under the packaged Copilot CLI, which uses Node.js 24. The analytics worker returns its result in V8's binary format, so a `node` newer than the app's runtime (for example a Node.js 27 pre-release) crashes the canvas at "Preparing analytics". See the [prerequisite](https://github.com/microsoft/AI-Engineering-Coach#prerequisite-nodejs-22-or-24-on-path) for Windows `PATH` order. Restart the GitHub Copilot app after changing `PATH`.
+
+The dashboard shows one progress screen until parsing and background analytics finish. If analytics report an error, the canvas shows it; reload the canvas to try again. When you open it on a fresh clone, it shows a setup card with one command:
 
 ```
 npm install && npm run build

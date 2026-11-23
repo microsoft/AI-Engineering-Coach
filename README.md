@@ -125,6 +125,18 @@ The same dashboard also runs as a canvas inside the GitHub Copilot app, so you d
 
 A canvas is an interactive side panel in the GitHub Copilot app. Rather than replying only in chat, the agent can open a canvas to show rich, task-specific UI that you view and interact with directly while you keep working. This repo ships one named **AI Engineer Coach**, packaged as an [`apm`](https://github.com/microsoft/apm) package under [`.apm/extensions/ai-engineer-coach/`](.apm/extensions/ai-engineer-coach/). It reuses the exact webview bundle from the VS Code extension and parses your local session logs in process, so nothing leaves your machine.
 
+### Prerequisite: Node.js 22 or 24 on `PATH`
+
+The canvas starts its parse and analytics workers with the `node` found on `PATH`, not with the GitHub Copilot app's own runtime. Install a Node.js LTS release (22 or 24) and make sure it is the first `node` on `PATH`:
+
+```bash
+node --version   # run in a new terminal; expect v22.x or v24.x
+```
+
+- **Don't use a newer `node` than the app's runtime.** The app runs canvases on Node.js 24, and the analytics result comes back in V8's binary format. A newer `node` (for example a Node.js 27 pre-release) writes a format the app can't read, so the canvas stops at "Preparing analytics".
+- **Windows:** the system `PATH` is searched before your user `PATH`. If another Node.js is installed system-wide (for example in `C:\Program Files\nodejs\`), put the LTS folder before it in the system `PATH`.
+- **Restart the GitHub Copilot app** after changing `PATH`. The app passes its `PATH` to canvases when it starts, so a running app keeps the old one.
+
 ### Install into another project (apm)
 
 From any other project you have open in the GitHub Copilot app:
