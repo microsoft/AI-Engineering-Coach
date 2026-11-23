@@ -104,3 +104,24 @@ describe('layoutWorkspaceGrid', () => {
     expect(() => layoutWorkspaceGrid()).not.toThrow();
   });
 });
+
+describe('frontier tile', () => {
+  const nowSlots = () => [...document.querySelectorAll('.cal-workspace-now')].map(cell => cell.getAttribute('data-slot'));
+
+  it('highlights the first pending tile in plan order and moves it as tiles are read', () => {
+    renderWorkspaceGrid([planKey(0, 'a', 10), planKey(1, 'b', 10), planKey(2, 'c', 10), planKey(3, 'a', 10)]);
+    expect(nowSlots()).toEqual(['0']);
+    updateWorkspaceCell('b');
+    expect(nowSlots()).toEqual(['0']);
+    updateWorkspaceCell('a');
+    expect(nowSlots()).toEqual(['2']);
+    updateWorkspaceCell('c');
+    expect(nowSlots()).toEqual([]);
+  });
+
+  it('fades tiles in instead of the old scale pop', () => {
+    renderWorkspaceGrid([planKey(0, 'a', 10)]);
+    updateWorkspaceCell('a');
+    expect(document.querySelector('.cal-pop')).toBeNull();
+  });
+});

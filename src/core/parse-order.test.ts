@@ -207,7 +207,7 @@ describe('cold and warm loads return the same result', () => {
     const cold = view((await parseAllLogsAsyncDetailed(logsDirs)).result);
     const warm = view((await parseAllLogsAsyncDetailed(logsDirs, progress => steps.push(progress.detail ?? ''))).result);
 
-    expect(steps).toContain('Loaded from memory');
+    expect(steps.some(step => /^Loaded [\d,]+ cached sessions? from memory$/.test(step))).toBe(true);
     expect(warm).toEqual(cold);
   });
 });

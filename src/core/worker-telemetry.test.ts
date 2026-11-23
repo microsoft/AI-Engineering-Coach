@@ -89,6 +89,26 @@ describe('createTelemetrySampler', () => {
     expect(sample().cpuPct).toBe(100);
   });
 
+  it('keeps reading a busy worker as busy when it samples far more often than the CPU clock ticks', () => {
+    // A fully busy worker sampled every millisecond (progress events) while process.cpuUsage()
+    // only advances in 15.6 ms scheduler ticks, as on Windows. Per-call deltas are mostly 0.
+    let nowMs = 0;
+    const tickMs = 15.6;
+    const sample = createTelemetrySampler({
+      memoryUsage: () => mem(),
+      cpuUsage: () => ({ user: Math.floor(nowMs / tickMs) * tickMs * 1000, system: 0 }),
+      hrtimeNs: () => BigInt(Math.round(nowMs * 1e6)),
+      heapLimitBytes: () => 4096 * MB,
+    });
+    const readings: number[] = [];
+    for (nowMs = 1; nowMs <= 3000; nowMs++) {
+      const t = sample();
+      if (nowMs > 600) readings.push(t.cpuPct);
+    }
+    const busy = readings.filter(pct => pct >= 90).length;
+    expect(busy / readings.length).toBeGreaterThan(0.95);
+  });
+
   it('produces a payload matching the ParseTelemetry contract', () => {
     const sample = createTelemetrySampler({
       memoryUsage: () => mem({ rss: 100 * MB, heapUsed: 50 * MB }),

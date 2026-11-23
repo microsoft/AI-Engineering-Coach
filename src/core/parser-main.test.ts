@@ -463,8 +463,9 @@ describe('parseAllLogsAsyncDetailed', () => {
       progress.push(update.detail ?? '');
     });
 
-    expect(progress).toContain('Loaded from memory');
+    expect(progress).toContain('Loaded 1 cached session from memory');
   });
+
 });
 
 describe('clearCache', () => {
