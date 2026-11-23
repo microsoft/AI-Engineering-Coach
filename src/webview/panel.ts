@@ -12,9 +12,10 @@ import { saveSidebarStats } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult, type LoadProgress } from '../core/parser';
 import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
+import { computeSessionTotals } from '../core/session-totals';
 import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
-import { createProgressThrottle } from './panel-progress-throttle';
+import { createProgressThrottle, pickProgressTotals } from './panel-progress-throttle';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
 import { isCopilotModelAvailable } from './panel-llm-model';
@@ -159,7 +160,9 @@ export class DashboardPanel {
     // Throttle progress messages to the webview: at most once per 250ms, structural ones at once.
     const sendRaw = (progress: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string }) => {
       if (this.disposed) return;
-      this.lastProgress = progress;
+      // Keep the latest totals with the replayed message, so a reloaded webview shows them even
+      // when the last update (such as an analytics step) only carries the phase.
+      this.lastProgress = { ...pickProgressTotals(this.lastProgress), ...progress };
       try {
         this.panel.webview.postMessage({ type: 'progress', ...progress });
       } catch {
@@ -203,10 +206,12 @@ export class DashboardPanel {
         runtimeDebug('panel', 'loadData-cache-hit');
         this.parseResult = panelCache.result;
         this.analyzer = panelCache.analyzerInstance;
-        sendProgress({ phase: 4, detail: 'Computing analytics', pct: 90, sessions: this.parseResult.sessions.length });
+        // Reopened during or after analytics: no parse runs, so send the totals the parse found.
+        const totals = { sessions: this.parseResult.sessions.length, ...computeSessionTotals(this.parseResult.sessions, this.parseResult.editLocIndex) };
+        sendProgress({ phase: 4, detail: 'Computing analytics', pct: 90, ...totals });
         await panelCache.analyticsReady;
         if (this.disposed) return;
-        sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: this.parseResult.sessions.length });
+        sendProgress({ phase: 5, detail: 'Ready', pct: 100, ...totals });
         publishReady();
         runtimeDebug('panel', 'sync-timing',
           `result=warm-cache totalMs=${Date.now() - t0} sessions=${this.parseResult.sessions.length}`);

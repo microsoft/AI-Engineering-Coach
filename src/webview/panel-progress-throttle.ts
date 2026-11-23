@@ -63,3 +63,14 @@ export function createProgressThrottle<T extends ThrottledProgress>(
     },
   };
 }
+
+type ProgressTotals = { sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number };
+
+/** The found-so-far totals of a progress message, for carrying them onto a later one. */
+export function pickProgressTotals(progress: ProgressTotals | undefined): ProgressTotals {
+  if (!progress) return {};
+  const { sessions, linesOfCode, toolCalls, imagesAnalyzed, filesEdited, requests } = progress;
+  const totals: ProgressTotals = { sessions, linesOfCode, toolCalls, imagesAnalyzed, filesEdited, requests };
+  for (const key of Object.keys(totals) as Array<keyof ProgressTotals>) if (totals[key] === undefined) delete totals[key];
+  return totals;
+}

@@ -289,7 +289,8 @@ function mem(mb: number): string {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
 
-const n = (v: number | undefined): string => (v ?? 0).toLocaleString('en-US');
+/** A count, or a dash when it was never reported (unknown is not 0). */
+const n = (v: number | undefined): string => (v === undefined ? '—' : v.toLocaleString('en-US'));
 
 /** Plain-text diagnostics for "Copy diagnostics": aggregates and display paths only, never
  *  session content. */

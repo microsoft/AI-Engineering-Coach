@@ -191,3 +191,16 @@ describe('buildDiagnostics', () => {
     expect(text).not.toMatch(/[A-Za-z]:\\Users|\/home\/|\/Users\//);
   });
 });
+
+describe('buildDiagnostics unknown totals', () => {
+  it('prints a dash, not 0, for totals that were never reported', () => {
+    const text = buildDiagnostics({
+      elapsedMs: 1000, phase: 4, pct: 90, ready: false,
+      phaseDurations: [undefined, undefined, undefined, undefined, 1000, undefined],
+      sessions: 12,
+      counts: { done: 0, slow: 0, skipped: 0 },
+      flagged: [],
+    });
+    expect(text).toContain('Found: 12 sessions · — prompts · — tool calls · — lines written · — files touched');
+  });
+});

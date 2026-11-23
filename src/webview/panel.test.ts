@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
 import type { ParseResult } from '../core/parser';
+import { createRequest } from '../core/parser-shared';
 import { DashboardPanel } from './panel';
 import { panelCache } from './panel-cache';
 
@@ -277,5 +278,29 @@ describe('host capabilities', () => {
     await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(2));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(capabilityPushes()).toHaveLength(0);
+  });
+});
+
+describe('progress totals on reopen', () => {
+  const withTotals: ParseResult = {
+    ...result,
+    sessions: [{
+      sessionId: 's1', workspaceId: 'w1', workspaceName: 'api', location: '/x', harness: 'VS Code',
+      creationDate: null, lastMessageDate: null, requestCount: 2,
+      requests: [createRequest({ messageText: 'a', responseText: 'b' }), createRequest({ messageText: 'c', responseText: 'd' })],
+    }],
+  };
+
+  it('sends the found-so-far totals when the panel reopens during analytics and when the webview reloads', async () => {
+    let finish = () => {};
+    panelCache.store(withTotals, new Analyzer([]), new Promise<void>(resolve => { finish = resolve; }));
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4 })));
+    expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4, sessions: 1, requests: 2, toolCalls: 0 }));
+    mocks.post.mockClear();
+    mocks.receive({ type: 'ready' });
+    expect(mocks.post).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'progress', phase: 4, requests: 2 }));
+    finish();
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' })));
   });
 });
