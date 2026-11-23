@@ -38,6 +38,7 @@ import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
 import { readClaudeCompaction, requestCompactionFields } from './agent-compaction';
 import { addTurnCompaction } from './cli-compaction';
+import { withInheritedTurnsRemoved } from './fork-ownership';
 
 interface ClaudeContentBlock {
   type: string;
@@ -959,17 +960,39 @@ function claudeTurnWitness(request: SessionRequest): number {
 }
 
 /**
+ * Resolves, from what each transcript logged, which sessions copied turns from which (`withInheritedTurnsRemoved`): a
+ * fork loses its copies and records its source, or that nothing says which one it is; a fork of nothing but copies
+ * stays, with no turns of its own. The results go onto the parsed sessions themselves, which `discovery` is keyed by,
+ * and the removed ids onto their sources, so a session's detail leaves them out too.
+ */
+function resolveClaudeForks(results: ClaudeProjectResult[], discovery: ClaudeDiscovery): void {
+  const sessions = results.flatMap(result => result.sessions);
+  const resolved = withInheritedTurnsRemoved(sessions);
+  for (const [i, session] of sessions.entries()) {
+    const next = resolved[i];
+    if (next === session) continue;
+    const kept = new Set(next.requests);
+    const removed = session.requests.flatMap(request => (!kept.has(request) && request.userEventId ? [request.userEventId] : []));
+    Object.assign(session, next);
+    const source = discovery.sessionSources.get(session);
+    if (source && removed.length > 0) source.droppedUserEventIds = [...(source.droppedUserEventIds ?? []), ...removed];
+  }
+}
+
+/**
  * Keeps each user line in one session across every project folder, and leaves it out of the others: a fork, or a copy
- * of a session in another project folder, replays earlier turns with the same `uuid`. The owner is the session whose
- * copy says it was typed there (`claudeTurnWitness`: a fork's copies are older than its first line, and carry only the
- * conversation lines, not the queue, API request and cost records beside them), else the one whose transcript started
- * first. A session left with no requests is dropped.
+ * of a session in another project folder, replays earlier turns with the same `uuid`. Forks are resolved first, by the
+ * evidence their transcripts logged (`resolveClaudeForks`); a turn still held twice after that is kept by the session
+ * whose copy says it was typed there (`claudeTurnWitness`), else the one whose transcript started first, and nothing
+ * says which session the other copied it from. A session left with no requests is dropped, unless it is a fork that
+ * holds only copied turns.
  */
 function keepEachTurnOnce(
   results: ClaudeProjectResult[],
   discovery: ClaudeDiscovery,
   sessionSourceIndex?: Map<string, SessionSource>,
 ): ClaudeProjectResult[] {
+  resolveClaudeForks(results, discovery);
   const owners = new Map<string, { session: Session; request: SessionRequest; rank: number }>();
   for (const { sessions } of results) {
     for (const session of sessions) {
@@ -1007,26 +1030,21 @@ function keepEachTurnOnce(
 
 /** Leaves out a session's turns that another session owns, or that it repeats. A session that loses turns is dated
  *  from its earliest kept turn, as `parseClaudeSessionFile` dates every session, and its source records the ids
- *  another session owns, so its detail leaves them out too. Turns another session owns were inherited: the session
- *  counts them (`inheritedTurns`) and, unless it already names one, links to the owner of the latest as its fork
- *  source (the direct source, for a fork of a fork). Returns whether the session still has requests. */
+ *  another session owns, so its detail leaves them out too. Turns another session owns count as inherited
+ *  (`inheritedTurns`), from a source nothing names (`forkSourceAmbiguous`) unless the session already records one.
+ *  Returns whether the session still has requests. */
 function keepOwnedTurns(
   session: Session,
   owners: Map<string, { session: Session; request: SessionRequest }>,
   source?: SessionSource,
 ): boolean {
   const dropped: string[] = [];
-  let latest: { session: Session; timestamp: number } | undefined;
   const requests = session.requests.filter(request => {
     const id = request.userEventId;
     if (!id) return true;
     const owner = owners.get(id);
     if (!owner || owner.request === request) return true;
-    if (owner.session !== session) {
-      dropped.push(id);
-      const timestamp = request.timestamp ?? 0;
-      if (!latest || timestamp >= latest.timestamp) latest = { session: owner.session, timestamp };
-    }
+    if (owner.session !== session) dropped.push(id);
     return false;
   });
   if (requests.length === session.requests.length) return true;
@@ -1035,10 +1053,10 @@ function keepOwnedTurns(
   if (requests.length === 0) return false;
   session.creationDate = earliestRequestTime(requests) ?? session.creationDate;
   if (dropped.length > 0) {
-    session.inheritedTurns = dropped.length;
-    if (!session.forkedFromId && latest && latest.session.sessionId !== session.sessionId) session.forkedFromId = latest.session.sessionId;
+    session.inheritedTurns = (session.inheritedTurns ?? 0) + dropped.length;
+    if (!session.forkedFromId) session.forkSourceAmbiguous = true;
   }
-  if (source && dropped.length > 0) source.droppedUserEventIds = dropped;
+  if (source && dropped.length > 0) source.droppedUserEventIds = [...(source.droppedUserEventIds ?? []), ...dropped];
   return true;
 }
 
@@ -1402,7 +1420,8 @@ export function parseClaudeSessionFile(
     const nonHumanKind = subagentFile ? 'subagent' : claudeNonHumanKind(lines, i);
     if (nonHumanKind) markNonHuman(request, nonHumanKind);
     if (!subagentFile && userTs && fileStart !== null && userTs < fileStart) request.historyLeadMs = fileStart - userTs;
-    if (claudeLoggedLive(lines, i, assistantData.nextIndex)) request.loggedLive = true;
+    // A copied prompt can sit just after the fork's own opening queue record: one older than the transcript is no live turn.
+    if (!request.historyLeadMs && claudeLoggedLive(lines, i, assistantData.nextIndex)) request.loggedLive = true;
     requests.push(request);
     i = assistantData.nextIndex;
   }
