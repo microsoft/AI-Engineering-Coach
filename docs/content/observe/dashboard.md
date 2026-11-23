@@ -33,7 +33,7 @@ are read again on every open; the card names this step and counts the sessions.
 
 **Show details** adds step timings, heap and throughput over time, worker CPU and memory, and a
 table of the most recent 200 folders read, with **Slow** (over 2 seconds) and **Skipped** filters.
-Paths there start with `~` instead of your home folder; files that could not be read are listed with
+Paths there start with `~` instead of your home folder, and a folder named after your account (for example a home folder on a remote machine) shows as `…`; files that could not be read are listed with
 their full path in the "AI Engineer Coach" output channel. **Copy diagnostics** copies counts, timings and these
 shortened paths, never session content. The panel remembers whether details were open.
 

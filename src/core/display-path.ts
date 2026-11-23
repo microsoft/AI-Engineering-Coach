@@ -64,3 +64,15 @@ export function displayFolderName(p: string): string {
   const parts = normalizeSeparators(decodeFileUri(p)).split('/').filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : p;
 }
+
+/**
+ * Path segments equal to the account name (the home folder's name) replaced by `…`. Catches
+ * what `~` can't: a home folder on a remote host, or a short (8.3) form of the local one. Only
+ * whole segments, so `devtools` or `dev-api` stay as they are; account names under 3 characters
+ * are left alone, since they match too many real folder names.
+ */
+export function hideAccountName(text: string, account: string): string {
+  if (account.length < 3 || !text) return text;
+  const pattern = new RegExp(`(?<=^|[\\\\/])${escapeRegExp(account)}(?=[\\\\/]|$|[\\s'"),;:])`, 'gi');
+  return text.replace(pattern, '…');
+}

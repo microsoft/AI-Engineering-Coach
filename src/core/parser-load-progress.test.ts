@@ -240,3 +240,44 @@ it('shows a workspace opened in the home folder as "~" while reading and when it
   const items = progress.filter(update => update.item).map(update => `${update.item!.status} ${update.item!.folder} ${update.item!.path}`);
   expect(items).toEqual(['reading ~ ~', 'parsed ~ ~']);
 });
+
+it('masks the account name in folders outside the local home, such as a remote home folder', async () => {
+  const account = path.basename(os.homedir());
+  vi.mocked(scanVsCodeDirs).mockReturnValue({
+    entries: [{ logsDir: '/logs/vscode', dirEntries: [dirEntry('ws-remote')] }],
+    totalDirs: 1,
+  });
+  vi.mocked(processWorkspaceEntryAsync).mockImplementation((...args: Parameters<typeof processWorkspaceEntryAsync>) => {
+    const [, wsId, , ctx] = args;
+    ctx.workspaceRoots?.set(wsId, `/home/${account}`);
+    return Promise.resolve(account);
+  });
+  const progress: ProgressUpdate[] = [];
+
+  await parseAllLogsAsyncDetailed(['/logs/vscode'], update => { progress.push({ ...update }); });
+
+  const item = progress.find(update => update.item)!.item!;
+  expect(`${item.folder} ${item.path}`).toBe('… /home/…');
+  expect(progress.map(update => update.detail ?? '').join('\n')).not.toContain(account);
+});
+
+it('reports reading progress inside a large changed workspace on an incremental load', async () => {
+  const staleDir = path.join('/logs/vscode', 'ws-stale');
+  vi.mocked(loadCacheData).mockResolvedValue({ result: makeResult(), dirMetas: {} });
+  vi.mocked(findStaleDirs).mockReturnValue({ stale: new Set([staleDir]), removed: new Set() });
+  vi.mocked(processWorkspaceEntryAsync).mockImplementation((...args: Parameters<typeof processWorkspaceEntryAsync>) => {
+    const [, , , , onWorkspaceProgress] = args;
+    onWorkspaceProgress?.({ wsName: 'api', detail: 'chat 1/2', completed: 1, total: 2 });
+    return Promise.resolve('api');
+  });
+  const progress: ProgressUpdate[] = [];
+
+  await parseAllLogsAsyncDetailed(['/logs/vscode'], update => { progress.push({ ...update }); });
+
+  const reading = progress.filter(update => update.item?.status === 'reading');
+  expect(reading.map(update => `${update.item!.kind} ${update.item!.index}/${update.item!.total} ${update.detail}`))
+    .toEqual(['workspace 1/1 workspace 1/1: api — chat 1/2']);
+  // Half of the only changed workspace is half of phase 2 (no CLI sessions to share it with).
+  expect(reading[0].pct).toBe(43);
+  for (let i = 1; i < progress.length; i++) expect(progress[i].pct).toBeGreaterThanOrEqual(progress[i - 1].pct);
+});

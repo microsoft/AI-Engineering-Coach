@@ -11,7 +11,7 @@ import * as os from 'os';
 import { Workspace } from './types';
 import { ParseContext, prefetchCache, stripSingleSession, maybeForceGc, recordFailedFile, resetParseWarnings, resetParseTiming, getParseTiming, getParseWarningCounts } from './parser-shared';
 import { LOAD_PHASES, phasePct, SLOW_ITEM_MS, type LoadItem, type LoadItemKind } from './load-phases';
-import { displayFolderName, shortenHomePath } from './display-path';
+import { displayFolderName, hideAccountName, shortenHomePath } from './display-path';
 import { EditLocIndex } from './edit-loc-diff';
 import { getMemoryCache, setMemoryCache, computeDirMetasAsync, loadCacheData, saveCacheData, findStaleDirs, clearCache, stripSessionsForMemory } from './cache';
 import type { DirMetas, ParseResult, SessionSource } from './cache';
@@ -97,7 +97,8 @@ function loadItem(
   done?: { ms: number; sessions: number; skipped: boolean },
 ): LoadItem {
   const { index, total } = position;
-  const shown = shortenHomePath(rawPath, os.homedir());
+  const home = os.homedir();
+  const shown = hideAccountName(shortenHomePath(rawPath, home), path.basename(home));
   const item: LoadItem = { kind, index, total, folder: displayFolderName(shown), path: shown, status: 'reading' };
   if (done) {
     item.ms = done.ms;
@@ -897,7 +898,12 @@ export async function parseAllLogsAsyncDetailed(
       const start = Date.now();
       const before = freshSessions.length;
       const skippedBefore = getParseWarningCounts().skippedFiles;
-      const wsName = await processWorkspaceEntryAsync(logsDir, wsId, harness, staleCtx);
+      const position = { index: done + 1, total: stalePaths.length };
+      const wsName = await processWorkspaceEntryAsync(logsDir, wsId, harness, staleCtx, onProgress ? (entry) => {
+        const item = loadItem('workspace', position, entry.rootPath ?? entry.wsName);
+        const within = entry.total > 0 ? entry.completed / entry.total : 0;
+        report({ phase: 2, detail: `${itemDetail(item)} — ${entry.detail}`, pct: pct(2, staleShare * ((done + within) / stalePaths.length)), sessions: freshSessions.length, item });
+      } : undefined);
       done++;
       const item = loadItem('workspace', { index: done, total: stalePaths.length }, entryDisplaySource(staleCtx, before, { wsId, wsName: wsName || wsId }), {
         ms: Date.now() - start,

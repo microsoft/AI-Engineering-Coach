@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { displayFolderName, redactHomePaths, shortenHomePath } from './display-path';
+import { displayFolderName, hideAccountName, redactHomePaths, shortenHomePath } from './display-path';
 
 describe('shortenHomePath', () => {
   it('replaces a Windows home folder with ~, ignoring case and separator style', () => {
@@ -58,5 +58,19 @@ describe('displayFolderName', () => {
     expect(displayFolderName('/work/my-api/')).toBe('my-api');
     expect(displayFolderName('file:///c%3A/work/my%20app')).toBe('my app');
     expect(displayFolderName('my-api')).toBe('my-api');
+  });
+});
+
+describe('hideAccountName', () => {
+  it('masks whole path segments equal to the account name, in any case and separator style', () => {
+    expect(hideAccountName('/home/dev/api', 'Dev')).toBe('/home/…/api');
+    expect(hideAccountName('vscode-remote://ssh-remote+box/home/dev', 'dev')).toBe('vscode-remote://ssh-remote+box/home/…');
+    expect(hideAccountName('workspace 2/9: D:\\Users\\DEV\\api — chat 1/2', 'dev')).toBe('workspace 2/9: D:\\Users\\…\\api — chat 1/2');
+  });
+
+  it('leaves names that only contain the account name, and short account names, alone', () => {
+    expect(hideAccountName('/work/devtools/dev-api', 'dev')).toBe('/work/devtools/dev-api');
+    expect(hideAccountName('/home/me/api', 'me')).toBe('/home/me/api');
+    expect(hideAccountName('api', 'dev')).toBe('api');
   });
 });
