@@ -142,12 +142,16 @@ export function withInheritedTurnsRemoved(sessions: readonly Session[]): Session
     };
   });
 }
+/** A turn's identity that stays the same while its session is still being written: its prompt's event, else its
+ *  request (a Copilot request ID is its latest reply's, so it changes as the turn gains messages). */
+export const turnIdentity = (r: Pick<SessionRequest, 'userEventId' | 'requestId'>): string => r.userEventId || r.requestId;
+
 /** A session re-read in full (for its detail view) with the same turns the analysis kept: a fork's copied turns stay
  *  counted once, in their source. `analyzed` is the session as the analyzer holds it. */
 export function withAnalyzedTurns(full: Session, analyzed: Session | null): Session {
   if (!analyzed?.inheritedTurns) return full;
-  const kept = new Set(analyzed.requests.map(r => r.requestId));
-  const requests = full.requests.filter(r => kept.has(r.requestId));
+  const kept = new Set(analyzed.requests.map(turnIdentity));
+  const requests = full.requests.filter(r => kept.has(turnIdentity(r)));
   return {
     ...full, requests, requestCount: requests.length, inheritedTurns: analyzed.inheritedTurns,
     ...(analyzed.forkedFromId ? { forkedFromId: analyzed.forkedFromId } : {}),

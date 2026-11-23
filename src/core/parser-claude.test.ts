@@ -168,11 +168,35 @@ describe('parseClaudeSessions', () => {
       const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
       const ms = Date.parse;
       expect(request.userWaits).toEqual([
-        { start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:04:05Z'), kind: 'question', answered: true },
+        { start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:04:05Z'), kind: 'question', answered: true, text: { answer: 'User answered: B' } },
         { start: ms('2025-06-15T10:04:10Z'), end: ms('2025-06-15T10:04:11Z'), kind: 'question', answered: false },
         { start: ms('2025-06-15T10:04:20Z'), end: ms('2025-06-15T10:04:20Z'), kind: 'question', answered: false },
       ]);
       expect(request.totalElapsed).toBe(300_000);
+    });
+  });
+
+  it('keeps the agent’s own text apart from the file contents its write tools wrote', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('write it'),
+      makeAssistant('I will write the file.', '2025-06-15T10:00:01Z'),
+      makeToolAssistant('Write', { file_path: '/p/a.ts', content: 'export const x = 1;' }, '2025-06-15T10:00:02Z', 't1'),
+      { type: 'user', timestamp: '2025-06-15T10:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      expect(request.responseText).toContain('export const x = 1;');
+      expect(request.replyText).toBe('I will write the file.');
+    });
+  });
+
+  it('logs an empty reply, not the file contents, for a turn that only wrote a file', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('write it'),
+      makeToolAssistant('Write', { file_path: '/p/a.ts', content: 'export const x = 1;' }, '2025-06-15T10:00:02Z', 't1'),
+      { type: 'user', timestamp: '2025-06-15T10:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      expect([request.responseText.includes('export const x = 1;'), request.replyText]).toEqual([true, '']);
     });
   });
 
@@ -220,6 +244,23 @@ describe('parseClaudeSessions', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('keeps an AskUserQuestion call’s questions, options, your answer and what the agent said before it', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('plan it', '2025-06-15T10:00:00Z'),
+      makeAssistant('Two ways to do this.', '2025-06-15T10:00:03Z'),
+      makeToolAssistant('AskUserQuestion', {
+        questions: [{ question: 'Which approach?', header: 'Approach', options: [{ label: 'Rewrite', description: 'x' }, { label: 'Patch' }], multiSelect: false }],
+      }, '2025-06-15T10:00:05Z', 'q1'),
+      { type: 'user', timestamp: '2025-06-15T10:01:00Z', sessionId: 'sess-1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'q1', content: [{ type: 'text', text: 'User has answered your questions: "Which approach?"="Patch"' }] }] } },
+      makeAssistant('done', '2025-06-15T10:02:00Z'),
+    ], (projectsDir) => {
+      const [wait] = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0].userWaits ?? [];
+      expect(wait.text).toEqual({
+        ask: 'Which approach?', choices: ['Rewrite', 'Patch'], before: 'Two ways to do this.', answer: 'User has answered your questions: "Which approach?"="Patch"',
+      });
+    });
   });
 
   it('keeps a fork that holds only copied turns, from its transcript to the Sessions list', () => {
@@ -282,7 +323,7 @@ describe('parseClaudeSessions', () => {
       const waits = parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.userWaits);
       expect(waits).toEqual([
         [{ start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:03:00Z'), kind: 'question', answered: false }],
-        [{ start: ms('2025-06-15T10:03:05Z'), end: ms('2025-06-15T10:06:00Z'), kind: 'question', answered: true }],
+        [{ start: ms('2025-06-15T10:03:05Z'), end: ms('2025-06-15T10:06:00Z'), kind: 'question', answered: true, text: { answer: 'User answered: B' } }],
         undefined,
       ]);
     });

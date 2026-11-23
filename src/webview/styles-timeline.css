@@ -17,6 +17,47 @@
 .tlx-seg.disabled, .tlx-seg-l.disabled { opacity: 0.4; }
 .tlx-seg-l { color: var(--text-muted); font-size: 12px; margin-right: -6px; }
 .tlx-mask { margin-left: auto; color: var(--text-muted); font-size: 12px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+
+/* Date picker: the toolbar's date opens a calendar */
+.tlx-picker { position: relative; display: inline-flex; }
+.tlx-date .tlx-date-btn {
+  background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text);
+  font: inherit; font-size: 16px; font-weight: 600; padding: 2px 6px; text-align: left;
+}
+.tlx-date .tlx-date-btn:hover, .tlx-date .tlx-date-btn[aria-expanded="true"] { border-color: var(--border); background: var(--input-bg); }
+.tlx-date .tlx-date-btn:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 1px; }
+.tlx-date-btn .caret { color: var(--text-muted); font-size: 11px; }
+.tlx-cal {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 31; width: 292px; max-width: calc(100vw - 24px); box-sizing: border-box;
+  background: var(--canvas); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12px; font-weight: 400;
+}
+.tlx-cal-head, .tlx-cal-month { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tlx-cal-month { margin: 10px 0 4px; }
+.tlx-cal-month b { font-size: 13px; }
+.tlx-cal-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.tlx-cal-grid th { color: var(--text-muted); font-weight: 400; font-size: 11px; padding: 2px 0; }
+.tlx-cal-grid td { padding: 1px; text-align: center; }
+.tlx-date .tlx-cal-d {
+  position: relative; width: 100%; height: 30px; padding: 0 0 6px; border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--text); font-size: 12px;
+}
+.tlx-date .tlx-cal-d:hover:not(:disabled) { background: var(--list-hover); }
+.tlx-date .tlx-cal-d:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -1px; }
+.tlx-date .tlx-cal-d.other { color: var(--text-muted); }
+.tlx-date .tlx-cal-d.today { border-color: var(--text-muted); border-style: dashed; }
+.tlx-date .tlx-cal-d.in { background: color-mix(in srgb, var(--accent-blue) 22%, transparent); }
+.tlx-date .tlx-cal-d.end { background: color-mix(in srgb, var(--accent-blue) 72%, #000); color: #fff; }
+.tlx-cal .dot { position: absolute; left: 50%; bottom: 4px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--tl-you); opacity: 0; }
+.tlx-cal .dot.a2, .tlx-cal .a1 .dot { opacity: 0.4; }
+.tlx-cal .a2 .dot { opacity: 0.7; }
+.tlx-cal .a3 .dot { opacity: 1; width: 6px; height: 6px; margin-left: -3px; bottom: 3px; }
+.tlx-cal .end .dot { background: #fff; }
+.tlx-cal-status { color: var(--text-muted); margin: 6px 0; min-height: 16px; }
+.tlx-cal-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.tlx-cal-key { color: var(--text-muted); font-size: 11px; margin: 8px 0 0; line-height: 1.5; }
+.tlx-cal-key .dot { position: static; display: inline-block; margin: 0 2px 1px 0; vertical-align: middle; opacity: 0.7; }
+.tlx-range-note { margin: -4px 0 10px; }
 .tlx-filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 0 0 12px; font-size: 12px; }
 .tlx-filters label { color: var(--text-muted); display: inline-flex; gap: 6px; align-items: center; }
 .tlx-filters input[type=search], .tlx-filters select {
@@ -28,7 +69,14 @@
 .tlx-btn-quiet { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); }
 .tlx-btn:disabled { opacity: 0.45; cursor: default; }
 .tlx-empty { color: var(--text-muted); padding: 24px; text-align: center; }
-.tlx-foot { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; margin-top: 16px; }
+.tlx-how { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; margin-top: 16px; max-width: 760px; }
+.tlx-how summary { cursor: pointer; width: fit-content; border-radius: 3px; }
+.tlx-how summary:hover { color: var(--text); }
+.tlx-how summary:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 2px; }
+.tlx-how ul { margin: 6px 0 4px; padding-left: 18px; }
+.tlx-how li { margin: 2px 0; }
+.tlx-how b { color: var(--text); font-weight: 600; }
+.tlx-how p { margin: 4px 0 0; }
 .tlx-insights { margin-top: 0; }
 .tlx-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .tlx-kpis .ctx-comp-kpi { min-width: 0; }
@@ -134,6 +182,24 @@
 .tlx .dr-links { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; flex-wrap: wrap; }
 .tlx .dr-links a { color: var(--accent-blue); text-decoration: none; cursor: pointer; }
 .tlx .dr-links a:hover { text-decoration: underline; }
+.tlx-trk .wait { cursor: pointer; }
+.tlx-trk .wait:focus-visible { outline: 1px solid var(--focus-border); outline-offset: 1px; z-index: 2; }
+.tlx-text { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.tlx-text-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.tlx-text .tx-off { color: var(--text-muted); font-size: 11.5px; margin-left: 10px; }
+.tlx-text .tx-list { display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow: auto; margin-top: 6px; }
+.tlx-text .tx-item { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.tlx-text .tx-item.focus { border-color: var(--accent-blue); box-shadow: 0 0 0 1px var(--accent-blue); }
+.tlx-text .tx-head { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.tlx-text .tx-body { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto;
+  border-left: 3px solid var(--border); padding: 2px 0 2px 8px; }
+.tlx-text .tx-code { font-family: var(--vscode-editor-font-family, monospace); }
+.tlx-text .tx-meta { font-size: 11px; color: var(--text-muted); margin: 4px 0; }
+.tlx-text .tx-answer { font-size: 12px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tlx-text .tx-answer b { margin-right: 6px; }
+.tlx-text .tx-choices { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.tlx-text .tx-more { margin: 4px 0; font-size: 12px; }
+.tlx-text .tx-more summary { cursor: pointer; color: var(--text-muted); font-size: 11px; }
 .tlx .who-you { color: var(--text); }
 .tlx .who-agent { color: var(--tl-auto); }
 .tlx .who-autopilot { color: var(--accent-orange); }

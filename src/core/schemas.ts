@@ -275,6 +275,26 @@ export const SessionSchema = z.object({
   workspaceRootPath: z.string().optional(),
 }).passthrough();
 
+/* ---- Timeline lane text (from the parse worker) ---- */
+
+const TimelineTurnWaitShape = {
+  s: z.number(), e: z.number(), k: z.enum(['question', 'relay', 'permission']), a: z.boolean(), at: z.number().optional(),
+};
+
+/** What the worker returns for one lane: only these fields, so nothing else of the session reaches the host. */
+export const TimelineSessionTextSchema = z.object({
+  sessionId: z.string(),
+  turns: z.array(z.object({
+    t: z.number(), k: z.enum(['you', 'agent', 'autopilot', 'compaction', 'other']), id: z.string().optional(),
+    prompt: z.string().optional(), reply: z.string().optional(), cut: z.boolean().optional(),
+  }).strict()),
+  waits: z.array(z.object({
+    ...TimelineTurnWaitShape,
+    ask: z.string().optional(), choices: z.array(z.string()).optional(), answer: z.string().optional(), tool: z.string().optional(),
+    intention: z.string().optional(), before: z.string().optional(), cut: z.boolean().optional(),
+  }).strict()),
+}).strict();
+
 /* ---- Validation helper ---- */
 
 /**

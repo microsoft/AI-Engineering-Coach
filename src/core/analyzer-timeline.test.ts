@@ -82,7 +82,8 @@ describe('TimelineAnalyzer', () => {
       const data = createAnalyzer([session]).getTimelineData({ fromDate: '2024-03-15', toDate: '2024-03-15' }, ctx);
       expect(data.sessions).toHaveLength(1);
       expect(data.sessions[0]).toMatchObject({ id: 's1', repo: 'shop', harness: 'Copilot App', parent: -1, via: null });
-      expect(data.sessions[0].turns).toEqual([
+      expect(data.sessions[0].turns.every(t => typeof t.id === 'string')).toBe(true);
+      expect(data.sessions[0].turns.map(({ id: _id, ...turn }) => turn)).toEqual([
         { t: at(10), d: 600_000, k: 'you', sub: 0, comp: false, cr: 2.5, tok: 1000 },
         { t: at(10, 20), d: 0, k: 'autopilot', sub: 1, comp: false, cr: 0, tok: 0, noDuration: true },
       ]);

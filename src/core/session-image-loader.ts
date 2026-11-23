@@ -6,11 +6,13 @@
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import type { SessionSource } from './cache';
-import type { Session } from './types';
-import type { SessionSourceRequest } from './session-images';
-import { SessionSchema } from './schemas';
+import type { Session, TimelineSessionText, TimelineTextSuperseded } from './types';
+import type { SessionSourceRequest, TimelineTextRequest } from './session-images';
+import { SessionSchema, TimelineSessionTextSchema } from './schemas';
 import { warnCore } from './log';
 import type { ImageRequestMatch } from './image-data';
+
+const SUPERSEDED: TimelineTextSuperseded = { superseded: true };
 
 interface ImageWorker {
   on(event: 'message', listener: (value: unknown) => void): void;
@@ -28,6 +30,7 @@ export class SessionImageLoader {
   private worker: ImageWorker | null = null;
   private queue: Promise<void> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private textTicket = 0;
 
   constructor(private readonly createWorker: () => ImageWorker = () => new Worker(path.join(__dirname, 'parse-worker.js'), {
     execArgv: [],
@@ -51,8 +54,19 @@ export class SessionImageLoader {
     });
   }
 
-  private enqueue<T>(request: SessionSourceRequest, decode: (value: object) => T): Promise<T> {
-    const result = this.queue.then(() => this.run(request, decode));
+  /** One Timeline lane's text, built and scrubbed in the worker: the host gets only what the lane shows. Only the newest
+   *  such read matters (one lane's details are shown at a time): one still queued behind it is dropped unread, as
+   *  `{ superseded: true }`, so the lane shown isn't kept waiting. */
+  loadTimelineText(request: TimelineTextRequest): Promise<TimelineSessionText | TimelineTextSuperseded | null> {
+    const ticket = ++this.textTicket;
+    return this.enqueue<TimelineSessionText | TimelineTextSuperseded | null>(request, value => {
+      if (!('text' in value)) throw new Error('Invalid timeline text worker response');
+      return value.text === null ? null : TimelineSessionTextSchema.parse(value.text);
+    }, () => (ticket === this.textTicket ? undefined : SUPERSEDED));
+  }
+
+  private enqueue<T>(request: SessionSourceRequest, decode: (value: object) => T, skip?: () => T | undefined): Promise<T> {
+    const result = this.queue.then(() => skip?.() ?? this.run(request, decode));
     // A failed request must not prevent subsequent image requests from running.
     this.queue = result.then(() => undefined, () => undefined);
     return result;
@@ -141,4 +155,8 @@ export function loadSessionImages(source: SessionSource, sessionId: string, requ
 
 export function loadSessionDetails(source: SessionSource, sessionId: string): Promise<Session | null> {
   return imageLoader.loadSession(source, sessionId);
+}
+
+export function loadSessionTimelineText(request: TimelineTextRequest): Promise<TimelineSessionText | TimelineTextSuperseded | null> {
+  return imageLoader.loadTimelineText(request);
 }

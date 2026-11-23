@@ -7,20 +7,26 @@
  * and which sessions started which; and a Families view that judges each delegation as a whole. The analyzer sends
  * the range once (`getTimelineData`); every view, filter and the name mask are computed here with the shared model. */
 
-import type { DateFilter, TimelineDataset, TimelineTurn, TurnSender } from '../core/types';
+import type {
+  DateFilter, TimelineDataset, TimelineSessionText, TimelineTextSuperseded, TimelineTextTurn, TimelineTextWait, TimelineTurn, TurnSender,
+} from '../core/types';
 import {
-  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, dayStart, dayTicks, familiesInsights, filterLanes,
-  formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, neededYou, NO_LANE_FILTERS,
-  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
+  addDays, buildFamilies, buildLanes, buildViewFamilies, createNamer, waitInWindow, dayStart, dayTicks, familiesInsights, filteredDayTotals, filterLanes,
+  formatCount, formatCredits, formatDuration, formatHours, formatWhen, hasLaneFilters, hourTicks, MAX_TEXT_SCOPE_TURNS, neededYou, NO_LANE_FILTERS,
+  clipIntervals, clippedMs, intervalsMs, prepareTimeline, roleOf, stepDate, textScope, textTurnFinder, timelineKpis, timelineWindow, turnTimes, verdictText, VERDICTS,
   viewInsights, weekStart, WIDE_FAN_OUT, type Interval,
-  type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
-  type TimelineLane, type TimelineView, type TimelineWait, type ViewFamily,
+  type DayTotals, type FamiliesOverview, type FamilySummary, type LaneFilters, type Namer, type PreparedSession, type PreparedTimeline,
+  type TimelineLane, type TimelinePeriod, type TimelineView, type TimelineWait, type ViewFamily,
 } from '../core/timeline-model';
+import {
+  clampRange, isDate, MAX_RANGE_DAYS, rangeDays, rangeTicks, rangeWindow, shiftDate, stepRange, type DateRange,
+} from '../core/timeline-range';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { toDateStr } from '../core/helpers';
-import { rpc } from './shared';
+import { rpc, vscode } from './shared';
 import { html, render, type VNode } from './render';
 import { consumeNavHint } from './nav-hint';
+import { closePicker, datePicker, pickerOpen, type PickerActions, type PickerInput } from './timeline-date-picker';
 
 type Group = 'tree' | 'flat';
 type Color = 'family' | 'harness';
@@ -31,6 +37,10 @@ type FamilySort = 'credits' | 'children' | 'agentMs' | 'childTyped' | 'perChild'
 interface TimelineState {
   view: TimelineView;
   date: string;
+  /** The days the Range view shows, both included: kept by dates, so it survives a reload of another date range. */
+  range: DateRange | null;
+  /** The range picked was longer than the longest drawn, and was cut. */
+  rangeCapped: boolean;
   group: Group;
   color: Color;
   strip: StripMode;
@@ -49,12 +59,18 @@ interface TimelineState {
   familySort: FamilySort;
   familyMin: number;
   verdict: VerdictFilter;
+  /** Show prompts and questions in the detail panel (kept in the webview state; null until read). */
+  showText: boolean | null;
+  /** The prompt, question or wait highlighted in the detail panel (`t:<time>`, `w:<kind>:<start>`, `i:<start>`). */
+  textFocus: string | null;
+  /** When the highlighted wait ended: tells apart two of a kind that began together. */
+  textFocusEnd: number | null;
 }
 
 const state: TimelineState = {
-  view: 'day', date: '', group: 'tree', color: 'family', strip: 'turns', selected: null, focusId: null,
+  view: 'day', date: '', range: null, rangeCapped: false, group: 'tree', color: 'family', strip: 'turns', selected: null, focusId: null,
   collapsed: new Set(), masked: false, filters: { ...NO_LANE_FILTERS }, family: null, familyQuery: '',
-  familySort: 'credits', familyMin: 2, verdict: 'all',
+  familySort: 'credits', familyMin: 2, verdict: 'all', showText: null, textFocus: null, textFocusEnd: null,
 };
 
 interface Loaded {
@@ -65,6 +81,14 @@ interface Loaded {
 let loaded: Loaded | null = null;
 let rootEl: HTMLElement | null = null;
 let scrollToSelected = false;
+let scrollToText = false;
+
+/** The text behind each opened lane, by session ID: read once per load, on demand. */
+type TextEntry = { status: 'loading' } | { status: 'ready'; text: TimelineSessionText } | { status: 'missing' } | { status: 'tooMany'; turns: number };
+const texts = new Map<string, TextEntry>();
+/** The read of the lane whose details show now (`sessionId|from|to`). */
+let shownTextKey: string | null = null;
+const SHOW_TEXT_KEY = 'timelineShowText';
 
 const FAMILY_COLORS = ['#3794ff', '#2ea043', '#14a38b', '#bf8700', '#db61a2', '#a371f7', '#0969da', '#d18616'];
 const LONE_COLOR = '#8b949e';
@@ -89,19 +113,129 @@ export async function renderTimeline(container: HTMLElement, currentFilter: Date
   const dataset = await rpc<TimelineDataset>('getTimelineData', { filter: currentFilter });
   if (!root.isConnected) return;
   loaded = { prepared: prepareTimeline(dataset) };
+  texts.clear();
+  // A highlight belongs to the click that made it, not to the next load.
+  state.textFocus = null;
+  state.textFocusEnd = null;
+  scrollToText = false;
+  closePicker();
+  // Off until you turn it on: then your choice is kept for the panel.
+  state.showText ??= (vscode.getState() as Record<string, unknown> | null)?.[SHOW_TEXT_KEY] === true;
   rootEl = root;
   root.replaceChildren();
-  applyNavHint(consumeNavHint(), loaded.prepared);
-  if (!loaded.prepared.days.includes(state.date)) state.date = nearestDay(state.date, loaded.prepared.days, loaded.prepared.bounds[0]);
+  applyNavHint(consumeNavHint() ?? firstLoadLink(), loaded.prepared);
+  // A picked date stays, with or without activity, while it's within the loaded days; else the nearest active day.
+  const [lo, hi] = selectable(loaded.prepared);
+  if (!isDate(state.date) || state.date < lo || state.date > hi) {
+    state.date = nearestDay(state.date, loaded.prepared.days, loaded.prepared.bounds[0]);
+  }
+  keepRange(loaded.prepared);
   draw();
 }
 
-/** A date (`YYYY-MM-DD`) from another page, or `view=…&date=…&session=<id>&family=<id>`. */
+const VIEW_KEY = 'timelineView';
+let restored = false;
+
+/** On the page's first load in this webview: the view in the address (`#view=…`), else the one last shown. */
+function firstLoadLink(): string | undefined {
+  if (restored) return undefined;
+  restored = true;
+  const hash = typeof location === 'undefined' ? '' : location.hash;
+  if (hash.startsWith('#view=')) return hash.slice(1);
+  const saved = (vscode.getState() as Record<string, unknown> | null)?.[VIEW_KEY];
+  return typeof saved === 'string' ? saved : undefined;
+}
+
+/** The view as a link: `view=day&date=…`, `view=week&date=…`, `view=range&from=…&to=…` or `view=families`. */
+function viewLink(): string {
+  if (state.view === 'range' && state.range) return `view=range&from=${state.range.from}&to=${state.range.to}`;
+  return state.view === 'families' ? 'view=families' : `view=${state.view}&date=${state.date}`;
+}
+
+/** Keeps the view in the webview's state and the address, by dates, so a reload or a copied link opens it again. */
+function saveView(): void {
+  const link = viewLink();
+  const saved = vscode.getState();
+  const prev = saved && typeof saved === 'object' ? saved as Record<string, unknown> : {};
+  if (prev[VIEW_KEY] !== link) vscode.setState({ ...prev, [VIEW_KEY]: link });
+  if (typeof location === 'undefined' || location.hash === '#' + link) return;
+  try {
+    history.replaceState(history.state, '', '#' + link);
+  } catch {
+    // A host that doesn't allow it keeps the view in its state only.
+  }
+}
+
+/** The first and last day that can be shown: the loaded range, or its first and last active day when it's open-ended. */
+function selectable(p: PreparedTimeline): [string, string] {
+  const first = p.days[0] || state.date || toDateStr(Date.now());
+  const last = p.days[p.days.length - 1] ?? first;
+  return [Number.isFinite(p.bounds[0]) ? toDateStr(p.bounds[0]) : first, Number.isFinite(p.bounds[1]) ? toDateStr(p.bounds[1] - 1) : last];
+}
+
+/** The range shown when the Range view opens with none: the week shown, else the 7 days to the day shown. */
+function defaultRange(p: PreparedTimeline): DateRange {
+  const [lo, hi] = selectable(p);
+  const date = state.date || hi;
+  const [from, to] = state.view === 'week' ? [toDateStr(weekStart(date)), shiftDate(toDateStr(weekStart(date)), 6)] : [shiftDate(date, -6), date];
+  return clampRange(from, to, lo, hi)?.range ?? { from: lo, to: hi };
+}
+
+/** Keeps the range within the loaded days (another sidebar range was loaded); the Range view always has one. */
+function keepRange(p: PreparedTimeline): void {
+  const [lo, hi] = selectable(p);
+  if (state.range) state.range = clampRange(state.range.from, state.range.to, lo, hi)?.range ?? null;
+  if (state.view === 'range' && !state.range) state.range = defaultRange(p);
+}
+
+/** The period the lanes are drawn for: the Families view keeps the last one. */
+function period(): TimelinePeriod {
+  return state.view === 'families' ? 'day' : state.view;
+}
+
+/** The [start, end) of the day, the week or the range shown. */
+function windowOf(view: TimelinePeriod): Interval {
+  return view === 'range' && state.range ? rangeWindow(state.range) : timelineWindow(view === 'week' ? 'week' : 'day', state.date);
+}
+
+/** `this day`, `this week`, `in this range`. */
+function thisPeriod(view: TimelinePeriod): string {
+  return view === 'range' ? 'in this range' : `this ${view}`;
+}
+
+function setView(view: TimelineView): void {
+  if (view === 'range' && !state.range && loaded) state.range = defaultRange(loaded.prepared);
+  closePicker();
+  update({ view, rangeCapped: false });
+}
+
+/** The previous or next period: the day or week with activity, or the range moved by its own length. */
+function stepped(p: PreparedTimeline, dir: -1 | 1): Partial<TimelineState> | null {
+  if (state.view === 'families') return null;
+  if (state.view === 'range') {
+    const [lo, hi] = selectable(p);
+    const range = state.range && stepRange(state.range, dir, lo, hi);
+    return range ? { range, date: range.to, rangeCapped: false } : null;
+  }
+  const date = stepDate(state.view, state.date, dir, p.days);
+  return date ? { date } : null;
+}
+
+/** A date (`YYYY-MM-DD`) from another page, or `view=…&date=…&session=<id>&family=<id>`, or `view=range&from=…&to=…`. */
 function applyNavHint(hint: string | undefined, p: PreparedTimeline): void {
   if (!hint) return;
+  hint = hint.replace(/^#/, '');
   const params = /^\d{4}-\d{2}-\d{2}$/.test(hint) ? new URLSearchParams({ date: hint }) : new URLSearchParams(hint);
   const view = params.get('view');
-  state.view = view === 'week' || view === 'families' ? view : 'day';
+  state.view = view === 'week' || view === 'families' || view === 'range' ? view : 'day';
+  if (state.view === 'range') {
+    const [from, to] = [params.get('from'), params.get('to')];
+    const [lo, hi] = selectable(p);
+    const picked = isDate(from) && isDate(to) ? clampRange(from, to, lo, hi) : null;
+    // A range with no loaded day opens the Day view instead.
+    if (picked) Object.assign(state, { range: picked.range, rangeCapped: picked.capped, date: picked.range.to });
+    else state.view = 'day';
+  }
   const date = params.get('date');
   if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) state.date = date;
   const session = p.sessions.find(x => x.id === params.get('session') && !x.ctx);
@@ -148,13 +282,24 @@ function activeIn(s: PreparedSession, win: Interval): boolean {
 function draw(): void {
   if (!rootEl?.isConnected || !loaded) return;
   render(page(loaded), rootEl);
+  saveView();
   if (scrollToSelected) {
     scrollToSelected = false;
     requestAnimationFrame(() => rootEl?.querySelector('.tlx-lane.sel, .frow.sel')?.scrollIntoView({ block: 'center' }));
   }
+  const focus = scrollToText && state.textFocus ? rootEl.querySelector('#tlxText .tx-item.focus') : null;
+  if (focus) {
+    scrollToText = false;
+    requestAnimationFrame(() => focus.scrollIntoView({ block: 'nearest' }));
+  }
 }
 
 function update(change: Partial<TimelineState>): void {
+  // A highlighted prompt or wait belongs to the click that chose it: another lane, or this one opened again, has none.
+  if (change.selected !== undefined && !('textFocus' in change)) {
+    change = { ...change, textFocus: null, textFocusEnd: null };
+    scrollToText = false;
+  }
   Object.assign(state, change);
   draw();
 }
@@ -184,6 +329,13 @@ function shortDate(date: string | undefined, year = false): string {
 
 /* ---- page ---- */
 
+/** The privacy notes of the two controls that change what text the page shows: their tooltip and accessible description. */
+const MASK_HELP = 'Hides session names, branches, repositories, model names, search text and the prompts and questions text, '
+  + 'on this page only, not the sidebar: for example before taking a screenshot.';
+const SHOW_TEXT_HELP = 'Reads this session’s prompts, questions, answers and permission requests again from its log on this machine '
+  + 'when you open the lane. Links, email addresses, secret-like tokens, your home folder and your names are replaced, and '
+  + 'nothing of it leaves this page.';
+
 function page(data: Loaded): VNode {
   const p = data.prepared;
   if (!p.sessions.some(s => !s.ctx)) {
@@ -192,19 +344,32 @@ function page(data: Loaded): VNode {
   const namer = createNamer(p, state.masked);
   const ctx = state.view === 'families' ? null : viewContext(p, namer);
   return html`
-    ${toolbar(p)}
+    ${toolbar(p, ctx?.dayTotals ?? p.dayTotals)}
+    ${rangeNote()}
     ${ctx ? filterBar(p, ctx) : null}
     <div class="tlx-view">${ctx ? timelineView(ctx) : familiesView(data, namer)}</div>
-    <p class="tlx-foot">Agent time is, for each turn, the time from its prompt to its last logged agent activity, less the time that
-          turn was stopped on a question or a permission prompt; then merged per session, so turns that overlap count once. Waiting on you counts the
-          gaps from the end of a session’s work to your next prompt (2 to 120 min, both included) and the questions and permission prompts you
-          answered (from the request to its result; none when your answer was recorded before the request), once per session where they overlap; an answer is dated by Copilot’s record of it when
-          logged; permissions a policy decided aren’t counted. A turn counts as yours when the harness marked it as neither automated nor sent by another session.
-      Credits are the AI credits Copilot logged; other harnesses show time and turns. A session’s parent is the session whose
-      create_session, open_pr_session or open_issue_session call returned its ID, else the parent Codex and OpenCode log, else the
-      session that relayed its first message. The Timeline shows counts, timings, model, harness and repository names and the session names
-      you gave (never automatic titles, nor a name that repeats your first prompt); no prompt or response body, though a name you gave can hold the same words. Mask names hides names, branches, repositories and search
-      text on this page only, not the sidebar.</p>` as VNode;
+    ${howMeasured()}` as VNode;
+}
+
+/** How the page's numbers are measured, collapsed: the full rules are on the Timeline page of the docs. */
+function howMeasured(): VNode {
+  return html`
+    <details class="tlx-how" id="tlxHow">
+      <summary>How these numbers are measured</summary>
+      <ul>
+        <li><b>Agent time</b>: from each prompt to the agent’s last activity in that turn, less the time it was stopped on a
+          question or a permission prompt; turns that overlap count once.</li>
+        <li><b>Waiting on you</b>: gaps of 2 to 120 min before your next prompt, plus the questions and permission prompts you
+          answered; permissions a policy decided aren’t counted.</li>
+        <li>A <b>range</b> is its whole days added up.</li>
+        <li>A turn is <b>yours</b> unless the harness marked it as automated or another session sent it.</li>
+        <li><b>Credits</b> are logged by Copilot only; other harnesses show time and turns.</li>
+        <li>A <b>child session</b> is linked when its parent started it (create session, open PR or open issue), Codex or
+          OpenCode logged its parent, or the parent relayed its first message.</li>
+      </ul>
+      <p>Session names are the ones you gave, never automatic titles or a name that repeats your first prompt. Full
+        definitions: the Timeline page of the AI Engineer Coach docs, under Definitions.</p>
+    </details>` as VNode;
 }
 
 function segment<T extends string>(id: string, options: [T, string][], current: T, onPick: (v: T) => void, disabled = false): VNode {
@@ -215,41 +380,80 @@ function segment<T extends string>(id: string, options: [T, string][], current: 
     </span>` as VNode;
 }
 
-function toolbar(p: PreparedTimeline): VNode {
+function toolbar(p: PreparedTimeline, totals: ReadonlyMap<string, DayTotals>): VNode {
   const families = state.view === 'families';
+  const [lo, hi] = selectable(p);
   let label: string;
-  let prev: string | null = null;
-  let next: string | null = null;
   if (families) {
     label = `All families · ${shortDate(p.days[0])} – ${shortDate(p.days[p.days.length - 1], true)}`;
+  } else if (state.view === 'range' && state.range) {
+    const { from, to } = state.range;
+    const n = rangeDays(state.range);
+    const start = from === to ? '' : `${shortDate(from, from.slice(0, 4) !== to.slice(0, 4))} – `;
+    label = `${start}${shortDate(to, true)} · ${n} ${n === 1 ? 'day' : 'days'}`;
   } else if (state.view === 'week') {
     const start = weekStart(state.date);
     label = `${shortDate(toDateStr(start))} – ${new Date(addDays(start, 6)).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}`;
-    prev = stepDate('week', state.date, -1, p.days);
-    next = stepDate('week', state.date, 1, p.days);
   } else {
     label = new Date(state.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    prev = stepDate('day', state.date, -1, p.days);
-    next = stepDate('day', state.date, 1, p.days);
   }
-  const unit = state.view === 'week' ? 'week' : 'day';
+  const prev = stepped(p, -1);
+  const next = stepped(p, 1);
+  const unit = state.view === 'week' ? 'week' : state.view === 'range' ? 'range' : 'day';
+  const input: PickerInput = {
+    view: period(), date: state.date, range: state.range, lo, hi, today: toDateStr(Date.now()), activity: dayActivity(p, totals), label,
+  };
+  const actions: PickerActions = {
+    pickDate: date => update({ date, view: state.view === 'range' ? 'day' : state.view }),
+    pickRange: (range, capped) => update({ view: 'range', range, date: range.to, rangeCapped: capped }),
+  };
   return html`
     <div class="tlx-bar">
       <div class="tlx-date">
-        <button type="button" id="tlxPrev" aria-label=${'Previous ' + unit} disabled=${!prev} onClick=${() => prev && update({ date: prev })}>‹</button>
-        <span id="tlxDateLabel">${label}</span>
-        <button type="button" id="tlxNext" aria-label=${'Next ' + unit} disabled=${!next} onClick=${() => next && update({ date: next })}>›</button>
+        <button type="button" id="tlxPrev" aria-label=${'Previous ' + unit} disabled=${!prev} onClick=${() => prev && update(prev)}>‹</button>
+        ${families ? html`<span id="tlxDateLabel">${label}</span>` : datePicker(input, actions)}
+        <button type="button" id="tlxNext" aria-label=${'Next ' + unit} disabled=${!next} onClick=${() => next && update(next)}>›</button>
       </div>
-      ${segment<TimelineView>('tlxView', [['day', 'Day'], ['week', 'Week'], ['families', 'Families']], state.view, v => update({ view: v }))}
+      ${segment<TimelineView>('tlxView', [['day', 'Day'], ['week', 'Week'], ['range', 'Range'], ['families', 'Families']], state.view, setView)}
       <span class=${'tlx-seg-l' + (families ? ' disabled' : '')}>Group</span>
       ${segment<Group>('tlxGroup', [['tree', 'Session tree'], ['flat', 'Flat']], state.group, v => update({ group: v }), families)}
       <span class=${'tlx-seg-l' + (families ? ' disabled' : '')}>Color</span>
       ${segment<Color>('tlxColor', [['family', 'Family'], ['harness', 'Harness']], state.color, v => update({ color: v }), families)}
-      <label class="tlx-mask" title="Hide session names, branches, repositories and search text on this page, for example before taking a screenshot">
-        <input type="checkbox" id="tlxMask" checked=${state.masked} onChange=${(e: Event) => setMasked((e.target as HTMLInputElement).checked)} />
+      <label class="tlx-mask" title=${MASK_HELP}>
+        <input type="checkbox" id="tlxMask" checked=${state.masked} aria-describedby="tlxMaskHelp"
+          onChange=${(e: Event) => setMasked((e.target as HTMLInputElement).checked)} />
         Mask names
       </label>
+      <span id="tlxMaskHelp" hidden>${MASK_HELP}</span>
     </div>` as VNode;
+}
+
+/** A day's activity for the calendar, as the strip counts it: none, or a third of the busiest day's turns, two thirds,
+ *  or more. */
+function dayActivity(p: PreparedTimeline, totals: ReadonlyMap<string, DayTotals>): PickerInput['activity'] {
+  const turns = (d: string) => {
+    const x = totals.get(d);
+    return x ? x.typed + x.automated : 0;
+  };
+  const max = Math.max(1, ...p.days.map(turns));
+  return date => {
+    const x = totals.get(date);
+    if (!x) return { level: 0, text: 'no activity' };
+    const n = x.typed + x.automated;
+    const level = n === 0 ? 1 : n <= max / 3 ? 1 : n <= 2 * max / 3 ? 2 : 3;
+    return { level, text: `${formatCount(n)} ${n === 1 ? 'turn' : 'turns'} (${formatCount(x.typed)} typed) · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours` };
+  };
+}
+
+/** Says when a picked range was cut to the longest drawn, and that a long one is dense. */
+function rangeNote(): VNode | null {
+  if (state.view !== 'range' || !state.range) return null;
+  const n = rangeDays(state.range);
+  const parts = [
+    state.rangeCapped ? `Ranges are cut to ${MAX_RANGE_DAYS} days, so this one ends on ${state.range.to}.` : '',
+    n > 31 ? `Over ${n} days the lanes are dense: pick fewer days to tell single turns apart.` : '',
+  ].filter(Boolean);
+  return parts.length ? html`<p class="note tlx-range-note" id="tlxRangeNote" role="status">${parts.join(' ')}</p>` as VNode : null;
 }
 
 function filterBar(p: PreparedTimeline, ctx: ViewContext): VNode {
@@ -283,7 +487,7 @@ function filterBar(p: PreparedTimeline, ctx: ViewContext): VNode {
 interface ViewContext {
   p: PreparedTimeline;
   namer: Namer;
-  view: 'day' | 'week';
+  view: TimelinePeriod;
   /** Sessions in the window before the filters. */
   all: number;
   /** Their indices: a parent among them but not shown was hidden by a filter. */
@@ -294,13 +498,17 @@ interface ViewContext {
   r0: number;
   r1: number;
   ticks: [number, string][];
+  /** Each loaded day's totals over the sessions the filters keep, for the strip and the calendar. */
+  dayTotals: ReadonlyMap<string, DayTotals>;
 }
 
 function pct(ctx: ViewContext, t: number): number {
   return 100 * (Math.max(ctx.r0, Math.min(ctx.r1, t)) - ctx.r0) / (ctx.r1 - ctx.r0);
 }
 
-function trackRange(lanes: TimelineLane[], view: 'day' | 'week', start: number, end: number): Pick<ViewContext, 'r0' | 'r1' | 'ticks'> {
+function trackRange(lanes: TimelineLane[], view: TimelinePeriod, start: number, end: number): Pick<ViewContext, 'r0' | 'r1' | 'ticks'> {
+  // A range of two days or more is drawn whole, its ticks spaced for its length; a one-day range like a day.
+  if (view === 'range' && end - start > 26 * 3.6e6) return { r0: start, r1: end, ticks: rangeTicks(start, end) };
   if (view === 'week') {
     return { r0: start, r1: end, ticks: dayTicks(start, end).map(t => [t, new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })]) };
   }
@@ -326,8 +534,8 @@ function trackRange(lanes: TimelineLane[], view: 'day' | 'week', start: number, 
 }
 
 function viewContext(p: PreparedTimeline, namer: Namer): ViewContext {
-  const view = state.view === 'week' ? 'week' : 'day';
-  const [start, end] = timelineWindow(view, state.date);
+  const view = period();
+  const [start, end] = windowOf(view);
   const all = buildLanes(p, start, end);
   const lanes = filterLanes(all, state.filters, p, s => namer.repo(s));
   const families = buildViewFamilies(lanes, p);
@@ -351,7 +559,20 @@ function viewContext(p: PreparedTimeline, namer: Namer): ViewContext {
   }
   return {
     p, namer, view, all: all.length, inWindow: new Set(all.map(l => l.s.index)), lanes, families, familyOf, ...trackRange(lanes, view, start, end),
+    dayTotals: shownDayTotals(p, namer),
   };
+}
+
+/** The strip's per-day totals: computed again only when the filters, the mask or the data change, not on navigation. */
+let shownTotals: { p: PreparedTimeline; key: string; totals: ReadonlyMap<string, DayTotals> } | null = null;
+
+function shownDayTotals(p: PreparedTimeline, namer: Namer): ReadonlyMap<string, DayTotals> {
+  if (!hasLaneFilters(state.filters)) return p.dayTotals;
+  const key = JSON.stringify([state.filters, state.masked]);
+  if (shownTotals?.p !== p || shownTotals.key !== key) {
+    shownTotals = { p, key, totals: filteredDayTotals(p, state.filters, s => namer.repo(s)) };
+  }
+  return shownTotals.totals;
 }
 
 function kpiCard(value: string, label: string, sub: string, color?: string): VNode {
@@ -364,7 +585,7 @@ function kpiCard(value: string, label: string, sub: string, color?: string): VNo
 function timelineView(ctx: ViewContext): VNode {
   const { p, view, lanes, families } = ctx;
   if (lanes.length === 0) {
-    return html`${dayStrip(p, view)}
+    return html`${dayStrip(ctx)}
       <div class="tlx-empty">${ctx.all > 0
         ? html`No session matches these filters. <button type="button" class="tlx-btn" onClick=${() => update({ filters: { ...NO_LANE_FILTERS } })}>Clear filters</button>`
         : `No sessions in this ${view}.`}</div>` as VNode;
@@ -375,8 +596,9 @@ function timelineView(ctx: ViewContext): VNode {
   const asked = kpis.waits - kpis.idleWaits;
   const typedShare = kpis.turns ? `${Math.round(100 * kpis.typed / kpis.turns)}% from you · ${formatCount(kpis.turns - kpis.typed)} automated` : 'no turn started here';
   return html`
+    ${dayStrip(ctx)}
     <div class="ctx-cache-tips tlx-insights" id="tlxInsights" role="note">
-      <div class="ctx-cache-tips-title">What happened ${view === 'week' ? 'this week' : `on ${state.date}`}</div>
+      <div class="ctx-cache-tips-title">What happened ${view === 'week' ? 'this week' : view === 'range' && state.range ? `from ${state.range.from} to ${state.range.to}` : `on ${state.date}`}</div>
       ${insights.map(t => html`<div class="ctx-cache-tip">• ${t}</div>`)}
     </div>
     <div class="ctx-comp-kpis tlx-kpis" id="tlxKpis">
@@ -387,7 +609,6 @@ function timelineView(ctx: ViewContext): VNode {
       ${kpiCard(formatDuration(kpis.waitMs), 'Waiting on you', `${formatCount(kpis.waits)} ${kpis.waits === 1 ? 'wait' : 'waits'} started${asked ? ` (${formatCount(asked)} on a question or permission)` : ''} · ${formatCount(kpis.longWaits)} of 30 min or more`)}
       ${kpiCard(String(kpis.peak.count), 'Peak parallel sessions', kpis.peak.at != null && kpis.peak.count > 0 ? `doing agent work at ${formatWhen(kpis.peak.at, view)}` : '—')}
     </div>
-    ${dayStrip(p, view)}
     ${legend(view)}
     ${lanesPanel(ctx)}
     <div class="tlx-grid">
@@ -396,28 +617,39 @@ function timelineView(ctx: ViewContext): VNode {
     </div>` as VNode;
 }
 
-function dayStrip(p: PreparedTimeline, view: 'day' | 'week'): VNode {
+/** Every loaded day, to pick one: its bars count the sessions the filters keep, as the Day view does; its footer is the
+ *  selected day's or the range's totals, those of the KPIs. */
+function dayStrip(ctx: ViewContext): VNode {
+  const { p, view, dayTotals: totals } = ctx;
+  const filtered = totals !== p.dayTotals;
   const hours = state.strip === 'hours';
+  const none: DayTotals = { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
   const value = (d: string) => {
-    const x = p.dayTotals.get(d)!;
+    const x = totals.get(d) ?? none;
     return hours ? x.agentMs / 3.6e6 : x.typed + x.automated;
   };
   const max = Math.max(1e-9, ...p.days.map(value));
-  const week = view === 'week' ? timelineWindow('week', state.date) : null;
-  const today = p.dayTotals.get(state.date) ?? { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
+  // The week or range shown is highlighted; in a range, a click opens that day.
+  const span = view === 'day' ? null : windowOf(view);
+  // The Day and Range views total their own lanes, as their KPIs do; the Week view gives the selected day's.
+  const footer = view === 'week' ? totals.get(state.date) ?? none
+    : ctx.lanes.reduce((t, l) => ({ ...t, typed: t.typed + l.typed, automated: t.automated + l.automated, agentMs: t.agentMs + l.agentMs }), none);
+  const which = view === 'range' && state.range ? `Range ${state.range.from} → ${state.range.to}` : `Selected day ${state.date}`;
   return html`
     <div class="tlx-strip" id="tlxStrip">
       <div class="tlx-strip-head">
-        <span><b>${hours ? 'Agent hours per day' : 'Turns per day'}</b> · ${hours ? 'agent working time' : 'you vs automated'} · every session in range, before filters · ${p.days[0]} → ${p.days[p.days.length - 1]} · click a day</span>
+        <span>Pick a day · <b>${hours ? 'Agent hours per day' : 'Turns per day'}</b> · ${hours ? 'agent working time' : 'you vs automated'} · ${p.days[0]} → ${p.days[p.days.length - 1]}${filtered ? ' · only sessions your filters show' : ''}</span>
         ${segment<StripMode>('tlxStripMode', [['turns', 'Turns'], ['hours', 'Agent hours']], state.strip, v => update({ strip: v }))}
       </div>
       <div class="tlx-strip-bars">
         ${p.days.map(d => {
-          const x = p.dayTotals.get(d)!;
-          const inWeek = week != null && dayStart(d) >= week[0] && dayStart(d) < week[1];
-          const tip = `${d}: ${x.typed} typed · ${x.automated} automated · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours · ${formatDuration(x.waitMs)} waiting on you`;
+          const x = totals.get(d) ?? none;
+          const inWeek = span != null && dayStart(d) >= span[0] && dayStart(d) < span[1];
+          const tip = totals.has(d)
+            ? `${d}: ${x.typed} typed · ${x.automated} automated · ${(x.agentMs / 3.6e6).toFixed(1)} agent-hours · ${formatDuration(x.waitMs)} waiting on you`
+            : `${d}: no session your filters show`;
           return html`<button type="button" class=${'d' + (d === state.date ? ' sel' : '') + (inWeek ? ' inwk' : '')} data-day=${d} title=${tip} aria-label=${tip}
-            onClick=${() => update({ date: d })}>
+            onClick=${() => update(view === 'range' ? { view: 'day', date: d } : { date: d })}>
             ${hours
               ? html`<i class="h" style=${`height:${(x.agentMs / 3.6e6 / max) * 64}px`}></i>`
               : html`<i class="you" style=${`height:${(x.typed / max) * 64}px`}></i><i class="auto" style=${`height:${(x.automated / max) * 64}px`}></i>`}
@@ -427,12 +659,12 @@ function dayStrip(p: PreparedTimeline, view: 'day' | 'week'): VNode {
       <div class="tlx-lg">
         ${hours ? html`<span><i class="sw h"></i>agent hours</span>`
           : html`<span><i class="sw you"></i>prompts you typed</span><span><i class="sw auto"></i>automated: agents, relays, autopilot</span>`}
-        <span class="tlx-lg-end">Selected day ${state.date}: ${today.typed} typed · ${today.automated} automated · ${(today.agentMs / 3.6e6).toFixed(1)} agent-hours</span>
+        <span class="tlx-lg-end">${which}: ${footer.typed} typed · ${footer.automated} automated · ${(footer.agentMs / 3.6e6).toFixed(1)} agent-hours</span>
       </div>
     </div>` as VNode;
 }
 
-function legend(view: 'day' | 'week'): VNode {
+function legend(view: TimelinePeriod): VNode {
   return html`
     <div class="tlx-lg tlx-legend">
       <span><i class="sw work"></i>agent working</span>
@@ -503,7 +735,7 @@ const WAIT_WHAT: Record<TimelineWait['kind'], string> = {
 function waitTip(ctx: ViewContext, w: TimelineWait, win: Interval): string {
   const whole = w.end - w.start;
   const inside = clippedMs(w, win);
-  return `Waiting on you ${WAIT_WHAT[w.kind]}: ${formatDuration(whole)}${inside < whole ? `, ${formatDuration(inside)} of it this ${ctx.view}` : ''}`;
+  return `Waiting on you ${WAIT_WHAT[w.kind]}: ${formatDuration(whole)}${inside < whole ? `, ${formatDuration(inside)} of it ${thisPeriod(ctx.view)}` : ''}`;
 }
 
 /** Why a child's parent isn't drawn right above it. */
@@ -512,7 +744,7 @@ function parentNote(ctx: ViewContext, l: TimelineLane): string | null {
   const parent = ctx.p.sessions[l.s.parent];
   const why = ctx.inWindow.has(parent.index) ? 'parent hidden by a filter'
     : parent.ctx ? 'parent outside this range or the sidebar selection'
-      : `parent not active this ${ctx.view}`;
+      : `parent not active ${thisPeriod(ctx.view)}`;
   return l.visibleParent >= 0 ? `${why} · linked to its nearest shown ancestor` : why;
 }
 
@@ -554,7 +786,18 @@ function laneRow(ctx: ViewContext, l: TimelineLane, depth: number): VNode {
         ${ctx.ticks.map(([x]) => html`<div class="grid" style=${`left:${pct(ctx, x)}%`}></div>`)}
         ${l.waits.map(w => {
           const [part] = clipIntervals([[w.start, w.end]], plot);
-          return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} title=${waitTip(ctx, w, l.win)} style=${span(part)}></div>` : null;
+          const key = w.kind === 'idle' ? `i:${w.start}` : `w:${w.kind}:${w.start}`;
+          const open = (e?: Event) => {
+            e?.stopPropagation();
+            // Shown text only: a highlight set while it is hidden would turn up, stale, when it shows again.
+            const shown = !!state.showText && !state.masked;
+            scrollToText = shown;
+            update({ selected: s.id, textFocus: shown ? key : null, textFocusEnd: shown ? w.end : null });
+          };
+          const tip = waitTip(ctx, w, l.win);
+          return part ? html`<div class=${'wait' + (w.kind === 'idle' ? '' : ' ask')} data-wait=${w.kind} data-wait-at=${key}
+            role="button" tabindex="0" aria-label=${tip} title=${tip + (state.showText && !state.masked ? '\nClick to read it in the details' : '')}
+            style=${span(part)} onClick=${open} onKeyDown=${onActivate(open)}></div>` : null;
         })}
         ${clipIntervals(l.segments, plot).map(part => html`<div class="seg" title=${`Agent working ${formatDuration(part[1] - part[0])} (bars are at least 1 px wide, so a very short one can look longer)`} style=${`${span(part)};background:${color}`}></div>`)}
         ${l.turns.map(t => html`<div class=${'mk ' + markKind(t.k)} data-sender=${t.k} title=${turnTip(ctx, s, t)} style=${`left:${pct(ctx, t.t)}%`}></div>`)}
@@ -622,7 +865,7 @@ function lanesPanel(ctx: ViewContext): VNode {
       : 'Copilot logs only a fork count, with no source session, so Copilot forks aren’t linked.',
   ].join(' ');
   return html`
-    <div class=${'tlx-lanes' + (ctx.view === 'week' ? ' wk' : '')} id="tlxLanes" tabindex="0" aria-label="Session lanes: ↑ ↓ change lane, ← → change day or week">
+    <div class=${'tlx-lanes' + (ctx.view !== 'day' && ctx.r1 - ctx.r0 > 26 * 3.6e6 ? ' wk' : '')} id="tlxLanes" tabindex="0" aria-label="Session lanes: ↑ ↓ change lane, ← → change day, week or range">
       ${rows}
       ${children.map(l => {
         const top = centre.get(l.visibleParent);
@@ -651,7 +894,7 @@ function impactPanel(ctx: ViewContext, childLanes: number, childShare: number): 
   return html`
     <div class="tlx-panel" id="tlxImpact">
       <h4>Impact by session family</h4>
-      <p class="note">A coordinator and the sessions it started, ${ctx.view === 'week' ? 'this week' : state.date}. Credits are logged AI credits;
+      <p class="note">A coordinator and the sessions it started, ${ctx.view === 'day' ? state.date : thisPeriod(ctx.view)}. Credits are logged AI credits;
         bars compare each family with the largest. Click a row to select the coordinator, or the family’s top session shown when the
         coordinator isn’t.</p>
       <table>
@@ -701,7 +944,7 @@ function noTurnNote(ctx: ViewContext, l: TimelineLane): string {
   const shows = parts.length ? `the lane shows ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]}` : 'nothing was measured in it';
   return l.s.all.length === 0
     ? `This session logged no turn, only stops for you: ${shows}.`
-    : `No turn started this ${ctx.view}: ${shows}.`;
+    : `No turn started ${thisPeriod(ctx.view)}: ${shows}.`;
 }
 
 function detailPanel(ctx: ViewContext): VNode {
@@ -725,8 +968,8 @@ function detailPanel(ctx: ViewContext): VNode {
       </div><span class="chip chip-sel">selected</span></div>
       <div class="dr-kpis">
         <div><b>${l.typed} / ${l.automated}</b><span>you / automated</span></div>
-        <div><b>${formatDuration(l.agentMs)}</b><span>agent time this ${ctx.view}</span></div>
-        <div><b>${formatCredits(l.credits)} cr</b><span>${totalCredits > 0 ? `${(100 * l.credits / totalCredits).toFixed(1)}% of the ${ctx.view}` : 'no credits logged'}</span></div>
+        <div><b>${formatDuration(l.agentMs)}</b><span>agent time ${thisPeriod(ctx.view)}</span></div>
+        <div><b>${formatCredits(l.credits)} cr</b><span>${totalCredits > 0 ? `${(100 * l.credits / totalCredits).toFixed(1)}% of the ${ctx.view === 'range' ? 'range' : ctx.view}` : 'no credits logged'}</span></div>
         <div><b>${l.subagents}</b><span>sub-agent launches</span></div>
       </div>
       ${l.turns.length === 0
@@ -743,8 +986,9 @@ function detailPanel(ctx: ViewContext): VNode {
           <td class="num">${t.sub || ''}</td></tr>`;
         })}
         </tbody></table></div>`}
-      <p class="note tlx-note-end">${l.turns.length} ${l.turns.length === 1 ? 'turn' : 'turns'} started this ${ctx.view} · ${formatTokens(l.tokens)} ·
-        rows are whole turns, the cards above only this ${ctx.view} · no prompt or response body is shown</p>
+      <p class="note tlx-note-end">${l.turns.length} ${l.turns.length === 1 ? 'turn' : 'turns'} started ${thisPeriod(ctx.view)} · ${formatTokens(l.tokens)} ·
+        rows are whole turns, the cards above only ${thisPeriod(ctx.view)}</p>
+      ${textSection(ctx, l)}
       <div class="dr-links">
         ${parent && !parent.ctx ? goLink('Open parent session ›', () => openSession(parent.index), 'tlxOpenParent') : null}
         ${parent?.ctx ? html`<span class="muted">parent outside this range or the sidebar selection</span>` : null}
@@ -760,15 +1004,175 @@ function detailPanel(ctx: ViewContext): VNode {
     </div>` as VNode;
 }
 
-/** Shows a session on the Day view (or the current Week), on its busiest day when it has no lane in the current window. */
+/* ---- prompts and questions (detail panel, local only) ---- */
+
+const TURN_TITLE: Record<TurnSender, string> = {
+  you: 'You typed', agent: 'Sent by an agent or session', autopilot: 'Autopilot continuation', compaction: 'Compaction', other: 'System or harness message',
+};
+const ASK_TITLE: Record<TimelineTextWait['k'], string> = {
+  question: 'The agent asked you', relay: 'A child session’s question, relayed to you', permission: 'Permission prompt',
+};
+const DECISIONS: Record<string, string> = {
+  approved: 'approved', 'approved-for-location': 'approved for this location', 'approved-for-session': 'approved for the session',
+  'denied-interactively-by-user': 'denied by you', 'denied-no-approval-rule-and-could-not-request-from-user': 'denied: no rule allowed it and you couldn’t be asked',
+};
+
+function setShowText(on: boolean): void {
+  const saved: unknown = vscode.getState();
+  vscode.setState({ ...(saved && typeof saved === 'object' ? saved : {}), [SHOW_TEXT_KEY]: on });
+  update({ showText: on });
+}
+
+/** The lane's text, read once per load and window: the first call starts the request and redraws when it answers. The
+ *  request names what the lane shows (its window, its turns and the turn before each wait for your next prompt), so
+ *  the read returns that and nothing more. */
+function sessionText(l: TimelineLane): TextEntry {
+  const key = `${l.s.id}|${l.win[0]}|${l.win[1]}`;
+  shownTextKey = key;
+  const known = texts.get(key);
+  if (known) return known;
+  const entry: TextEntry = { status: 'loading' };
+  texts.set(key, entry);
+  // A read the Timeline reloaded under (the map was cleared, and the lane read again) is dropped.
+  const settle = (next: TextEntry) => {
+    if (texts.get(key) !== entry) return;
+    texts.set(key, next);
+    draw();
+  };
+  // A read dropped for a newer one is forgotten, and read again if its lane is the one shown.
+  const superseded = () => {
+    if (texts.get(key) !== entry) return;
+    texts.delete(key);
+    if (shownTextKey === key) draw();
+  };
+  const scope = textScope(l.win, [...l.turns, ...l.waits.flatMap(w => (w.after ? [w.after] : []))]);
+  if (scope.turns.length > MAX_TEXT_SCOPE_TURNS) {
+    const tooMany: TextEntry = { status: 'tooMany', turns: scope.turns.length };
+    texts.set(key, tooMany);
+    return tooMany;
+  }
+  rpc<TimelineSessionText | TimelineTextSuperseded | null>('getTimelineSessionText', { sessionId: l.s.id, scope })
+    .then(text => (text && 'superseded' in text ? superseded() : settle(text ? { status: 'ready', text } : { status: 'missing' })))
+    .catch(() => settle({ status: 'missing' }));
+  return entry;
+}
+
+function textItem(key: string, head: string, body: (VNode | null)[], focus = state.textFocus === key): VNode {
+  return html`<div class=${'tx-item' + (focus ? ' focus' : '')} data-text-at=${key}>
+    <div class="tx-head">${head}</div>${body}</div>` as VNode;
+}
+
+function quote(text: string | undefined, cls = 'tx-body'): VNode | null {
+  return text ? html`<div class=${cls}>${text}</div>` as VNode : null;
+}
+
+function earlier(label: string, text: string | undefined, open = false): VNode | null {
+  return text ? html`<details class="tx-more" open=${open}><summary>${label}</summary><div class="tx-body">${text}</div></details>` as VNode : null;
+}
+
+/** A time in the detail panel: with its date when it falls outside the shown day or week (a wait that began earlier). */
+function textTime(ctx: ViewContext, t: number, win: Interval): string {
+  if (t >= win[0] && t < win[1]) return formatWhen(t, ctx.view);
+  return new Date(t).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function turnItem(ctx: ViewContext, t: TimelineTurn, tt: TimelineTextTurn | undefined): VNode {
+  const kind = tt?.k ?? t.k;
+  const hidden = kind === 'compaction' || kind === 'other';
+  return textItem(`t:${t.t}${t.id ? `:${t.id}` : ''}`, `${formatWhen(t.t, ctx.view)} · ${TURN_TITLE[t.k]}`, [
+    // The agent's reply to a harness message is its own words, and can be the last it said before it needed you.
+    tt?.prompt ? quote(tt.prompt) : html`<p class="note">${hidden ? 'The message that started it isn’t shown: it is a summary or a harness message, not an instruction.' : 'No message text was logged.'}</p>` as VNode,
+    earlier('End of the agent’s reply in this turn', tt?.reply),
+  ]);
+}
+
+function askItem(ctx: ViewContext, w: TimelineTextWait, win: Interval, focus: boolean): VNode {
+  // Timed to Copilot's record of your answer when it logged one, else to the result.
+  const answered = w.at ?? w.e;
+  const took = answered >= w.s ? `after ${formatDuration(answered - w.s)}` : 'before the request was logged';
+  const status = w.k === 'permission'
+    ? (w.a ? `decided by you ${took}` : 'no record that you decided it')
+    : (w.a ? `you answered ${took}` : 'not answered: interrupted, or no answer logged');
+  const decision = w.answer ? DECISIONS[w.answer] ?? w.answer : '';
+  return textItem(`w:${w.k}:${w.s}`, `${textTime(ctx, w.s, win)} · ${ASK_TITLE[w.k]} · ${status}`, w.k === 'permission' ? [
+    w.tool ? html`<div class="tx-meta">Requested · ${w.tool}</div>` as VNode : null,
+    quote(w.ask, 'tx-body tx-code'),
+    w.intention ? html`<div class="tx-meta">The agent’s reason: ${w.intention}</div>` as VNode : null,
+    decision ? html`<div class="tx-answer"><b>Decision</b> ${decision}</div>` as VNode : null,
+  ] : [
+    earlier('What the agent said before it asked', w.before, true),
+    quote(w.ask) ?? html`<p class="note">The question’s text wasn’t logged.</p>` as VNode,
+    w.choices?.length ? html`<ul class="tx-choices">${w.choices.map(c => html`<li>${c}</li>`)}</ul>` as VNode : null,
+    w.answer ? html`<div class="tx-answer"><b>${w.k === 'relay' ? 'Your reply' : 'Your answer'}</b> ${w.answer}</div>` as VNode : null,
+  ], focus);
+}
+
+/** The questions or permission prompts a click on a hatched wait highlights: those of its kind and start, and of them
+ *  the one that ended when it did, when two began together. */
+function focusedAsks(asks: readonly TimelineTextWait[]): Set<TimelineTextWait> {
+  const same = asks.filter(w => `w:${w.k}:${w.s}` === state.textFocus);
+  const exact = same.filter(w => w.e === state.textFocusEnd);
+  return new Set(exact.length ? exact : same);
+}
+
+/** The prompts that started this window's turns, what each question or permission prompt asked and what you answered,
+ *  and each wait for your next prompt with the message it followed: local text, read when the lane is opened. */
+function textSection(ctx: ViewContext, l: TimelineLane): VNode {
+  const on = !!state.showText && !state.masked;
+  const toggle = html`<label class="tlx-text-toggle" title=${SHOW_TEXT_HELP}><input type="checkbox" id="tlxShowText" checked=${on}
+    disabled=${state.masked} aria-describedby="tlxShowTextHelp" onChange=${(e: Event) => setShowText((e.target as HTMLInputElement).checked)} />
+    Show prompts and questions</label><span id="tlxShowTextHelp" hidden>${SHOW_TEXT_HELP}</span>`;
+  const wrap = (...body: (VNode | null)[]) => html`<div class="tlx-text" id="tlxText">${toggle}${body}</div>` as VNode;
+  if (state.masked) return wrap(html`<p class="note">Hidden while names are masked.</p>` as VNode);
+  if (!on) return wrap(html`<span class="tx-off" id="tlxTextOff">Off: turn it on to read this lane’s prompts, questions and answers from its log.</span>` as VNode);
+  const entry = sessionText(l);
+  if (entry.status === 'loading') return wrap(html`<p class="note">Reading this session’s log…</p>` as VNode);
+  if (entry.status === 'missing') return wrap(html`<p class="note">This session’s log couldn’t be read again, so its text isn’t available.</p>` as VNode);
+  if (entry.status === 'tooMany') {
+    return wrap(html`<p class="note">This lane lists ${formatCount(entry.turns)} turns here, more than the ${formatCount(MAX_TEXT_SCOPE_TURNS)} whose text can be read at once. Pick fewer days to read its prompts and questions.</p>` as VNode);
+  }
+  const { text } = entry;
+  const [from, to] = l.win;
+  const textOf = textTurnFinder(text.turns);
+  const asks = text.waits.filter(w => waitInWindow(w, from, to));
+  const focused = focusedAsks(asks);
+  const items: [number, VNode][] = [
+    ...l.turns.map(t => [t.t, turnItem(ctx, t, textOf(t))] as [number, VNode]),
+    ...asks.map(w => [w.s, askItem(ctx, w, l.win, focused.has(w))] as [number, VNode]),
+    ...l.waits.filter(w => w.kind === 'idle').map(w => {
+      const before = w.after && textOf(w.after);
+      return [w.start, textItem(`i:${w.start}`, `${textTime(ctx, w.start, l.win)} · Waited ${formatDuration(w.end - w.start)} for your next prompt`, [
+        before?.k === 'compaction' ? html`<p class="note">It followed a compaction, whose summary isn’t shown.</p>` as VNode
+          : earlier('End of the agent’s reply before the wait', before?.reply, true) ?? html`<p class="note">No agent reply was logged before it.</p>` as VNode,
+      ])] as [number, VNode];
+    }),
+  ];
+  items.sort((a, b) => a[0] - b[0]);
+  const prompts = l.turns.filter(t => textOf(t)?.prompt).length;
+  return wrap(
+    html`<p class="note">${prompts} ${prompts === 1 ? 'prompt' : 'prompts'}${asks.length ? ` and ${asks.length} ${asks.length === 1 ? 'question or permission prompt' : 'questions or permission prompts'}` : ''} ${thisPeriod(ctx.view)},
+      read again from the session’s log on this machine. Links, email addresses, secret-like tokens, your home folder and your names are replaced;
+      long text is cut.</p>` as VNode,
+    items.length ? html`<div class="tx-list">${items.map(([, node]) => node)}</div>` as VNode : null,
+  );
+}
+
+/** Shows a session on the Day view (or the current Week), on its busiest day when it has no lane in the current window.
+ *  The Range view stays when it holds the day asked for or, with none asked, when the session has a lane in it. */
 function openSession(index: number, date?: string): void {
   if (!loaded) return;
   const s = loaded.prepared.sessions[index];
   if (s.ctx) return;
-  const view = state.view === 'week' ? 'week' : 'day';
-  if (date) state.date = date;
-  else if (state.view === 'families' || !activeIn(s, timelineWindow(view, state.date))) state.date = busiestDay(s);
-  if (state.view === 'families') state.view = 'day';
+  if (state.view === 'range' && state.range) {
+    const { from, to } = state.range;
+    const keep = date ? date >= from && date <= to : activeIn(s, rangeWindow(state.range));
+    if (date) state.date = date;
+    if (!keep) Object.assign(state, { view: 'day', date: date ?? busiestDay(s) });
+  } else {
+    if (date) state.date = date;
+    else if (state.view === 'families' || !activeIn(s, windowOf(period()))) state.date = busiestDay(s);
+    if (state.view === 'families') state.view = 'day';
+  }
   state.focusId = s.id;
   state.filters = { ...NO_LANE_FILTERS };
   draw();
@@ -961,7 +1365,7 @@ function familyAside(o: FamiliesOverview, namer: Namer, p: PreparedTimeline): VN
     </aside>` as VNode;
 }
 
-/* ---- keyboard: ← → change day or week, ↑ ↓ change lane or family ---- */
+/* ---- keyboard: ← → change day, week or range, ↑ ↓ change lane or family ---- */
 
 /** Keys a focused control uses itself: text fields, lists, buttons, links and editable content. */
 function ownsKeys(el: HTMLElement): boolean {
@@ -972,15 +1376,15 @@ function onKeyDown(e: KeyboardEvent): void {
   if (!rootEl?.isConnected || !loaded) return;
   if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
   const target = e.target instanceof HTMLElement ? e.target : null;
-  if (target && ownsKeys(target)) return;
+  if ((target && ownsKeys(target)) || pickerOpen()) return;
   // Only when the Timeline has focus (or nothing does): elsewhere, such as the sidebar, the keys keep their own use.
   const inTimeline = !target || target === document.body || rootEl.contains(target);
   if (!inTimeline) return;
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     if (state.view === 'families') return;
     e.preventDefault();
-    const next = stepDate(state.view, state.date, e.key === 'ArrowLeft' ? -1 : 1, loaded.prepared.days);
-    if (next) update({ date: next });
+    const next = stepped(loaded.prepared, e.key === 'ArrowLeft' ? -1 : 1);
+    if (next) update(next);
     return;
   }
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;

@@ -12,7 +12,7 @@ import * as path from 'path';
 import { afterEach, describe, it, expect, beforeEach } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli';
-import { getParseWarningCounts, resetParseWarnings, setCuriosityDetector } from './parser-shared';
+import { getParseWarningCounts, resetParseWarnings, setCuriosityDetector, stripSingleSession } from './parser-shared';
 import { detectCuriosity } from './curiosity';
 import { CuriosityAnalyzer } from './analyzer-curiosity';
 import { runDetectors, runEmitters } from './detector-registry';
@@ -484,14 +484,84 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     const ms = (iso: string) => Date.parse(iso);
     // Every request stops the agent; only an answer from you is `answered`. A policy decision isn't a request to you.
     expect(session?.requests[0].userWaits).toEqual([
-      { start: ms(at(1)), end: ms(at(6)), kind: 'question', answered: true },
+      { start: ms(at(1)), end: ms(at(6)), kind: 'question', answered: true, text: { answer: 'yes' } },
       { start: ms(at(7)), end: ms(at(8)), kind: 'question', answered: false },
-      { start: ms(at(9)), end: ms(at(12)), kind: 'relay', answered: true },
-      { start: ms(at(14)), end: ms(at(14, 2)), kind: 'permission', answered: false },
-      { start: ms(at(15)), end: ms(at(17)), kind: 'permission', answered: true },
+      { start: ms(at(9)), end: ms(at(12)), kind: 'relay', answered: true, text: { answer: 'b' } },
+      { start: ms(at(14)), end: ms(at(14, 2)), kind: 'permission', answered: false, text: { answer: 'approved' } },
+      { start: ms(at(15)), end: ms(at(17)), kind: 'permission', answered: true, text: { answer: 'approved' } },
       // The record of your answer dates it, apart from the result.
-      { start: ms(at(18)), end: ms(at(19)), kind: 'permission', answered: true, answeredAt: ms(at(19)) },
-      { start: ms(at(21)), end: ms(at(24)), kind: 'permission', answered: true },
+      { start: ms(at(18)), end: ms(at(19)), kind: 'permission', answered: true, answeredAt: ms(at(19)), text: { answer: 'approved' } },
+      { start: ms(at(21)), end: ms(at(24)), kind: 'permission', answered: true, text: { answer: 'denied-interactively-by-user' } },
+    ]);
+  });
+
+  it('keeps what a question, relay or permission prompt asked and what you answered, until the session is stripped', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 10, m)).toISOString();
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: at(0), data: { content: 'go' } },
+      { type: 'assistant.message', timestamp: at(1), data: { content: 'Two databases fit.' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Which DB?', choices: ['A', 'B'] } } },
+      { type: 'tool.execution_complete', timestamp: at(5), data: { toolCallId: 'q1', success: true, result: { content: 'User selected: B' } } },
+      { type: 'permission.requested', timestamp: at(6), data: { requestId: 'p1', permissionRequest: { kind: 'shell', fullCommandText: 'npm test', intention: 'Run the tests' } } },
+      { type: 'permission.completed', timestamp: at(7), data: { requestId: 'p1', decisionSource: 'human_response', result: { kind: 'approved' } } },
+      { type: 'tool.execution_start', timestamp: at(8), data: { toolName: 'relay_session_input', toolCallId: 'r1', arguments: { context: 'Child asks', project_session_id: 'p' } } },
+      { type: 'tool.execution_complete', timestamp: at(9), data: { toolCallId: 'r1', success: true, result: { content: JSON.stringify({ question: 'Deploy now?', outcome: 'answered_here', answer: 'Not yet' }) } } },
+      // The answer text can come only in the human_response record.
+      { type: 'tool.execution_start', timestamp: at(10), data: { toolName: 'ask_user', toolCallId: 'q2', arguments: { question: 'Name?' } } },
+      { type: 'tool.execution_complete', timestamp: at(11), data: { toolCallId: 'q2', success: true, result: { content: '' } } },
+      { type: 'human_response.recorded', timestamp: at(11), data: { toolCallId: 'q2', response: { answer: 'Ada' } } },
+      { type: 'permission.requested', timestamp: at(12), data: { requestId: 'p2', permissionRequest: { kind: 'mcp', serverName: 'github', toolTitle: 'Create issue' } } },
+      { type: 'permission.completed', timestamp: at(13), data: { requestId: 'p2', decisionSource: 'human_response', result: { kind: 'denied-interactively-by-user' } } },
+      { type: 'assistant.message', timestamp: at(14), data: { content: 'done' } },
+    ]), 'ws', 'ws');
+    expect(session?.requests[0].userWaits?.map(w => [w.kind, w.answered, w.text])).toEqual([
+      ['question', true, { ask: 'Which DB?', choices: ['A', 'B'], before: 'Two databases fit.', answer: 'B' }],
+      ['permission', true, { ask: 'npm test', tool: 'shell', intention: 'Run the tests', answer: 'approved' }],
+      ['relay', true, { ask: 'Deploy now?', before: 'Two databases fit.', answer: 'Not yet' }],
+      ['question', true, { ask: 'Name?', before: 'Two databases fit.', answer: 'Ada' }],
+      ['permission', true, { ask: 'github: Create issue', tool: 'mcp', answer: 'denied-interactively-by-user' }],
+    ]);
+    // The analyzers hold sessions without it: the detail view reads it again from the log.
+    stripSingleSession(session!);
+    expect(session?.requests[0].userWaits?.some(w => w.text)).toBe(false);
+  });
+
+  it('gives a recorded answer only to the question it answered, not to a later one that reused its tool call ID', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 10, m)).toISOString();
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: at(0), data: { content: 'go' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Ship it?' } } },
+      { type: 'human_response.recorded', timestamp: at(3), data: { toolCallId: 'q1', response: { answer: 'yes' } } },
+      { type: 'tool.execution_complete', timestamp: at(3), data: { toolCallId: 'q1', success: true, result: { content: '' } } },
+      { type: 'tool.execution_start', timestamp: at(5), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Tag it?' } } },
+      { type: 'tool.execution_complete', timestamp: at(6), data: { toolCallId: 'q1', success: false } },
+      { type: 'tool.execution_start', timestamp: at(7), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Notify?' } } },
+      { type: 'assistant.message', timestamp: at(8), data: { content: 'done' } },
+    ]), 'ws', 'ws');
+    expect(session?.requests[0].userWaits?.map(w => [w.text?.ask, w.text?.answer])).toEqual([['Ship it?', 'yes'], ['Tag it?', undefined], ['Notify?', undefined]]);
+    // Nor its record that you answered (code from #381, hardened here): only the first was answered.
+    expect(session?.requests[0].userWaits?.map(w => [w.answered, w.answeredAt])).toEqual([[true, Date.parse(at(3))], [false, undefined], [false, undefined]]);
+  });
+
+  it('keeps a recorded answer for a later request that reused the tool call ID, even when it comes before that question', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 1, 10, m)).toISOString();
+    const session = parseCLIEventsFile(writeEvents([
+      { type: 'session.start', data: { sessionId: COORD } },
+      { type: 'user.message', timestamp: at(0), data: { content: 'go' } },
+      { type: 'tool.execution_start', timestamp: at(2), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Ship it?' } } },
+      { type: 'human_response.recorded', timestamp: at(3), data: { toolCallId: 'q1', requestId: 'r1', response: { answer: 'yes' } } },
+      { type: 'tool.execution_complete', timestamp: at(3), data: { toolCallId: 'q1', success: true, result: { content: '' } } },
+      // The second question's record is logged before its own start entry.
+      { type: 'human_response.recorded', timestamp: at(5), data: { toolCallId: 'q1', requestId: 'r2', response: { answer: 'no' } } },
+      { type: 'tool.execution_start', timestamp: at(5), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Tag it?' } } },
+      { type: 'tool.execution_complete', timestamp: at(7), data: { toolCallId: 'q1', success: true, result: { content: '' } } },
+      { type: 'assistant.message', timestamp: at(8), data: { content: 'done' } },
+    ]), 'ws', 'ws');
+    expect(session?.requests[0].userWaits?.map(w => [w.text?.ask, w.text?.answer, w.answered, w.answeredAt, w.requestId])).toEqual([
+      ['Ship it?', 'yes', true, Date.parse(at(3)), 'r1'],
+      ['Tag it?', 'no', true, Date.parse(at(5)), 'r2'],
     ]);
   });
 
@@ -513,7 +583,8 @@ describe('session families and credits (Copilot CLI and Copilot App)', () => {
     const ms = (iso: string) => Date.parse(iso);
     // Overlapping requests stay separate: each is its own answer, and the model unions their time.
     expect(session?.requests.map(r => r.userWaits)).toEqual([
-      [{ start: ms(at(1)), end: ms(at(11)), kind: 'permission', answered: true, answeredAt: ms(at(13)) }, { start: ms(at(2)), end: ms(at(12)), kind: 'question', answered: true }],
+      [{ start: ms(at(1)), end: ms(at(11)), kind: 'permission', answered: true, answeredAt: ms(at(13)), text: { answer: 'approved' } },
+        { start: ms(at(2)), end: ms(at(12)), kind: 'question', answered: true, text: { answer: 'ok' } }],
       undefined,
     ]);
   });

@@ -13,6 +13,7 @@ import { toDateStr, isoWeek } from './helpers';
 import { AnalyzerBase } from './analyzer-base';
 import type { EditLocIndex } from './edit-loc-diff';
 import { harnessLabel, scrubBranch, scrubLabel, scrubRepository, type ScrubContext } from './session-labels';
+import { turnIdentity } from './fork-ownership';
 import { localScrubContext } from './session-workspace-meta';
 import { resolveParentLinks, type ParentLink } from './timeline-links';
 import { addDays, dayStart, prepareTimeline } from './timeline-model';
@@ -69,6 +70,7 @@ function timelineTurn(r: SessionRequest, paired: RelayPairs, origin?: Map<Timeli
     comp: Boolean(r.compaction || r.compactions?.length),
     cr: r.aiCredits ?? 0,
     tok: r.loggedTokens ?? Math.max(0, (r.promptTokens ?? 0) + (r.completionTokens ?? 0)),
+    ...(turnIdentity(r) ? { id: turnIdentity(r) } : {}),
     ...(r.totalElapsed == null ? { noDuration: true } : {}),
     ...(waits.length ? { w: waits } : {}),
   };

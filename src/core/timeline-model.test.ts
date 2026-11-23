@@ -5,9 +5,10 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filterLanes, formatDuration, hourTicks,
+  buildFamilies, buildLanes, buildViewFamilies, createNamer, familiesInsights, familyUnattendedMs, filteredDayTotals, filterLanes, formatDuration, hourTicks,
   NO_LANE_FILTERS, peakParallel, prepareTimeline, sessionWaits, sessionWork, stepDate, timelineKpis, timelineWindow, turnTimes,
-  verdictText, VERDICTS, viewInsights, type PreparedTimeline,
+  textScope, verdictText, VERDICTS, viewInsights, type PreparedTimeline,
+  waitInWindow,
 } from './timeline-model';
 import type { TimelineDataset, TimelineSessionRecord, TimelineTurn, TurnSender } from './types/timeline-types';
 
@@ -53,6 +54,13 @@ describe('timeline model', () => {
     expect(waitsOf([turn(at(9), 10), turn(at(9, 20), 30, 'agent'), turn(at(10, 30), 1)])).toEqual([[at(9, 50), at(10, 30)]]);
     // Without a logged duration, when the work ended is unknown: no wait until a timed turn says so.
     expect(waitsOf([turn(at(9), 0, 'you', { noDuration: true }), turn(at(10), 5), turn(at(10, 30), 5)])).toEqual([[at(10, 5), at(10, 30)]]);
+  });
+
+  it('ties a wait for your next prompt to the turn whose end started it, not the latest-started one', () => {
+    const a = turn(at(10), 10, 'you', { id: 'a' });
+    const b = turn(at(10, 2), 1, 'agent', { id: 'b' });
+    const idle = sessionWaits([a, b, turn(at(10, 40), 1)]).waits.find(w => w.kind === 'idle');
+    expect([idle?.start, idle?.after?.id]).toEqual([at(10, 10), 'a']);
   });
 
   it('measures the longest unattended stretch in a family, up to your next input anywhere in it', () => {
@@ -298,5 +306,98 @@ describe('conditional coaching sentences', () => {
     expect(lane.segments).toEqual([[at(0, 0, 13), at(0, 10, 13)], [at(23, 55, 13), at(0, 0, 14)]]);
     expect(lane.agentMs).toBe(15 * MIN);
     expect(p.days).toEqual(['2024-03-13']);
+  });
+});
+
+describe('waitInWindow', () => {
+  it('takes a question asked, waited on or answered in the window, and not one that only ended at its start', () => {
+    const [from, to] = [100, 200];
+    const w = (s: number, e: number, a = true, at?: number) => ({ s, e, k: 'question' as const, a, ...(at === undefined ? {} : { at }) });
+    expect([
+      waitInWindow(w(150, 150), from, to), waitInWindow(w(50, 150), from, to), waitInWindow(w(50, 90, true, 120), from, to),
+      waitInWindow(w(50, 100, true, 80), from, to), waitInWindow(w(200, 250), from, to), waitInWindow(w(50, 60, false), from, to),
+    ]).toEqual([true, true, true, false, false, false]);
+  });
+});
+
+describe('textScope', () => {
+  it('lists each turn once: a wait’s preceding turn is often one the lane lists', () => {
+    const scope = textScope([at(9), at(18)], [{ t: at(10), id: 'a' }, { t: at(11) }, { t: at(10), id: 'a' }, { t: at(11) }, { t: at(11), id: 'b' }]);
+    expect(scope).toEqual({ from: at(9), to: at(18), turns: [{ t: at(10), id: 'a' }, { t: at(11) }, { t: at(11), id: 'b' }] });
+  });
+});
+
+describe('a dense session', () => {
+  it('builds its lane and family whatever its number of turns', () => {
+    // More values than a call can take as arguments: Math.min(...values) throws a RangeError on them.
+    // Measured agent turns between your prompts: a stretch the family ran unattended for each.
+    const prepared = (n: number) => {
+      const list = Array.from({ length: n }, (_, i) => turn(at(0) + i * 60_000, i % 2 ? 0.5 : 0, i % 2 ? 'agent' : 'you'));
+      return { list, p: prepareTimeline({ forkedSessions: 0, sessions: [session('busy', list), session('kid', [turn(at(22, 0, 14), 5, 'agent')], { parent: 0, via: 'create' })] }) };
+    };
+    const { list: turns, p } = prepared(300_000);
+    const win: [number, number] = [at(0), at(0, 0, 15 + 220)];
+    // The same pattern in 10 turns (the child is before the window): the longest unattended stretch doesn't depend on how many there are.
+    const small = prepared(10).p;
+    const smallLanes = buildLanes(small, ...win);
+    const longest = buildViewFamilies(smallLanes, small)[0].unattendedMs;
+    expect(longest).toBeGreaterThan(0);
+    const lanes = buildLanes(p, ...win);
+    expect([lanes[0].first, lanes[0].turns.length]).toEqual([at(0), 300_000]);
+    expect(lanes[0].last).toBeGreaterThanOrEqual(turns[turns.length - 1].t);
+    expect(p.stretches.get(0)!.length).toBe(150_000);
+    const families = buildViewFamilies(lanes, p);
+    expect(families[0].unattendedMs).toBe(longest);
+    expect(timelineKpis(lanes, families).unattendedMs).toBe(longest);
+    expect(viewInsights(lanes, families, createNamer(p, false), 'range', p).length).toBeGreaterThan(0);
+    const overview = buildFamilies(p);
+    expect(overview.families[0].from).toBe('2024-03-14');
+    expect(familiesInsights(overview.totals).length).toBeGreaterThan(0);
+  });
+});
+
+describe('filteredDayTotals', () => {
+  // A types on the 15th only and works alone on the 16th; B, in Claude Code, types on the 16th.
+  const p = prepareTimeline({
+    forkedSessions: 0,
+    sessions: [
+      session('a', [turn(at(9), 30, 'you'), turn(at(10, 0, 16), 20, 'agent'), turn(at(11, 0, 16), 10, 'agent')]),
+      session('b', [turn(at(14, 0, 16), 5, 'you'), turn(at(14, 40, 16), 3, 'you')], { harness: 'Claude Code' }),
+    ],
+  });
+  const dayKpis = (day: string, f = NO_LANE_FILTERS) => {
+    const lanes = filterLanes(buildLanes(p, ...timelineWindow('day', day)), f, p);
+    const k = timelineKpis(lanes, buildViewFamilies(lanes, p));
+    return { typed: k.typed, automated: k.turns - k.typed, agentMs: k.agentMs, waitMs: k.waitMs };
+  };
+  const none = { typed: 0, automated: 0, agentMs: 0, waitMs: 0 };
+
+  it('counts each day what the Day view shows with the same filters', () => {
+    for (const f of [{ ...NO_LANE_FILTERS, harness: 'Claude Code' }, { ...NO_LANE_FILTERS, youTyped: true }, { ...NO_LANE_FILTERS, hideOneTurn: true }]) {
+      const totals = filteredDayTotals(p, f);
+      for (const day of p.days) expect([day, totals.get(day) ?? none]).toEqual([day, dayKpis(day, f)]);
+    }
+    // A session counts on a day when its lane that day passes: A typed nothing on the 16th.
+    expect(filteredDayTotals(p, { ...NO_LANE_FILTERS, youTyped: true }).get('2024-03-16')).toMatchObject({ typed: 2, automated: 0 });
+    expect(filteredDayTotals(p, { ...NO_LANE_FILTERS, harness: 'Claude Code' }).has('2024-03-15')).toBe(false);
+  });
+
+  it('reads a long, busy session once, not once per day', () => {
+    // 300,000 turns over 209 days; preparing them is linear, and so must be filtering them.
+    const turns = Array.from({ length: 300_000 }, (_, i) => turn(at(0) + i * 60_000, i % 2 ? 0.5 : 0, i % 2 ? 'agent' : 'you'));
+    const data: TimelineDataset = { forkedSessions: 0, sessions: [session('busy', turns)] };
+    let started = performance.now();
+    const busy = prepareTimeline(data);
+    const prepareMs = performance.now() - started;
+    started = performance.now();
+    const totals = filteredDayTotals(busy, { ...NO_LANE_FILTERS, youTyped: true });
+    expect(performance.now() - started).toBeLessThan(prepareMs);
+    expect(totals.size).toBe(busy.days.length);
+    expect(totals.get(busy.days[1])).toEqual(busy.dayTotals.get(busy.days[1]));
+  });
+
+  it('is the unfiltered totals without filters', () => {
+    expect(filteredDayTotals(p, NO_LANE_FILTERS)).toBe(p.dayTotals);
+    for (const day of p.days) expect(p.dayTotals.get(day)).toEqual(dayKpis(day));
   });
 });

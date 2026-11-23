@@ -6,6 +6,8 @@
 /* Session names and branches as a harness logged them, made safe to display: links, email addresses, drive and
  * home paths, and the user's own names (OS account, GitHub handles) are removed. Browser-safe: no Node imports. */
 
+import { scrubSecrets } from './secret-scrub';
+
 /** What to remove from a label: the user's home directory and the names that identify them. */
 export interface ScrubContext {
   /** Home directory, replaced by `~` (after drive paths are replaced). */
@@ -128,6 +130,19 @@ export function scrubBranch(value: string, ctx: ScrubContext): string {
     out = out.replace(new RegExp(`^${escapeRegExp(name)}[/_-]`, 'i'), '');
   }
   return scrubLabel(out, ctx, MAX_BRANCH, '[name]');
+}
+
+/** Free text (a prompt, a question, your answer, an agent's message) made safe to show on this machine: links, email
+ *  addresses and credentials (see `scrubSecrets`) are replaced, the home directory becomes `~` and the user's names
+ *  become `[name]`. Line breaks and other paths stay, so the text reads as written. */
+export function scrubText(value: string, ctx: ScrubContext): string {
+  let out = scrubSecrets(value.replaceAll(/[a-z][a-z0-9+.-]{0,30}:\/\/\S+/gi, '[link]').replaceAll(/[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){1,10}/g, '[email]'));
+  if (ctx.home && ctx.home.length > 1) {
+    const home = ctx.home.replace(/[\\/]+$/, '');
+    const variants = new Set([home, home.replaceAll('\\', '/'), home.replaceAll('/', '\\')]);
+    for (const variant of variants) out = out.replace(new RegExp(escapeRegExp(variant), 'gi'), '~');
+  }
+  return removeNames(out, usableNames([...ctx.names, ...(ctx.handles ?? [])]), '[name]');
 }
 
 /** Shown when a repository or folder name is nothing but the user's name, so scrubbing left nothing. */

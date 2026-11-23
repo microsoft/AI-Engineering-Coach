@@ -346,6 +346,21 @@ describe('parseSessionFile (VS Code chat) — endState', () => {
       expect(sess?.requests[0].endState).toBeUndefined();
     });
   });
+
+  it('keeps thinking out of the reply the Timeline shows', () => {
+    const reqs = [
+      {
+        requestId: 'r1', timestamp: 1000, message: { text: 'hi' },
+        response: [{ kind: 'thinking', value: 'Weighing two options.' }, { value: 'Here it is.' }, { kind: 'thinking', value: '' }],
+        result: { metadata: { promptTokens: 50, outputTokens: 5 } },
+      },
+      { requestId: 'r2', timestamp: 2000, message: { text: 'and?' }, response: [{ kind: 'thinking', value: 'Only thinking.' }], result: {} },
+    ];
+    withChatSession(reqs, (filePath) => {
+      const sess = parseSessionFile(filePath, 'ws', 'wp', 'Local Agent');
+      expect(sess?.requests.map(r => r.replyText)).toEqual(['Here it is.', '']);
+    });
+  });
 });
 
 describe('parseSessionFile token extraction', () => {

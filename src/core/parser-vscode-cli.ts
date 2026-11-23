@@ -35,7 +35,7 @@ import {
 } from './edit-tool-diff';
 import { recordedTools, recordedToolFiles, recordedInvestigation, recordedWebDomains } from './curiosity-activity';
 import { imageReferencesFromAttachments, imageReferencesFromVariables, imageRequestIndex, type ImageReference, type ImageRequestMatch } from './image-data';
-import type { NonHumanKind, UserWait } from './types';
+import type { NonHumanKind, UserWait, UserWaitText } from './types';
 import { cliNonHumanKind, cliRelaySenderId } from './parser-turn-kinds';
 import { NANO_AIU_PER_AI_CREDIT } from './github-app-issue-credit-model';
 import { readCliClient, readCliWorkspaceMeta } from './session-workspace-meta';
@@ -66,6 +66,8 @@ interface TurnState {
   userTs: string | null;
   agentMode: string;
   responseChunks: string[];
+  /** The agent's own messages, without the code that edits wrote (which `responseChunks` also holds). */
+  agentMessages: string[];
   toolNames: Set<string>;
   investigationDelegations: Set<'research' | 'explore'>;
   webDomains: Set<string>;
@@ -150,6 +152,8 @@ interface CLIParseState {
   humanRequestIds: Map<string, string>;
   /** Keys with a `human_response.recorded` event. */
   humanResponses: Map<string, number | null>;
+  /** The answer text a `human_response.recorded` event logged, by key. */
+  humanAnswers: Map<string, string>;
   /** Waits answered before the first turn; the first turn takes them. */
   earlyWaits: UserWait[];
 }
@@ -166,6 +170,7 @@ function freshTurn(userMsg: string, userTs: string | null, agentMode: string, re
     userTs,
     agentMode,
     responseChunks: [],
+    agentMessages: [],
     toolNames: new Set(),
     investigationDelegations: new Set(),
     webDomains: new Set(),
@@ -269,6 +274,7 @@ function flushTurn(state: CLIParseState): void {
   const respTs = turn.lastAssistantTs ? new Date(turn.lastAssistantTs).getTime() : null;
   const firstProgress = turn.firstToolTs && msgTs ? turn.firstToolTs - msgTs : null;
   const responseText = turn.responseChunks.filter(Boolean).join('\n\n');
+  const replyText = turn.agentMessages.filter(Boolean).join('\n\n');
 
   const requestId = turn.lastAssistantId || `${state.sessionId}:cli:${state.requests.length}`;
   const request = createRequest({
@@ -278,6 +284,7 @@ function flushTurn(state: CLIParseState): void {
     timestamp: msgTs,
     messageText: turn.userMsg,
     responseText,
+    replyText,
     agentName: harnessName(state),
     agentMode: turn.agentMode || 'agent',
     modelId: turn.modelId || state.currentModelId,
@@ -360,11 +367,15 @@ interface OpenUserWait {
   nextTs?: number;
   /** The relayed request's ID (`relay_session_input`'s `request_id`). */
   requestId?: string;
+  text?: UserWaitText;
 }
 
-function openUserWait(state: CLIParseState, key: string, start: number | null, wait: Pick<OpenUserWait, 'kind' | 'requestId'>): void {
+function openUserWait(state: CLIParseState, key: string, start: number | null, wait: Pick<OpenUserWait, 'kind' | 'requestId' | 'text'>): void {
   if (start !== null && key && !key.endsWith(':')) {
-    state.openWaits.set(key, { start, kind: wait.kind, owner: state.turn ? state.requests.length : -1, ...(wait.requestId ? { requestId: wait.requestId } : {}) });
+    state.openWaits.set(key, {
+      start, kind: wait.kind, owner: state.turn ? state.requests.length : -1,
+      ...(wait.requestId ? { requestId: wait.requestId } : {}), ...(wait.text ? { text: wait.text } : {}),
+    });
   }
 }
 
@@ -375,36 +386,119 @@ function waitRequestId(state: CLIParseState, key: string, open: OpenUserWait): P
   return requestId ? { requestId } : {};
 }
 
+/** A text field when it holds something. */
+function textField<K extends keyof UserWaitText>(key: K, value: UserWaitText[K] | undefined): Partial<UserWaitText> {
+  if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) return {};
+  const field: Partial<UserWaitText> = { [key]: value };
+  return field;
+}
+
+/** The agent's last message in the turn in progress: what it said before it stopped. */
+function lastAgentMessage(state: CLIParseState): string | undefined {
+  const chunks = state.turn?.agentMessages.filter(c => c.trim());
+  return chunks?.length ? chunks[chunks.length - 1] : undefined;
+}
+
+/** An `ask_user` question with its choices, or a relayed question's context, and what the agent said before it. */
+function questionText(args: Record<string, unknown>, relay: boolean, state: CLIParseState): UserWaitText {
+  const choices = Array.isArray(args.choices) ? args.choices.filter((c): c is string => typeof c === 'string') : undefined;
+  return {
+    ...textField('ask', str(relay ? args.context : args.question).trim()),
+    ...textField('choices', choices),
+    ...textField('before', lastAgentMessage(state)),
+  };
+}
+
+/** Your answer in a question tool's result: Copilot's `User selected: …`/`User responded: …`, or a relay's `answer`
+ *  (with the child's question). Nothing for a failed or interrupted call. */
+function questionAnswerText(data: Record<string, unknown>): UserWaitText {
+  if (data.success === false) return {};
+  const result = recordValue(data.result);
+  const content = str(result?.content ?? data.result).trim();
+  if (content.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(content);
+      if (isRecord(parsed)) return { ...textField('ask', str(parsed.question).trim()), ...textField('answer', str(parsed.answer).trim()) };
+    } catch {
+      return textField('answer', content);
+    }
+  }
+  return textField('answer', content.replace(/^User (selected|responded):\s*/, ''));
+}
+
+/** What a permission prompt asked for: the command, path, URL or extension capability, the kind of request and the
+ *  agent's stated intention. */
+function permissionText(data: Record<string, unknown>): UserWaitText {
+  const request = recordValue(data.permissionRequest) ?? recordValue(data.promptRequest) ?? {};
+  const capabilities = Array.isArray(request.capabilities) ? request.capabilities.filter((c): c is string => typeof c === 'string') : [];
+  const extension = str(request.extensionName) ? `${str(request.extensionName)}${capabilities.length ? `: ${capabilities.join(', ')}` : ''}` : '';
+  const mcp = str(request.serverName) ? `${str(request.serverName)}: ${str(request.toolTitle) || str(request.toolName)}` : '';
+  const ask = [request.fullCommandText, request.path, request.fileName, request.url, mcp, request.toolName, extension].map(v => str(v).trim()).find(Boolean);
+  const intention = str(request.intention).trim() || str(request.toolDescription).trim();
+  return { ...textField('ask', ask), ...textField('tool', str(request.kind)), ...textField('intention', intention) };
+}
+
 /** The question or permission prompt `key` was resolved at `end`. The turn was stopped on it either way, so it is
  *  kept, even at zero duration; it is `answered` with evidence that you answered (the result, or a
  *  `human_response.recorded` event for it, which can come before or after). A decision a policy made (`automatic`)
  *  stopped nothing a person was asked about and is dropped. */
-function closeUserWait(state: CLIParseState, key: string, end: number | null, answered: boolean, automatic = false): void {
+function closeUserWait(state: CLIParseState, key: string, end: number | null, answered: boolean, automatic = false, result: UserWaitText = {}): void {
   const open = key ? state.openWaits.get(key) : undefined;
   if (!open) return;
   state.openWaits.delete(key);
+  // A recorded answer belongs to this wait alone: a later one that reuses its key starts without it.
+  const { answeredAt, requestId, recorded } = takeHumanResponse(state, key, open);
   if (end === null || end < open.start || automatic) return;
-  const answeredAt = state.humanResponses.get(key);
+  const text = { ...open.text, ...result, ...(recorded !== undefined && !result.answer ? { answer: recorded } : {}) };
   const wait: UserWait = {
-    start: open.start, end, kind: open.kind, answered: answered || state.humanResponses.has(key), ...(answeredAt != null ? { answeredAt } : {}),
-    ...waitRequestId(state, key, open),
+    start: open.start, end, kind: open.kind, answered: answered || answeredAt !== undefined, ...(answeredAt != null ? { answeredAt } : {}),
+    ...requestId, ...(Object.keys(text).length ? { text } : {}),
   };
   state.closedWaits.set(key, wait);
   attachUserWait(state, wait, open.owner);
 }
 
+/** The record of your answer to the wait `key`, taken as the wait closes. `answeredAt` is undefined without a record,
+ *  null when the record has no time. */
+function takeHumanResponse(state: CLIParseState, key: string, open: OpenUserWait): { answeredAt: number | null | undefined; requestId: Partial<UserWait>; recorded: string | undefined } {
+  const out = {
+    answeredAt: state.humanResponses.has(key) ? state.humanResponses.get(key) ?? null : undefined,
+    requestId: waitRequestId(state, key, open),
+    recorded: state.humanAnswers.get(key),
+  };
+  state.humanResponses.delete(key);
+  state.humanRequestIds.delete(key);
+  state.humanAnswers.delete(key);
+  return out;
+}
+
+/** The closed wait a record of your answer on `key` belongs to: none while a wait is open on the key, or when the record
+ *  is for another request than the closed wait's (a later wait reusing the key, logged before that wait's own entry). */
+function closedWaitFor(state: CLIParseState, key: string, requestId: string): UserWait | undefined {
+  if (state.openWaits.has(key)) return undefined;
+  const closed = state.closedWaits.get(key);
+  return closed && !(requestId && closed.requestId && closed.requestId !== requestId) ? closed : undefined;
+}
+
+/** A record of your answer goes to the wait still open on its key, kept until that closes; else to the wait it
+ *  closed (it can come before or after the result). A record for another request than the closed wait's is kept for
+ *  the later wait it belongs to (`closedWaitFor`). */
 function recordHumanResponse(data: Record<string, unknown>, state: CLIParseState, at: number | null): void {
+  const answer = str(recordValue(data.response)?.answer).trim();
   for (const key of [str(data.toolCallId), data.requestId ? `permission:${str(data.requestId)}` : '']) {
     if (!key) continue;
-    if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
     const requestId = key === str(data.toolCallId) ? str(data.requestId) : '';
-    if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
-    const wait = state.closedWaits.get(key);
+    const wait = closedWaitFor(state, key, requestId);
     if (wait) {
       wait.answered = true;
       if (wait.answeredAt === undefined && at !== null) wait.answeredAt = at;
       if (requestId && wait.kind === 'question') wait.requestId ??= requestId;
+      if (answer && !wait.text?.answer) wait.text = { ...wait.text, answer };
+      continue;
     }
+    if (!state.humanResponses.has(key)) state.humanResponses.set(key, at);
+    if (requestId && !state.humanRequestIds.has(key)) state.humanRequestIds.set(key, requestId);
+    if (answer) state.humanAnswers.set(key, answer);
   }
 }
 
@@ -614,7 +708,10 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {
   noteSessionToolCall(state, data, eventTime(ev));
   if (isToolNamed(toolName, QUESTION_TOOLS)) {
     const relay = isToolNamed(toolName, ['relay_session_input']);
-    openUserWait(state, str(data.toolCallId), eventTime(ev), { kind: relay ? 'relay' : 'question', requestId: relay ? str(recordValue(data.arguments)?.request_id) : '' });
+    openUserWait(state, str(data.toolCallId), eventTime(ev), {
+      kind: relay ? 'relay' : 'question', requestId: relay ? str(recordValue(data.arguments)?.request_id) : '',
+      text: questionText(recordValue(data.arguments) ?? {}, relay, state),
+    });
   }
   const turn = state.turn;
   if (!turn) return;
@@ -752,7 +849,7 @@ function handleToolExecutionComplete(ev: CLIEvent, state: CLIParseState): void {
   const data = ev.data || {};
   recordStartedSessions(data, state);
   const toolCallId = str(data.toolCallId);
-  closeUserWait(state, toolCallId, eventTime(ev), questionAnswered(data));
+  if (state.openWaits.has(toolCallId)) closeUserWait(state, toolCallId, eventTime(ev), questionAnswered(data), false, questionAnswerText(data));
   const turn = state.turn;
   if (!turn) return;
   const pending = toolCallId ? turn.pendingToolEdits.get(toolCallId) : undefined;
@@ -797,7 +894,10 @@ function handleAssistantMessage(ev: CLIEvent, state: CLIParseState): void {
     }
     else if (turn.answerEvidence === 'legacy') turn.answerEvidence = 'missing';
   }
-  if (content) turn.responseChunks.push(content);
+  if (content) {
+    turn.responseChunks.push(content);
+    turn.agentMessages.push(content);
+  }
   turn.lastAssistantTs = ev.timestamp || turn.lastAssistantTs;
   turn.lastAssistantId = str(ev.id) || turn.lastAssistantId;
 
@@ -923,10 +1023,11 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       handleToolExecutionComplete(ev, state);
       return;
     case 'permission.requested':
-      openUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), { kind: 'permission' });
+      openUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), { kind: 'permission', text: permissionText(ev.data || {}) });
       return;
     case 'permission.completed':
-      closeUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), permissionDecidedByYou(ev.data || {}), permissionDecidedByPolicy(ev.data || {}));
+      closeUserWait(state, `permission:${str(ev.data?.requestId)}`, eventTime(ev), permissionDecidedByYou(ev.data || {}), permissionDecidedByPolicy(ev.data || {}),
+        textField('answer', str(recordValue(ev.data?.result)?.kind)));
       return;
     case 'external_tool.requested':
       noteSessionToolCall(state, ev.data || {}, eventTime(ev));
@@ -941,6 +1042,7 @@ function handleCliEvent(ev: CLIEvent, state: CLIParseState, wsId: string): void 
       if (state.turn && ev.data?.success === true && typeof ev.data.summary === 'string' && ev.data.summary.trim()) {
         state.turn.answerEvidence = 'final';
         if (!state.turn.responseChunks.includes(ev.data.summary)) state.turn.responseChunks.push(ev.data.summary);
+        if (!state.turn.agentMessages.includes(ev.data.summary)) state.turn.agentMessages.push(ev.data.summary);
         state.turn.lastAssistantTs = ev.timestamp || state.turn.lastAssistantTs;
       }
       return;
@@ -994,6 +1096,7 @@ function createInitialCliState(wsId: string, editLocIndex?: EditLocIndex): CLIPa
     closedWaits: new Map(),
     humanRequestIds: new Map(),
     humanResponses: new Map(),
+    humanAnswers: new Map(),
     earlyWaits: [],
   };
 }
@@ -1014,6 +1117,7 @@ function closeUnresolvedWaits(state: CLIParseState): void {
     attachUserWait(state, {
       start: open.start, end: attested ? answeredAt : open.nextTs ?? open.start, kind: open.kind, answered: state.humanResponses.has(key),
       ...(answeredAt != null ? { answeredAt } : {}), ...waitRequestId(state, key, open),
+      ...(open.text ? { text: { ...open.text, ...textField('answer', state.humanAnswers.get(key)) } } : {}),
     }, open.owner);
   }
 }
