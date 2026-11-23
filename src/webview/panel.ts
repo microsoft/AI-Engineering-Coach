@@ -12,7 +12,6 @@ import { saveSidebarStats } from '../core/cache';
 import { clearCache, findLogsDirs, parseAllLogsViaWorker, ParseResult, type LoadProgress } from '../core/parser';
 import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
-import { computeSessionTotals } from '../core/session-totals';
 import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
 import { createProgressThrottle, pickProgressTotals } from './panel-progress-throttle';
@@ -206,8 +205,9 @@ export class DashboardPanel {
         runtimeDebug('panel', 'loadData-cache-hit');
         this.parseResult = panelCache.result;
         this.analyzer = panelCache.analyzerInstance;
-        // Reopened during or after analytics: no parse runs, so send the totals the parse found.
-        const totals = { sessions: this.parseResult.sessions.length, ...computeSessionTotals(this.parseResult.sessions, this.parseResult.editLocIndex) };
+        // Reopened during or after analytics: no parse runs, so send the totals the parse reported
+        // (stored with the cache, so nothing is recounted here).
+        const totals = { ...panelCache.totals, sessions: this.parseResult.sessions.length };
         sendProgress({ phase: 4, detail: 'Computing analytics', pct: 90, ...totals });
         await panelCache.analyticsReady;
         if (this.disposed) return;
@@ -261,7 +261,8 @@ export class DashboardPanel {
           phase: 4, detail, pct: 90 + pct / 10, sessions: sessionCount,
         });
       }, fork);
-      panelCache.store(this.parseResult, this.analyzer, analyticsReady);
+      const { sessions: _sessions, ...parseTotals } = pickProgressTotals(this.lastProgress);
+      panelCache.store(this.parseResult, this.analyzer, analyticsReady, parseTotals);
       await analyticsReady;
       const warmUpMs = Date.now() - tWarmUp;
       runtimeDebug('panel', 'warmUp-done', `elapsedMs=${Date.now() - t0}`);
