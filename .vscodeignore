@@ -27,6 +27,7 @@ test-results/**
 # Docs scaffolding (only publish README + LICENSE + dist)
 README.github.md
 CHANGELOG.github.md
+*.aic-staging
 changelog.d/**
 SECURITY.md
 

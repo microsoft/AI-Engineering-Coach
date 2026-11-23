@@ -27,16 +27,18 @@ npm run package
 `npm run package` runs [`scripts/package-readme-swap.mjs`](../scripts/package-readme-swap.mjs),
 which:
 
-1. Renames the GitHub-facing `README.md` to `README.github.md`.
-2. Copies `README.extension.md` into `README.md` (this is the README the Marketplace shows).
+1. Computes the build stamp and the dated changelog (`CHANGELOG.md` plus the `changelog.d/`
+   fragments), before touching any file, so the swap doesn't mark the package as built from
+   uncommitted changes. The stamp reaches the nested build through `AIC_BUILD_INFO`.
+2. Stages `README.extension.md` (the README the Marketplace shows) and the dated changelog, then
+   parks the originals as `README.github.md` and `CHANGELOG.github.md` and moves the staged files
+   into place.
 3. Runs `vsce package --allow-missing-repository --no-dependencies`, which itself triggers the
    `vscode:prepublish` script → `npm run build` → `node esbuild.mjs` to bundle into
    `dist/extension.js`.
-4. Restores the original `README.md` regardless of build success.
-
-Before step 1 it computes the build stamp and hands it to the nested build through the
-`AIC_BUILD_INFO` environment variable, so the temporary README swap doesn't mark the package as
-built from uncommitted changes.
+4. Restores both originals whichever step fails, and says which file to rename back by hand if a
+   restore itself fails. If a previous run was killed mid-way, the next run first restores the
+   parked originals instead of overwriting them.
 
 The `--no-dependencies` flag is required because runtime dependencies are bundled into
 `dist/extension.js` by esbuild; `node_modules/` is excluded via `.vscodeignore`.
