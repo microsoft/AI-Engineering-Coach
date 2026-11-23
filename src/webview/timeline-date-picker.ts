@@ -110,9 +110,12 @@ function afterDraw(root: Element): void {
     root.querySelector<HTMLElement>('#tlxDateLabel')?.focus();
   }
   // A month button disabled at the first or last loaded month drops focus: it goes to the month's day reached by Tab.
+  // Chromium moves focus off a control that turns disabled only at its next frame, so one still on it has lost it too.
   if (ui.keepFocus) {
     ui.keepFocus = false;
-    if (ui.open && !document.activeElement?.closest('#tlxCal')) root.querySelector<HTMLElement>('#tlxCal button[data-date][tabindex="0"]')?.focus();
+    const active = document.activeElement;
+    const lost = !active?.closest('#tlxCal') || (active instanceof HTMLButtonElement && active.disabled);
+    if (ui.open && lost) root.querySelector<HTMLElement>('#tlxCal button[data-date][tabindex="0"]')?.focus();
   }
 }
 

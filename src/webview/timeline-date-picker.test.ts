@@ -84,6 +84,18 @@ describe('Timeline date picker, moving around the calendar', () => {
     expect(page.draws).toBe(0);
     expect(page.picked).toEqual([]);
   });
+
+  it('moves focus to a day when the month button it was on turns disabled, before the browser drops it', async () => {
+    const { $ } = mountPage();
+    $('#tlxDateLabel')!.click();
+    await settle();
+    // April holds the first loaded day: from May, ‹ reaches it and can go no further.
+    $('#tlxCalPrev')!.focus();
+    $('#tlxCalPrev')!.click();
+    await settle();
+    expect($<HTMLButtonElement>('#tlxCalPrev')!.disabled).toBe(true);
+    expect((document.activeElement as HTMLElement).dataset.date).toBe('2026-04-20');
+  });
 });
 
 describe('Timeline date picker, picking and closing', () => {
