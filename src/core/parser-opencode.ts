@@ -5,10 +5,17 @@
 
 /* OpenCode session parser
  *
- * Data layout (macOS):
+ * Data layout (macOS, legacy JSON storage):
  *   ~/.local/share/opencode/storage/session/global/<session-id>.json   -- session metadata
  *   ~/.local/share/opencode/storage/message/<session-id>/<msg-id>.json -- message metadata
  *   ~/.local/share/opencode/storage/part/<msg-id>/<part-id>.json       -- content parts (text, tool, step-start/finish)
+ *
+ * Current OpenCode versions instead store the same data in a SQLite database:
+ *   ~/.local/share/opencode/opencode.db (or opencode-<id>.db)
+ * with `session`, `message`, and `part` tables. `message`/`part` rows carry their JSON payload
+ * in a `data` column, with id/session/message linkage in dedicated columns. The database is
+ * opened read-only via `node:sqlite` (Node >= 22.5); when unavailable, only the legacy layout
+ * is read. Both layouts describe the same shapes below.
  *
  * Sessions have: id, slug, version, projectID, directory, title, time.created/updated
  * Messages have: id, sessionID, role (user|assistant), time, agent, model {providerID, modelID}, tokens, cost
