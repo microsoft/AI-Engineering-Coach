@@ -214,7 +214,8 @@ export function recordLoadingProgress(msg: LoadingProgress, now = Date.now()): v
   s.etaAt = now;
 }
 
-function tickClock(now = Date.now()): void {
+/** Elapsed and time left; on the 1 s timer also the drawer's running step time and throughput. */
+function tickClock(now = Date.now(), refreshDrawer = true): void {
   const s = state;
   if (!s || !byId('loading-time')) return;
   if (s.ready || s.phase < 0) {
@@ -228,9 +229,17 @@ function tickClock(now = Date.now()): void {
     if (left > 0.5) text += ` · ${formatTimeLeft(left)}`;
   }
   setText('loading-time', text);
-  // The running step's time moves even when no message arrives (analytics reports only its
-  // start and end).
-  if (byId('loading-details')?.hidden === false) renderPhaseList(s, now);
+  // The running step's time and the throughput move even when no message arrives (analytics
+  // reports only its start and end; a large workspace can take seconds).
+  if (refreshDrawer && byId('loading-details')?.hidden === false) {
+    renderPhaseList(s, now);
+    renderThroughput(s, now);
+  }
+}
+
+function renderThroughput(s: ScreenState, now: number): void {
+  const series = s.rate.series(now);
+  updateThroughput(series, series.length > 0 ? s.rate.recent(now) : undefined, s.rateUnit);
 }
 
 function nowLine(s: ScreenState): { text: string; folder?: string } {
@@ -359,12 +368,11 @@ export function renderLoadingScreen(now = Date.now()): void {
   }
   renderStepper(s);
   renderHealth(s);
-  tickClock(now);
+  tickClock(now, false);
   if (s.telemetry) updateTelemetry(s.telemetry, now);
   if (byId('loading-details')?.hidden !== false) return;
   renderPhaseList(s, now);
-  const series = s.rate.series(now);
-  updateThroughput(series, series.length > 0 ? s.rate.recent(now) : undefined, s.rateUnit);
+  renderThroughput(s, now);
   renderActivity();
 }
 

@@ -203,3 +203,24 @@ describe('details drawer clock', () => {
     }
   });
 });
+
+describe('details drawer throughput while idle', () => {
+  it('lets the rate fall back to zero when no item finishes for a while', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      mountLoadingScreen(content, memoryStore(true), 0);
+      for (let i = 1; i <= 6; i++) {
+        recordLoadingProgress({ phase: 2, pct: 10 + i, item: { kind: 'workspace', index: i, total: 50, folder: 'api', path: '~/api', status: 'parsed', ms: 5, sessions: 1 } }, i * 100);
+      }
+      vi.setSystemTime(600);
+      renderLoadingScreen(600);
+      expect(text('tg-rate')).toBe('2.0 workspaces/s');
+      vi.advanceTimersByTime(5000);
+      expect(text('tg-rate')).toBe('0.0 workspaces/s');
+    } finally {
+      disposeLoadingScreen();
+      vi.useRealTimers();
+    }
+  });
+});
