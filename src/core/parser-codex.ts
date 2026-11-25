@@ -104,6 +104,8 @@ interface CodexParseState {
   curTotalInput: number;
   curTotalOutput: number;
   curTotalCachedInput: number;
+  /** Cumulative `cache_write_input_tokens`, a part of `input_tokens`; 0 when a build doesn't log it. */
+  curTotalCacheWrite: number;
   /** Cumulative reasoning tokens (`reasoning_output_tokens`); `null` until a build reports them. */
   curTotalReasoning: number | null;
   /** Cumulative `total_tokens`; a model call is counted only when it grows. */
@@ -218,6 +220,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     curTotalInput: 0,
     curTotalOutput: 0,
     curTotalCachedInput: 0,
+    curTotalCacheWrite: 0,
     curTotalReasoning: null,
     curTotalTokens: 0,
     hasTokenData: false,
@@ -239,14 +242,15 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
 function computeModelUsage(state: CodexParseState, model: string): Record<string, ModelUsage> | undefined {
   if (!state.hasTokenData || (state.curTotalInput <= 0 && state.curTotalOutput <= 0)) return undefined;
   const billingModel = state.turnModel || model || 'untracked';
-  const uncachedInput = Math.max(0, state.curTotalInput - state.curTotalCachedInput);
+  // `input_tokens` includes both the tokens read from the cache and the tokens written to it.
+  const uncachedInput = Math.max(0, state.curTotalInput - state.curTotalCachedInput - state.curTotalCacheWrite);
   return {
     [billingModel]: {
       ...(state.curTotalCachedReported ? {} : { cacheTokensReported: false }),
       inputTokens: uncachedInput,
       outputTokens: state.curTotalOutput,
       cacheReadTokens: state.curTotalCachedInput,
-      cacheWriteTokens: 0,
+      cacheWriteTokens: state.curTotalCacheWrite,
       ...(state.curTotalReasoning == null ? {} : { reasoningTokens: Math.min(state.curTotalReasoning, state.curTotalOutput) }),
     },
   };
@@ -571,6 +575,7 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   state.curTotalInput = input;
   state.curTotalOutput = output;
   state.curTotalCachedInput = tokenCount(totalUsage.cached_input_tokens) ?? 0;
+  state.curTotalCacheWrite = tokenCount(totalUsage.cache_write_input_tokens) ?? 0;
   // Reasoning is part of the output, so both totals come from the same snapshot: one that doesn't report reasoning
   // leaves it unknown rather than setting an earlier total against a later output total.
   state.curTotalReasoning = tokenCount(totalUsage.reasoning_output_tokens);
