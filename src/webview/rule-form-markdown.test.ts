@@ -282,12 +282,13 @@ describe('mergeRuleMarkdown cleared detect logic', () => {
 describe('mergeRuleMarkdown with the rule parser\'s sections and keys', () => {
   const head = '---\nid: x\nname: X\ngroup: prompt-quality\nseverity: low\nscope: requests\n---\n';
 
-  it('reads a heading inside a code fence as a section, as the rule parser does, and edits it there', () => {
+  it('keeps a heading inside a code fence in its section, as the rule parser does, and edits the real one', () => {
     const md = `${head}\n# Description\nAn example:\n\`\`\`markdown\n# When Triggered\nFenced text.\n\`\`\`\n\n# When Triggered\nReal text.\n`;
     const fields = fullFields(md);
-    expect(fields).toMatchObject({ description: 'An example:\n```markdown', whenTriggered: parseRule(md)!.descriptionTemplate });
+    const description = 'An example:\n```markdown\n# When Triggered\nFenced text.\n```';
+    expect([fields, parseRule(md)]).toMatchObject([{ description, whenTriggered: 'Real text.' }, { description, descriptionTemplate: 'Real text.' }]);
     const merged = mergeRuleMarkdown(md, { ...fields, whenTriggered: 'New text.' }, new Set<RuleFormField>(['whenTriggered']));
-    expect(parseRule(merged)!.descriptionTemplate).toBe('New text.');
+    expect(merged).toBe(md.replace('Real text.', 'New text.'));
   });
 
   it.each<[string, string[]]>([
@@ -316,7 +317,8 @@ describe('mergeRuleMarkdown with a heading inside the detect block', () => {
   const md = [
     '---', 'id: x', 'name: X', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '',
     '# Description', 'Text', '',
-    '# Detection Logic', '```detect', 'scan: requests', '# Examples', 'match: messageLength > 0', 'check: count >= 1', '```', '',
+    // The detect block opens mid-line, so it isn't a code fence and the rule parser reads `# Examples` as a heading.
+    '# Detection Logic', 'Logic: ```detect', 'scan: requests', '# Examples', 'match: messageLength > 0', 'check: count >= 1', '```', '',
     '# Tests', '```test', '{messageLength: 5} -> triggered', '```', '',
   ].join('\n');
 

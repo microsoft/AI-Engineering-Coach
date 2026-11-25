@@ -45,6 +45,7 @@
 
 import { defaultRuleDescription } from './rule-summary';
 import { DetectionRule, RuleCondition, RuleSeverity, RuleScope, PracticeGroup, PRACTICE_GROUPS  } from './types';
+import { fencedLines } from './markdown-fences';
 import { formatInlineList, quoteScalar, readQuotedScalar, splitInlineList } from './frontmatter-values';
 
 interface ParsedFrontmatter {
@@ -171,12 +172,17 @@ function parseFrontmatter(raw: string): { frontmatter: ParsedFrontmatter; body: 
 }
 
 function parseSection(body: string, heading: string): string {
-  // Find the heading, then capture everything until the next heading or true end-of-string.
-  // We avoid the 'm' flag on `$` which would stop at end-of-line; instead we use
-  // a negative lookahead `(?![\s\S])` as a true end-of-string anchor.
-  const regex = new RegExp(`^#+\\s+${heading}\\s*\\n([\\s\\S]*?)(?=^#+\\s|(?![\\s\\S]))`, 'mi');
-  const match = body.match(regex);
-  return match ? match[1].trim() : '';
+  // Find the heading, then capture everything until the next heading or the end of the body. Headings inside
+  // code fences belong to the section around them.
+  const lines = body.split('\n');
+  const fenced = fencedLines(lines);
+  const isHeading = lines.map((line, i) => !fenced[i] && /^#+(\s|$)/.test(line));
+  const headingRe = new RegExp(`^#+\\s+${heading}\\s*$`, 'i');
+  const start = lines.findIndex((line, i) => isHeading[i] && headingRe.test(line));
+  if (start < 0) return '';
+  let end = start + 1;
+  while (end < lines.length && !isHeading[end]) end++;
+  return lines.slice(start + 1, end).join('\n').trim();
 }
 
 function parseDetectionLogic(body: string): RuleCondition[] {

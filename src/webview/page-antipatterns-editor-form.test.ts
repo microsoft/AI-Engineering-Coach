@@ -223,7 +223,8 @@ describe('Rule Editor sections inside the detect block', () => {
   const md = [
     '---', 'id: inside-detect', 'name: Inside detect', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '',
     '# Description', 'Text', '',
-    '# Detection Logic', '```detect', 'scan: requests', '# Examples', 'match: messageLength > 0', 'check: count >= 1', '```', '',
+    // The detect block opens mid-line, so it isn't a code fence and the rule parser reads `# Examples` as a heading.
+    '# Detection Logic', 'Logic: ```detect', 'scan: requests', '# Examples', 'match: messageLength > 0', 'check: count >= 1', '```', '',
   ].join('\n');
 
   it('makes them read-only, saves the other edits with the detect block, and unlocks them for the next rule', async () => {
@@ -263,6 +264,21 @@ describe('Rule Editor Test Rule', () => {
     expect(await testRuleLive(markdown)).toEqual(direct);
     expect(results.textContent).toContain(`TRIGGERED`);
     expect(results.textContent).toContain(`(${direct.occurrences} / ${direct.total})`);
+  });
+
+  it('replaces the loading text with the result on every run of a rule without thresholds', async () => {
+    const md = [
+      '---', 'id: no-thresholds', 'name: No thresholds', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', '',
+      '# Detection Logic', '```detect', 'scan: requests', 'match: true', 'check: count >= 1', '```', '',
+    ].join('\n');
+    const page = await renderPage();
+    await openRule(page, 'no-thresholds', md);
+    const results = page.querySelector<HTMLElement>('#rule-test-results')!;
+    for (let run = 0; run < 2; run++) {
+      page.querySelector<HTMLButtonElement>('#rule-editor-test')!.click();
+      await vi.waitFor(() => expect(results.textContent).toContain('TRIGGERED'));
+      expect(results.textContent).not.toContain('Running rule');
+    }
   });
 
   it('runs the thresholds edited in the form', async () => {
