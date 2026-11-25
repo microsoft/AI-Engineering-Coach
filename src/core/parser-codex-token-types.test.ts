@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Codex `token_count` events: per-call context, the reported context window and reasoning tokens.
+/* Codex `token_count` events: per-call context, the reported context window, reasoning tokens and cache writes.
  * Synthetic fixtures follow the Codex rollout format (`info.total_token_usage`, `info.last_token_usage`,
  * `info.model_context_window`); no local Codex logs were available to copy shapes from. */
 
@@ -111,6 +111,29 @@ describe('Codex token types', () => {
       const usage = parseCodexSessions(sessionsDir)[0].modelUsage?.['gpt-5.3-codex'];
       expect(usage).toMatchObject({ outputTokens: 2_000 });
       expect(usage).not.toHaveProperty('reasoningTokens');
+    });
+  });
+
+  it('reports cache_write_input_tokens as cache writes, not as uncached input', () => {
+    withCodexFile([
+      ...HEADER,
+      { type: 'event_msg', timestamp: '2026-10-30T10:00:00Z', payload: { type: 'user_message', message: 'hi' } },
+      // The numbers of Codex's own `parses_cache_write_token_usage` test: input includes cache reads and cache writes.
+      tokenCount('2026-10-30T10:00:05Z', { ...usage(100, 40, 10, 5), cache_write_input_tokens: 60 }, null),
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].modelUsage?.['gpt-5.3-codex'])
+        .toEqual({ inputTokens: 0, outputTokens: 10, cacheReadTokens: 40, cacheWriteTokens: 60, reasoningTokens: 5 });
+    });
+  });
+
+  it('keeps the totals of a rollout that predates cache_write_input_tokens', () => {
+    withCodexFile([
+      ...HEADER,
+      { type: 'event_msg', timestamp: '2026-10-30T10:00:00Z', payload: { type: 'user_message', message: 'hi' } },
+      tokenCount('2026-10-30T10:00:05Z', usage(100, 40, 10, 5), null),
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0].modelUsage?.['gpt-5.3-codex'])
+        .toEqual({ inputTokens: 60, outputTokens: 10, cacheReadTokens: 40, cacheWriteTokens: 0, reasoningTokens: 5 });
     });
   });
 });
