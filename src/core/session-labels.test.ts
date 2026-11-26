@@ -29,6 +29,12 @@ describe('session labels', () => {
     expect(scrubLabel('Fix C:\\Users\\Jane Doe\\Secret Project', ctx)).toBe('Fix [path]');
     expect(scrubLabel('Fix /Users/Jane Doe/Secret Project/notes.txt now', ctx)).toBe('Fix [path] now');
     expect(scrubLabel('Fix /home/Jane Doe/Secret Project', ctx)).toBe('Fix [path]');
+    // Spaces in the first segment too, up to a word with a file extension; a slash command and its words stay.
+    expect(scrubLabel('Fix /Secret Project/notes.txt now', { names: [] })).toBe('Fix [path] now');
+    expect(scrubLabel('Run /fix and/or check /Secret Project/notes.txt', { names: [] })).toBe('Run /fix and/or check [path]');
+    expect(scrubLabel('Then /fix the build and/or tests', { names: [] })).toBe('Then /fix the build and/or tests');
+    expect(scrubLabel('Run /review then see /a/b.ts', { names: [] })).toBe('Run /review then see [path]');
+    expect(scrubLabel('Ship /v1.2 notes/today', { names: [] })).toBe('Ship /v1.2 notes/today');
     expect(scrubLabel('See C:\\Users\\jane\\My Docs\\file name.txt now', ctx)).toBe('See [path] now');
     expect(scrubLabel('model "/Users/jane doe/models/x" here', { names: [] })).toBe('model [path] here');
     expect(scrubLabel('weights=/opt/jane/w.bin', { names: [] })).toBe('weights=[path]');

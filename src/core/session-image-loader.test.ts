@@ -129,6 +129,36 @@ describe('image worker lifecycle', () => {
     expect(await newer).toBeNull();
   });
 
+  it('stops a lane-text read still running when a newer lane is read, so the newer one doesn’t wait behind it', async () => {
+    const workers: FakeWorker[] = [];
+    const loader = new SessionImageLoader(() => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    });
+    loaders.push(loader);
+    const text = (from: number) => ({ type: 'timeline-text' as const, source, sessionId: 'session', scope: { from, to: from + 1, turns: [] }, labels: { names: [] } });
+    const older = loader.loadTimelineText(text(1));
+    await Promise.resolve();
+    expect(workers[0].requests).toHaveLength(1);
+    const newer = loader.loadTimelineText(text(2));
+    expect(await older).toEqual({ superseded: true });
+    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(workers[1].requests.map(r => (r.type === 'timeline-text' ? r.scope.from : r.type))).toEqual([2]);
+    workers[1].emit('message', { type: 'timeline-text', text: null });
+    expect(await newer).toBeNull();
+    // An image or detail read that is running isn't stopped by a lane-text read.
+    const image = loader.load(source, 'session', 'image');
+    await Promise.resolve();
+    const third = loader.loadTimelineText(text(3));
+    workers[1].emit('message', { type: 'session-images', images: [] });
+    expect(await image).toEqual([]);
+    await Promise.resolve();
+    workers[1].emit('message', { type: 'timeline-text', text: null });
+    expect(await third).toBeNull();
+  });
+
   it('takes from the worker only the fields a lane shows', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const worker = new FakeWorker();

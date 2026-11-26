@@ -87,15 +87,40 @@ function unquotedPath(match: string): string {
   return '[path]' + (rest ? ' ' + rest.replaceAll(DRIVE_PATH, unquotedPath) : '');
 }
 
-/** Unquoted absolute POSIX paths of two or more segments, spaces and all (see `pathEnd`). */
+/** Where an absolute POSIX path whose first segment holds spaces could start (`/Secret Project/…`): the segment ends at
+ *  its slash, not with a space, so a slash command followed by words (`/review then see /a/b.ts`) isn't one. */
+const SPACED_POSIX_START = /(^|[\s("'`:=])\/(?=[^\s/,;)"'`](?:[^/,;)"'`\n]*[^\s/,;)"'`])?\/)/g;
+const FILE_WORD = /\.[A-Za-z0-9]{1,5}$/;
+
+/** The first unquoted absolute POSIX path of two or more segments: where it starts, its text to the end of the clause,
+ *  and the index of its last word (see `pathEnd`). A first segment with spaces counts only up to a later word with a file
+ *  extension, before any next path, and of at most 4 words, so a slash command and the text after it stay. */
+function firstPosixPath(value: string): { at: number; text: string; last: number } | null {
+  const plain = /(^|[\s("'`:=])(\/[^\s/,;)"'`]+\/[^,;)"'`\n]*)/.exec(value);
+  let best: { at: number; text: string; last: number } | null = null;
+  if (plain) {
+    const words = plain[2].split(' ');
+    best = { at: plain.index + plain[1].length, text: plain[2], last: pathEnd(words, words.findIndex((w, i) => i > 0 && w.startsWith('/'))) };
+  }
+  for (const m of value.matchAll(SPACED_POSIX_START)) {
+    const at = m.index + m[1].length;
+    if (best && at >= best.at) break;
+    const text = /^[^,;)"'`\n]*/.exec(value.slice(at))?.[0] ?? '';
+    const segmentWords = text.slice(1, text.indexOf('/', 1)).split(' ').length;
+    const words = text.split(' ');
+    const next = words.findIndex((w, i) => i > 0 && w.startsWith('/'));
+    const ext = words.findIndex((w, i) => i >= segmentWords - 1 && FILE_WORD.test(w) && (next < 0 || i < next));
+    if (segmentWords <= 4 && ext >= 0) return { at, text, last: ext };
+  }
+  return best;
+}
+
+/** Unquoted absolute POSIX paths of two or more segments, spaces and all (see `firstPosixPath`). */
 function posixPaths(value: string): string {
-  const start = /(^|[\s("'`:=])(\/[^\s/,;)"'`]+\/[^,;)"'`\n]*)/.exec(value);
-  if (!start) return value;
-  const words = start[2].split(' ');
-  const last = pathEnd(words, words.findIndex((w, i) => i > 0 && w.startsWith('/')));
-  const rest = words.slice(last + 1).join(' ');
-  const at = start.index + start[1].length;
-  return value.slice(0, at) + '[path]' + (rest ? ' ' + posixPaths(rest) : '') + posixPaths(value.slice(at + start[2].length));
+  const found = firstPosixPath(value);
+  if (!found) return value;
+  const rest = found.text.split(' ').slice(found.last + 1).join(' ');
+  return value.slice(0, found.at) + '[path]' + (rest ? ' ' + posixPaths(rest) : '') + posixPaths(value.slice(found.at + found.text.length));
 }
 
 /** A label without links, email addresses, drive or UNC paths, the home directory or the user's names. */
