@@ -416,7 +416,6 @@ export const MEMORY_PREVIEW_CHARS = 500;
  * - messageText is truncated to MEMORY_PREVIEW_CHARS (enough for all analytics).
  * - responseText is cleared entirely (session detail re-reads full text from source files
  *   via loadSessionFromDisk() for VS Code / CLI sessions).
- * - todoSnapshot is dropped (only used in the session detail view).
  *
  * Numeric fields (messageLength, responseLength, token counts) and structured fields
  * (aiCode, toolsUsed, editedFiles, …) are preserved, so analytics are unaffected.
@@ -428,7 +427,7 @@ export function stripSingleSession(session: Session): void {
       r.messageText = r.messageText.substring(0, MEMORY_PREVIEW_CHARS);
     }
     r.responseText = '';
-    if (r.todoSnapshot) r.todoSnapshot = null;
+    if (r.todoSnapshot) r.todoSnapshot = r.todoSnapshot.map(({ id, title, status }) => ({ id, title, status }));
   }
 }
 const DEVCONTAINER_PATH_RE = /(?:^|[\s=:"'`])\/workspaces\//;

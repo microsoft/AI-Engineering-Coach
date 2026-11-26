@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ContextVerdictThresholds, SessionContextDetail, TodoItem } from '../core/types';
 import { Analyzer } from '../core/analyzer';
-import { createRequest, createSession } from '../core/parser-shared';
+import { createRequest, createSession, stripSingleSession } from '../core/parser-shared';
 
 vi.mock('./shared', () => ({ COLORS: { green: '#3fb950', yellow: '#d29922', red: '#f85149', blue: '#58a6ff' } }));
 
@@ -138,6 +138,26 @@ describe('sessionChartGuides to-dos a snapshot first shows in progress or comple
     ]);
     expect(sessionChartGuides(row, THRESHOLDS).bands?.map(b => [b.label, b.xMin, b.xMax])).toEqual([
       ['\u2714 Plan', 1, 1], ['\u2714 Build', 1, 2], ['Ship', 1, 3], ['\u2714 Review', 2, 2],
+    ]);
+  });
+});
+
+describe('to-do events after the memory strip', () => {
+  it('still name each to-do item after the parser strips the session for memory', () => {
+    const request = (n: number, todoSnapshot: TodoItem[]) => createRequest({
+      requestId: `r${n}`, messageText: 'm', responseText: 'r', timestamp: Date.UTC(2026, 9, 28, 10, n), promptTokens: 10_000, completionTokens: 100,
+      toolsUsed: ['manage_todo_list'], todoSnapshot,
+    });
+    const session = createSession({
+      sessionId: 's', workspaceId: 'ws', workspaceName: 'ws', harness: 'VS Code', requests: [
+        request(0, [{ id: 1, title: 'Plan', status: 'in-progress' }, { id: 2, title: 'Build', status: 'not-started' }]),
+        request(1, [{ id: 1, title: 'Plan', status: 'completed' }, { id: 2, title: 'Build', status: 'in-progress' }]),
+      ],
+    });
+    stripSingleSession(session);
+    const [row] = new Analyzer([session]).getWorkspaceContextSessions('ws').sessions;
+    expect(row.events.map(e => [e.requestIndex, e.type, e.label])).toEqual([
+      [0, 'todo-add', 'Plan'], [0, 'todo-add', 'Build'], [1, 'todo-complete', 'Plan'], [1, 'todo-progress', 'Build'],
     ]);
   });
 });

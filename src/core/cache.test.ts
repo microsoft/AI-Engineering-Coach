@@ -20,7 +20,7 @@ import {
   DirMetas,
   ParseResult,
 } from './cache';
-import { Session } from './types';
+import { Session, TodoItem } from './types';
 import { createRequest, createSession, stripSingleSession } from './parser-shared';
 
 const tempDirs: string[] = [];
@@ -65,7 +65,7 @@ describe('stripSessionsForMemory', () => {
     expect(request.responseText).toBe('');
     expect(request.toolConfirmations).toHaveLength(1);
     expect(request.toolConfirmations[0].commandLine).toBe('npm test');
-    expect(request.todoSnapshot).toBeNull();
+    expect(request.todoSnapshot).toEqual([{ id: 1, title: 'ship fix', status: 'in-progress' }]);
   });
 
   it('preserves analytics metadata needed after stripping', () => {
@@ -103,13 +103,20 @@ describe('stripSessionsForMemory', () => {
 });
 
 describe('stripSingleSession', () => {
-  it('truncates messageText to 500 chars, clears responseText, nulls todoSnapshot', () => {
+  it('truncates messageText to 500 chars and clears responseText', () => {
     const session = makeSession();
     stripSingleSession(session);
     const request = session.requests[0];
     expect(request.messageText.length).toBe(500);
     expect(request.responseText).toBe('');
-    expect(request.todoSnapshot).toBeNull();
+  });
+
+  it('keeps only the id, title and status of each to-do item, which Context Management reads', () => {
+    const session = makeSession();
+    const request = session.requests[0];
+    request.todoSnapshot = [{ id: 1, title: 'ship fix', status: 'in-progress', description: 'x'.repeat(5000) } as TodoItem];
+    stripSingleSession(session);
+    expect(request.todoSnapshot).toEqual([{ id: 1, title: 'ship fix', status: 'in-progress' }]);
   });
 
   it('preserves length metadata and structured fields', () => {
