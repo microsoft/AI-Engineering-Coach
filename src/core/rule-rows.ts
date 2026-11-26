@@ -13,7 +13,7 @@ import { isHumanTurn } from './human-turns';
  * A request plus its session's `harness`, so a rule can count only the harnesses that log a field, and
  * `humanTurn`, so a rule can count only the turns the user typed.
  */
-export type RuleRequestRow = SessionRequest & { harness: string; humanTurn: boolean };
+export type RuleRequestRow = SessionRequest & { harness: string; humanTurn: boolean } & Partial<Pick<Session, 'sessionId' | 'workspaceName'>>;
 
 /**
  * Copies `reqs` with each request's session `harness` and `humanTurn` attached. Request objects are
@@ -29,7 +29,15 @@ export function toRuleRequestRows(
   sessions: Session[] | ReadonlyMap<SessionRequest, Session>,
 ): RuleRequestRow[] {
   const sessionOf = 'get' in sessions ? sessions : AnalyzerBase.buildRequestSessionMap(sessions);
-  return reqs.map(req => ({ ...req, harness: sessionOf.get(req)?.harness ?? carriedHarness(req), humanTurn: humanTurn(req) }));
+  return reqs.map(req => {
+    const session = sessionOf.get(req);
+    return {
+      ...req,
+      ...(session && { sessionId: session.sessionId, workspaceName: session.workspaceName }),
+      harness: session?.harness ?? carriedHarness(req),
+      humanTurn: humanTurn(req),
+    };
+  });
 }
 
 function carriedHarness(req: SessionRequest): string {

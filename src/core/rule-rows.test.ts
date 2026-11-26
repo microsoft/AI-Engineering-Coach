@@ -18,12 +18,12 @@ describe('toRuleRequestRows', () => {
   const vscode = session('Local Agent', 'c');
   const reqs = [...claude.requests, ...vscode.requests];
 
-  it('copies each request with its session harness and leaves the shared requests untouched', () => {
+  it('copies each request with its session harness and ids and leaves the shared requests untouched', () => {
     const rows = toRuleRequestRows(reqs, [claude, vscode]);
     expect(rows.map(row => [row.requestId, row.harness])).toEqual([['a', 'Claude'], ['b', 'Claude'], ['c', 'Local Agent']]);
     expect(rows[0]).not.toBe(reqs[0]);
-    expect(rows[0]).toEqual({ ...reqs[0], harness: 'Claude', humanTurn: true });
-    expect(reqs.some(request => 'harness' in request || 'humanTurn' in request)).toBe(false);
+    expect(rows[0]).toEqual({ ...reqs[0], sessionId: 'Claude', workspaceName: 'Project', harness: 'Claude', humanTurn: true });
+    expect(reqs.some(request => ['harness', 'humanTurn', 'sessionId', 'workspaceName'].some(key => key in request))).toBe(false);
   });
 
   it('derives humanTurn from the non-human marker, and treats an unmarked turn as typed', () => {
@@ -56,5 +56,10 @@ describe('toRuleRequestRows', () => {
     const rows = toRuleRequestRows(reqs, [vscode]);
     expect(rows.map(row => row.harness)).toEqual(['', '', 'Local Agent']);
     expect(toRuleRequestRows(toRuleRequestRows(reqs, [claude]), []).map(row => row.harness)).toEqual(['Claude', 'Claude', '']);
+  });
+
+  it('leaves an unresolved request without a session ID, and keeps one it already carries', () => {
+    expect(toRuleRequestRows(reqs, [vscode]).map(row => row.sessionId)).toEqual([undefined, undefined, 'Local Agent']);
+    expect(toRuleRequestRows(toRuleRequestRows(reqs, [claude]), []).map(row => row.sessionId)).toEqual(['Claude', 'Claude', undefined]);
   });
 });
