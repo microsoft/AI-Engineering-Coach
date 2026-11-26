@@ -331,6 +331,9 @@ export interface ParseContext {
   sessionSourceIndex: Map<string, SessionSource>;
   /** Running total of AI-generated lines of code (sum of all aiCode blocks). */
   aiLoc: number;
+  /** When present, filled with each workspace's project folder (also for workspaces without
+   *  sessions), so the loading screen can show it as a display path. */
+  workspaceRoots?: Map<string, string>;
 }
 
 /** Creates a SessionRequest with sensible defaults; callers only supply non-default fields. */

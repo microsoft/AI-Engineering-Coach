@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
 import type { ParseResult } from '../core/parser';
+import { createRequest } from '../core/parser-shared';
 import { DashboardPanel } from './panel';
 import { panelCache } from './panel-cache';
 
@@ -277,5 +278,39 @@ describe('host capabilities', () => {
     await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(2));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(capabilityPushes()).toHaveLength(0);
+  });
+});
+
+describe('progress totals on reopen', () => {
+  const withTotals: ParseResult = {
+    ...result,
+    sessions: [{
+      sessionId: 's1', workspaceId: 'w1', workspaceName: 'api', location: '/x', harness: 'VS Code',
+      creationDate: null, lastMessageDate: null, requestCount: 2,
+      requests: [createRequest({ messageText: 'a', responseText: 'b' }), createRequest({ messageText: 'c', responseText: 'd' })],
+    }],
+  };
+
+  it('sends the found-so-far totals when the panel reopens during analytics and when the webview reloads', async () => {
+    let finish = () => {};
+    // Totals the parse reported are stored with the cache; reopening reuses them instead of
+    // counting every session again on the extension host.
+    panelCache.store(withTotals, new Analyzer([]), new Promise<void>(resolve => { finish = resolve; }), { requests: 2, toolCalls: 0, linesOfCode: 0, filesEdited: 0 });
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4 })));
+    expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4, sessions: 1, requests: 2, toolCalls: 0 }));
+    mocks.post.mockClear();
+    mocks.receive({ type: 'ready' });
+    expect(mocks.post).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'progress', phase: 4, requests: 2 }));
+    finish();
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' })));
+  });
+
+  it('reuses the stored totals on reopen rather than recounting sessions', async () => {
+    // The stored totals differ from what a recount of these (empty) sessions would give.
+    panelCache.store(result, new Analyzer([]), Promise.resolve(), { requests: 4210, toolCalls: 12004 });
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4, requests: 4210, toolCalls: 12004 })));
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' })));
   });
 });

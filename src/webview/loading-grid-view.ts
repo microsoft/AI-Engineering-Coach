@@ -12,7 +12,7 @@ import { html, render } from './render';
 import {
   percentile,
   sessionIntensityLevel,
-  sessionTileVars,
+  sessionTileOpacity,
   parseWorkspacePlanKey,
   computeGridDimensions,
 } from './loading-grid-model';
@@ -23,6 +23,9 @@ let workspaceRendered = false;
 let workspaceSlotIndex = new Map<number, number>();
 let loadingGridResizeBound = false;
 let workspaceGroupSlots = new Map<string, number[]>();
+/** Done flag per grid position, and the first position still pending (the "now" tile). */
+let positionDone = new Uint8Array(0);
+let frontier = 0;
 
 export function layoutWorkspaceGrid(): void {
   const container = document.getElementById('loading-tile-bg');
@@ -64,13 +67,15 @@ export function renderWorkspaceGrid(plan: string[]): void {
     workspaceGroupSlots.set(item.workspaceKey, existingSlots);
   }
 
-  const gridCells = items.map(item => {
+  const gridCells = items.map((item, index) => {
     const level = sessionIntensityLevel(item.size, intensityBreakpoints);
-    const vars = sessionTileVars(level);
     const titleParts = [item.date ? item.date : '', item.workspace, item.size > 0 ? `${Math.round(item.size / 1024)} KB session` : 'session'];
-    return html`<div class="cal-cell cal-workspace-cell cal-workspace-pending" data-slot=${item.order} title=${titleParts.filter(Boolean).join(' \u2014 ')} style=${`--pending-bg:${vars.pendingBg};--pending-border:${vars.pendingBorder};--done-bg:${vars.doneBg};--done-border:${vars.doneBorder};--done-glow:${vars.doneGlow};`}></div>`;
+    const cls = `cal-cell cal-workspace-cell cal-workspace-pending${index === 0 ? ' cal-workspace-now' : ''}`;
+    return html`<div class=${cls} data-slot=${item.order} title=${titleParts.filter(Boolean).join(' \u2014 ')} style=${`--done-opacity:${sessionTileOpacity(level)};`}></div>`;
   });
-  render(html`<div class="loading-bg-grid" id="loading-bg-grid">${gridCells}</div>`, container);
+  positionDone = new Uint8Array(items.length);
+  frontier = 0;
+  render(html`<div class="loading-bg-grid" id="loading-bg-grid" aria-hidden="true">${gridCells}</div>`, container);
   container.style.display = '';
 
   requestAnimationFrame(() => layoutWorkspaceGrid());
@@ -92,8 +97,18 @@ export function updateWorkspaceCell(workspaceKey: string, detail?: string): void
   for (const slotIdx of slots) {
     const index = workspaceSlotIndex.get(slotIdx);
     const cell = index === undefined ? null : grid.children.item(index);
-    if (!(cell instanceof HTMLElement)) continue;
-    cell.className = 'cal-cell cal-workspace-cell cal-workspace-done cal-pop';
+    if (!(cell instanceof HTMLElement) || index === undefined) continue;
+    cell.className = 'cal-cell cal-workspace-cell cal-workspace-done';
+    positionDone[index] = 1;
     if (detail) cell.title = detail;
   }
+  advanceFrontier(grid);
+}
+
+/** Move the highlighted "now" tile to the first position that is still pending. */
+function advanceFrontier(grid: HTMLElement): void {
+  if (frontier >= positionDone.length || !positionDone[frontier]) return;
+  while (frontier < positionDone.length && positionDone[frontier]) frontier++;
+  const next = grid.children.item(frontier);
+  if (next instanceof HTMLElement) next.classList.add('cal-workspace-now');
 }

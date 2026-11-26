@@ -9,7 +9,10 @@
  */
 
 import { parentPort } from 'worker_threads';
+import * as os from 'os';
+import * as path from 'path';
 import { flushCacheWrites, stripSessionsForMemory } from './cache';
+import { hideAccountName, redactHomePaths } from './display-path';
 import { emitResultChunks, DEFAULT_SESSION_CHUNK_SIZE } from './parse-chunking';
 import { createAckWindow, shouldSendProgressImmediately } from './parse-worker-stream';
 import { parseAllLogsAsyncDetailed, type LoadProgress } from './parser';
@@ -141,6 +144,7 @@ onMessage(async (msg) => {
   memTimer.unref?.();
   try {
     const logsDirs = Array.isArray(msg.logsDirs) ? msg.logsDirs : [];
+    const home = os.homedir();
     runtimeDebug('parse-worker', 'message-start', `logsDirs=${logsDirs.length}`);
 
     // Throttle verbose intra-workspace progress messages, but always send
@@ -157,6 +161,9 @@ onMessage(async (msg) => {
     };
 
     const { result, dirMetas } = await parseAllLogsAsyncDetailed(logsDirs, (progress) => {
+      // Progress is shown on screen: never send the home folder (it usually holds the user
+      // name). Parser items already carry display paths; this also covers free-text details.
+      if (progress.detail) progress.detail = hideAccountName(redactHomePaths(progress.detail, home), path.basename(home));
       progress.telemetry = sampleTelemetry();
       lastProgress = progress;
       const progressMessage: ProgressMessage = { type: 'progress', progress };

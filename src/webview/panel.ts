@@ -14,6 +14,7 @@ import { hasExternalHarnessSources } from '../core/parser-harnesses';
 import { runtimeDebug } from '../core/runtime-debug';
 import { WebviewMessage, type HostCapabilitiesMessage } from '../core/types';
 import { panelCache } from './panel-cache';
+import { createProgressThrottle, pickProgressTotals } from './panel-progress-throttle';
 import { clearCatalogCache } from './panel-catalog';
 import { getDashboardHtml, getErrorHtml } from './panel-html';
 import { isCopilotModelAvailable } from './panel-llm-model';
@@ -155,49 +156,25 @@ export class DashboardPanel {
     runtimeDebug('panel', 'loadData-start');
     const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-    // Throttle progress messages to the webview: at most once per 250ms.
-    let lastProgressTime = 0;
-    let pendingProgress: Parameters<typeof sendRaw>[0] | undefined;
-    let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
+    // Throttle progress messages to the webview: at most once per 250ms, structural ones at once.
     const sendRaw = (progress: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string }) => {
       if (this.disposed) return;
-      this.lastProgress = progress;
+      // Keep the latest totals with the replayed message, so a reloaded webview shows them even
+      // when the last update (such as an analytics step) only carries the phase.
+      this.lastProgress = { ...pickProgressTotals(this.lastProgress), ...progress };
       try {
         this.panel.webview.postMessage({ type: 'progress', ...progress });
       } catch {
         // Webview may have been disposed between the flag check and the call.
       }
     };
+    const throttle = createProgressThrottle(sendRaw);
     const sendProgress = (progress: Parameters<typeof sendRaw>[0]) => {
       if (this.disposed) {
-        clearTimeout(progressFlushTimer);
+        throttle.dispose();
         return;
       }
-      const now = Date.now();
-      // Always send immediately for phase changes, workspace grid updates, and the final "Ready".
-      if (progress.phase !== pendingProgress?.phase || progress.workspacePlan || progress.workspaceDone || progress.pct >= 100) {
-        clearTimeout(progressFlushTimer);
-        progressFlushTimer = undefined;
-        sendRaw(progress);
-        lastProgressTime = now;
-        pendingProgress = progress;
-        return;
-      }
-      pendingProgress = progress;
-      if (now - lastProgressTime >= 250) {
-        clearTimeout(progressFlushTimer);
-        progressFlushTimer = undefined;
-        sendRaw(progress);
-        lastProgressTime = now;
-      } else if (!progressFlushTimer) {
-        progressFlushTimer = setTimeout(() => {
-          progressFlushTimer = undefined;
-          if (pendingProgress && !this.disposed) {
-            sendRaw(pendingProgress);
-            lastProgressTime = Date.now();
-          }
-        }, 250 - (now - lastProgressTime));
-      }
+      throttle.push(progress);
     };
 
     const safePost = (msg: Record<string, unknown>) => {
@@ -228,10 +205,13 @@ export class DashboardPanel {
         runtimeDebug('panel', 'loadData-cache-hit');
         this.parseResult = panelCache.result;
         this.analyzer = panelCache.analyzerInstance;
-        sendProgress({ phase: 4, detail: 'Computing analytics', pct: 90, sessions: this.parseResult.sessions.length });
+        // Reopened during or after analytics: no parse runs, so send the totals the parse reported
+        // (stored with the cache, so nothing is recounted here).
+        const totals = { ...panelCache.totals, sessions: this.parseResult.sessions.length };
+        sendProgress({ phase: 4, detail: 'Computing analytics', pct: 90, ...totals });
         await panelCache.analyticsReady;
         if (this.disposed) return;
-        sendProgress({ phase: 5, detail: 'Ready', pct: 100, sessions: this.parseResult.sessions.length });
+        sendProgress({ phase: 5, detail: 'Ready', pct: 100, ...totals });
         publishReady();
         runtimeDebug('panel', 'sync-timing',
           `result=warm-cache totalMs=${Date.now() - t0} sessions=${this.parseResult.sessions.length}`);
@@ -281,7 +261,8 @@ export class DashboardPanel {
           phase: 4, detail, pct: 90 + pct / 10, sessions: sessionCount,
         });
       }, fork);
-      panelCache.store(this.parseResult, this.analyzer, analyticsReady);
+      const { sessions: _sessions, ...parseTotals } = pickProgressTotals(this.lastProgress);
+      panelCache.store(this.parseResult, this.analyzer, analyticsReady, parseTotals);
       await analyticsReady;
       const warmUpMs = Date.now() - tWarmUp;
       runtimeDebug('panel', 'warmUp-done', `elapsedMs=${Date.now() - t0}`);
@@ -308,7 +289,7 @@ export class DashboardPanel {
         try { this.panel.webview.html = getErrorHtml(error instanceof Error ? error.message : 'Failed to load data'); } catch { /* disposed */ }
       }
     } finally {
-      clearTimeout(progressFlushTimer);
+      throttle.dispose();
       this.loading = false;
       this.loadCompletedAt = Date.now();
     }

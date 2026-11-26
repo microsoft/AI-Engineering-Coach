@@ -91,6 +91,8 @@ export function scanVsCodeDirs(logsDirs: string[]): {
 
 export interface WorkspaceParseProgress {
   wsName: string;
+  /** The workspace's project folder, when known. */
+  rootPath?: string;
   detail: string;
   completed: number;
   total: number;
@@ -346,6 +348,7 @@ export async function processWorkspaceEntryAsync(
   const { workspaces, sessions, editLocIndex, sessionSourceIndex } = ctx;
   const startIdx = sessions.length;
   const { entryPath, wsName, isCLI, customInstructionsBytes, workspaceRootPath } = initializeWorkspaceEntry(logsDir, wsId, harness, workspaces);
+  if (workspaceRootPath) ctx.workspaceRoots?.set(wsId, workspaceRootPath);
 
   if (isCLI) {
     const eventsFile = path.join(entryPath, 'events.jsonl');
@@ -360,6 +363,7 @@ export async function processWorkspaceEntryAsync(
         const total = Math.max(1, totalBytes);
         onProgress?.({
           wsName,
+          rootPath: workspaceRootPath,
           detail: `events.jsonl ${Math.round((bytesRead / total) * 100)}%`,
           completed: bytesRead,
           total,
@@ -411,6 +415,7 @@ export async function processWorkspaceEntryAsync(
     if (shouldReportChunk(i, chatFiles.length, chatEvery)) {
       onProgress?.({
         wsName,
+        rootPath: workspaceRootPath,
         detail: `chat ${i + 1}/${chatFiles.length}`,
         completed,
         total: totalUnits,
@@ -449,6 +454,7 @@ export async function processWorkspaceEntryAsync(
     if (shouldReportChunk(i, editStateFiles.length, editEvery)) {
       onProgress?.({
         wsName,
+        rootPath: workspaceRootPath,
         detail: `edits ${i + 1}/${editStateFiles.length}`,
         completed,
         total: totalUnits,

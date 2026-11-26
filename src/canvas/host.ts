@@ -17,6 +17,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { Analyzer } from '../core/analyzer';
 import { findLogsDirs, parseAllLogsViaWorker, type LoadProgress, type ParseResult } from '../core/parser';
 import { getRpcHandler } from '../webview/panel-rpc';
+import { pickProgressTotals } from '../webview/panel-progress-throttle';
 import { getDashboardShellHtml } from '../webview/dashboard-shell';
 import { warnCore } from '../core/log';
 import type { ForkFn } from '../core/parser-worker-host';
@@ -96,7 +97,8 @@ export function createCanvasHost(options: CanvasHostOptions): CanvasHost {
   }
 
   function sendProgress(progress: LoadProgress): void {
-    lastProgress = progress;
+    // A client that connects later gets the latest totals too, not only the last phase.
+    lastProgress = { ...pickProgressTotals(lastProgress), ...progress };
     broadcast({ type: 'progress', ...progress });
   }
 
