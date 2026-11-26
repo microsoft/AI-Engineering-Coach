@@ -119,6 +119,7 @@ const cssSources = [
   'src/webview/styles-learning.css',
   'src/webview/styles-token-types.css',
   'src/webview/styles-timeline.css',
+  'src/webview/styles-loading.css',
 ];
 
 function bundleCss() {

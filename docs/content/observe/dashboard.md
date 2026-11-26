@@ -14,6 +14,32 @@ During **Sync Sessions**, one animated progress screen stays visible until parsi
 analysis finish. The dashboard then shows activity data and practice scores together.
 Sync also starts a fresh scan when the dashboard was closed.
 
+### While it loads
+
+Each tile in the background is one session log; tiles fill in as they are read. The card in the
+middle shows:
+
+- **The current step** and a percentage that only moves forward, with a six-step bar whose active
+  step fills as it progresses.
+- **What is being read**: "Workspace N of T" with the folder name only, never the full path.
+- **Time**: elapsed time, and "about N s left" once a few seconds of progress exist. The estimate
+  comes from the recent pace, so treat it as approximate.
+- **Found so far**: sessions, prompts, tool calls, lines written by AI and files touched.
+- **Health**: parse worker heap use against its limit (amber from 65%, red from 85%) and files that
+  could not be read.
+
+On later opens, cached sessions load first. Copilot CLI and App sessions are never cached, so they
+are read again on every open; the card names this step and counts the sessions.
+
+**Show details** adds step timings, heap and throughput over time, worker CPU and memory, and a
+table of the most recent 200 folders read, with **Slow** (over 2 seconds) and **Skipped** filters.
+Paths there start with `~` instead of your home folder, and a folder named after your account (for example a home folder on a remote machine) shows as `…`; files that could not be read are listed with
+their full path in the "AI Engineer Coach" output channel. **Copy diagnostics** copies counts, timings and these
+shortened paths, never session content. The panel remembers whether details were open.
+
+When a load takes longer than 0.4 seconds, a short summary appears before the dashboard
+opens. With reduced motion turned on in your system settings, the screen does not animate.
+
 ## Practice Scores
 
 Five score cards are displayed at the top of the dashboard, each computed from the anti-pattern detection system:

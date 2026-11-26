@@ -93,8 +93,14 @@ function acquireVsCodeApi() {
         });
       }
     },
-    getState() { return window.mockWebviewState ?? {}; },
-    setState(s) { window.mockWebviewState = s; return s; }
+    // Webview state survives a reload, as in VS Code (kept per tab, so each test starts empty).
+    getState() {
+      try { return JSON.parse(sessionStorage.getItem('harness-webview-state') || '{}'); } catch { return {}; }
+    },
+    setState(s) {
+      try { sessionStorage.setItem('harness-webview-state', JSON.stringify(s)); } catch { /* storage unavailable */ }
+      return s;
+    }
   };
 }
 window.acquireVsCodeApi = acquireVsCodeApi;

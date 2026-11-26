@@ -17,11 +17,11 @@ export interface WorkspacePlanMeta {
   size: number;
 }
 
-/** Compact a running stat count for the loading ticker: 1.2M / 47K / 938. */
+/** Compact a running stat count for the loading screen: 1.2M / 47K / 9,384. */
 export function formatStatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return String(n);
+  if (n >= 10_000) return `${(n / 1_000).toFixed(0)}K`;
+  return n.toLocaleString('en-US');
 }
 
 export interface GridDimensions {
@@ -30,17 +30,20 @@ export interface GridDimensions {
   size: number;
 }
 
+/** Share of each grid stride a tile fills; the rest is the gap between tiles. */
+export const TILE_STRIDE_SHARE = 0.34;
+
 /** Compute the background tile grid layout for `n` cells inside a `width`×`height` viewport.
- * Rows/cols are chosen proportional to the viewport aspect ratio; cell size fills ~60% of the
- * available stride and is clamped to 2–16px. Returns `null` when there is nothing to lay out or
- * the viewport is too small to be meaningful (mirrors the previous inline early-return guard). */
+ * Rows/cols are chosen proportional to the viewport aspect ratio; cell size fills about a third
+ * of the available stride and is clamped to 2–16px. Returns `null` when there is nothing to lay
+ * out or the viewport is too small to be meaningful. */
 export function computeGridDimensions(n: number, width: number, height: number): GridDimensions | null {
   if (n === 0 || width < 20 || height < 20) return null;
   const aspect = width / height;
   const rows = Math.max(1, Math.ceil(Math.sqrt(n / aspect)));
   const cols = Math.max(1, Math.ceil(n / rows));
   const stride = Math.min(width / cols, height / rows);
-  const size = Math.max(2, Math.min(16, Math.floor(stride * 0.6)));
+  const size = Math.max(2, Math.min(16, Math.floor(stride * TILE_STRIDE_SHARE)));
   return { rows, cols, size };
 }
 
@@ -62,21 +65,10 @@ export function sessionIntensityLevel(size: number, breakpoints: { q25: number; 
   return 1;
 }
 
-export function sessionTileVars(level: 1 | 2 | 3 | 4): { pendingBg: string; pendingBorder: string; doneBg: string; doneBorder: string; doneGlow: string } {
-  const strengths = {
-    1: { pending: 6, border: 14, done: 35, glow: 18 },
-    2: { pending: 9, border: 18, done: 48, glow: 24 },
-    3: { pending: 12, border: 24, done: 62, glow: 30 },
-    4: { pending: 16, border: 30, done: 78, glow: 38 },
-  }[level];
-
-  return {
-    pendingBg: `color-mix(in srgb, var(--accent-blue) ${strengths.pending}%, var(--vscode-editor-background, #1e1e1e))`,
-    pendingBorder: `color-mix(in srgb, var(--accent-blue) ${strengths.border}%, var(--border))`,
-    doneBg: `color-mix(in srgb, var(--vscode-progressBar-background, var(--accent-blue)) ${strengths.done}%, var(--vscode-editor-background, #1e1e1e))`,
-    doneBorder: `color-mix(in srgb, var(--vscode-progressBar-background, var(--accent-blue)) ${Math.min(90, strengths.done + 8)}%, var(--border))`,
-    doneGlow: `color-mix(in srgb, var(--vscode-progressBar-background, var(--accent-blue)) ${strengths.glow}%, transparent)`,
-  };
+/** Opacity of a read tile by session size: bigger sessions read stronger. The color itself is
+ *  always the accent, so read tiles never look duller than pending ones in any theme. */
+export function sessionTileOpacity(level: 1 | 2 | 3 | 4): number {
+  return { 1: 0.45, 2: 0.62, 3: 0.8, 4: 1 }[level];
 }
 
 export function parseWorkspacePlanKey(key: string, fallbackOrder: number): WorkspacePlanMeta {

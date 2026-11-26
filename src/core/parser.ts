@@ -7,8 +7,11 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { Workspace } from './types';
-import { ParseContext, prefetchCache, stripSingleSession, maybeForceGc, recordFailedFile, resetParseWarnings, resetParseTiming, getParseTiming } from './parser-shared';
+import { ParseContext, prefetchCache, stripSingleSession, maybeForceGc, recordFailedFile, resetParseWarnings, resetParseTiming, getParseTiming, getParseWarningCounts } from './parser-shared';
+import { LOAD_PHASES, phasePct, SLOW_ITEM_MS, type LoadItem, type LoadItemKind } from './load-phases';
+import { displayFolderName, hideAccountName, shortenHomePath } from './display-path';
 import { EditLocIndex } from './edit-loc-diff';
 import { getMemoryCache, setMemoryCache, computeDirMetasAsync, loadCacheData, saveCacheData, findStaleDirs, clearCache, stripSessionsForMemory } from './cache';
 import type { DirMetas, ParseResult, SessionSource } from './cache';
@@ -42,6 +45,9 @@ export interface LoadProgress {
   workspacePlan?: string[];
   /** Sent after each workspace is processed so the loading grid can mark it complete. */
   workspaceDone?: string;
+  /** The workspace or session being read (status `reading`) or just finished, for the loading
+   *  screen's "Workspace N of T" line and activity table. Carries display paths only. */
+  item?: LoadItem;
   /** Live runtime telemetry of the parse worker process (issue #106). Lets the loading UI
    *  surface the resource pressure that drives parse load: heap, RSS, file buffers, CPU. */
   telemetry?: ParseTelemetry;
@@ -68,17 +74,7 @@ export interface ParseTelemetry {
 
 export type ProgressCallback = (p: LoadProgress) => void;
 
-export const LOAD_PHASES = [
-  'Discovering log directories',
-  'Checking cache',
-  'Parsing session logs',
-  'Scanning external harnesses',
-  'Preparing analytics',
-  'Ready',
-] as const;
-
-const PHASE_STARTS = [0, 2, 10, 75, 85, 95];
-const PHASE_WIDTHS = [2, 8, 65, 10, 10, 5];
+export { LOAD_PHASES };
 
 function yieldToLoop(): Promise<void> {
   return new Promise(r => setImmediate(r));
@@ -91,10 +87,30 @@ function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | null> {
   ]);
 }
 
-function pct(phase: number, intraPhase: number): number {
-  const base = PHASE_STARTS[phase] ?? 95;
-  const width = PHASE_WIDTHS[phase] ?? 5;
-  return Math.min(100, Math.round(base + width * Math.max(0, Math.min(1, intraPhase))));
+const pct = phasePct;
+
+/** A display-safe progress item: home folder shortened to `~`, folder name split out. */
+function loadItem(
+  kind: LoadItemKind,
+  position: { index: number; total: number },
+  rawPath: string,
+  done?: { ms: number; sessions: number; skipped: boolean },
+): LoadItem {
+  const { index, total } = position;
+  const home = os.homedir();
+  const shown = hideAccountName(shortenHomePath(rawPath, home), path.basename(home));
+  const item: LoadItem = { kind, index, total, folder: displayFolderName(shown), path: shown, status: 'reading' };
+  if (done) {
+    item.ms = done.ms;
+    item.sessions = done.sessions;
+    item.status = done.skipped ? 'skipped' : done.ms > SLOW_ITEM_MS ? 'slow' : 'parsed';
+  }
+  return item;
+}
+
+/** The "workspace N/T: <path>" detail text, with the path in display form. */
+function itemDetail(item: LoadItem, suffix = ''): string {
+  return `${item.kind === 'cli-session' ? 'session' : 'workspace'} ${item.index}/${item.total}: ${item.path}${suffix}`;
 }
 
 export function findLogsDirs(): string[] {
@@ -231,6 +247,8 @@ async function collectWorkspaceSessionTiles(
 
 type ReportProgress = (p: Partial<LoadProgress> & { phase: number }) => void;
 
+type WorkspaceEntryProgress = NonNullable<Parameters<typeof processWorkspaceEntryAsync>[4]>;
+
 type CacheHitResult = { result: ParseResult; dirMetas: DirMetas };
 
 const VOLATILE_HARNESS_SET = new Set([
@@ -304,41 +322,136 @@ function removeRecollectedSessions(result: ParseResult): void {
   result.sessions = kept;
 }
 
-async function collectVolatileHarnesses(
-  logsDirs: string[],
-  result: ParseResult,
-  onProgress?: ProgressCallback,
-): Promise<void> {
+/** Copilot CLI/App session folders and Xcode dirs that every load reads again (never cached). */
+interface VolatilePlan {
+  items: Array<{ logsDir: string; name: string; harness: string; workspaceKey: string }>;
+  xcodeDirs: string[];
+}
+
+function planVolatileHarnesses(logsDirs: string[]): VolatilePlan {
   const { vsCodeDirs, xcodeDirs } = partitionDirs(logsDirs);
   const { entries } = scanVsCodeDirs(vsCodeDirs.filter(isCopilotSessionStateDir));
-  const ctx: ParseContext = {
-    workspaces: result.workspaces,
-    sessions: result.sessions,
-    editLocIndex: result.editLocIndex,
-    sessionSourceIndex: result.sessionSourceIndex,
-    aiLoc: 0,
-  };
+  const items: VolatilePlan['items'] = [];
   for (const { logsDir, dirEntries } of entries) {
     const harness = harnessFromPath(logsDir);
     for (const entry of dirEntries) {
-      await processWorkspaceEntryAsync(logsDir, entry.name, harness, ctx);
+      items.push({ logsDir, name: entry.name, harness, workspaceKey: makeWorkspaceGroupKey(harness, entry.name) });
     }
   }
-  await collectXcode(xcodeDirs, result.workspaces, result.sessions, result.editLocIndex, onProgress, result.sessionSourceIndex);
+  return { items, xcodeDirs };
+}
+
+function volatilePlanKeys(plan: VolatilePlan, startOrder: number): string[] {
+  return plan.items.map((item, i) => makeWorkspaceProgressKey(item.workspaceKey, item.name, startOrder + i));
+}
+
+/** The path to show for a processed entry: the project folder of the sessions it added (CLI
+ *  sessions carry it; VS Code chat sessions keep it in the source index), else the name the
+ *  parser resolved. */
+function entryDisplaySource(
+  parsed: Pick<ParseContext, 'sessions' | 'sessionSourceIndex' | 'workspaceRoots'>,
+  before: number,
+  entry: { wsId: string; wsName: string },
+): string {
+  for (let i = before; i < parsed.sessions.length; i++) {
+    const session = parsed.sessions[i];
+    const root = session.workspaceRootPath ?? parsed.sessionSourceIndex.get(session.sessionId)?.workspaceRootPath;
+    if (root) return root;
+  }
+  // No session named its folder (for example a workspace without sessions): the folder the
+  // workspace was opened on, then the resolved name. The name alone would show a home-folder
+  // workspace by the user name.
+  return parsed.workspaceRoots?.get(entry.wsId) ?? entry.wsName;
+}
+
+/** Progress while one re-read session streams (a large `events.jsonl` can take seconds): a
+ *  `reading` item, with the percentage moved within that session's share of the step. */
+function readingReporter(
+  onProgress: ProgressCallback | undefined,
+  result: ParseResult,
+  position: { index: number; total: number },
+  at: (fraction: number) => number,
+): WorkspaceEntryProgress | undefined {
+  if (!onProgress) return undefined;
+  return (progress) => {
+    const item = loadItem('cli-session', position, progress.rootPath ?? progress.wsName);
+    const within = progress.total > 0 ? progress.completed / progress.total : 0;
+    onProgress({
+      phase: 2,
+      detail: `${itemDetail(item)} — ${progress.detail}`,
+      pct: at((position.index - 1 + within) / position.total),
+      sessions: result.sessions.length,
+      item,
+    });
+  };
+}
+
+/** Re-read the volatile sessions with countable progress inside phase 2. `range` is the slice
+ *  of phase 2 this step fills, so a step that follows other phase-2 work never moves the
+ *  percentage backwards. */
+async function collectVolatileHarnesses(
+  plan: VolatilePlan,
+  result: ParseResult,
+  onProgress?: ProgressCallback,
+  range: { from: number; to: number; announcePlan: boolean } = { from: 0, to: 1, announcePlan: true },
+): Promise<void> {
+  const ctx: ParseContext = { ...result, aiLoc: 0, workspaceRoots: new Map() };
+  const total = plan.items.length;
+  const at = (fraction: number): number => pct(2, range.from + (range.to - range.from) * fraction);
+  const running = createRunningTotals(result.editLocIndex);
+  for (const session of result.sessions) running.add(session);
+  if (onProgress && total > 0) {
+    onProgress({
+      phase: 2,
+      detail: `Re-reading ${total} Copilot CLI and App session${total === 1 ? '' : 's'}`,
+      pct: at(0),
+      sessions: result.sessions.length,
+      ...running.snapshot(),
+      ...(range.announcePlan ? { workspacePlan: volatilePlanKeys(plan, 0) } : {}),
+    });
+    await yieldToLoop();
+  }
+  for (let i = 0; i < total; i++) {
+    const { logsDir, name, harness, workspaceKey } = plan.items[i];
+    const start = Date.now();
+    const before = result.sessions.length;
+    const skippedBefore = getParseWarningCounts().skippedFiles;
+    const wsName = await processWorkspaceEntryAsync(logsDir, name, harness, ctx, readingReporter(onProgress, result, { index: i + 1, total }, at));
+    for (let s = before; s < result.sessions.length; s++) running.add(result.sessions[s]);
+    if (onProgress) {
+      const item = loadItem('cli-session', { index: i + 1, total }, entryDisplaySource(ctx, before, { wsId: name, wsName: wsName || name }), {
+        ms: Date.now() - start,
+        sessions: result.sessions.length - before,
+        skipped: getParseWarningCounts().skippedFiles > skippedBefore,
+      });
+      onProgress({
+        phase: 2,
+        detail: itemDetail(item),
+        pct: at((i + 1) / total),
+        sessions: result.sessions.length,
+        ...running.snapshot(),
+        workspaceDone: workspaceKey,
+        item,
+      });
+    }
+    if (i % 8 === 7) await yieldToLoop();
+  }
+  await collectXcode(plan.xcodeDirs, result.workspaces, result.sessions, result.editLocIndex, onProgress, result.sessionSourceIndex);
 }
 
 async function reportWorkspaceProgress(
   onProgress: ProgressCallback | undefined,
-  progress: { processed: number; totalDirs: number; lastWsName: string; elapsed: number; sessions: number; workspaceKey: string },
+  progress: { processed: number; totalDirs: number; displaySource: string; elapsed: number; sessions: number; added: number; skipped: boolean; workspaceKey: string },
   totals: SessionTotals,
 ): Promise<void> {
-  const { processed, totalDirs, lastWsName, elapsed, sessions, workspaceKey } = progress;
+  const { processed, totalDirs, displaySource, elapsed, sessions, added, skipped, workspaceKey } = progress;
   const shouldYield = elapsed > 2000 || processed % 4 === 0 || processed === totalDirs;
   const suffix = elapsed > 2000 ? ` (${(elapsed / 1000).toFixed(1)}s)` : '';
   if (onProgress) {
+    const item = loadItem('workspace', { index: processed, total: totalDirs }, displaySource, { ms: elapsed, sessions: added, skipped });
     onProgress({
       phase: 2,
-      detail: `workspace ${processed}/${totalDirs}: ${lastWsName}${suffix}`,
+      detail: itemDetail(item, suffix),
       pct: pct(2, processed / totalDirs),
       sessions,
       linesOfCode: totals.linesOfCode,
@@ -347,9 +460,37 @@ async function reportWorkspaceProgress(
       filesEdited: totals.filesEdited,
       requests: totals.requests,
       workspaceDone: workspaceKey,
+      item,
     });
   }
   if (shouldYield) await yieldToLoop();
+}
+
+/** Phase 1 is done once the cache is read: report it before the volatile re-read starts, so
+ *  phases arrive in order and the percentage only moves forward. */
+function reportCacheLoaded(report: ReportProgress, result: ParseResult, source: 'memory' | 'disk'): void {
+  const count = result.sessions.length;
+  report({
+    phase: 1,
+    detail: `Loaded ${count.toLocaleString('en-US')} cached session${count === 1 ? '' : 's'} from ${source}`,
+    pct: pct(1, 1),
+    sessions: count,
+    ...computeSessionTotals(result.sessions, result.editLocIndex),
+  });
+}
+
+/** Final totals over every session, sent once the parse is complete. The external-harness step
+ *  reports counts only, so without this the loading screen's last counters would leave out
+ *  Claude, Codex and OpenCode sessions. */
+function reportParseTotals(report: ReportProgress, result: ParseResult): void {
+  const count = result.sessions.length;
+  report({
+    phase: 3,
+    detail: `Found ${count.toLocaleString('en-US')} session${count === 1 ? '' : 's'}`,
+    pct: pct(3, 1),
+    sessions: count,
+    ...computeSessionTotals(result.sessions, result.editLocIndex),
+  });
 }
 
 async function tryMemoryCache(
@@ -365,14 +506,11 @@ async function tryMemoryCache(
   if (stale.size !== 0 || removed.size !== 0) return null;
 
   removeRecollectedSessions(mem.result);
-  await collectVolatileHarnesses(logsDirs, mem.result, onProgress);
+  reportCacheLoaded(report, mem.result, 'memory');
+  await collectVolatileHarnesses(planVolatileHarnesses(logsDirs), mem.result, onProgress);
   await collectExternalHarnesses(mem.result.workspaces, mem.result.sessions, mem.result.editLocIndex, onProgress, mem.result.sessionSourceIndex);
   sortParseResult(mem.result);
-  report({
-    phase: 1, detail: 'Loaded from memory', pct: pct(1, 1),
-    sessions: mem.result.sessions.length,
-    ...computeSessionTotals(mem.result.sessions, mem.result.editLocIndex),
-  });
+  reportParseTotals(report, mem.result);
   return { result: mem.result, dirMetas: currentMetas };
 }
 
@@ -389,16 +527,13 @@ async function tryDiskCache(
   if (stale.size !== 0 || removed.size !== 0) return null;
 
   removeRecollectedSessions(cached.result);
-  await collectVolatileHarnesses(logsDirs, cached.result, onProgress);
+  reportCacheLoaded(report, cached.result, 'disk');
+  await collectVolatileHarnesses(planVolatileHarnesses(logsDirs), cached.result, onProgress);
   await collectExternalHarnesses(cached.result.workspaces, cached.result.sessions, cached.result.editLocIndex, onProgress, cached.result.sessionSourceIndex);
   sortParseResult(cached.result);
   setMemoryCache(cached.result, currentMetas);
   runtimeDebug('parser', 'disk-cache-hit', `sessions=${cached.result.sessions.length}`);
-  report({
-    phase: 1, detail: 'Loaded from cache', pct: pct(1, 1),
-    sessions: cached.result.sessions.length,
-    ...computeSessionTotals(cached.result.sessions, cached.result.editLocIndex),
-  });
+  reportParseTotals(report, cached.result);
   return { result: cached.result, dirMetas: currentMetas };
 }
 
@@ -509,13 +644,17 @@ async function processWorkspaces(
       let lastWsName = '';
       for (const { logsDir, wsId, harness, workspaceKey } of batch) {
         const start = Date.now();
+        const before = ctx.sessions.length;
+        const skippedBefore = getParseWarningCounts().skippedFiles;
+        let failed = false;
         try {
           lastWsName = await processWorkspaceEntryAsync(logsDir, wsId, harness, ctx, (progress) => {
             if (!onProgress) return;
             const totals = running.snapshot();
+            const item = loadItem('workspace', { index: processed + 1, total: totalDirs }, progress.rootPath ?? progress.wsName);
             onProgress({
               phase: 2,
-              detail: `workspace ${processed + 1}/${totalDirs}: ${progress.wsName} — ${progress.detail}`,
+              detail: `${itemDetail(item)} — ${progress.detail}`,
               pct: pct(2, (processed + (progress.completed / progress.total)) / totalDirs),
               sessions: ctx.sessions.length,
               linesOfCode: totals.linesOfCode,
@@ -523,10 +662,12 @@ async function processWorkspaces(
               imagesAnalyzed: totals.imagesAnalyzed,
               filesEdited: totals.filesEdited,
               requests: totals.requests,
+              item,
             });
           });
         } catch (e) {
           lastWsName = wsId;
+          failed = true;
           recordFailedFile('parser', logsDir, e);
         }
         const elapsed = Date.now() - start;
@@ -548,7 +689,16 @@ async function processWorkspaces(
         processed++;
         await reportWorkspaceProgress(
           onProgress,
-          { processed, totalDirs, lastWsName, elapsed, sessions: ctx.sessions.length, workspaceKey },
+          {
+            processed,
+            totalDirs,
+            displaySource: entryDisplaySource(ctx, before, { wsId, wsName: lastWsName }),
+            elapsed,
+            sessions: ctx.sessions.length,
+            added: ctx.sessions.length - before,
+            skipped: failed || getParseWarningCounts().skippedFiles > skippedBefore,
+            workspaceKey,
+          },
           running.snapshot(),
         );
       }
@@ -602,12 +752,14 @@ async function collectExternalHarnesses(
   onProgress?: ProgressCallback,
   sessionSourceIndex?: Map<string, SessionSource>,
 ): Promise<void> {
+  let harnessFraction = 0;
   await collectExternalHarnessesAsync(workspaces, sessions, editLocIndex, {
     onHarnessStart: (name, index, total, sessionCount) => {
-      if (onProgress) onProgress({ phase: 3, detail: name, pct: pct(3, index / total), sessions: sessionCount });
+      harnessFraction = total > 0 ? index / total : 0;
+      if (onProgress) onProgress({ phase: 3, detail: name, pct: pct(3, harnessFraction), sessions: sessionCount });
     },
     onHarnessDetail: (name, detail, sessionCount) => {
-      if (onProgress) onProgress({ phase: 3, detail: `${name} ${detail}`, pct: pct(3, 0.3), sessions: sessionCount });
+      if (onProgress) onProgress({ phase: 3, detail: `${name} ${detail}`, pct: pct(3, harnessFraction), sessions: sessionCount });
     },
     onHarnessError: (name, error) => {
       warnCore('parser', `${name} scan failed`, error);
@@ -730,37 +882,53 @@ export async function parseAllLogsAsyncDetailed(
         stalePlan.push(makeWorkspaceProgressKey(item.workspaceKey, item.wsId, staleOrder++, tile.date ?? item.date, tile.size));
       }
     }
+    // The volatile re-read follows the changed workspaces inside phase 2: give each step its
+    // share of the phase and one combined grid plan, so the percentage never restarts.
+    const volatilePlan = planVolatileHarnesses(logsDirs);
+    const stepTotal = stalePaths.length + volatilePlan.items.length;
+    const staleShare = stepTotal > 0 ? stalePaths.length / stepTotal : 0;
     report({
       phase: 2,
       detail: `Updating ${stalePaths.length} changed workspace(s)`,
       pct: pct(2, 0),
       sessions: freshSessions.length,
       ...computeSessionTotals(freshSessions, editLocIndex),
-      workspacePlan: stalePlan,
+      workspacePlan: [...stalePlan, ...volatilePlanKeys(volatilePlan, staleOrder)],
     });
 
+    const staleCtx: ParseContext = { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex, aiLoc: 0, workspaceRoots: new Map() };
     let done = 0;
     for (const { logsDir, wsId, harness, workspaceKey } of staleWork) {
-      await processWorkspaceEntryAsync(logsDir, wsId, harness, { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex, aiLoc: 0 });
+      const start = Date.now();
+      const before = freshSessions.length;
+      const skippedBefore = getParseWarningCounts().skippedFiles;
+      const position = { index: done + 1, total: stalePaths.length };
+      const wsName = await processWorkspaceEntryAsync(logsDir, wsId, harness, staleCtx, onProgress ? (entry) => {
+        const item = loadItem('workspace', position, entry.rootPath ?? entry.wsName);
+        const within = entry.total > 0 ? entry.completed / entry.total : 0;
+        report({ phase: 2, detail: `${itemDetail(item)} — ${entry.detail}`, pct: pct(2, staleShare * ((done + within) / stalePaths.length)), sessions: freshSessions.length, item });
+      } : undefined);
       done++;
-      if (done % 20 === 0 || done === stalePaths.length) {
-        report({ phase: 2, detail: `${done}/${stalePaths.length}`, pct: pct(2, done / stalePaths.length), sessions: freshSessions.length, workspaceDone: workspaceKey });
-        await yieldToLoop();
-      } else {
-        report({ phase: 2, detail: `${done}/${stalePaths.length}`, pct: pct(2, done / stalePaths.length), sessions: freshSessions.length, workspaceDone: workspaceKey });
-      }
+      const item = loadItem('workspace', { index: done, total: stalePaths.length }, entryDisplaySource(staleCtx, before, { wsId, wsName: wsName || wsId }), {
+        ms: Date.now() - start,
+        sessions: freshSessions.length - before,
+        skipped: getParseWarningCounts().skippedFiles > skippedBefore,
+      });
+      report({ phase: 2, detail: itemDetail(item), pct: pct(2, staleShare * (done / stalePaths.length)), sessions: freshSessions.length, workspaceDone: workspaceKey, item });
+      if (done % 20 === 0 || done === stalePaths.length) await yieldToLoop();
     }
 
-    await collectVolatileHarnesses(logsDirs, {
+    await collectVolatileHarnesses(volatilePlan, {
       workspaces,
       sessions: freshSessions,
       editLocIndex,
       sessionSourceIndex: freshSessionSourceIndex,
-    }, onProgress);
+    }, onProgress, { from: staleShare, to: 1, announcePlan: false });
     await collectExternalHarnesses(workspaces, freshSessions, editLocIndex, onProgress, freshSessionSourceIndex);
 
     const result: ParseResult = { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex };
     sortParseResult(result);
+    reportParseTotals(report, result);
     stripSessionsForMemory(result.sessions);
     setMemoryCache(result, currentMetas);
     // Written in the background; parse-worker.ts flushes it before reporting `done`.
@@ -774,7 +942,7 @@ export async function parseAllLogsAsyncDetailed(
   const sessions: import('./types').Session[] = [];
   const editLocIndex: EditLocIndex = new Map();
   const sessionSourceIndex = new Map<string, SessionSource>();
-  const ctx: ParseContext = { workspaces, sessions, editLocIndex, sessionSourceIndex, aiLoc: 0 };
+  const ctx: ParseContext = { workspaces, sessions, editLocIndex, sessionSourceIndex, aiLoc: 0, workspaceRoots: new Map() };
 
   const { vsCodeDirs, xcodeDirs } = partitionDirs(logsDirs);
   const { entries, totalDirs } = scanVsCodeDirs(vsCodeDirs);
@@ -786,6 +954,7 @@ export async function parseAllLogsAsyncDetailed(
 
   const result: ParseResult = { workspaces, sessions, editLocIndex, sessionSourceIndex };
   sortParseResult(result);
+  reportParseTotals(report, result);
   stripSessionsForMemory(result.sessions);
   setMemoryCache(result, currentMetas);
   // Written in the background; parse-worker.ts flushes it before reporting `done`.

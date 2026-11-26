@@ -9,6 +9,8 @@
  * text around the detect block) survive a round trip.
  */
 
+import { fencedLines } from '../core/markdown-fences';
+
 /** The fields the Rule Editor form shows, as its inputs hold them. */
 export interface RuleFormFields {
   id: string;
@@ -97,12 +99,14 @@ function frontmatterBlocks(yaml: string): Block[] {
 
 /**
  * Splits a rule body at its headings the way the rule parser finds them: every line that starts with `#` and
- * whitespace, inside a code fence or not. The first block holds any text before the first heading.
+ * whitespace, outside a code fence (see `fencedLines`). The first block holds any text before the first heading.
  */
 function sectionBlocks(body: string): Block[] {
   const blocks: Block[] = [{ key: '', lines: [] }];
-  for (const line of body.split('\n')) {
-    const heading = /^#+(\s.*)?$/.exec(line);
+  const lines = body.split('\n');
+  const fenced = fencedLines(lines);
+  for (const [i, line] of lines.entries()) {
+    const heading = fenced[i] ? null : /^#+(\s.*)?$/.exec(line);
     if (heading) blocks.push({ key: (heading[1] ?? '').trim().toLowerCase(), lines: [line] });
     else blocks[blocks.length - 1].lines.push(line);
   }

@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { describe, it, expect, vi } from 'vitest';
 import { reconstructFromJsonl } from './parser-vscode-files';
 import { parseCLIEventsFile } from './parser-vscode-cli';
@@ -1296,6 +1297,31 @@ describe('parseEditState (AI-generated LoC)', () => {
       expect(totalFor(index, URI)).toBe(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('processWorkspaceEntryAsync workspace root', () => {
+  it('reports the workspace root with progress and records it for workspaces without sessions', async () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-root-'));
+    const root = path.join(logsDir, 'project', 'api');
+    try {
+      fs.mkdirSync(root, { recursive: true });
+      fs.mkdirSync(path.join(logsDir, 'ws', 'chatSessions'), { recursive: true });
+      fs.writeFileSync(path.join(logsDir, 'ws', 'workspace.json'), JSON.stringify({ folder: pathToFileURL(root).href }));
+      fs.writeFileSync(path.join(logsDir, 'ws', 'chatSessions', 'empty.json'), '{}');
+      const ctx: ParseContext = {
+        workspaces: new Map(), sessions: [], editLocIndex: new Map(), sessionSourceIndex: new Map(), aiLoc: 0, workspaceRoots: new Map(),
+      };
+      const roots: Array<string | undefined> = [];
+      resetParseWarnings();
+      await processWorkspaceEntryAsync(logsDir, 'ws', 'VS Code', ctx, progress => roots.push(progress.rootPath));
+      expect(roots.length).toBeGreaterThan(0);
+      expect(roots.every(r => r === path.normalize(root))).toBe(true);
+      expect(ctx.workspaceRoots?.get('ws')).toBe(path.normalize(root));
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+      resetParseWarnings();
     }
   });
 });

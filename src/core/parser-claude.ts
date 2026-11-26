@@ -1250,7 +1250,7 @@ export function parseClaudeSessions(
 
 export async function parseClaudeSessionsAsync(
   projectsDir: string,
-  onProject?: (idx: number, total: number, name: string) => void,
+  onProject?: (idx: number, total: number, name: string, rootPath?: string) => void,
   editLocIndex?: EditLocIndex,
   sessionSourceIndex?: Map<string, SessionSource>,
 ): Promise<{ sessions: Session[]; workspaceId: string; workspaceName: string }[]> {
@@ -1272,7 +1272,10 @@ export async function parseClaudeSessionsAsync(
     if (result) results.push(result);
 
     // Report after parsing, so the progress detail shows the name taken from the recorded cwd.
-    if (onProject) onProject(i + 1, projectDirs.length, result?.workspaceName ?? projectNameFromEncoded(dirName, projectsDir));
+    if (onProject) {
+      const rootPath = result?.sessions.find(session => session.workspaceRootPath)?.workspaceRootPath;
+      onProject(i + 1, projectDirs.length, result?.workspaceName ?? projectNameFromEncoded(dirName, projectsDir), rootPath);
+    }
 
     // Yield every 5 projects so the event loop stays responsive
     if (i % 5 === 0) await new Promise<void>(r => setTimeout(r, 0));

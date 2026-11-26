@@ -360,7 +360,7 @@ test.describe('Timeline', () => {
 });
 
 test.describe('Timeline prompts and questions, off until you turn them on', () => {
-  type ReadWindow = { textReads: number; mockTimelineTextHook?: () => unknown; mockWebviewState?: Record<string, unknown> };
+  type ReadWindow = { textReads: number; mockTimelineTextHook?: () => unknown };
 
   test('reads nothing from the log on first load, and says how to show it', async ({ page }) => {
     await page.addInitScript(() => {
@@ -382,7 +382,7 @@ test.describe('Timeline prompts and questions, off until you turn them on', () =
   });
 
   test('keeps it on when you turned it on before', async ({ page }) => {
-    await page.addInitScript(() => { (window as unknown as ReadWindow).mockWebviewState = { timelineShowText: true }; });
+    await page.addInitScript(() => sessionStorage.setItem('harness-webview-state', JSON.stringify({ timelineShowText: true })));
     await openTimeline(page);
     await page.locator('.tlx-lane[data-session="tl-flaky"] .tlx-lbl').click();
     await expect(page.locator('#tlxShowText')).toBeChecked();

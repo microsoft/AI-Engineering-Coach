@@ -288,12 +288,20 @@ test.describe('Timeline range links', () => {
   });
 
   test('keeps the view in the webview state by dates, and opens it again from there', async ({ page }) => {
-    type StateWindow = { mockWebviewState?: Record<string, unknown> };
+    const stored = () => page.evaluate(() => JSON.parse(sessionStorage.getItem('harness-webview-state') || '{}') as Record<string, unknown>);
     await openTimeline(page);
+    // Each test starts with an empty state: the Timeline opens on its default view, and keeps it.
+    expect((await stored()).timelineView).toBe('view=day&date=2026-05-03');
     await page.locator('#tlxView button[data-value="range"]').click();
-    expect(await page.evaluate(() => (window as unknown as StateWindow).mockWebviewState?.timelineView)).toBe('view=range&from=2026-05-02&to=2026-05-03');
-    // A reloaded webview gets its state back (the harness keeps it in memory, so it is given here).
-    await page.addInitScript(() => { (window as unknown as StateWindow).mockWebviewState = { timelineView: 'view=week&date=2026-05-02' }; });
+    expect((await stored()).timelineView).toBe('view=range&from=2026-05-02&to=2026-05-03');
+    // A reloaded webview gets its state back, as in VS Code: the harness keeps it for the tab.
+    await openTimeline(page);
+    await expect(page.locator('#tlxView button[data-value="range"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#tlxDateLabel')).toContainText('2 days');
+  });
+
+  test('opens the view a webview state holds', async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem('harness-webview-state', JSON.stringify({ timelineView: 'view=week&date=2026-05-02' })));
     await openTimeline(page);
     await expect(page.locator('#tlxView button[data-value="week"]')).toHaveAttribute('aria-pressed', 'true');
   });
