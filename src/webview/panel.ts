@@ -42,6 +42,10 @@ export class DashboardPanel {
   private parseResult: ParseResult | undefined;
   private pendingMessages: Extract<WebviewMessage, { type: 'request' }>[] = [];
   private dataReady = false;
+  /** The dashboard page posted `ready`: until then a replacement page waits (`showPage`). */
+  private pageLoaded = false;
+  private pendingPage?: string;
+  private pendingPageTimer?: NodeJS.Timeout;
   private disposed = false;
   private loading = false;
   private loadCompletedAt = 0;
@@ -62,7 +66,7 @@ export class DashboardPanel {
     );
 
     runtimeDebug('panel', 'constructor');
-    this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
+    this.loadDashboardPage();
     this.panel.onDidChangeViewState((e) => {
       runtimeDebug('panel', 'view-state', `visible=${e.webviewPanel.visible} active=${e.webviewPanel.active}`);
     }, null, this.disposables);
@@ -126,8 +130,28 @@ export class DashboardPanel {
     this.lastProgress = undefined;
     this.sentLlm = undefined;
     this.disposed = false;
-    this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
+    this.loadDashboardPage();
     void this.loadData(true);
+  }
+
+  private loadDashboardPage(): void {
+    [this.pageLoaded, this.pendingPage] = [false, undefined];
+    clearTimeout(this.pendingPageTimer);
+    this.panel.webview.html = getDashboardHtml(this.panel.webview, this.extensionUri);
+  }
+
+  /** Shows an error page once the dashboard page posted `ready` (or after 10 s): earlier, that page's load can undo it. */
+  private showPage(html: string): void {
+    this.pendingPage = html;
+    clearTimeout(this.pendingPageTimer);
+    if (this.pageLoaded) this.replacePage();
+    else this.pendingPageTimer = setTimeout(() => this.replacePage(), 10_000);
+  }
+
+  private replacePage(): void {
+    clearTimeout(this.pendingPageTimer);
+    if (this.pendingPage !== undefined && !this.disposed) try { this.panel.webview.html = this.pendingPage; } catch { /* disposed */ }
+    this.pendingPage = undefined;
   }
 
   private updateSidebarStats(): void {
@@ -234,7 +258,7 @@ export class DashboardPanel {
       if (dirs.length === 0 && !hasExternal) {
         runtimeDebug('panel', 'loadData-no-dirs');
         if (!this.disposed) {
-          try { this.panel.webview.html = getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, and OpenCode sessions.'); } catch { /* disposed */ }
+          this.showPage(getErrorHtml('No AI coding session logs found. Looked for VS Code, GitHub Copilot (CLI and Xcode), Claude Code, Codex, and OpenCode sessions.'));
         }
         return;
       }
@@ -286,7 +310,7 @@ export class DashboardPanel {
       runtimeDebug('panel', 'loadData-error', error);
       if (this.analyzer && panelCache.analyzerInstance === this.analyzer) panelCache.clear();
       if (!this.disposed) {
-        try { this.panel.webview.html = getErrorHtml(error instanceof Error ? error.message : 'Failed to load data'); } catch { /* disposed */ }
+        this.showPage(getErrorHtml(error instanceof Error ? error.message : 'Failed to load data'));
       }
     } finally {
       throttle.dispose();
@@ -299,6 +323,8 @@ export class DashboardPanel {
     if (this.disposed) return;
     if (typeof msg === 'object' && msg !== null && 'type' in msg && msg.type === 'ready') {
       runtimeDebug('panel', 'webview-ready', `dataReady=${this.dataReady}`);
+      this.pageLoaded = true;
+      if (this.pendingPage !== undefined) return this.replacePage();
       if (this.dataReady) {
         this.panel.webview.postMessage({ type: 'dataReady', currentWorkspace: vscode.workspace.name || '', ...this.skippedCounts() });
       } else if (this.lastProgress) {
@@ -430,6 +456,7 @@ export class DashboardPanel {
   private dispose(): void {
     runtimeDebug('panel', 'dispose');
     this.disposed = true;
+    clearTimeout(this.pendingPageTimer);
     DashboardPanel.instance = undefined;
     this.panel.dispose();
     for (const disposable of this.disposables) disposable.dispose();

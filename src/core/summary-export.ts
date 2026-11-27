@@ -14,6 +14,8 @@ import type {
 } from './types/analytics-types';
 import type { FlowStateData } from './types/context-types';
 import type { DateFilter } from './types/session-types';
+import type { TimelineDataset } from './types/timeline-types';
+import { buildFamilies, buildLanes, buildViewFamilies, prepareTimeline, timelineKpis, WIDE_FAN_OUT } from './timeline-model';
 
 export interface SummaryExportInput {
   generatedAt?: string | Date;
@@ -24,6 +26,8 @@ export interface SummaryExportInput {
   workLifeBalance: WorkLifeBalanceResult | null;
   flowState: FlowStateData;
   antiPatterns: AntiPatternData;
+  /** The Timeline's range dataset; adds the autonomy section when given. */
+  timeline?: TimelineDataset;
 }
 
 export interface SummaryExportAnalyzer {
@@ -33,6 +37,7 @@ export interface SummaryExportAnalyzer {
   getWorkLifeBalance(filter?: DateFilter): WorkLifeBalanceResult | null;
   getFlowState(filter?: DateFilter): FlowStateData;
   getAntiPatterns(filter?: DateFilter): AntiPatternData;
+  getTimelineData?(filter?: DateFilter): TimelineDataset;
 }
 
 export interface SummaryExportReport {
@@ -78,6 +83,30 @@ export interface SummaryExportReport {
     /** Rules that couldn't be evaluated, so the anti-patterns leave them out. */
     notEvaluated: Array<{ id: string; name: string; group: string; error: string }>;
   };
+  /** How much agents worked on their own and how delegation went (Timeline). Counts only, no session names. */
+  autonomy: SummaryAutonomy | null;
+}
+
+export interface SummaryAutonomy {
+  typedTurns: number;
+  automatedTurns: number;
+  agentHours: number;
+  /** Waits on you that started in range. */
+  waitsOnYou: number;
+  /** Of those, the ones on a question or a permission prompt you answered. */
+  waitsOnQuestionOrPermission: number;
+  /** Every question and permission prompt you answered in range, counted when you answered. */
+  questionsAndPermissionsAnswered: number;
+  waitHours: number;
+  families: number;
+  childSessions: number;
+  /** Child sessions you typed into or answered a question or permission prompt in. */
+  childSessionsWithYourInput: number;
+  /** Null when no credits were logged. */
+  familyCreditSharePct: number | null;
+  noInputInChildren: number;
+  youSteppedIn: number;
+  wideFanOut: number;
 }
 
 const TOP_LANGUAGE_LIMIT = 10;
@@ -184,6 +213,32 @@ export function buildSummaryExport(input: SummaryExportInput): SummaryExportRepo
       topPatterns: buildTopAntiPatterns(input.antiPatterns),
       notEvaluated: input.antiPatterns.failedRules.map(rule => ({ id: rule.ruleId, name: rule.ruleName, group: rule.group, error: rule.error })),
     },
+    autonomy: input.timeline ? buildAutonomy(input.timeline) : null,
+  };
+}
+
+function buildAutonomy(data: TimelineDataset): SummaryAutonomy | null {
+  if (!data.sessions.some(s => !s.ctx)) return null;
+  const p = prepareTimeline(data);
+  const lanes = buildLanes(p, -Infinity, Infinity);
+  const { totals } = buildFamilies(p);
+  const kpis = timelineKpis(lanes, buildViewFamilies(lanes, p));
+  const hours = (ms: number) => Math.round(ms / 360_000) / 10;
+  return {
+    typedTurns: lanes.reduce((n, l) => n + l.typed, 0),
+    automatedTurns: lanes.reduce((n, l) => n + l.automated, 0),
+    agentHours: hours(kpis.agentMs),
+    waitsOnYou: kpis.waits,
+    waitsOnQuestionOrPermission: kpis.waits - kpis.idleWaits,
+    questionsAndPermissionsAnswered: kpis.answered,
+    waitHours: hours(kpis.waitMs),
+    families: totals.families,
+    childSessions: totals.children,
+    childSessionsWithYourInput: totals.childrenNeedingYou,
+    familyCreditSharePct: totals.totalCredits > 0 ? Math.round(totals.creditShare) : null,
+    noInputInChildren: totals.alone.families,
+    youSteppedIn: totals.needed.families,
+    wideFanOut: totals.wide.families,
   };
 }
 
@@ -201,6 +256,7 @@ export function buildSummaryExportFromAnalyzer(
     workLifeBalance: analyzer.getWorkLifeBalance(filter),
     flowState: analyzer.getFlowState(filter),
     antiPatterns: analyzer.getAntiPatterns(filter),
+    timeline: analyzer.getTimelineData?.(filter),
   });
 }
 
@@ -238,6 +294,20 @@ export function renderSummaryMarkdown(report: SummaryExportReport): string {
   if (report.flow.suggestions.length > 0) {
     lines.push('', '### Flow Suggestions');
     for (const suggestion of report.flow.suggestions) lines.push(`- ${suggestion}`);
+  }
+
+  if (report.autonomy) {
+    const a = report.autonomy;
+    const turns = a.typedTurns + a.automatedTurns;
+    lines.push(
+      '', '## Autonomy and Delegation (Timeline)',
+      `- Turns you typed: ${formatNumber(a.typedTurns)} of ${formatNumber(turns)}${turns ? ` (${formatPercent(a.automatedTurns / turns)} automated)` : ''}`,
+      `- Agent time: ${a.agentHours} h`,
+      `- Waits on you that started in range: ${formatNumber(a.waitsOnYou)} (${formatNumber(a.waitsOnQuestionOrPermission)} on a question or permission prompt); time waiting on you in range: ${a.waitHours} h, including waits that began earlier`,
+      `- Questions and permission prompts you answered: ${formatNumber(a.questionsAndPermissionsAnswered)}`,
+      `- Session families: ${formatNumber(a.families)} (${formatNumber(a.childSessions)} child sessions, ${formatNumber(a.childSessionsWithYourInput)} with a prompt or answer from you${a.familyCreditSharePct == null ? '' : `; ${a.familyCreditSharePct}% of credits`})`,
+      `- Families: ${formatNumber(a.noInputInChildren)} with no input from you in their children, ${formatNumber(a.youSteppedIn)} where you stepped into a child; ${formatNumber(a.wideFanOut)} of these with ${WIDE_FAN_OUT}+ children`,
+    );
   }
 
   lines.push('', '## Top Languages');

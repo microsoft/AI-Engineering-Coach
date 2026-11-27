@@ -37,6 +37,7 @@ Object.assign(process.env, {
   XDG_CONFIG_HOME: path.join(home, '.config'),
   XDG_DATA_HOME: path.join(home, '.local', 'share'),
   COPILOT_HOME: path.join(home, '.copilot'),
+  GH_CONFIG_DIR: path.join(home, '.config', 'gh'),
 });
 
 afterAll(() => {

@@ -606,6 +606,42 @@ function mockTokenTypes(mode) {
   };
 }
 
+/* Synthetic Timeline range: a coordinator with three children (one started by relay) and a grandchild on 3 May,
+ * a Claude Code session that waited on you, and a smaller family on 2 May. Local times, like the dashboard. */
+function mockTimelineData() {
+  const at = (day, h, m = 0) => new Date(2026, 4, day, h, m).getTime();
+  const turn = (t, minutes, k = 'you', extra = {}) => ({ t, d: minutes * 60000, k, sub: 0, comp: false, cr: 0, tok: 0, ...extra });
+  const s = (id, name, turns, extra = {}) => ({ id, name, branch: '', repo: 'shop', harness: 'Copilot App', model: 'claude-opus-4.7', parent: -1, via: null, turns, ...extra });
+  return {
+    forkedSessions: 0,
+    sessions: [
+      s('tl-coord', 'Checkout revamp', [turn(at(3, 9), 30, 'you', { cr: 12, tok: 900000 }), turn(at(3, 10, 40), 5, 'agent', { cr: 2 }), turn(at(3, 11, 30), 20, 'you', { cr: 8 })], { branch: 'checkout-revamp' }),
+      s('tl-pay', 'Payment API tests', [turn(at(3, 9, 10), 60, 'agent', { cr: 20, sub: 2 }), turn(at(3, 10, 20), 10, 'you', { cr: 5 })], { parent: 0, via: 'create', model: 'gpt-5.4' }),
+      s('tl-docs', 'Docs update', [turn(at(3, 9, 15), 40, 'agent', { cr: 10 }), turn(at(3, 9, 58), 15, 'autopilot', { cr: 4 })], { parent: 0, via: 'create', repo: 'docs-site' }),
+      s('tl-lint', 'Lint fixes', [turn(at(3, 9, 30), 20, 'agent', { cr: 6, comp: true })], { parent: 1, via: 'create' }),
+      s('tl-perf', 'Perf probe', [turn(at(3, 12), 25, 'agent', { cr: 7 })], { parent: 0, via: 'relay' }),
+      s('tl-flaky', 'Investigate flaky test', [turn(at(3, 14), 5, 'you', { tok: 5000 }), turn(at(3, 14, 40), 3, 'you')], { harness: 'Claude Code', repo: 'my-api', model: 'claude-sonnet-4.6' }),
+      s('tl-early', '', [turn(at(2, 16), 10, 'you', { cr: 3 })], { harness: 'Copilot CLI', repo: 'my-api' }),
+      s('tl-notes', 'Release notes', [turn(at(2, 15), 10, 'you', { cr: 5, w: [{ s: at(2, 15, 2), e: at(2, 15, 6), k: 'question', a: true }] })]),
+      s('tl-log', 'Changelog', [turn(at(2, 15, 5), 10, 'agent', { cr: 2 })], { parent: 7, via: 'create' }),
+    ],
+  };
+}
+
+/* The text behind two Timeline lanes (the Claude Code session that waited for a prompt, and the session with a
+ * question); any other lane's log reads as unavailable. */
+function mockTimelineText(sessionId) {
+  const at = (day, h, m = 0) => new Date(2026, 4, day, h, m).getTime();
+  if (sessionId === 'tl-flaky') return { sessionId, waits: [], turns: [
+    { t: at(3, 14), k: 'you', prompt: 'Why is the checkout test flaky?', reply: 'It races on the clock.' },
+    { t: at(3, 14, 40), k: 'you', prompt: 'Fix it with a fake clock.', reply: 'Done.' },
+  ] };
+  if (sessionId === 'tl-notes') return { sessionId, turns: [{ t: at(2, 15), k: 'you', prompt: 'Draft the release notes for 2.4', reply: 'Drafted them.' }], waits: [
+    { s: at(2, 15, 2), e: at(2, 15, 6), k: 'question', a: true, ask: 'Include the beta features?', choices: ['Yes', 'No'], answer: 'No', before: 'I found three beta features.' },
+  ] };
+  return null;
+}
+
 function mockSessionTimeline(sessionId) {
   if (sessionId === 's5') return mockContextTimeline(sessionId);
   if (sessionId === 'pc-3') {
@@ -880,25 +916,8 @@ function getMockData(method, params) {
     getSessionTimeline: () => mockSessionTimeline(params?.sessionId),
     getTokenTypes: () => mockTokenTypes(window.mockTokenTypesMode),
 
-    getDayTimeline: () => ({
-      date: '2026-05-03',
-      mode: 'day',
-      rangeLabel: 'May 3, 2026',
-      dayStart: new Date('2026-05-03T00:00:00Z').getTime(),
-      dayEnd: new Date('2026-05-03T23:59:59Z').getTime(),
-      sessions: [
-        { sessionId: 's1', workspaceName: 'my-api', sessionName: 'Refactoring auth module', firstActivity: new Date('2026-05-03T09:00:00Z').getTime(), lastActivity: new Date('2026-05-03T09:45:00Z').getTime(), requestCount: 28, totalRequestCount: 28, requests: [] },
-        { sessionId: 's2', workspaceName: 'frontend-app', sessionName: 'Fix login page', firstActivity: new Date('2026-05-03T10:00:00Z').getTime(), lastActivity: new Date('2026-05-03T10:30:00Z').getTime(), requestCount: 15, totalRequestCount: 15, requests: [] },
-        { sessionId: 's3', workspaceName: 'data-pipeline', sessionName: 'Add ETL step', firstActivity: new Date('2026-05-03T11:15:00Z').getTime(), lastActivity: new Date('2026-05-03T12:00:00Z').getTime(), requestCount: 22, totalRequestCount: 22, requests: [] },
-        { sessionId: 's4', workspaceName: 'my-api', sessionName: 'API tests', firstActivity: new Date('2026-05-03T14:00:00Z').getTime(), lastActivity: new Date('2026-05-03T15:10:00Z').getTime(), requestCount: 35, totalRequestCount: 35, requests: [] },
-        { sessionId: 's5', workspaceName: 'mobile-sdk', sessionName: 'SDK integration', firstActivity: new Date('2026-05-03T16:00:00Z').getTime(), lastActivity: new Date('2026-05-03T16:45:00Z').getTime(), requestCount: 18, totalRequestCount: 18, requests: [] }
-      ],
-      sessionCount: 5,
-      maxConcurrent: 1,
-      prevDay: '2026-05-02',
-      nextDay: null
-    }),
-
+    getTimelineData: () => window.mockTimelineDataOverride ?? mockTimelineData(),
+    getTimelineSessionText: () => window.mockTimelineTextHook?.(params.sessionId) ?? mockTimelineText(params.sessionId),
     getHeatmap: () => ({
       heatmap: Array.from({ length: 7 }, (day) => Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 17) ? Math.floor(Math.random() * 30) + 10 : Math.floor(Math.random() * 3))),
       byType: {},

@@ -378,6 +378,24 @@ describe('parseAllLogsAsyncDetailed', () => {
     expect(parseXcodeDatabasesAsync).toHaveBeenCalledWith(XCODE_DIR, parsed.result.editLocIndex, parsed.result.sessionSourceIndex);
   });
 
+  it('keeps a Copilot CLI session found beside an editor workspace’s chat sessions on memory-cache hits', async () => {
+    const editorDir = path.join('/Users/test', 'AppData', 'Code', 'User', 'workspaceStorage');
+    const cachedResult = makeResult();
+    const request = createRequest({ requestId: 'sibling-cli-request', messageText: '', responseText: '' });
+    cachedResult.sessions.push(makeSession({ sessionId: 'sibling-cli', harness: 'GitHub Copilot CLI', requests: [request], requestCount: 1 }));
+    cachedResult.sessionSourceIndex.set('sibling-cli', {
+      kind: 'cli-events', filePath: path.join(editorDir, 'ws-1', 'events.jsonl'), workspaceId: 'ws-1', workspaceName: 'ws', harness: 'VS Code',
+    } as never);
+    cachedResult.editLocIndex.set('sibling-cli-request', new Map([['src/app.ts', { added: 1, removed: 0 }]]));
+    vi.mocked(getMemoryCache).mockReturnValue({ result: cachedResult, dirMetas: {} });
+    vi.mocked(scanVsCodeDirs).mockReturnValue({ entries: [], totalDirs: 0 });
+
+    const parsed = await parseAllLogsAsyncDetailed([editorDir]);
+
+    expect(parsed.result.sessions.map(session => session.sessionId)).toEqual(['sibling-cli']);
+    expect(parsed.result.editLocIndex.has('sibling-cli-request')).toBe(true);
+  });
+
   it('reports progress during a cold parse', async () => {
     const progress: Array<{ phase: number; detail?: string; workspacePlan?: string[]; workspaceDone?: string }> = [];
 

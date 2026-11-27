@@ -101,6 +101,8 @@ interface OcPart {
 
 interface OpenCodeAssistantData {
   responseText: string;
+  /** The assistant's own text parts, without the code its write tools wrote (which `responseText` also holds). */
+  replyText: string;
   toolsUsed: string[];
   editedFiles: string[];
   referencedFiles: string[];
@@ -231,14 +233,22 @@ function getOpenCodeUserText(msg: OcMessage, partsByMsg: Map<string, OcPart[]>):
   return userTextFromParts || msg.summary?.title || '';
 }
 
-function findAssistantMessages(messages: OcMessage[], startIndex: number): OcMessage[] {
-  const result: OcMessage[] = [];
-  for (let i = startIndex; i < messages.length; i++) {
-    const candidate = messages[i];
-    if (candidate.role === 'user') break;
-    if (candidate.role === 'assistant') result.push(candidate);
+/** The assistant messages answering each user message, by its ID: those naming it as their parent (`parentID`), and
+ *  those naming no user message, from it up to the next user message. A late answer to an earlier prompt can arrive
+ *  after a later one, so arrival order alone can give it to the wrong turn. One pass over the time-sorted messages. */
+function assistantMessagesByUser(messages: readonly OcMessage[]): Map<string, OcMessage[]> {
+  const userIds = new Set(messages.filter(m => m.role === 'user').map(m => m.id));
+  const byUser = new Map<string, OcMessage[]>();
+  let current: string | undefined;
+  for (const m of messages) {
+    if (m.role === 'user') { current = m.id; continue; }
+    if (m.role !== 'assistant') continue;
+    const owner = m.parentID && userIds.has(m.parentID) ? m.parentID : current;
+    if (!owner) continue;
+    if (!byUser.has(owner)) byUser.set(owner, []);
+    byUser.get(owner)?.push(m);
   }
-  return result;
+  return byUser;
 }
 
 function applyOpenCodePart(
@@ -343,6 +353,7 @@ function collectAssistantData(
 ): OpenCodeAssistantData {
   const data: OpenCodeAssistantData = {
     responseText: '',
+    replyText: '',
     toolsUsed: [],
     editedFiles: [],
     referencedFiles: [],
@@ -358,7 +369,9 @@ function collectAssistantData(
   const assistantMsg = assistantMessages[0];
   if (!assistantMsg) return data;
 
-  const assistantTs = assistantMsg.time?.completed || assistantMsg.time?.created || null;
+  // The turn's work ends with its last assistant message, not its first (tool loops log several).
+  const ends = assistantMessages.map(message => message.time?.completed || message.time?.created || 0).filter(ts => ts > 0);
+  const assistantTs = ends.length > 0 ? Math.max(...ends) : null;
   if (assistantTs && (!data.lastTs || assistantTs > data.lastTs)) data.lastTs = assistantTs;
   if (userTs && assistantTs) data.totalElapsed = assistantTs - userTs;
 
@@ -374,6 +387,7 @@ function collectAssistantData(
     for (const part of parts) applyOpenCodePart(part, data, textParts);
   }
   data.responseText = textParts.join('\n');
+  data.replyText = assistantMessages.flatMap(message => (partsByMsg.get(message.id) || []).filter(part => part.type === 'text' && part.text).map(part => part.text!)).join('\n');
 
   return data;
 }
@@ -427,6 +441,7 @@ function buildOpenCodeRequest(
     messageText: getOpenCodeUserText(msg, partsByMsg),
     variableKinds: imageCount > 0 ? { image: imageCount } : {},
     responseText: assistantData.responseText,
+    replyText: assistantData.replyText,
     agentName: msg.agent || 'OpenCode',
     agentMode: msg.agent || 'build',
     modelId: assistantData.modelId,
@@ -515,6 +530,7 @@ function buildOpenCodeSession(
   const cacheState = { sawMain: false };
   let firstTs: number | null = null;
   let lastTs: number | null = null;
+  const answers = assistantMessagesByUser(rawMessages);
 
   for (let i = 0; i < rawMessages.length; i++) {
     const msg = rawMessages[i];
@@ -523,7 +539,7 @@ function buildOpenCodeSession(
     const userTs = msg.time?.created || null;
     if (userTs && (!firstTs || userTs < firstTs)) firstTs = userTs;
 
-    const assistantMessages = findAssistantMessages(rawMessages, i + 1);
+    const assistantMessages = answers.get(msg.id) ?? [];
     const assistantData = collectAssistantData(assistantMessages, partsByMsg, userTs, lastTs);
     lastTs = assistantData.lastTs;
     const request = buildOpenCodeRequest(msg, partsByMsg, assistantData, userTs, editLocIndex);
@@ -545,6 +561,7 @@ function buildOpenCodeSession(
     requests,
     hasDevcontainer: detectDevcontainerFromRequests(requests, rawSession.directory),
     workspaceRootPath: rawSession.directory || undefined,
+    ...(rawSession.parentID && rawSession.parentID !== rawSession.id ? { parentSessionId: rawSession.parentID } : {}),
   });
 }
 

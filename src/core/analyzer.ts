@@ -5,10 +5,11 @@
 
 /* Analyzer facade and warm-up helpers. */
 
+import { withInheritedTurnsRemoved } from './fork-ownership';
 import {
   Session, SessionRequest, DateFilter, DailyActivity, HourlyDistribution, HeatmapData,
   CodeProductionData, ConsumptionData, BurndownConfig, BurndownData, AiCreditData, AiCreditBurndownData, TokenCoverageData,
-  DayTimeline, SessionList, WorkspaceBreakdown, RecommendationResult,
+  TimelineDataset, SessionList, WorkspaceBreakdown, RecommendationResult,
   AntiPatternData, WorkLifeBalanceResult, StatsResult, HarnessComparisonData,
   WorkflowOptimizationData, ConfigHealthData, FlowStateData, Workspace,
   CalendarActivityData, ProjectOverviewData, ContextManagementData, InsightsData,
@@ -58,7 +59,12 @@ export class Analyzer {
   private readonly requestSessionMap: Map<SessionRequest, Session>;
   private cache = new Map<string, unknown>();
 
-  constructor(sessions: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
+  constructor(input: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
+    // Each turn is counted once, everywhere: a fork's copied history belongs to its source.
+    const all = withInheritedTurnsRemoved(input);
+    // A session with no turn of its own only holds your answers to stops (Copilot permission-only sessions): only the
+    // Timeline shows those. A fork whose every turn was copied stays everywhere, as the session it is.
+    const sessions = all.filter(s => s.requests.length > 0 || (s.inheritedTurns ?? 0) > 0);
     const elIdx = editLocIndex ?? new Map<string, Map<string, EditLoc>>();
     this.sessions = sessions;
     this.editLocIndex = elIdx;
@@ -68,7 +74,7 @@ export class Analyzer {
     this.dashboard = new DashboardAnalyzer(sessions, elIdx, sharedMap);
     this.production = new ProductionAnalyzer(sessions, elIdx, sharedMap);
     this.consumption = new ConsumptionAnalyzer(sessions, elIdx, sharedMap);
-    this.timeline = new TimelineAnalyzer(sessions, elIdx, sharedMap);
+    this.timeline = new TimelineAnalyzer(sessions, elIdx, sharedMap, all);
     this.patterns = new PatternsAnalyzer(sessions, elIdx, sharedMap);
     this.workflows = new WorkflowAnalyzer(sessions, elIdx, sharedMap);
     this.config = new ConfigAnalyzer(sessions, elIdx, this.workspaces, sharedMap);
@@ -171,7 +177,7 @@ export class Analyzer {
   getAiCreditBurndown(config: BurndownConfig, f?: DateFilter): AiCreditBurndownData { return this.consumption.getAiCreditBurndown(config, f); }
   getTokenCoverage(f?: DateFilter): TokenCoverageData { return this.consumption.getTokenCoverage(f); }
 
-  getDayTimeline(dateStr?: string, mode?: string, f?: DateFilter): DayTimeline { return this.timeline.getDayTimeline(dateStr, mode, f); }
+  getTimelineData(f?: DateFilter): TimelineDataset { return this.timeline.getTimelineData(f); }
   getSessions(page: number, pageSize: number, f?: DateFilter, search?: string): SessionList { return this.timeline.getSessions(page, pageSize, f, search); }
   getSessionDetail(sessionId: string): Session | null { return this.timeline.getSessionDetail(sessionId); }
   getWorkLifeBalance(f?: DateFilter): WorkLifeBalanceResult | null { return this.timeline.getWorkLifeBalance(f); }

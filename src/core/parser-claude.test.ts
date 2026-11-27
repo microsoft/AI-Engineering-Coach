@@ -14,7 +14,9 @@ import { execSync } from 'child_process';
 import { describe, it, expect, vi } from 'vitest';
 import { EditLocIndex } from './edit-loc-diff';
 import type { SessionSource } from './cache';
-import { extractClaudeImageReferences, parseClaudeSessions } from './parser-claude';
+import { extractClaudeImageReferences, parseClaudeSessionFile, parseClaudeSessions } from './parser-claude';
+import { withInheritedTurnsRemoved } from './fork-ownership';
+import { Analyzer } from './analyzer';
 import { getParseWarningCounts, getParseWarnings, MAX_FILE_SIZE, resetParseWarnings } from './parser-shared';
 import { loadSourceSession } from './session-images';
 
@@ -109,6 +111,224 @@ function withProjectsDir(filename: string, lines: Array<object | string>, run: (
 }
 
 describe('parseClaudeSessions', () => {
+  it('reads a transcript whose path is longer than Windows’ classic 260-character limit', () => {
+    // Claude Code names a project folder after its whole working directory, so deep repositories give long paths.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-long-path-'));
+    try {
+      // Long whatever the temp folder: a deep home, and a project folder named after a deep working directory.
+      const projects = path.join(root, 'home-folder-'.repeat(8), 'projects');
+      const projDir = path.join(projects, '-C-' + 'very-deep-working-directory-'.repeat(7) + 'repo');
+      fs.mkdirSync(projDir, { recursive: true });
+      const file = path.join(projDir, '0f0e0d0c-0000-4000-8000-000000000288.jsonl');
+      fs.writeFileSync(file, [makeUser('prompt', '2025-06-15T10:00:00Z'), makeAssistant('answer', '2025-06-15T10:00:05Z')].map(l => JSON.stringify(l)).join('\n'));
+      expect(file.length).toBeGreaterThan(350);
+      expect(parseClaudeSessions(projects).flatMap(w => w.sessions).map(s => s.requests.length)).toEqual([1]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('marks how much older than the transcript’s first line a prompt is: a fork’s copied history', () => {
+    withProjectsDir('fork.jsonl', [
+      { type: 'queue-operation', timestamp: '2025-06-15T10:10:00Z', sessionId: 'fork-1' },
+      makeUser('copied prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'fork-1' }),
+      makeAssistant('copied answer', '2025-06-15T10:00:05Z'),
+      makeUser('new prompt', '2025-06-15T10:10:01Z', { uuid: 'u2', sessionId: 'fork-1' }),
+      makeAssistant('new answer', '2025-06-15T10:10:05Z'),
+    ], (projectsDir) => {
+      const file = path.join(projectsDir, '-Users-me-proj', 'fork.jsonl');
+      expect(parseClaudeSessionFile(file, 'ws', 'proj')?.requests.map(r => r.historyLeadMs)).toEqual([600_000, undefined]);
+      // Ten minutes older than the transcript: a copy even with its source not loaded, so the parse leaves it out.
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0]).toMatchObject({ requestCount: 1, inheritedTurns: 1 });
+    });
+    withProjectsDir('plain.jsonl', [
+      { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'plain-1' },
+      makeUser('prompt', '2025-06-15T10:00:00Z', { uuid: 'u1', sessionId: 'plain-1' }),
+      makeAssistant('answer', '2025-06-15T10:00:05Z'),
+    ], (projectsDir) => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.historyLeadMs)).toEqual([undefined]);
+    });
+  });
+
+  it('records every AskUserQuestion as a stop, answered only with a non-empty, successful result', () => {
+    const answer = (id: string, ts: string, isError = false, content = isError ? 'no user' : 'User answered: B') => ({
+      type: 'user', timestamp: ts, sessionId: 'sess-1',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }] },
+    });
+    withProjectsDir('s.jsonl', [
+      makeUser('plan it', '2025-06-15T10:00:00Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:00:05Z', 'q1'),
+      answer('q1', '2025-06-15T10:04:05Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:04:10Z', 'q2'),
+      answer('q2', '2025-06-15T10:04:11Z', true),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:04:20Z', 'q3'),
+      answer('q3', '2025-06-15T10:04:20Z', false, ''),
+      makeAssistant('done', '2025-06-15T10:05:00Z'),
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      const ms = Date.parse;
+      expect(request.userWaits).toEqual([
+        { start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:04:05Z'), kind: 'question', answered: true, text: { answer: 'User answered: B' } },
+        { start: ms('2025-06-15T10:04:10Z'), end: ms('2025-06-15T10:04:11Z'), kind: 'question', answered: false },
+        { start: ms('2025-06-15T10:04:20Z'), end: ms('2025-06-15T10:04:20Z'), kind: 'question', answered: false },
+      ]);
+      expect(request.totalElapsed).toBe(300_000);
+    });
+  });
+
+  it('keeps the agent’s own text apart from the file contents its write tools wrote', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('write it'),
+      makeAssistant('I will write the file.', '2025-06-15T10:00:01Z'),
+      makeToolAssistant('Write', { file_path: '/p/a.ts', content: 'export const x = 1;' }, '2025-06-15T10:00:02Z', 't1'),
+      { type: 'user', timestamp: '2025-06-15T10:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      expect(request.responseText).toContain('export const x = 1;');
+      expect(request.replyText).toBe('I will write the file.');
+    });
+  });
+
+  it('logs an empty reply, not the file contents, for a turn that only wrote a file', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('write it'),
+      makeToolAssistant('Write', { file_path: '/p/a.ts', content: 'export const x = 1;' }, '2025-06-15T10:00:02Z', 't1'),
+      { type: 'user', timestamp: '2025-06-15T10:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+    ], (projectsDir) => {
+      const request = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0];
+      expect([request.responseText.includes('export const x = 1;'), request.replyText]).toEqual([true, '']);
+    });
+  });
+
+  it('marks a turn logged with its own queue or API records as logged live, and a fork’s copied turn not', () => {
+    withProjectsDir('s.jsonl', [
+      { type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', sessionId: 'sess-1', operation: 'enqueue' },
+      makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }),
+      { type: 'api-request', timestamp: '2025-06-15T10:00:01Z', sessionId: 'sess-1' },
+      makeAssistant('one', '2025-06-15T10:00:02Z'),
+      // Copied from another transcript: conversation lines only.
+      makeUser('second', '2025-06-15T10:01:00Z', { uuid: 'u2' }),
+      makeAssistant('two', '2025-06-15T10:01:02Z'),
+      // Only its API request record says this turn was logged live; the record itself is left out of the parse.
+      makeUser('third', '2025-06-15T10:02:00Z', { uuid: 'u3' }),
+      { type: 'api-request', timestamp: '2025-06-15T10:02:01Z', sessionId: 'sess-1', body: 'x'.repeat(4096) },
+      makeAssistant('three', '2025-06-15T10:02:02Z'),
+    ], (projectsDir) => {
+      expect(parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.loggedLive)).toEqual([true, undefined, true]);
+    });
+  });
+
+  it('keeps a fork’s queue record with its own new prompt, so the copied turn before it stays a copy', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fork-boundary-'));
+    try {
+      const projDir = path.join(root, 'projects', '-Users-me-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const line = (o: object, sessionId: string) => JSON.stringify({ ...o, sessionId });
+      const queue = (ts: string) => ({ type: 'queue-operation', timestamp: ts, operation: 'enqueue' });
+      const shared = [makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }), makeAssistant('one', '2025-06-15T10:00:05Z')];
+      // The fork lost its opening records: its copies, then its own queued prompt. Its file is written first, so it
+      // starts no later than its source by every measure but who logged the shared turn live.
+      fs.writeFileSync(path.join(projDir, 'fork.jsonl'), [...shared, queue('2025-06-15T10:20:00Z'), makeUser('mine', '2025-06-15T10:20:00Z', { uuid: 'u2' }),
+        { type: 'api-request', timestamp: '2025-06-15T10:20:01Z' }, makeAssistant('two', '2025-06-15T10:20:05Z')].map(o => line(o, 'fork')).join('\n'));
+      // The source logged its turns live, and went on later.
+      fs.writeFileSync(path.join(projDir, 'src.jsonl'), [queue('2025-06-15T10:00:00Z'), shared[0], { type: 'api-request', timestamp: '2025-06-15T10:00:01Z' }, shared[1],
+        queue('2025-06-15T10:30:00Z'), makeUser('later', '2025-06-15T10:30:00Z', { uuid: 'u3' }), { type: 'api-request', timestamp: '2025-06-15T10:30:01Z' }, makeAssistant('three', '2025-06-15T10:30:05Z')]
+        .map(o => line(o, 'src')).join('\n'));
+      const sessions = parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions);
+      // The parse already counts the copied turn once, in the source, and links the fork to it.
+      expect(sessions.find(s => s.sessionId === 'src')?.requests.map(r => r.messageText)).toEqual(['first', 'later']);
+      expect(sessions.find(s => s.sessionId === 'fork')).toMatchObject({ forkedFromId: 'src', inheritedTurns: 1 });
+      expect(sessions.find(s => s.sessionId === 'fork')?.requests.map(r => r.loggedLive)).toEqual([true]);
+      const fork = withInheritedTurnsRemoved(sessions).find(s => s.sessionId === 'fork');
+      expect([fork?.requests.map(r => r.messageText), fork?.forkedFromId, fork?.inheritedTurns]).toEqual([['mine'], 'src', 1]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an AskUserQuestion call’s questions, options, your answer and what the agent said before it', () => {
+    withProjectsDir('s.jsonl', [
+      makeUser('plan it', '2025-06-15T10:00:00Z'),
+      makeAssistant('Two ways to do this.', '2025-06-15T10:00:03Z'),
+      makeToolAssistant('AskUserQuestion', {
+        questions: [{ question: 'Which approach?', header: 'Approach', options: [{ label: 'Rewrite', description: 'x' }, { label: 'Patch' }], multiSelect: false }],
+      }, '2025-06-15T10:00:05Z', 'q1'),
+      { type: 'user', timestamp: '2025-06-15T10:01:00Z', sessionId: 'sess-1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'q1', content: [{ type: 'text', text: 'User has answered your questions: "Which approach?"="Patch"' }] }] } },
+      makeAssistant('done', '2025-06-15T10:02:00Z'),
+    ], (projectsDir) => {
+      const [wait] = parseClaudeSessions(projectsDir)[0].sessions[0].requests[0].userWaits ?? [];
+      expect(wait.text).toEqual({
+        ask: 'Which approach?', choices: ['Rewrite', 'Patch'], before: 'Two ways to do this.', answer: 'User has answered your questions: "Which approach?"="Patch"',
+      });
+    });
+  });
+
+  it('keeps a fork that holds only copied turns, from its transcript to the Sessions list', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fork-copies-only-'));
+    try {
+      const projDir = path.join(root, 'projects', '-Users-me-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const line = (o: object, sessionId: string) => JSON.stringify({ ...o, sessionId });
+      const shared = [makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }), makeAssistant('one', '2025-06-15T10:00:05Z')];
+      fs.writeFileSync(path.join(projDir, 'src.jsonl'), [{ type: 'queue-operation', timestamp: '2025-06-15T10:00:00Z', operation: 'enqueue' }, shared[0],
+        { type: 'api-request', timestamp: '2025-06-15T10:00:01Z' }, shared[1]].map(o => line(o, 'src')).join('\n'));
+      fs.writeFileSync(path.join(projDir, 'fork.jsonl'), shared.map(o => line(o, 'fork')).join('\n'));
+      const sessions = parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions);
+      expect(sessions.find(s => s.sessionId === 'fork')).toMatchObject({ requestCount: 0, inheritedTurns: 1, forkedFromId: 'src' });
+      const listed = new Analyzer(sessions, new Map()).getSessions(1, 50).sessions.map(s => [s.sessionId, s.requestCount]);
+      expect(listed.sort()).toEqual([['fork', 0], ['src', 1]]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('links no source when two transcripts logged the copied history live, and still counts each turn once', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fork-two-sources-'));
+    try {
+      const projDir = path.join(root, 'projects', '-Users-me-proj');
+      fs.mkdirSync(projDir, { recursive: true });
+      const line = (o: object, sessionId: string) => JSON.stringify({ ...o, sessionId });
+      const queue = (ts: string) => ({ type: 'queue-operation', timestamp: ts, operation: 'enqueue' });
+      const liveTurn = (text: string, ts: string, uuid: string) => [queue(ts), makeUser(text, ts, { uuid }), { type: 'api-request', timestamp: ts }, makeAssistant('ok', ts)];
+      const sharedLive = [...liveTurn('first', '2025-06-15T10:00:00Z', 'u1'), ...liveTurn('second', '2025-06-15T10:05:00Z', 'u2')];
+      fs.writeFileSync(path.join(projDir, 'a.jsonl'), [...sharedLive, ...liveTurn('in a', '2025-06-15T10:30:00Z', 'ua')].map(o => line(o, 'a')).join('\n'));
+      fs.writeFileSync(path.join(projDir, 'b.jsonl'), [...sharedLive, ...liveTurn('in b', '2025-06-15T10:31:00Z', 'ub')].map(o => line(o, 'b')).join('\n'));
+      fs.writeFileSync(path.join(projDir, 'fork.jsonl'), [makeUser('first', '2025-06-15T10:00:00Z', { uuid: 'u1' }), makeAssistant('ok', '2025-06-15T10:00:00Z'),
+        makeUser('second', '2025-06-15T10:05:00Z', { uuid: 'u2' }), makeAssistant('ok', '2025-06-15T10:05:00Z'),
+        ...liveTurn('mine', '2025-06-15T10:20:00Z', 'u4')].map(o => line(o, 'fork')).join('\n'));
+      const sessions = parseClaudeSessions(path.join(root, 'projects')).flatMap(w => w.sessions);
+      const fork = sessions.find(s => s.sessionId === 'fork');
+      expect([fork?.requests.map(r => r.messageText), fork?.inheritedTurns, fork?.forkedFromId, fork?.forkSourceAmbiguous]).toEqual([['mine'], 2, undefined, true]);
+      const ids = sessions.flatMap(s => s.requests.map(r => r.userEventId)).sort();
+      expect(ids).toEqual(['u1', 'u2', 'u4', 'ua', 'ub']);
+      expect(sessions.filter(s => s.forkedFromId)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an unanswered AskUserQuestion until the next line, and pairs an answer that comes after your next prompt', () => {
+    const ms = Date.parse;
+    withProjectsDir('s.jsonl', [
+      makeUser('plan it', '2025-06-15T10:00:00Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:00:05Z', 'q1'),
+      // You typed instead of answering: the question stopped the agent until then, and got no answer.
+      makeUser('never mind, do X', '2025-06-15T10:03:00Z'),
+      makeToolAssistant('AskUserQuestion', { questions: [] }, '2025-06-15T10:03:05Z', 'q2'),
+      makeUser('also Y', '2025-06-15T10:04:00Z'),
+      // q2's answer is logged after that prompt.
+      { type: 'user', timestamp: '2025-06-15T10:06:00Z', sessionId: 'sess-1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'q2', content: 'User answered: B' }] } },
+      makeAssistant('done', '2025-06-15T10:07:00Z'),
+    ], (projectsDir) => {
+      const waits = parseClaudeSessions(projectsDir)[0].sessions[0].requests.map(r => r.userWaits);
+      expect(waits).toEqual([
+        [{ start: ms('2025-06-15T10:00:05Z'), end: ms('2025-06-15T10:03:00Z'), kind: 'question', answered: false }],
+        [{ start: ms('2025-06-15T10:03:05Z'), end: ms('2025-06-15T10:06:00Z'), kind: 'question', answered: true, text: { answer: 'User answered: B' } }],
+        undefined,
+      ]);
+    });
+  });
+
   it('extracts current Edit new_string and MultiEdit deltas', () => {
     withProjectsDir('s.jsonl', [
       makeUser('edit files', '2025-06-15T10:00:00Z', { uuid: 'request_claude_edit' }),

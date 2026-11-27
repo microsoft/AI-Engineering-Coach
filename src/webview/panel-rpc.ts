@@ -7,7 +7,11 @@
 
 import { Analyzer } from '../core/analyzer';
 import { ParseResult } from '../core/parser';
-import { loadSessionFromDisk } from '../core/cache';
+import { loadSessionFromDisk, loadTimelineTextFromDisk } from '../core/cache';
+import { MAX_TEXT_SCOPE_TURNS } from '../core/timeline-model';
+import { turnIdentity, withAnalyzedTurns } from '../core/fork-ownership';
+import { localScrubContext } from '../core/session-workspace-meta';
+import type { TimelineTextScope } from '../core/types/timeline-types';
 import { FF_TOKEN_REPORTING_ENABLED } from '../core/constants';
 import { loadGitHubAppMetrics } from '../core/github-app-analytics';
 import { loadGitHubAppIssueCredits } from '../core/github-app-issue-credits';
@@ -127,6 +131,18 @@ export function validateDateFilter(p: Record<string, unknown>): DateFilter | und
   else if (isString(p.workspace)) f.workspaceId = p.workspace;
   if (isString(p.harness)) f.harness = p.harness;
   return Object.keys(f).length > 0 ? f : undefined;
+}
+
+/** A lane's text scope from the webview: a finite window and its turns, else nothing is read. */
+function validateTimelineTextScope(raw: unknown): TimelineTextScope | null {
+  if (!isRecord(raw) || !isNumber(raw.from) || !isNumber(raw.to) || !Number.isFinite(raw.from) || !Number.isFinite(raw.to)
+    || raw.to <= raw.from || !Array.isArray(raw.turns) || raw.turns.length > MAX_TEXT_SCOPE_TURNS) return null;
+  const turns: TimelineTextScope['turns'] = [];
+  for (const t of raw.turns) {
+    if (!isRecord(t) || !isNumber(t.t) || !Number.isFinite(t.t) || !isOptionalString(t.id)) return null;
+    turns.push({ t: t.t, ...(t.id ? { id: t.id } : {}) });
+  }
+  return { from: raw.from, to: raw.to, turns };
 }
 
 function validateBurndownConfig(raw: unknown): BurndownConfig {
@@ -761,11 +777,7 @@ const rpcHandlers: TypedRpcHandlers = {
     isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined,
   ) : errorResult('Token reporting is temporarily disabled'),
   getTokenCoverage: (a, _p, params) => FF_TOKEN_REPORTING_ENABLED ? a.getTokenCoverage(validateDateFilter(params)) : errorResult('Token reporting is temporarily disabled'),
-  getDayTimeline: (a, _p, params) => a.getDayTimeline(
-    isOptionalString(params?.date) ? params.date : undefined,
-    isOptionalString(params?.mode) ? params.mode : undefined,
-    isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined,
-  ),
+  getTimelineData: (a, _p, params) => a.getTimelineData(isRecord(params?.filter) ? validateDateFilter(params.filter) : undefined),
   getSessions: (a, _p, params) => a.getSessions(
     isNumber(params?.page) ? params.page : 1,
     isNumber(params?.pageSize) ? Math.min(params.pageSize, 100) : 20,
@@ -778,9 +790,22 @@ const rpcHandlers: TypedRpcHandlers = {
     // In-memory sessions have text stripped for memory efficiency.
     // Try loading full session from disk cache for the detail view.
     const fromDisk = await loadSessionFromDisk(sessionId);
-    if (fromDisk) return fromDisk;
+    // A fork's copied turns count once, in their source, here as on every other view.
+    if (fromDisk) return withAnalyzedTurns(fromDisk, a.getSessionDetail(sessionId));
     // Fall back to in-memory (stripped) session.
     return a.getSessionDetail(sessionId);
+  },
+  // The text behind one Timeline lane, read again from its log when the lane is opened: only for the local panel, and
+  // only what the lane shows. The worker reads, filters and scrubs it; the full session never comes to this thread.
+  getTimelineSessionText: async (a, _p, params) => {
+    const sessionId = params?.sessionId;
+    const scope = validateTimelineTextScope(params?.scope);
+    if (!isString(sessionId) || !scope) return null;
+    const analyzed = a.getSessionDetail(sessionId);
+    if (!analyzed) return null;
+    // A fork's copied turns, and their stops, count once, in their source.
+    const kept = analyzed.inheritedTurns ? analyzed.requests.map(turnIdentity) : undefined;
+    return loadTimelineTextFromDisk(sessionId, scope, localScrubContext(), kept);
   },
   getWorkLifeBalance: (a, _p, params) => a.getWorkLifeBalance(validateDateFilter(params)),
   getAntiPatterns: (a, _p, params) => a.getAntiPatterns(validateDateFilter(params)),

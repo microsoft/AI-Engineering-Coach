@@ -37,7 +37,6 @@ export const INITIAL_COUNTS = { Requests: '63', Sessions: '21', 'AI LoC': '315',
 export const RELOADED_COUNTS = { Requests: '66', Sessions: '22', 'AI LoC': '330', Workspaces: '3' };
 export const INITIAL_NET_LOC = 294;
 export const PROJECT_NAMES = dataset.projects.map(project => project.id);
-export const FIRST_PROMPT = `${dataset.projects[0].prompts[0]} Task: ${dataset.schedule[0].topic}.`;
 
 const totalsSchema = z.object({ sessions: z.number(), requests: z.number(), aiLoc: z.number(), netAiLoc: z.number() });
 export const fixtureDatasetSchema = z.object({
@@ -61,6 +60,7 @@ export function isolatedEnvironment(root: string, original: NodeJS.ProcessEnv): 
     XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_DATA_HOME: path.join(home, '.local', 'share'),
     COPILOT_HOME: path.join(home, '.copilot'),
+    GH_CONFIG_DIR: path.join(home, '.config', 'gh'),
     TMPDIR: path.join(root, 'tmp'),
     TMP: path.join(root, 'tmp'),
     TEMP: path.join(root, 'tmp'),
@@ -85,9 +85,95 @@ export function fixturePaths(root: string, platform: NodeJS.Platform = process.p
   return {
     home,
     logs: path.join(codeUser, 'workspaceStorage'),
+    cliLogs: path.join(home, '.copilot', 'session-state'),
     workspace: path.join(home, 'workspaces', 'smoke-workspace'),
     runtimeLog: path.join(home, '.copilot-analytics-cache', 'runtime.log'),
   };
+}
+
+/** The synthetic Copilot App family: a coordinator that starts two children (one starts a grandchild), a child it
+ *  starts by relaying its first message, and a lone Copilot CLI session. */
+export const FAMILY = {
+  coordinator: '0f000000-0000-4000-8000-000000000001',
+  payment: '0f000000-0000-4000-8000-000000000002',
+  docs: '0f000000-0000-4000-8000-000000000003',
+  lint: '0f000000-0000-4000-8000-000000000004',
+  perf: '0f000000-0000-4000-8000-000000000005',
+  lone: '0f000000-0000-4000-8000-000000000006',
+  sessions: 6,
+  requests: 9,
+  /** The GitHub handle the synthetic Copilot sign-in uses; branches start with it and the Timeline removes it. */
+  handle: 'octo-dev',
+};
+
+export const familyDatasetSchema = z.object({
+  synthetic: z.literal(true),
+  kind: z.literal('session-family'),
+  harnesses: z.array(z.string()),
+  sessions: z.number(),
+  requests: z.number(),
+  family: z.object({ coordinators: z.number(), children: z.number(), grandchildren: z.number(), relayStarted: z.number() }),
+});
+
+export function familyFixtureFiles(root: string, timestamp: number): Map<string, string> {
+  const { home, cliLogs } = fixturePaths(root);
+  const at = (h: number, m = 0) => { const d = new Date(timestamp); d.setHours(h, m, 0, 0); return d.toISOString(); };
+  const relay = (from: string, text: string) => ({ content: text, transformedContent: `<cross_session_message>\nfrom_session_id: ${from}\n</cross_session_message>\n${text}` });
+  const usage = (ts: string, credits: number) => ({ type: 'session.usage_record', timestamp: ts,
+    data: { usage: { model: 'claude-opus-4.7', inputTokens: 40_000, outputTokens: 2_000, initiator: 'agent', copilotUsage: { totalNanoAiu: credits * 1e9 } } } });
+  const start = (id: string, app = true) => ({ type: 'session.start', timestamp: at(9), data: { sessionId: id, selectedModel: 'claude-opus-4.7', ...(app ? { remoteSteerable: true } : {}) } });
+  const reply = (ts: string, text: string) => ({ type: 'assistant.message', id: `a-${ts}`, timestamp: ts, data: { content: text, phase: 'final' } });
+  const create = (id: string, child: string) => [
+    { type: 'tool.execution_start', data: { toolName: 'create_session', toolCallId: id } },
+    // The Copilot App's result: the quoted name and project IDs are not the new session; its labelled ID and link are.
+    { type: 'tool.execution_complete', data: { toolCallId: id, success: true, result: {
+      content: `Created session 'Follow-up' (id: ${child}) in project '${FAMILY.lone}'. Link to it with ghapp://sessions/${child}.` } } },
+  ];
+  /** A question the agent asked you (`ask_user`) and your answer. */
+  const ask = (id: string, from: string, to: string) => [
+    { type: 'tool.execution_start', timestamp: from, data: { toolName: 'ask_user', toolCallId: id } },
+    { type: 'tool.execution_complete', timestamp: to, data: { toolCallId: id, success: true, result: { content: 'User selected: Keep both' } } },
+  ];
+  /** A permission prompt and who decided it: you, or a host policy (not a wait on you). */
+  const permission = (id: string, from: string, to: string, decisionSource: 'human_response' | 'host_policy') => [
+    { type: 'permission.requested', timestamp: from, data: { requestId: id, permissionRequest: { kind: 'shell' } } },
+    { type: 'permission.completed', timestamp: to, data: { requestId: id, decisionSource, result: { kind: 'approved' } } },
+  ];
+  const files = new Map<string, string>();
+  const session = (id: string, name: string, branch: string, events: object[]) => {
+    files.set(path.join(cliLogs, id, 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
+    files.set(path.join(cliLogs, id, 'workspace.yaml'), [`id: ${id}`, `cwd: ${path.join(home, 'workspaces', 'shop')}`,
+      ...(name ? [`name: ${name}`, 'user_named: true'] : []), `branch: ${branch}`, `repository: ${FAMILY.handle}/shop`, 'fork_count: 0'].join('\n') + '\n');
+  };
+  session(FAMILY.coordinator, 'Checkout revamp', `${FAMILY.handle}/checkout-revamp`, [
+    start(FAMILY.coordinator), { type: 'user.message', timestamp: at(10), data: { content: 'Split the checkout work into sessions.' } },
+    usage(at(10, 1), 3), ...create('c1', FAMILY.payment), ...create('c2', FAMILY.docs), reply(at(10, 5), 'Started two sessions.'),
+    { type: 'user.message', timestamp: at(10, 40), data: relay(FAMILY.payment, 'Payment tests pass.') }, reply(at(10, 41), 'Noted.'),
+    { type: 'user.message', timestamp: at(11, 30), data: { content: 'Ship it.' } }, ...permission('pm1', at(11, 31), at(11, 31), 'host_policy'),
+    ...permission('pm2', at(11, 32), at(11, 36), 'human_response'), usage(at(11, 40), 2), reply(at(11, 50), 'Shipped.'),
+  ]);
+  session(FAMILY.payment, 'Payment tests', `${FAMILY.handle}/payment-tests`, [
+    start(FAMILY.payment), { type: 'user.message', timestamp: at(10, 2), data: relay(FAMILY.coordinator, 'Add payment tests.') },
+    usage(at(10, 3), 5), ...create('p1', FAMILY.lint), reply(at(10, 30), 'Tests added.'),
+    { type: 'user.message', timestamp: at(10, 35), data: { content: 'Also cover refunds.' } }, reply(at(10, 38), 'Refunds covered.'),
+  ]);
+  session(FAMILY.docs, 'Docs update', `${FAMILY.handle}/docs`, [
+    start(FAMILY.docs), { type: 'user.message', timestamp: at(10, 4), data: relay(FAMILY.coordinator, 'Update the docs.') },
+    ...ask('q1', at(10, 6), at(10, 16)), usage(at(10, 17), 2), reply(at(10, 20), 'Docs updated.'),
+  ]);
+  session(FAMILY.lint, 'Lint fixes', `${FAMILY.handle}/lint`, [
+    start(FAMILY.lint), { type: 'user.message', timestamp: at(10, 6), data: relay(FAMILY.payment, 'Fix the lint errors.') },
+    reply(at(10, 15), 'Lint fixed.'),
+  ]);
+  session(FAMILY.perf, 'Perf probe', `${FAMILY.handle}/perf`, [
+    start(FAMILY.perf), { type: 'user.message', timestamp: at(12), data: relay(FAMILY.coordinator, 'Profile checkout.') },
+    usage(at(12, 10), 1), reply(at(12, 20), 'Profiled.'),
+  ]);
+  session(FAMILY.lone, '', 'main', [
+    start(FAMILY.lone, false), { type: 'user.message', timestamp: at(14), data: { content: 'Explain the build.' } }, reply(at(14, 5), 'Explained.'),
+  ]);
+  files.set(path.join(home, '.copilot', 'config.json'), JSON.stringify({ lastLoggedInUser: { host: 'https://github.com', login: FAMILY.handle } }) + '\n');
+  return files;
 }
 
 function scheduledTime(anchor: number, daysAgo: number, hour: number, projectIndex: number): number {
@@ -233,6 +319,38 @@ export async function exportFixtureDataset(root: string, timestamp: number, arti
   console.log(`Synthetic dataset: ${summary.projects.length} projects, ${summary.initial.sessions} sessions, ` +
     `${summary.initial.requests} requests, ${summary.initial.aiLoc} AI LoC across ${summary.activeDays} days.`);
   console.log(`Fixture definitions: ${summary.source}; raw synthetic inputs: ${path.join(artifacts, 'fixtures')}`);
+}
+
+/** The families scenario: Copilot App and Copilot CLI session-state files only, no VS Code projects. */
+export async function prepareFamilyFixtures(root: string, timestamp: number): Promise<void> {
+  await fs.mkdir(fixturePaths(root).workspace, { recursive: true });
+  await fs.mkdir(path.join(root, 'tmp'), { recursive: true });
+  for (const [file, content] of familyFixtureFiles(root, timestamp)) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content, { flag: 'wx' });
+  }
+}
+
+export async function assertFamilyFixturesUnchanged(root: string, timestamp: number): Promise<void> {
+  const expected = familyFixtureFiles(root, timestamp);
+  const logs = [...expected.keys()].filter(file => file.startsWith(fixturePaths(root).cliLogs));
+  assert.deepEqual((await listFiles(fixturePaths(root).cliLogs)).sort(), logs.sort(), 'Session-log files were added or removed unexpectedly');
+  for (const [file, content] of expected) {
+    assert.equal(await fs.readFile(file, 'utf8'), content, `Session-log input was modified: ${file}`);
+  }
+}
+
+export async function exportFamilyDataset(root: string, timestamp: number, artifacts: string): Promise<void> {
+  const { home } = fixturePaths(root);
+  for (const [file, content] of familyFixtureFiles(root, timestamp)) {
+    const target = path.join(artifacts, 'fixtures', 'initial', path.relative(home, file));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content);
+  }
+  const summary = familyDatasetSchema.parse({ synthetic: true, kind: 'session-family', harnesses: ['GitHub Copilot App', 'GitHub Copilot CLI'],
+    sessions: FAMILY.sessions, requests: FAMILY.requests, family: { coordinators: 1, children: 3, grandchildren: 1, relayStarted: 1 } });
+  await fs.writeFile(path.join(artifacts, 'dataset.json'), JSON.stringify(summary, null, 2) + '\n');
+  console.log(`Synthetic dataset: ${FAMILY.sessions} Copilot App and CLI sessions, ${FAMILY.requests} requests, one session family.`);
 }
 
 export function scenarioContext(): { root: string; timestamp: number } {

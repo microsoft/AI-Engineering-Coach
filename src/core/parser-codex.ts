@@ -28,7 +28,7 @@ import { assertTrustedPath, createRequest, createSession, detectDevcontainerFrom
 import { canonicalizeReasoningEffort, extractReasoningEffortFromModelId, isHarnessInjectedContext } from './helpers';
 import { EditLocIndex } from './edit-loc-diff';
 import { markNonHuman } from './human-turns';
-import { codexSessionNonHumanKind } from './parser-turn-kinds';
+import { codexParentThreadId, codexSessionNonHumanKind } from './parser-turn-kinds';
 import type { NonHumanKind } from './types';
 import {
   FileEditLocMap,
@@ -43,6 +43,7 @@ import { imageReferencesFromCodex, imageRequestIndex, mergeImageReferences, type
 import type { SessionSource } from './cache';
 import { forEachJsonlLine } from './parser-vscode-files';
 import { TurnContextAccumulator } from './cli-turn-context';
+import { CodexForkUsage, usageOf } from './codex-fork-usage';
 
 interface CodexLine {
   type: string;
@@ -57,6 +58,10 @@ interface CodexSessionMeta {
   model: string;
   /** Set for sub-agent and internal sessions, whose prompts a parent agent sent. */
   nonHumanKind?: NonHumanKind;
+  /** The thread that spawned this one (`source.subagent.thread_spawn.parent_thread_id`). */
+  parentSessionId?: string;
+  /** The thread this one was forked from (`session_meta.forked_from_id`, `codex fork`). */
+  forkedFromId?: string;
 }
 
 interface CodexContentItem {
@@ -84,6 +89,10 @@ interface CodexParseState {
   hasUserMessageEvent: boolean;
   imageScan?: CodexImageScan;
   currentAssistantTexts: string[];
+  /** The agent's own messages this turn, without its reasoning: the reply the Timeline shows. Codex can log one both as an
+   *  event and as a response item, so each source is kept apart and the reply is read from one. */
+  currentReplyTexts: string[];
+  currentReplyItems: string[];
   currentToolsUsed: string[];
   investigationDelegations: ('research' | 'explore')[];
   webDomains: string[];
@@ -93,9 +102,11 @@ interface CodexParseState {
   turnModel: string;
   turnEffort: 'max' | 'high' | 'medium' | 'low' | null;
   turnStartTs: number | null;
-  /** When the turn's task completed or was aborted; later lines until the next prompt are idle time. */
+  /** Where the turn's work ended (`recordCodexTurnEnd`); later lines until the next prompt are idle time. */
   turnEndTs: number | null;
-  /** A task started after the turn's task ended: nothing more belongs to this turn. */
+  /** The turn logged its completion (`task_complete`) or abort (`turn_aborted`). */
+  turnCompleted: boolean;
+  /** A task started after the turn completed: nothing more belongs to this turn. */
   turnEnded: boolean;
   turnCanceled: boolean;
   answerEvidence: 'final' | 'legacy' | 'missing';
@@ -117,6 +128,22 @@ interface CodexParseState {
   pendingToolEdits: Map<string, PendingCodexEdit>;
   /** The latest `total_token_usage` logged `cached_input_tokens`; without it the cached count is a default 0. */
   curTotalCachedReported: boolean;
+  /** The thread is a fork (`session_meta.forked_from_id`): its cumulative totals start with its source's. */
+  forked: boolean;
+  /** Tokens the fork's first total inherited from its source; subtracted from every later total. */
+  inherited: { input: number; output: number; cached: number; reasoning: number; total: number };
+  /** The usage Codex logged for its latest response (`token_usage_record`, codex-cli 0.167+): owned by this thread; and
+   *  the turn it was logged in. */
+  lastResponseUsage?: Record<string, unknown>;
+  lastResponseTurn?: string;
+  /** The native ID of the turn being read (`task_started`, `turn_context`, `task_complete`), and of the next one when
+   *  its setup is logged before this turn's last line. */
+  turnId: string;
+  nextTurnId: string;
+  /** A fork's own usage, turn by turn (`codex-fork-usage.ts`). */
+  fork: CodexForkUsage;
+  /** The latest snapshot's `total_tokens`, to tell a new model call from a repeated snapshot. */
+  lastSnapshotTotal: number | null;
   /** Compactions logged during the current turn, in order. */
   turnCompactions: CompactionEvent[];
   /** Prompt tokens and `model_context_window` of the session's latest main-agent call; 0 and `null` before one. */
@@ -189,6 +216,18 @@ function projectNameFromCwd(cwd: string): string {
   return cwd.replaceAll('\\', '/').replace(/\/+$/, '').split('/').pop() || 'unknown';
 }
 
+/** Turn IDs and fork usage, before any line is read. */
+function newCodexForkState(): Pick<CodexParseState, 'forked' | 'inherited' | 'turnId' | 'nextTurnId' | 'fork' | 'lastSnapshotTotal'> {
+  return {
+    forked: false,
+    inherited: { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 },
+    turnId: '',
+    nextTurnId: '',
+    fork: new CodexForkUsage(),
+    lastSnapshotTotal: null,
+  };
+}
+
 function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): CodexParseState {
   return {
     requests: [],
@@ -200,6 +239,8 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     hasUserResponseItem: false,
     hasUserMessageEvent: false,
     currentAssistantTexts: [],
+    currentReplyTexts: [],
+    currentReplyItems: [],
     currentToolsUsed: [],
     investigationDelegations: [],
     webDomains: [],
@@ -210,6 +251,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     turnEffort: null,
     turnStartTs: null,
     turnEndTs: null,
+    turnCompleted: false,
     turnEnded: false,
     turnCanceled: false,
     answerEvidence: 'missing',
@@ -227,6 +269,7 @@ function createCodexState(initialModel: string, editLocIndex?: EditLocIndex): Co
     editLocIndex,
     pendingToolEdits: new Map(),
     curTotalCachedReported: false,
+    ...newCodexForkState(),
     turnCompactions: [],
     lastPromptTokens: 0,
     lastContextWindow: null,
@@ -290,6 +333,11 @@ function commitCodexEdit(state: CodexParseState, pending: PendingCodexEdit): voi
   state.currentEditedFiles.push(...pending.editedFiles);
 }
 
+/** The turn's reply, from its response items when it logged any, else from its events: never both, so once. */
+function codexReply(state: CodexParseState): string {
+  return (state.currentReplyItems.length ? state.currentReplyItems : state.currentReplyTexts).join('\n');
+}
+
 function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
   const hasResponse = state.imageScan ? state.imageScan.hasAssistantText : state.currentAssistantTexts.length > 0;
   if (!state.currentUserMessage && state.currentImageCount === 0 && !hasResponse) return;
@@ -319,12 +367,12 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
   state.prevTotalOutput = state.curTotalOutput;
 
   const requestId = `${state.sessionId || 'unknown'}:codex:${state.requests.length}`;
-  const turnEnd = state.turnEndTs ?? state.lastTs;
   state.requests.push(createRequest({
     requestId,
     timestamp: state.turnStartTs,
     messageText: state.currentUserMessage,
     responseText,
+    replyText: codexReply(state),
     answerEvidence: state.answerEvidence,
     isCanceled: state.turnCanceled,
     agentName: 'Codex',
@@ -337,7 +385,7 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     referencedFiles: [...new Set(state.currentReferencedFiles)],
     skillsUsed: [...new Set(state.currentSkillsUsed)],
     variableKinds: state.currentImageCount > 0 ? { image: state.currentImageCount } : {},
-    totalElapsed: state.turnStartTs && turnEnd ? turnEnd - state.turnStartTs : null,
+    totalElapsed: state.turnStartTs && state.turnEndTs && state.turnEndTs >= state.turnStartTs ? state.turnEndTs - state.turnStartTs : null,
     promptTokens: reqPromptTokens,
     completionTokens: reqCompletionTokens,
     reasoningEffort: state.turnEffort ?? extractReasoningEffortFromModelId(state.turnModel || defaultModel),
@@ -345,8 +393,51 @@ function flushCodexTurn(state: CodexParseState, defaultModel: string): void {
     ...requestCompactionFields(state.turnCompactions),
   }));
   mergeRequestEditLoc(state.editLocIndex, requestId, state.currentEditLocs);
+  noteForkTurn(state);
 
   resetCodexTurn(state);
+}
+
+/** The key of the turn being read: its native ID, else its place. */
+const turnKey = (state: CodexParseState) => state.turnId || `#${state.requests.length}`;
+
+/** A fork's request was added, with its own cumulative usage by the snapshots so far. */
+function noteForkTurn(state: CodexParseState): void {
+  if (!state.forked) return;
+  state.fork.noteTurn(state.turnId || `#${state.requests.length - 1}`, {
+    input: state.curTotalInput, output: state.curTotalOutput, cached: state.curTotalCachedInput,
+    reasoning: state.curTotalReasoning, total: state.curTotalTokens,
+  });
+}
+
+/** A native turn ID: the turn being read takes it until it has content; after that it is the next turn's, logged
+ *  before this one's last line. `task_complete` names the turn it ends. */
+function noteTurnId(state: CodexParseState, id: string, ends = false): void {
+  if (!id || id === state.turnId) return;
+  const started = state.currentUserMessage.length > 0 || state.currentAssistantTexts.length > 0 || state.currentToolsUsed.length > 0;
+  if (!state.turnId && (!started || ends)) state.turnId = id;
+  else if (!ends) state.nextTurnId = id;
+}
+
+/** A fork's usage, turn by turn (`CodexForkUsage`): requests, session totals and so Token Coverage all come from the
+ *  same allocation. */
+function reconcileForkUsage(state: CodexParseState): void {
+  const allocation = state.forked ? state.fork.allocate() : undefined;
+  if (!allocation) return;
+  for (const [i, own] of allocation.turns.entries()) {
+    const request = state.requests[i];
+    if (own && request) {
+      request.promptTokens = own.input;
+      request.completionTokens = own.output;
+    }
+  }
+  const sum = allocation.total;
+  state.curTotalInput = sum.input;
+  state.curTotalOutput = sum.output;
+  state.curTotalCachedInput = sum.cached;
+  state.curTotalReasoning = sum.reasoning;
+  state.curTotalTokens = sum.total;
+  state.hasTokenData = true;
 }
 
 function resetCodexTurn(state: CodexParseState): void {
@@ -356,6 +447,8 @@ function resetCodexTurn(state: CodexParseState): void {
   state.hasUserResponseItem = false;
   state.hasUserMessageEvent = false;
   state.currentAssistantTexts = [];
+  state.currentReplyTexts = [];
+  state.currentReplyItems = [];
   state.currentToolsUsed = [];
   state.investigationDelegations = [];
   state.webDomains = [];
@@ -364,12 +457,15 @@ function resetCodexTurn(state: CodexParseState): void {
   state.currentSkillsUsed = [];
   state.turnStartTs = null;
   state.turnEndTs = null;
+  state.turnCompleted = false;
   state.turnEnded = false;
   state.turnCanceled = false;
   state.turnContext = new TurnContextAccumulator();
   state.turnCompactions = [];
   state.currentEditLocs = new Map();
   state.answerEvidence = 'missing';
+  state.turnId = state.nextTurnId;
+  state.nextTurnId = '';
   if (state.imageScan) {
     state.imageScan.hasAssistantText = false;
     state.imageScan.hasTools = false;
@@ -549,6 +645,7 @@ function handleAssistantMessageEvent(payload: Record<string, unknown>, state: Co
   const content = payload.content;
   if (typeof content === 'string') {
     state.currentAssistantTexts.push(content);
+    state.currentReplyTexts.push(content);
     if (content.trim()) state.answerEvidence = payload.phase === 'final' ? 'final' : payload.phase == null ? 'legacy' : 'missing';
   }
 }
@@ -561,53 +658,74 @@ function handleTokenCountEvent(payload: Record<string, unknown>, state: CodexPar
   const info = recordValue(payload.info);
   const totalUsage = recordValue(info?.total_token_usage);
   if (!totalUsage) return;
+  const last = recordValue(info?.last_token_usage);
+  state.lastSnapshotTotal = tokenCount(totalUsage.total_tokens);
 
-  const input = tokenCount(totalUsage.input_tokens) ?? 0;
-  const output = tokenCount(totalUsage.output_tokens) ?? 0;
-  const total = tokenCount(totalUsage.total_tokens) ?? input + output;
+  // A fork (`codex fork`) continues its source's thread, so its first cumulative total already holds everything the
+  // source used. That baseline (the first total less its own call) belongs to the source; the fork counts from it. Its
+  // own call is the usage logged for its response, else the snapshot's last call; with neither, its usage is unknown.
+  if (state.forked) {
+    const total = usageOf(totalUsage);
+    if (total) state.fork.noteSnapshot(total, turnKey(state));
+  }
+  if (state.forked && !state.hasTokenData) {
+    // A response record of another turn says nothing about this snapshot's last call.
+    const ownCall = (state.lastResponseTurn === turnKey(state) ? state.lastResponseUsage : undefined) ?? last;
+    const less = (key: string) => Math.max(0, (tokenCount(totalUsage[key]) ?? 0) - (tokenCount(ownCall?.[key]) ?? 0));
+    state.inherited = {
+      input: less('input_tokens'), output: less('output_tokens'), cached: less('cached_input_tokens'),
+      reasoning: less('reasoning_output_tokens'), total: less('total_tokens'),
+    };
+  }
+  const base = state.inherited;
+  const own = (value: number | null, inherited: number) => (value == null ? null : Math.max(0, value - inherited));
+
+  const input = own(tokenCount(totalUsage.input_tokens), base.input) ?? 0;
+  const output = own(tokenCount(totalUsage.output_tokens), base.output) ?? 0;
+  const total = own(tokenCount(totalUsage.total_tokens), base.total) ?? input + output;
   // Codex repeats a token_count without a new model call (for example after a rate-limit update),
   // so a call is counted only when the cumulative total changes.
   const newCall = total > 0 && total !== state.curTotalTokens;
   state.curTotalInput = input;
   state.curTotalOutput = output;
-  state.curTotalCachedInput = tokenCount(totalUsage.cached_input_tokens) ?? 0;
+  state.curTotalCachedInput = own(tokenCount(totalUsage.cached_input_tokens), base.cached) ?? 0;
   // Reasoning is part of the output, so both totals come from the same snapshot: one that doesn't report reasoning
   // leaves it unknown rather than setting an earlier total against a later output total.
-  state.curTotalReasoning = tokenCount(totalUsage.reasoning_output_tokens);
+  state.curTotalReasoning = own(tokenCount(totalUsage.reasoning_output_tokens), base.reasoning);
   state.curTotalTokens = total;
   state.hasTokenData = true;
 
-  const last = recordValue(info?.last_token_usage);
   const lastInput = tokenCount(last?.input_tokens);
-  if (newCall && lastInput != null) {
-    const window = tokenCount(info?.model_context_window);
-    state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
-    // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
-    if (lastInput > 0) {
-      state.lastPromptTokens = lastInput;
-      state.lastContextWindow = window;
-      state.compactionOpen = false;
-    }
+  if (newCall && lastInput != null) noteMainCall(state, lastInput, tokenCount(info?.model_context_window));
+}
+
+/** A new main-agent model call, with its prompt tokens and context window. */
+function noteMainCall(state: CodexParseState, lastInput: number, window: number | null): void {
+  state.turnContext.addCall({ stream: 'main', inputTokens: lastInput, maxPromptTokens: window, model: state.turnModel || undefined });
+  // Codex logs an empty call (0 input) right after a compaction; only a real call closes it.
+  if (lastInput > 0) {
+    state.lastPromptTokens = lastInput;
+    state.lastContextWindow = window;
+    state.compactionOpen = false;
   }
+}
+
+/** A response's own usage (`token_usage_record`, codex-cli 0.167+). One of another thread (the source's, copied with
+ *  a fork's history) isn't this thread's. In a fork, each response counts once, by its ID, in the native turn it names
+ *  (`reconcileForkUsage`): its cumulative snapshots start with the source's. */
+function handleTokenUsageRecord(payload: Record<string, unknown>, state: CodexParseState, threadId: string): void {
+  const usage = recordValue(payload.usage);
+  const thread = stringValue(payload.thread_id);
+  if (!usage || (thread && threadId && thread !== threadId)) return;
+  state.lastResponseUsage = usage;
+  state.lastResponseTurn = stringValue(payload.turn_id) || turnKey(state);
+  if (!state.forked) return;
+  if (typeof usage.cached_input_tokens === 'number') state.curTotalCachedReported = true;
+  state.fork.noteRecord(payload, turnKey(state));
 }
 
 /** Response items that are the agent's work: reasoning or a tool call. Logged after the task completed, they extend the turn. */
 const CODEX_WORK_ITEMS: ReadonlySet<string> = new Set(['reasoning', 'function_call', 'custom_tool_call', 'local_shell_call', 'web_search_call']);
-
-/** Work logged after the task completed: the turn ends with that work instead. */
-function extendCodexTurnEnd(state: CodexParseState, ts: number | null): void {
-  if (!state.turnEnded && state.turnEndTs !== null && ts !== null && ts > state.turnEndTs) state.turnEndTs = ts;
-}
-
-/** A task_complete or turn_aborted ends the turn's work; time until the next prompt is the user's, not the agent's.
- *  A task with no prompt of its own (a manual `/compact`) is not a turn's work, whether it starts after the turn's
- *  task ended or before the first prompt. An end stamped before the prompt or unreadable is ignored. */
-function trackCodexTaskEnd(eventType: string, state: CodexParseState, ts: number | null): void {
-  if (eventType === 'task_started' && state.turnEndTs !== null) state.turnEnded = true;
-  if (eventType !== 'task_complete' && eventType !== 'turn_aborted') return;
-  if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
-  state.turnEndTs = ts;
-}
 
 function isCompactionEvent(eventType: string, payload: Record<string, unknown>): boolean {
   return eventType === 'context_compacted' || (eventType === 'item_completed' && recordValue(payload.item)?.type === 'ContextCompaction');
@@ -654,7 +772,6 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     handleUserMessageEvent(payload, state, ts, defaultModel);
     return;
   }
-  if (eventType === 'agent_reasoning' || eventType === 'function_call' || eventType === 'assistant_message') extendCodexTurnEnd(state, ts);
   if (eventType === 'agent_reasoning') {
     state.currentAssistantTexts.push(stringValue(payload.text));
     return;
@@ -680,14 +797,16 @@ function handleEventMsg(payload: Record<string, unknown>, state: CodexParseState
     handleCodexToolOutput(payload, state);
     return;
   }
+  if (eventType === 'task_started') noteTurnId(state, stringValue(payload.turn_id));
+  if (eventType === 'task_complete') noteTurnId(state, stringValue(payload.turn_id), true);
   if (eventType === 'task_complete' && typeof payload.last_agent_message === 'string' && payload.last_agent_message.trim()) {
     state.answerEvidence = 'final';
   }
   if (eventType === 'turn_aborted') state.turnCanceled = true;
-  trackCodexTaskEnd(eventType, state, ts);
 }
 
 function handleTurnContext(payload: Record<string, unknown>, state: CodexParseState): void {
+  noteTurnId(state, stringValue(payload.turn_id));
   const model = stringValue(payload.model);
   if (model) state.turnModel = model;
   const effort = payload.effort;
@@ -710,6 +829,7 @@ function handleAssistantResponseItem(payload: Record<string, unknown>, state: Co
   for (const item of extractContentItems(payload.content)) {
     if (item.type === 'output_text' && item.text) {
       state.currentAssistantTexts.push(item.text);
+      state.currentReplyItems.push(item.text);
       if (item.text.trim()) state.answerEvidence = payload.phase === 'final' || payload.channel === 'final' ? 'final'
         : payload.phase == null && payload.channel == null ? 'legacy' : 'missing';
     }
@@ -751,7 +871,6 @@ function handleResponseItem(payload: Record<string, unknown>, state: CodexParseS
     handleUserResponseItem(payload, state, ts, defaultModel);
     return;
   }
-  if (role === 'assistant' || CODEX_WORK_ITEMS.has(itemType)) extendCodexTurnEnd(state, ts);
   if (role === 'assistant' && itemType === 'message') {
     handleAssistantResponseItem(payload, state);
     return;
@@ -771,6 +890,8 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
     meta.cwd = stringValue(payload.cwd) || meta.cwd;
     meta.source = stringValue(payload.source) || meta.source;
     meta.nonHumanKind ??= codexSessionNonHumanKind(payload.source);
+    meta.parentSessionId ??= codexParentThreadId(payload.source);
+    meta.forkedFromId ??= stringValue(payload.forked_from_id) || undefined;
   }
   if (line.type === 'turn_context' && !meta.model) {
     meta.model = stringValue(line.payload?.model);
@@ -780,6 +901,7 @@ function updateSessionMeta(line: CodexLine, meta: CodexSessionMeta): void {
 function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSessionMeta): void {
   updateSessionMeta(line, meta);
   state.sessionId = meta.sessionId;
+  state.forked = !!meta.forkedFromId;
   const ts = line.timestamp ? new Date(line.timestamp).getTime() : null;
   updateTimestamps(state, ts);
   if (state.imageScan) {
@@ -790,17 +912,48 @@ function handleCodexLine(line: CodexLine, state: CodexParseState, meta: CodexSes
 
   if (line.type === 'event_msg') {
     handleEventMsg(line.payload || {}, state, ts, meta.model);
-    return;
-  }
-  if (line.type === 'turn_context') {
+  } else if (line.type === 'turn_context') {
     handleTurnContext(line.payload || {}, state);
-    return;
-  }
-  if (line.type === 'compacted') {
+  } else if (line.type === 'response_item') {
+    handleResponseItem(line.payload || {}, state, ts, meta.model);
+  } else if (line.type === 'token_usage_record') {
+    handleTokenUsageRecord(line.payload || {}, state, meta.sessionId);
+  } else if (line.type === 'compacted') {
     recordCodexCompaction(state);
-    return;
   }
-  if (line.type === 'response_item') handleResponseItem(line.payload || {}, state, ts, meta.model);
+  recordCodexTurnEnd(line, state, ts);
+}
+
+/** Lines that set up the next turn rather than doing work in this one. */
+const CODEX_SETUP_EVENTS = new Set(['user_message', 'task_started', 'thread_settings_applied']);
+
+/**
+ * Where the turn's work ended; time from there to the next prompt is the user's, not the agent's. Until the turn
+ * completes, it ends at its latest work line, so a turn without a `task_complete` (older Codex) still doesn't run to the
+ * next prompt. A `task_complete` or `turn_aborted` completes it; after that only model work Codex logs late extends it,
+ * and a task that starts (a manual `/compact`, the next turn) closes it. A line before the prompt, stamped before it, or
+ * unreadable is ignored.
+ */
+function recordCodexTurnEnd(line: CodexLine, state: CodexParseState, ts: number | null): void {
+  const type = line.type === 'event_msg' ? stringValue(line.payload?.type) : '';
+  if (type === 'task_started' && state.turnCompleted) state.turnEnded = true;
+  if (state.turnEnded || state.turnStartTs === null || ts === null || !Number.isFinite(ts) || ts < state.turnStartTs) return;
+  const ends = type === 'task_complete' || type === 'turn_aborted';
+  if (state.turnCompleted ? !isCodexModelWork(line) : !ends && !isTurnWork(line)) return;
+  if (state.turnEndTs === null || ts > state.turnEndTs) state.turnEndTs = ts;
+  if (ends) state.turnCompleted = true;
+}
+
+/** A line the agent or harness logged while working on the turn: not a prompt, and not the next turn's settings or
+ *  context (`task_started`, `turn_context`, `world_state`, developer or environment messages). */
+function isTurnWork(line: CodexLine): boolean {
+  const payload = line.payload ?? {};
+  if (line.type === 'event_msg') {
+    // The harness acknowledging the prompt (`item_completed` of the user message) is no agent work.
+    if (stringValue(payload.type) === 'item_completed' && stringValue(recordValue(payload.item)?.type) === 'UserMessage') return false;
+    return !CODEX_SETUP_EVENTS.has(stringValue(payload.type));
+  }
+  return line.type === 'response_item' && payload.role !== 'user' && payload.role !== 'developer' && payload.role !== 'system';
 }
 
 function handleCodexImageLine(line: CodexLine, state: CodexParseState, meta: CodexSessionMeta, scan: CodexImageScan): void {
@@ -937,6 +1090,7 @@ export function parseCodexSessionFile(filePath: string, editLocIndex?: EditLocIn
 
   flushCodexTurn(state, meta.model);
   if (state.requests.length === 0) return null;
+  reconcileForkUsage(state);
   if (meta.nonHumanKind) for (const request of state.requests) markNonHuman(request, meta.nonHumanKind);
 
   const modelUsage = computeModelUsage(state, meta.model);
@@ -955,5 +1109,7 @@ export function parseCodexSessionFile(filePath: string, editLocIndex?: EditLocIn
     endReason,
     hasDevcontainer: detectDevcontainerFromRequests(state.requests, meta.cwd),
     workspaceRootPath: meta.cwd || undefined,
+    ...(meta.parentSessionId && meta.parentSessionId !== meta.sessionId ? { parentSessionId: meta.parentSessionId } : {}),
+    ...(meta.forkedFromId && meta.forkedFromId !== meta.sessionId ? { forkedFromId: meta.forkedFromId } : {}),
   });
 }
