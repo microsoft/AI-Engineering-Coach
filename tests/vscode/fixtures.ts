@@ -88,7 +88,29 @@ export function fixturePaths(root: string, platform: NodeJS.Platform = process.p
     cliLogs: path.join(home, '.copilot', 'session-state'),
     workspace: path.join(home, 'workspaces', 'smoke-workspace'),
     runtimeLog: path.join(home, '.copilot-analytics-cache', 'runtime.log'),
+    extensions: path.join(root, 'extensions'),
   };
+}
+
+const buildInfoSchema = z.object({
+  version: z.string(), commit: z.string(), dirty: z.boolean(), branch: z.string(), builtAt: z.string(),
+});
+export type InstalledBuild = z.infer<typeof buildInfoSchema> & { root: string };
+
+/** The build stamp (dist/build-info.json) of the one extension the runner installed for this scenario. */
+export async function readInstalledBuild(root: string): Promise<InstalledBuild> {
+  const { extensions } = fixturePaths(root);
+  const installed = (await fs.readdir(extensions, { withFileTypes: true })).filter(entry => entry.isDirectory());
+  assert.equal(installed.length, 1, 'Only the packaged extension should be installed');
+  const installedRoot = path.join(extensions, installed[0].name);
+  const stamp = buildInfoSchema.parse(JSON.parse(await fs.readFile(path.join(installedRoot, 'dist', 'build-info.json'), 'utf8')));
+  return { ...stamp, root: installedRoot };
+}
+
+/** Matches runtime.log's activate line for this build: "[extension] activate | … | version=… commit=… dirty=… ". */
+export function activateLinePattern(build: InstalledBuild): RegExp {
+  const version = build.version.replaceAll('.', String.raw`\.`);
+  return new RegExp(String.raw`\[extension\] activate \|[^\n]*\| version=${version} commit=${build.commit} dirty=${build.dirty} `);
 }
 
 /** The synthetic Copilot App family: a coordinator that starts two children (one starts a grandchild), a child it

@@ -11,6 +11,8 @@ docs/security-audit.md
 .husky/pre-commit
 test-results/.last-run.json
 README.github.md
+CHANGELOG.github.md
+*.aic-staging
 PROPOSED_FIXES.md
 docs/proposals/
 local/

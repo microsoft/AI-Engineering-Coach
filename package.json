@@ -38,6 +38,7 @@
     "onCommand:aiEngineerCoach.reload",
     "onCommand:aiEngineerCoach.exportSummary",
     "onCommand:aiEngineerCoach.reviewLocalRules",
+    "onCommand:aiEngineerCoach.showReleaseNotes",
     "onView:aiEngineerCoach.welcome"
   ],
   "main": "./dist/extension.js",
@@ -68,8 +69,24 @@
         "command": "aiEngineerCoach.reviewLocalRules",
         "title": "AI Engineer Coach: Review Local Rule Approvals",
         "icon": "$(shield)"
+      },
+      {
+        "command": "aiEngineerCoach.showReleaseNotes",
+        "title": "AI Engineer Coach: What's New",
+        "icon": "$(megaphone)"
       }
     ],
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.showReleaseNotesAfterUpdate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "Show a notification that links to the changelog the first time AI Engineer Coach runs a build with newer dated changes."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -326,6 +343,7 @@
     "gen-synth-logs": "npx tsx scripts/generate-synthetic-logs.ts",
     "test:oom-synth": "npx tsx scripts/oom-repro.ts",
     "package": "node scripts/package-readme-swap.mjs",
+    "changelog": "node scripts/build-changelog.mjs",
     "spellcheck": "cspell \"src/**/*.ts\" \"docs/**/*.md\" \"*.md\"",
     "knip": "knip",
     "typecheck": "tsc --noEmit",

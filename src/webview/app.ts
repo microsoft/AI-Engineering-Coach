@@ -27,6 +27,7 @@ import {
   type LoadingProgress,
 } from './loading-screen';
 import { buildSkippedBanner } from './skipped-banner';
+import { mountBuildInfoFooter } from './build-info-footer';
 import { loadCapabilities, llmAvailable } from './capabilities';
 import { html, render, unmount, ComponentChildren } from './render';
 import { setNavHint } from './nav-hint';
@@ -277,6 +278,9 @@ function maybeShowSkippedBanner(): void {
   });
   col.insertBefore(banner, content);
 }
+
+const sidebarNav = document.getElementById('sidebar');
+if (sidebarNav) mountBuildInfoFooter(sidebarNav);
 
 initMessageListener(handleProgress, onDataReady);
 
