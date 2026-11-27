@@ -76,7 +76,7 @@ const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');
  *  cached with their workspace, and an older entry would date their answers by the result. 33: a record of your answer
  *  marks only the question it answered, not a later one that reused its tool call ID. 34: nor a question a record for
  *  another request was logged before. */
-const CACHE_VERSION = 34;
+const CACHE_VERSION = 35;
 
 /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or
  *  tampered) cache must degrade to a full re-parse, not OOM the host. */

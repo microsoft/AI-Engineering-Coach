@@ -419,7 +419,6 @@ export const MEMORY_PREVIEW_CHARS = 500;
  * - messageText is truncated to MEMORY_PREVIEW_CHARS (enough for all analytics).
  * - responseText is cleared entirely (session detail re-reads full text from source files
  *   via loadSessionFromDisk() for VS Code / CLI sessions).
- * - todoSnapshot is dropped (only used in the session detail view).
  *
  * Numeric fields (messageLength, responseLength, token counts) and structured fields
  * (aiCode, toolsUsed, editedFiles, …) are preserved, so analytics are unaffected.
@@ -432,7 +431,7 @@ export function stripSingleSession(session: Session): void {
     }
     r.responseText = '';
     delete r.replyText;
-    if (r.todoSnapshot) r.todoSnapshot = null;
+    if (r.todoSnapshot) r.todoSnapshot = r.todoSnapshot.map(({ id, title, status }) => ({ id, title, status }));
     // What a question or permission prompt asked, and your answer: read again with the session when it is opened.
     for (const w of r.userWaits ?? []) delete w.text;
   }
