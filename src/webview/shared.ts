@@ -67,7 +67,7 @@ export interface WorkerTelemetry {
 }
 
 export function initMessageListener(
-  onProgress: (msg: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string; telemetry?: WorkerTelemetry }) => void,
+  onProgress: (msg: { phase: number; detail?: string; pct: number; sessions?: number; linesOfCode?: number; toolCalls?: number; imagesAnalyzed?: number; filesEdited?: number; requests?: number; workspacePlan?: string[]; workspaceDone?: string; item?: LoadItem; telemetry?: WorkerTelemetry }) => void,
   onDataReady: (currentWorkspace: string, skipped?: { skippedFiles: number; skippedLines: number }) => void,
 ): void {
   window.addEventListener('message', (ev) => {
@@ -96,6 +96,7 @@ export function initMessageListener(
         requests: msg.requests as number | undefined,
         workspacePlan: msg.workspacePlan as string[] | undefined,
         workspaceDone: msg.workspaceDone as string | undefined,
+        item: msg.item as LoadItem | undefined,
         telemetry: msg.telemetry as WorkerTelemetry | undefined,
       });
     }
@@ -119,6 +120,7 @@ import {
 import { TreemapController, TreemapElement } from 'chartjs-chart-treemap';
 import type { Plugin } from 'chart.js';
 import type { ExtensionMethodName } from '../core/types/rpc-types';
+import type { LoadItem } from '../core/load-phases';
 
 Chart.register(
   CategoryScale, LinearScale, PointElement, LineElement,

@@ -107,48 +107,6 @@ export interface ConsumptionData {
   monthly: { labels: string[]; values: number[]; byModel: Record<string, number[]> };
 }
 
-export interface TimelineSession {
-  sessionId: string;
-  workspaceName: string;
-  sessionName: string;
-  firstActivity: number;
-  lastActivity: number;
-  requestCount: number;
-  totalRequestCount: number;
-  requests: TimelineRequest[];
-}
-
-export interface TimelineRequest {
-  timestamp: number;
-  messageText: string;
-  responseText: string;
-  messageLength: number;
-  responseLength: number;
-  agentName: string;
-  modelId: string;
-  toolsUsed: string[];
-  editedFiles: string[];
-  referencedFiles: string[];
-  preview: string;
-  loc?: number;
-  workType?: string;
-}
-
-export interface DayTimeline {
-  date: string;
-  mode: string;
-  rangeLabel: string;
-  dayStart: number;
-  dayEnd: number;
-  sessions: TimelineSession[];
-  sessionCount: number;
-  maxConcurrent: number;
-  prevDay: string | null;
-  nextDay: string | null;
-  firstDay: string | null;
-  activeDates: { date: string; count: number }[];
-}
-
 export interface SessionListItem {
   sessionId: string;
   workspaceName: string;

@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionImageLoader } from './session-image-loader';
 import type { SessionSourceRequest } from './session-images';
 import type { SessionSource } from './cache';
+import type { TimelineSessionText } from './types';
 
 class FakeWorker extends EventEmitter {
   requests: SessionSourceRequest[] = [];
@@ -110,6 +111,72 @@ describe('image worker lifecycle', () => {
     await rejected;
   });
 
+  it('drops a lane-text read a newer one replaced before it ran, so the lane shown is read next', async () => {
+    const worker = new FakeWorker();
+    const loader = new SessionImageLoader(() => worker);
+    loaders.push(loader);
+    const text = (from: number) => ({ type: 'timeline-text' as const, source, sessionId: 'session', scope: { from, to: from + 1, turns: [] }, labels: { names: [] } });
+    const busy = loader.load(source, 'session', 'image');
+    const older = loader.loadTimelineText(text(1));
+    const newer = loader.loadTimelineText(text(2));
+    await Promise.resolve();
+    worker.emit('message', { type: 'session-images', images: [] });
+    await busy;
+    expect(await older).toEqual({ superseded: true });
+    await Promise.resolve();
+    expect(worker.requests.map(r => r.type === 'timeline-text' ? r.scope.from : r.type)).toEqual(['session-images', 2]);
+    worker.emit('message', { type: 'timeline-text', text: null });
+    expect(await newer).toBeNull();
+  });
+
+  it('stops a lane-text read still running when a newer lane is read, so the newer one doesn’t wait behind it', async () => {
+    const workers: FakeWorker[] = [];
+    const loader = new SessionImageLoader(() => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    });
+    loaders.push(loader);
+    const text = (from: number) => ({ type: 'timeline-text' as const, source, sessionId: 'session', scope: { from, to: from + 1, turns: [] }, labels: { names: [] } });
+    const older = loader.loadTimelineText(text(1));
+    await Promise.resolve();
+    expect(workers[0].requests).toHaveLength(1);
+    const newer = loader.loadTimelineText(text(2));
+    expect(await older).toEqual({ superseded: true });
+    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(workers[1].requests.map(r => (r.type === 'timeline-text' ? r.scope.from : r.type))).toEqual([2]);
+    workers[1].emit('message', { type: 'timeline-text', text: null });
+    expect(await newer).toBeNull();
+    // An image or detail read that is running isn't stopped by a lane-text read.
+    const image = loader.load(source, 'session', 'image');
+    await Promise.resolve();
+    const third = loader.loadTimelineText(text(3));
+    workers[1].emit('message', { type: 'session-images', images: [] });
+    expect(await image).toEqual([]);
+    await Promise.resolve();
+    workers[1].emit('message', { type: 'timeline-text', text: null });
+    expect(await third).toBeNull();
+  });
+
+  it('takes from the worker only the fields a lane shows', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const worker = new FakeWorker();
+    const loader = new SessionImageLoader(() => worker);
+    loaders.push(loader);
+    const request = { type: 'timeline-text' as const, source, sessionId: 'session', scope: { from: 0, to: 10, turns: [] }, labels: { names: [] } };
+    const text = loader.loadTimelineText(request);
+    await Promise.resolve();
+    worker.emit('message', { type: 'timeline-text', text: { sessionId: 'session', turns: [{ t: 1, k: 'you', prompt: 'Go' }], waits: [] } });
+    expect(await text).toEqual({ sessionId: 'session', turns: [{ t: 1, k: 'you', prompt: 'Go' }], waits: [] });
+    // A reply carrying anything more of the session (here its raw response) is refused.
+    const more = loader.loadTimelineText(request);
+    const rejected = expect(more).rejects.toThrow();
+    await Promise.resolve();
+    worker.emit('message', { type: 'timeline-text', text: { sessionId: 'session', turns: [{ t: 1, k: 'you', responseText: 'raw' }], waits: [] } });
+    await rejected;
+  });
+
   it('extracts images and session details through the real bundled parse-worker protocol', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coach-image-worker-'));
     try {
@@ -140,6 +207,52 @@ describe('image worker lifecycle', () => {
       fs.appendFileSync(events, `\n${JSON.stringify({ type: 'assistant.message', id: 'later-answer', data: { content: 'More work' } })}`);
       expect(await loader.load({ ...source, filePath: events }, 'session', 'answer', { userEventId: 'user', requestIndex: 0 }))
         .toEqual([`data:image/png;base64,${base64}`]);
+      loader.dispose();
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('builds one lane’s text in the bundled parse worker: its scope only, scrubbed', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'coach-text-worker-'));
+    try {
+      const workerPath = path.join(directory, 'parse-worker.cjs');
+      await build({
+        entryPoints: [path.resolve('src', 'core', 'parse-worker.ts')],
+        outfile: workerPath, bundle: true, platform: 'node', format: 'cjs',
+      });
+      const at = (day: number, m: number) => new Date(2026, 4, day, 10, m).toISOString();
+      const secret = 'ghp_' + 'Abc123'.repeat(6);
+      const events = path.join(directory, 'events.jsonl');
+      fs.writeFileSync(events, [
+        { type: 'session.start', data: { sessionId: 'session' } },
+        { type: 'user.message', timestamp: at(1, 0), id: 'u1', data: { content: 'Yesterday’s prompt' } },
+        { type: 'tool.execution_start', timestamp: at(1, 1), data: { toolName: 'ask_user', toolCallId: 'q1', arguments: { question: 'Yesterday’s question?' } } },
+        { type: 'tool.execution_complete', timestamp: at(1, 2), data: { toolCallId: 'q1', success: true, result: { content: 'User selected: no' } } },
+        { type: 'user.message', timestamp: at(2, 0), id: 'u2', data: { content: `Deploy with ${secret}` } },
+        { type: 'tool.execution_start', timestamp: at(2, 1), data: { toolName: 'ask_user', toolCallId: 'q2', arguments: { question: 'Today’s question?' } } },
+        { type: 'tool.execution_complete', timestamp: at(2, 2), data: { toolCallId: 'q2', success: true, result: { content: 'User selected: yes' } } },
+        { type: 'user.message', timestamp: at(2, 30), id: 'u3', data: { content: 'Not listed by the lane' } },
+      ].map(event => JSON.stringify(event)).join('\n'));
+      const worker = new Worker(workerPath, { execArgv: [] });
+      const loader = new SessionImageLoader(() => worker);
+      loaders.push(loader);
+      const day = new Date(2026, 4, 2).getTime();
+      const text = await loader.loadTimelineText({
+        type: 'timeline-text', source: { ...source, filePath: events }, sessionId: 'session',
+        scope: { from: day, to: day + 86_400_000, turns: [{ t: Date.parse(at(2, 0)), id: 'u2' }] }, labels: { names: [] },
+      }) as TimelineSessionText | null;
+      expect(text?.turns.map(t => t.prompt)).toEqual(['Deploy with [secret]']);
+      expect(text?.waits.map(w => w.ask)).toEqual(['Today’s question?']);
+      expect(JSON.stringify(text)).not.toContain('Yesterday');
+      // The session detail view gets none of the Timeline's text: no reply text, no question or answer, raw.
+      const detail = await loader.loadSession({ ...source, filePath: events }, 'session');
+      expect(detail?.requests.length).toBe(3);
+      expect(detail?.requests.some(r => r.replyText !== undefined || (r.userWaits ?? []).some(w => w.text))).toBe(false);
+      // A malformed scope is refused, not read.
+      const invalid = new Promise<unknown>(resolve => worker.once('message', resolve));
+      worker.postMessage({ type: 'timeline-text', source: { ...source, filePath: events }, sessionId: 'session', scope: { from: 'x' }, labels: { names: [] } });
+      expect(await invalid).toEqual({ type: 'error', message: 'Invalid session source request' });
       loader.dispose();
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

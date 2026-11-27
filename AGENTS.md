@@ -74,7 +74,7 @@ CI runs `npm run check` (typecheck + lint + spellcheck + knip + test) plus the s
 every PR. Run those locally before pushing.
 
 Unit tests run with HOME, USERPROFILE and the other per-user data roots (APPDATA, LOCALAPPDATA,
-XDG_*, COPILOT_HOME) pointed at a temp dir ([`src/test/hermetic-home.ts`](src/test/hermetic-home.ts)),
+XDG_*, COPILOT_HOME, GH_CONFIG_DIR) pointed at a temp dir ([`src/test/hermetic-home.ts`](src/test/hermetic-home.ts)),
 so they never touch your real `~/.copilot-analytics-cache` or session data. Resolve per-user paths
 when they are used, not at module load.
 

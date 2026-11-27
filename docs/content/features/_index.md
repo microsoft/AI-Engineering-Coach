@@ -8,7 +8,7 @@ AI Engineer Coach organizes its capabilities into three areas that mirror a cont
 ## Observe
 
 - [Dashboard](/observe/dashboard/) -- At-a-glance practice scores, activity charts, and skill recommendations
-- [Timeline](/observe/timeline/) -- Gantt-style session timeline showing when and how long you worked with AI
+- [Timeline](/observe/timeline/) -- Autonomy lanes, waits on you and session families with verdicts
 - [Coding Moments](/observe/coding-moments/) -- Screenshot gallery from AI coding sessions with story reels and workspace filtering
 
 ## Measure

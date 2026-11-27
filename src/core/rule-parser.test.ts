@@ -133,6 +133,50 @@ describe.each([['LF', '\n'], ['CRLF', '\r\n']])('readFrontmatter, the grammar pa
   });
 });
 
+describe.each([['LF', '\n'], ['CRLF', '\r\n']])('parseRule sections (%s)', (_, eol) => {
+  const head = ['---', 'id: probe', 'name: Probe', 'group: prompt-quality', 'severity: low', 'scope: requests', '---', ''];
+  const detect = ['# Detection Logic', '```detect', 'scan: requests', 'match: messageLength > 0', 'check: count > 0', '```', ''];
+
+  it.each(['```markdown', '~~~', '````'])('keeps a heading inside a %s fence in the section around it', open => {
+    const close = open.startsWith('~') ? '~~~' : open.replace(/[a-z]+$/, '');
+    const fencedExample = ['An example:', open, '# When Triggered', 'Fenced text.', close];
+    const rule = parseRule([
+      ...head, '# Description', ...fencedExample, 'After the fence.', '', '# When Triggered', 'Real text.', '', ...detect,
+    ].join(eol));
+    expect(rule).toMatchObject({
+      description: [...fencedExample, 'After the fence.'].join(eol),
+      descriptionTemplate: 'Real text.',
+    });
+  });
+
+  it("doesn't read a fenced heading as a section the rule lacks", () => {
+    const rule = parseRule([...head, '# Description', '```', '# How to Improve', 'Fenced.', '```', '', ...detect].join(eol));
+    expect(rule?.suggestionTemplate).toBe('Review your practices.');
+  });
+
+  it('still ends a section at a heading after a fence marker that never closes', () => {
+    const rule = parseRule([...head, '# Description', 'Text', '~~~', '', '# When Triggered', 'Real text.', '', ...detect].join(eol));
+    expect(rule).toMatchObject({ description: ['Text', '~~~'].join(eol), descriptionTemplate: 'Real text.' });
+  });
+
+  it('reads a stray ``` before the detect block as a fence up to its closing line, as Markdown does', () => {
+    const rule = parseRule([...head, '# Description', 'Text', '```', '', '# When Triggered', 'Real text.', '', ...detect].join(eol));
+    expect(rule?.descriptionTemplate).toBe('{{count}} occurrences detected.');
+    expect(rule?.conditions).not.toEqual([]);
+  });
+
+  it("doesn't read a one-line ```js``` as a fence", () => {
+    const rule = parseRule([...head, '# Description', '```js```', '', '# When Triggered', 'Real text.', '', ...detect].join(eol));
+    expect(rule).toMatchObject({ description: '```js```', descriptionTemplate: 'Real text.' });
+  });
+
+  it('reads a long rule with many fence markers that never close quickly', () => {
+    const markers = Array<string>(20000).fill('```x');
+    const rule = parseRule([...head, '# Description', ...markers, '', '# When Triggered', 'Real text.', ''].join(eol));
+    expect(rule?.descriptionTemplate).toBe('Real text.');
+  }, 2000);
+});
+
 describe('serializeRule', () => {
   const FIELDS = [
     'id', 'name', 'group', 'severity', 'scope', 'requiresIdeContext', 'version', 'tags', 'thresholds', 'patterns',

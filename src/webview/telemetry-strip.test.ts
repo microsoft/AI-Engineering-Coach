@@ -6,12 +6,12 @@
 /**
  * @vitest-environment jsdom
  *
- * Unit tests for the loading-screen telemetry strip (issue #106). Verifies the pure formatting
+ * Unit tests for the loading-screen worker box (issue #106). Verifies the pure formatting
  * helpers and the DOM rendering of {@link updateTelemetry} against a real jsdom document.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { fmtMem, pressureColor, updateTelemetry } from './telemetry-strip';
+import { fmtMem, heapPeakMB, pressureColor, resetTelemetryHistory, updateTelemetry, updateThroughput } from './telemetry-strip';
 import type { WorkerTelemetry } from './shared';
 
 const SAMPLE: WorkerTelemetry = {
@@ -44,6 +44,7 @@ describe('telemetry-strip helpers', () => {
 describe('updateTelemetry rendering', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="loading-telemetry"></div>';
+    resetTelemetryHistory();
   });
 
   it('is a no-op when the host element is absent', () => {
@@ -51,7 +52,7 @@ describe('updateTelemetry rendering', () => {
     expect(() => updateTelemetry(SAMPLE)).not.toThrow();
   });
 
-  it('builds the strip once and populates all values', () => {
+  it('builds the worker box once and populates all values', () => {
     updateTelemetry(SAMPLE);
     const host = document.getElementById('loading-telemetry')!;
 
@@ -60,41 +61,53 @@ describe('updateTelemetry rendering', () => {
     expect(document.getElementById('tg-mem-limit')?.textContent).toBe('4.0 GB');
     expect(document.getElementById('tg-rss')?.textContent).toBe('512 MB');
     expect(document.getElementById('tg-buf')?.textContent).toBe('64 MB');
-    // CPU label: 42% -> active
-    expect(document.getElementById('tg-cpu-load')?.textContent).toBe('active');
+    expect(document.getElementById('tg-cpu-load')?.textContent).toBe('42%');
   });
 
-  it('does not rebuild markup on subsequent updates (updates in place)', () => {
-    updateTelemetry(SAMPLE);
-    const firstRing = document.getElementById('tg-mem-arc');
-    updateTelemetry({ ...SAMPLE, heapUsedMB: 1024 });
-    // Same element instance — strip was not torn down and recreated.
-    expect(document.getElementById('tg-mem-arc')).toBe(firstRing);
-    expect(document.getElementById('tg-mem-used')?.textContent).toBe('1.0 GB');
+  it('updates in place and draws the heap sparkline against the cap', () => {
+    updateTelemetry(SAMPLE, 0);
+    const line = document.getElementById('tg-heap-line');
+    updateTelemetry({ ...SAMPLE, heapUsedMB: 2048 }, 500);
+    expect(document.getElementById('tg-heap-line')).toBe(line);
+    expect(document.getElementById('tg-mem-used')?.textContent).toBe('2.0 GB');
+    // Two samples: 256 MB and 2048 MB of a 4096 MB cap (height 34 → y = 33 - v/cap*32).
+    expect(line?.getAttribute('points')).toBe('0.0,31.0 240.0,17.0');
   });
 
-  it('reflects the heap ring percentage and pressure class under load', () => {
-    // 3686 / 4096 ≈ 90% -> red + pressure class
-    updateTelemetry({ ...SAMPLE, heapUsedMB: 3686, cpuPct: 95 });
+  it('keeps one heap sample per half second however often it is called', () => {
+    for (let t = 0; t < 1000; t += 10) updateTelemetry(SAMPLE, t);
+    expect(document.getElementById('tg-heap-line')?.getAttribute('points')?.split(' ')).toHaveLength(2);
+    expect(heapPeakMB()).toBe(256);
+  });
+
+  it('marks heap pressure at 85% and clears it when use drops', () => {
+    updateTelemetry({ ...SAMPLE, heapUsedMB: 3686 }, 0);
     const host = document.getElementById('loading-telemetry')!;
     expect(host.classList.contains('tg-pressure')).toBe(true);
-    expect(document.getElementById('tg-mem-pct')?.textContent).toBe('90%');
-    expect(document.getElementById('tg-cpu-load')?.textContent).toBe('busy');
-
-    const arc = document.getElementById('tg-mem-arc') as unknown as SVGElement;
-    expect(arc.style.stroke).toContain('--accent-red');
-  });
-
-  it('clears the pressure class when utilization drops', () => {
-    updateTelemetry({ ...SAMPLE, heapUsedMB: 3900 }); // ~95% -> pressure
-    expect(document.getElementById('loading-telemetry')!.classList.contains('tg-pressure')).toBe(true);
-    updateTelemetry({ ...SAMPLE, heapUsedMB: 256 }); // ~6% -> no pressure
-    expect(document.getElementById('loading-telemetry')!.classList.contains('tg-pressure')).toBe(false);
+    expect((document.getElementById('tg-heap-line') as unknown as SVGElement).style.stroke).toContain('--accent-red');
+    updateTelemetry({ ...SAMPLE, heapUsedMB: 256 }, 600);
+    expect(host.classList.contains('tg-pressure')).toBe(false);
   });
 
   it('handles a zero heap limit without dividing by zero', () => {
     expect(() => updateTelemetry({ ...SAMPLE, heapLimitMB: 0 })).not.toThrow();
-    expect(document.getElementById('tg-mem-pct')?.textContent).toBe('0%');
+  });
+
+  it('shows the throughput rate with its unit', () => {
+    updateTelemetry(SAMPLE);
+    updateThroughput([2, 6, 4], 4.25, 'workspaces');
+    expect(document.getElementById('tg-rate')?.textContent).toBe('4.3 workspaces/s');
+    expect(document.getElementById('tg-rate-line')?.getAttribute('points')?.split(' ')).toHaveLength(3);
+    updateThroughput([], undefined, 'workspaces');
+    expect(document.getElementById('tg-rate')?.textContent).toBe('—');
+  });
+
+});
+
+describe('updateTelemetry skipped files', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="loading-telemetry"></div>';
+    resetTelemetryHistory();
   });
 
   it('shows no skipped files by default (clean parse)', () => {

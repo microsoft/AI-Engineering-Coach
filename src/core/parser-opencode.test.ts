@@ -52,6 +52,29 @@ function sqlString(value: string): string {
 }
 
 describe('parseOpenCodeSessions', () => {
+  it('ends a turn’s agent time at its last assistant message', () => {
+    withStorage({ id: 'sess-elapsed', directory: '/Users/me/proj', time: { created: 1700000000000 } }, [
+      { id: 'u1', sessionID: 'sess-elapsed', role: 'user', time: { created: 1700000000000 } },
+      { id: 'a1', sessionID: 'sess-elapsed', role: 'assistant', parentID: 'u1', modelID: 'big-pickle', time: { created: 1700000001000, completed: 1700000010000 } },
+      { id: 'a2', sessionID: 'sess-elapsed', role: 'assistant', parentID: 'u1', modelID: 'big-pickle', time: { created: 1700000011000, completed: 1700000300000 } },
+    ], storageDir => {
+      expect(parseOpenCodeSessions(storageDir)[0].requests[0].totalElapsed).toBe(300_000);
+    });
+  });
+
+  it('gives a late answer to the prompt it names, not to the prompt before it', () => {
+    const t = (s: number) => 1700000000000 + s * 1000;
+    withStorage({ id: 'sess-late', directory: '/Users/me/proj', time: { created: t(0) } }, [
+      { id: 'u1', sessionID: 'sess-late', role: 'user', time: { created: t(0) } },
+      { id: 'a1', sessionID: 'sess-late', role: 'assistant', parentID: 'u1', time: { created: t(1), completed: t(2) } },
+      { id: 'u2', sessionID: 'sess-late', role: 'user', time: { created: t(5) } },
+      { id: 'a2', sessionID: 'sess-late', role: 'assistant', parentID: 'u1', time: { created: t(6), completed: t(8) } },
+      { id: 'a3', sessionID: 'sess-late', role: 'assistant', parentID: 'u2', time: { created: t(7), completed: t(8) } },
+    ], storageDir => {
+      expect(parseOpenCodeSessions(storageDir)[0].requests.map(r => r.totalElapsed)).toEqual([8_000, 3_000]);
+    });
+  });
+
   it('parses current opencode.db session, message, and diff data', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-db-test-'));
     const dbPath = path.join(root, 'opencode.db');
@@ -169,6 +192,23 @@ describe('parseOpenCodeSessions', () => {
         },
       }],
     );
+  });
+
+  it('keeps the agent’s own text as its reply, apart from the code a write tool wrote', () => {
+    const user = { id: 'u1', sessionID: 's-reply', role: 'user', time: { created: 1700000000000 }, summary: { title: 'write it' } };
+    const assistant = (id: string) => ({ id, sessionID: 's-reply', role: 'assistant', parentID: 'u1', time: { created: 1700000001000, completed: 1700000002000 }, modelID: 'm' });
+    const write = (messageID: string) => ({ id: 'w-' + messageID, sessionID: 's-reply', messageID, type: 'tool', tool: 'write', state: { status: 'completed', input: { filePath: '/p/a.ts', content: 'export const x = 1;' } } });
+    const replyOf = (parts: (Record<string, unknown> & { id: string; messageID: string })[], ids: string[]) => {
+      let out: [boolean, string | undefined] = [false, undefined];
+      withStorage({ id: 's-reply', directory: '/p', time: { created: 1700000000000 } }, [user, ...ids.map(assistant)], (storageDir) => {
+        const request = parseOpenCodeSessions(storageDir)[0].requests[0];
+        out = [request.responseText.includes('export const x = 1;'), request.replyText];
+      }, parts);
+      return out;
+    };
+    expect(replyOf([{ id: 't1', sessionID: 's-reply', messageID: 'a1', type: 'text', text: 'Writing it.' }, write('a1')], ['a1'])).toEqual([true, 'Writing it.']);
+    // A turn that only wrote a file has no reply of its own.
+    expect(replyOf([write('a1')], ['a1'])).toEqual([true, '']);
   });
 
   it('uses a present empty summary diff as authoritative zero edits', () => {

@@ -16,7 +16,7 @@ import { createRequest, createSession } from '../core/parser-shared';
 import { clearLayerRules, registerPersonalRuleSource } from '../core/rule-engine';
 import type { ModelUsage, NonHumanKind, Session } from '../core/types';
 import { TODAY, returnedAfterExpiryWithoutCacheData, returnedToday } from '../test/copilot-cache-sessions';
-import { formatActivity, formatFlow, formatInsights, formatPatterns, formatPromptCache, formatSummary, formatTokenTypes, formatWellbeing } from './formatters';
+import { formatActivity, formatFlow, formatInsights, formatPatterns, formatPromptCache, formatSummary, formatTimeline, formatTokenTypes, formatWellbeing } from './formatters';
 
 // Keeps the broken rule out of the developer's runtime.log.
 vi.mock('../core/runtime-debug', async importOriginal => ({ ...await importOriginal<typeof import('../core/runtime-debug')>(), runtimeDebug: vi.fn() }));
@@ -261,5 +261,37 @@ describe('MCP anti-pattern summaries', () => {
   it('list none when every rule ran', () => {
     expect(formatPatterns(analyzer, filter).antiPatterns.notEvaluated).toEqual([]);
     expect(formatSummary(analyzer, filter).antiPatterns.notEvaluated).toEqual([]);
+  });
+});
+
+describe('formatTimeline', () => {
+  it('reports the day’s autonomy and the families’ verdicts without prompt text or session ids', () => {
+    const at = (h: number, m = 0) => new Date(2026, 9, 20, h, m).getTime();
+    const request = (timestamp: number, minutes: number, nonHumanKind?: NonHumanKind, aiCredits = 0) =>
+      createRequest({ messageText: 'secret prompt', responseText: '', timestamp, totalElapsed: minutes * 60_000, nonHumanKind, ...(aiCredits ? { aiCredits } : {}) });
+    const sessions = [
+      createSession({ sessionId: 'secret-coord', workspaceId: 'w', workspaceName: 'shop', harness: 'GitHub Copilot App', displayName: 'Checkout', childSessionIds: ['secret-kid'],
+        requests: [request(at(9), 30, undefined, 10), request(at(11), 10)] }),
+      createSession({ sessionId: 'secret-kid', workspaceId: 'w', workspaceName: 'shop', harness: 'GitHub Copilot App', displayName: 'Tests',
+        requests: [request(at(9, 10), 60, 'relayed', 30), request(at(10, 30), 5)] }),
+    ];
+    const summary = formatTimeline(new Analyzer(sessions, new Map()), undefined);
+    expect(summary).toMatchObject({
+      requested: { from: null, to: null },
+      observed: { sessions: 2, activeDays: 1, firstActiveDay: '2026-10-20', lastActiveDay: '2026-10-20' },
+      day: { date: '2026-10-20', turns: 4, typedTurns: 3, peakParallelSessions: 2, childSessions: 1, childCreditSharePct: 75, waitsOnUser: { started: 2, onQuestionOrPermission: 0, minutes: 110, atLeast30Min: 1 } },
+      families: { count: 1, childSessions: 1, childSessionsWithYourInput: 1, verdicts: { youSteppedIn: { families: 1, creditSharePct: 100 } }, top: [{ name: 'Session 1', repository: 'Repository A', verdict: 'You stepped in' }] },
+    });
+    // Names are always masked, and branches never sent: the result goes to a language model.
+    const json = JSON.stringify(summary);
+    expect(json).not.toContain('secret');
+    expect(json).not.toContain('Checkout');
+    const analyzer = new Analyzer(sessions, new Map());
+    expect(formatTimeline(analyzer, undefined, '2026-10-21').day)
+      .toEqual({ date: '2026-10-21', sessions: 0, note: 'No activity on this day in the selected range.' });
+    expect(formatTimeline(analyzer, { fromDate: '2026-10-21' }, '2026-10-20')).toMatchObject({ requested: { from: '2026-10-21', to: null }, sessions: 0 });
+    expect(formatTimeline(analyzer, { toDate: '2026-10-19' }, '2026-10-20').day).toBeUndefined();
+    expect(formatTimeline(analyzer, undefined, '2026-11-31')).toEqual({ error: 'Not a calendar date: 2026-11-31. Use YYYY-MM-DD.' });
+    expect(formatTimeline(analyzer, { fromDate: '2026-02-30' })).toEqual({ error: 'Not a calendar date: 2026-02-30. Use YYYY-MM-DD.' });
   });
 });

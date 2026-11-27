@@ -7,6 +7,12 @@ import { describe, it, expect } from 'vitest';
 import { redactSecrets } from './redact-secrets';
 
 describe('redactSecrets', () => {
+  it('scans a long run of letters and dashes in linear time', () => {
+    const t = Date.now();
+    redactSecrets('--a-'.repeat(25_000));
+    expect(Date.now() - t).toBeLessThan(1000);
+  });
+
   it('masks GitHub tokens', () => {
     const out = redactSecrets('push failed: ghp_abcdefghijklmnopqrstuvwxyz0123456789');
     expect(out).not.toContain('ghp_');

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, it, expect } from 'vitest';
-import { percentile, sessionIntensityLevel, sessionTileVars, parseWorkspacePlanKey, formatStatCount, computeGridDimensions } from './loading-grid-model';
+import { percentile, sessionIntensityLevel, sessionTileOpacity, parseWorkspacePlanKey, formatStatCount, computeGridDimensions } from './loading-grid-model';
 
 describe('percentile', () => {
   it('returns 0 for an empty set', () => {
@@ -42,15 +42,12 @@ describe('sessionIntensityLevel', () => {
   });
 });
 
-describe('sessionTileVars', () => {
-  it('produces all five css variables per level', () => {
-    for (const level of [1, 2, 3, 4] as const) {
-      const vars = sessionTileVars(level);
-      expect(Object.keys(vars).sort()).toEqual(
-        ['doneBg', 'doneBorder', 'doneGlow', 'pendingBg', 'pendingBorder'],
-      );
-      for (const v of Object.values(vars)) expect(v).toContain('color-mix');
-    }
+describe('sessionTileOpacity', () => {
+  it('reads bigger sessions stronger, with the largest at full strength', () => {
+    const levels = ([1, 2, 3, 4] as const).map(sessionTileOpacity);
+    expect(levels).toEqual([...levels].sort((a, b) => a - b));
+    expect(levels[3]).toBe(1);
+    expect(levels[0]).toBeGreaterThan(0.3);
   });
 });
 
@@ -84,12 +81,13 @@ describe('formatStatCount', () => {
     expect(formatStatCount(1_000_000)).toBe('1.0M');
   });
 
-  it('renders thousands with no decimals and a K suffix', () => {
+  it('renders ten thousand and up with no decimals and a K suffix', () => {
     expect(formatStatCount(47_000)).toBe('47K');
-    expect(formatStatCount(1_000)).toBe('1K');
+    expect(formatStatCount(10_000)).toBe('10K');
   });
 
-  it('renders values below 1000 verbatim', () => {
+  it('renders values below ten thousand in full with a thousands separator', () => {
+    expect(formatStatCount(9_384)).toBe('9,384');
     expect(formatStatCount(938)).toBe('938');
     expect(formatStatCount(0)).toBe('0');
   });
@@ -118,5 +116,10 @@ describe('computeGridDimensions', () => {
     expect(tiny.size).toBeGreaterThanOrEqual(2);
     const big = computeGridDimensions(1, 800, 600)!;
     expect(big.size).toBeLessThanOrEqual(16);
+  });
+
+  it('sizes tiles to about a third of the stride, leaving room between them', () => {
+    // 895 tiles in 1280×900: 26 rows × 35 cols, stride ≈ 34.6px → 11px tiles.
+    expect(computeGridDimensions(895, 1280, 900)).toEqual({ rows: 26, cols: 35, size: 11 });
   });
 });

@@ -33,10 +33,37 @@ export class Dashboard {
       ? await driver.findElement(By.css('html')).getId()
       : undefined;
     await driver.switchTo().defaultContent();
-    await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
+    await this.runCommand(`AI Engineer Coach: ${title}`);
     // Page-object constructors resolve immediately; wait until the editor exists first.
     await driver.wait(until.elementLocated(By.css('.editor-instance')), READY_TIMEOUT);
     await this.waitForWebview(previousDocumentId);
+  }
+
+  /** Runs a command from the palette once the palette lists it and stays open. On a cold start the workbench can still
+   *  be activating its startup extensions: the palette then closes under the keystrokes, or doesn't list the command
+   *  yet, and typing into it fails (`ElementNotInteractable`). The command runs only in a state where selecting it is
+   *  possible; until then the palette is closed and opened again. */
+  private async runCommand(command: string): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.wait(async () => {
+      try {
+        const prompt = await new Workbench().openCommandPrompt();
+        await prompt.setText(`>${command}`);
+        const labels = await Promise.all((await prompt.getQuickPicks()).map(item => item.getLabel()));
+        if (labels.includes(command) && await prompt.isDisplayed()) {
+          await prompt.selectQuickPick(command);
+          return true;
+        }
+        await prompt.cancel().catch(() => undefined);
+        return false;
+      } catch (err: unknown) {
+        if (err instanceof error.ElementNotInteractableError || err instanceof error.StaleElementReferenceError
+          || err instanceof error.NoSuchElementError) {
+          return false;
+        }
+        throw err;
+      }
+    }, READY_TIMEOUT, `Waiting for the command palette to list "${command}"`);
   }
 
   private async waitForWebview(previousDocumentId?: string): Promise<void> {
@@ -68,9 +95,9 @@ export class Dashboard {
   }
 
   /** Runs an AI Engineer Coach command that opens something other than the dashboard. */
-  async runCommand(title: string): Promise<void> {
+  async runCoachCommand(title: string): Promise<void> {
     await VSBrowser.instance.driver.switchTo().defaultContent();
-    await new Workbench().executeCommand(`AI Engineer Coach: ${title}`);
+    await this.runCommand(`AI Engineer Coach: ${title}`);
   }
 
   /** Waits for an editor tab whose title matches and returns that title. */
@@ -171,6 +198,9 @@ export class Dashboard {
     this.currentWebview = undefined;
   }
 
+  /** Waits for the text, entering the webview again after each poll that doesn't find it. The extension can replace the
+   *  whole page (its no-data and error pages do, once the dashboard page reported `ready`), and VS Code then swaps the
+   *  inner iframe: a driver that entered the old one keeps polling a frame with no document, which finds nothing. */
   async waitForText(selector: string, expected: string, exact = false): Promise<void> {
     await VSBrowser.instance.driver.wait(async () => {
       try {
@@ -180,12 +210,30 @@ export class Dashboard {
           const target = expected.toLowerCase();
           if (exact ? text === target : text.includes(target)) return true;
         }
-        return false;
       } catch (err: unknown) {
-        if (err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError) return false;
-        throw err;
+        if (!(err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchElementError || err instanceof error.NoSuchFrameError
+          || err instanceof error.NoSuchWindowError)) {
+          throw err;
+        }
       }
+      // A poll that found nothing, or failed on the old frame: the next one starts from the webview's current frame.
+      await this.reenter().catch((err: unknown) => {
+        if (!(err instanceof error.StaleElementReferenceError || err instanceof error.NoSuchFrameError || err instanceof error.NoSuchElementError
+          || (err instanceof Error && err.message.startsWith('WebviewMixin.switchToFrame: outer iframe became stale during frame switch.')))) {
+          throw err;
+        }
+      });
+      return false;
     }, READY_TIMEOUT, `Expected ${selector} to ${exact ? 'equal' : 'contain'} ${JSON.stringify(expected)}`);
+  }
+
+  /** Enters the webview's current inner frame. */
+  private async reenter(): Promise<void> {
+    const driver = VSBrowser.instance.driver;
+    await driver.switchTo().defaultContent();
+    const webview = new WebView();
+    await webview.switchToFrame(READY_TIMEOUT);
+    this.currentWebview = webview;
   }
 
   async expectCount(selector: string, expected: number): Promise<void> {

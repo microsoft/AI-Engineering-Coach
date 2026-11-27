@@ -166,3 +166,21 @@ it('keeps every page behind analytics progress before publishing readiness', asy
     .toHaveBeenCalledWith(expect.stringContaining('"analyzed":1'));
   host.dispose();
 });
+
+it('replays the latest totals to a client that connects during analytics', async () => {
+  let finish = () => {};
+  analyzerCalls.warmUp.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+  vi.mocked(parseAllLogsViaWorker).mockImplementationOnce((_dirs, progress) => {
+    progress?.({ phase: 3, pct: 85, detail: 'Found 12 sessions', sessions: 12, requests: 40, toolCalls: 90, linesOfCode: 300, filesEdited: 7 });
+    return Promise.resolve({ sessions: [], workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() });
+  });
+  const host = createCanvasHost({ distDir: '/fixture/dist' });
+  host.start();
+  await vi.waitFor(() => expect(analyzerCalls.warmUp).toHaveBeenCalled());
+  const late = request(host, '/events');
+  const replay = String(late.write.mock.calls[0]?.[0] ?? '');
+  expect(replay).toContain('"phase":4');
+  expect(replay).toContain('"requests":40');
+  finish();
+  host.dispose();
+});

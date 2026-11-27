@@ -29,6 +29,7 @@ AI Engineer Coach reads your local AI session logs and turns them into actionabl
 - **Track progress** -- practice scores, weekly trends, daily activity charts
 - **Detect anti-patterns** -- 45 rules across prompt quality, session hygiene, code review, tool mastery, and context management
 - **Measure output** -- AI-generated code volume by language, workspace, model, and harness
+- **See autonomy and delegation** -- when agents worked or waited on you, and how the sessions you delegated went
 - **Discover skills** -- find repeated prompts and turn them into reusable skills
 - **Score context health** — agentic readiness checks, instruction-file audits, workspace context maps
 
@@ -190,7 +191,7 @@ A few features depend on the local VS Code language model and are hidden in canv
 | Page               | Description                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------- |
 | **Dashboard**      | Practice scores with week-over-week trends, daily activity chart, top workspace stats |
-| **Timeline**       | Gantt-style session timeline with per-day drill-down and overlap detection            |
+| **Timeline**       | Autonomy lanes per day, week or chosen range, waits on you, families with verdicts    |
 | **Coding Moments** | Screenshot gallery from AI coding sessions with story reels and workspace filtering   |
 
 ### Measure
