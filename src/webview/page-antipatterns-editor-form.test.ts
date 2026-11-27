@@ -69,11 +69,10 @@ function testsSection(md: string): string {
 /* One VS Code session with 40 requests: 30 ran terminal commands on the host, 10 attached a file. */
 const AT = Date.parse('2026-09-30T12:00:00Z');
 const TERMINAL = [{ toolId: 'run_in_terminal', confirmationType: 0, isTerminal: true, commandLine: 'npm test' }];
-// testRuleLive passes request rows as they are; devcontainerStats matches them to sessions by sessionId.
-const requests: SessionRequest[] = Array.from({ length: 40 }, (_, index) => Object.assign(createRequest({
+const requests: SessionRequest[] = Array.from({ length: 40 }, (_, index) => createRequest({
   requestId: `r${index}`, timestamp: AT + index * 60_000, messageText: 'Run the tests and fix what fails', responseText: 'Done.',
   toolConfirmations: index < 30 ? TERMINAL : [], referencedFiles: index % 4 === 0 ? ['src/app.ts'] : [],
-}), { sessionId: 'host' }));
+}));
 const sessions = [createSession({ sessionId: 'host', workspaceId: 'ws', workspaceName: 'Project', harness: 'Local Agent', requests })];
 const analyzer = new Analyzer(sessions, new Map());
 const parsed: ParseResult = { sessions, workspaces: new Map(), editLocIndex: new Map(), sessionSourceIndex: new Map() };
@@ -326,6 +325,17 @@ describe('Rule Editor Test Rule', () => {
     expect([slider().value, shown()]).toEqual(['35', '35']);
     expect(await testRuleLive(markdown)).toMatchObject({ ok: true, triggered: true, occurrences: 40, total: 40 });
     expect(results.textContent).toContain('(40 / 40)');
+  });
+});
+
+describe('Test Rule and the detector', () => {
+  it('gives the detector\'s result whether it runs before or after the detector, and leaves the requests untouched', async () => {
+    const source = builtIn('no-devcontainer');
+    const before = await testRuleLive(source);
+    const detected = analyzer.getAntiPatterns({}).patterns.find(pattern => pattern.id === 'no-devcontainer');
+    expect(before).toMatchObject({ ok: true, triggered: true, occurrences: detected?.occurrences });
+    expect(await testRuleLive(source)).toEqual(before);
+    expect(requests.some(request => 'sessionId' in request)).toBe(false);
   });
 });
 

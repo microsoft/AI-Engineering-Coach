@@ -237,25 +237,9 @@ export class PatternsAnalyzer extends AnalyzerBase {
     const reqs = this.filter(f);
     const sessions = this.filteredSessions(f);
 
-    // Enrich requests with session context for occurrence detail tracking
-    const sessionMap = new Map<string, Session>();
-    for (const s of sessions) {
-      for (const r of s.requests) {
-        sessionMap.set(r.requestId, s);
-      }
-    }
-    const enrichedReqs = reqs.map(r => {
-      const s = sessionMap.get(r.requestId);
-      if (!s) return r;
-      const enriched = r as SessionRequest & { sessionId: string; workspaceName: string };
-      enriched.sessionId = s.sessionId;
-      enriched.workspaceName = s.workspaceName;
-      return enriched;
-    });
-
     const skipIdeDetectors = !!(f?.harness && !f.harness.startsWith('Local Agent') && f.harness !== 'Xcode');
     // Index every session, not only `sessions`: a date filter can keep a request whose session it drops.
-    const detection = detectAntiPatterns(enrichedReqs, sessions, skipIdeDetectors, this.requestSessionMap);
+    const detection = detectAntiPatterns(reqs, sessions, skipIdeDetectors, this.requestSessionMap);
     detection.patterns.push(...contribution.patterns);
     return this.buildAntiPatternResult(detection, reqs, skipIdeDetectors, contribution.weekly);
   }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix Test Rule and the rule previews showing No Devcontainer as clean until the anti-patterns
+  had loaded once (#342): rule request rows now carry their session's ID and workspace name, and
+  the detector no longer writes them into the shared request objects
 - Fix AI features such as Generate Quiz, Slop or Not, and Skill Finder reporting "LLM returned
   invalid JSON after 3 attempts" when GitHub Copilot returned an empty response (#91): empty
   replies are now reported as "GitHub Copilot returned an empty response"
