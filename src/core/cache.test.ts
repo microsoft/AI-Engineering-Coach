@@ -19,7 +19,11 @@ import {
   clearCache,
   DirMetas,
   ParseResult,
+  flushCacheWrites,
+  loadCacheData,
+  saveCacheData,
 } from './cache';
+import { getCacheDir } from './cache-paths';
 import { Session, TodoItem } from './types';
 import { createRequest, createSession, stripSingleSession } from './parser-shared';
 
@@ -151,6 +155,57 @@ describe('stripSingleSession', () => {
   });
 });
 
+describe('cache written by an earlier parser', () => {
+  it('re-parses a version 31 cache, whose Copilot waits lack the answer’s own time and request ID (E4)', async () => {
+    clearCache();
+    const session = makeSession();
+    session.requests[0].userWaits = [{ start: 1, end: 5, kind: 'question', answered: true }];
+    const result: ParseResult = { workspaces: new Map(), sessions: [session], editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    const dirMetas: DirMetas = { '/logs/ws1': { chatCount: 1, chatMaxMtime: 1, editCount: 0, editMaxMtime: 0 } };
+    await saveCacheData(result, dirMetas);
+    await flushCacheWrites();
+    expect((await loadCacheData())?.result.sessions.length).toBe(1);
+    // The same files as the previous build wrote them: its version number, unchanged fingerprints.
+    const metaFile = path.join(getCacheDir(), 'meta.json');
+    fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf-8')) as object, version: 31 }));
+    expect(await loadCacheData()).toBeNull();
+    clearCache();
+  });
+
+  it('re-parses a version 32 cache, whose Copilot waits beside editor chats took a later question reusing an answered one’s ID for answered', async () => {
+    clearCache();
+    const editor = makeSession();
+    const cli = createSession({
+      sessionId: 'cli-beside-editor', workspaceId: 'ws1', workspaceName: 'workspace', harness: 'GitHub Copilot CLI',
+      requests: [createRequest({ requestId: 'r1', timestamp: 1, messageText: 'go', responseText: '',
+        userWaits: [{ start: 2, end: 3, kind: 'question', answered: true, answeredAt: 3 }, { start: 5, end: 6, kind: 'question', answered: true, answeredAt: 3 }] })],
+    });
+    const result: ParseResult = {
+      workspaces: new Map(), sessions: [editor, cli], editLocIndex: new Map(),
+      sessionSourceIndex: new Map([[cli.sessionId, { kind: 'cli-events', filePath: '/logs/ws1/copilot/events.jsonl', workspaceId: 'ws1', workspaceName: 'workspace', harness: 'GitHub Copilot CLI' }]]),
+    };
+    await saveCacheData(result, { '/logs/ws1': { chatCount: 1, chatMaxMtime: 1, editCount: 0, editMaxMtime: 0 } });
+    await flushCacheWrites();
+    expect((await loadCacheData())?.result.sessions.length).toBe(2);
+    const metaFile = path.join(getCacheDir(), 'meta.json');
+    fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf-8')) as object, version: 32 }));
+    expect(await loadCacheData()).toBeNull();
+    clearCache();
+  });
+
+  it('re-parses a version 34 cache, whose VS Code requests lost their to-do lists', async () => {
+    clearCache();
+    const result: ParseResult = { workspaces: new Map(), sessions: [makeSession()], editLocIndex: new Map(), sessionSourceIndex: new Map() };
+    await saveCacheData(result, { '/logs/ws1': { chatCount: 1, chatMaxMtime: 1, editCount: 0, editMaxMtime: 0 } });
+    await flushCacheWrites();
+    expect((await loadCacheData())?.result.sessions.length).toBe(1);
+    const metaFile = path.join(getCacheDir(), 'meta.json');
+    fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf-8')) as object, version: 34 }));
+    expect(await loadCacheData()).toBeNull();
+    clearCache();
+  });
+});
+
 describe('computeDirMetas', () => {
   it('computes fingerprints for workspace dirs with chatSessions', () => {
     const logsDir = makeTempDir();
@@ -195,7 +250,32 @@ describe('computeDirMetas', () => {
     expect(syncAfter).toBeGreaterThan(before);
     expect(asyncAfter).toBe(syncAfter);
   });
+});
 
+describe('computeDirMetas with a Copilot CLI log beside the chats', () => {
+  it('marks a workspace stale when the Copilot CLI log beside its chats, or that log’s sidecar, changes or goes (B9)', async () => {
+    const logsDir = makeTempDir();
+    const wsDir = path.join(logsDir, 'workspace1');
+    fs.mkdirSync(path.join(wsDir, 'chatSessions'), { recursive: true });
+    const events = path.join(wsDir, 'events.jsonl');
+    fs.writeFileSync(events, '{"type":"session.start"}\n');
+    const before = computeDirMetas([logsDir]);
+    expect(await computeDirMetasAsync([logsDir])).toEqual(before);
+    const stale = () => [...findStaleDirs(computeDirMetas([logsDir]), before).stale];
+    // Another turn appended: the chat folders are unchanged, the log isn't.
+    fs.appendFileSync(events, '{"type":"user.message"}\n');
+    expect(stale()).toEqual([wsDir]);
+    fs.writeFileSync(path.join(wsDir, 'workspace.yaml'), 'client_name: github/cli\n');
+    const withSidecar = computeDirMetas([logsDir]);
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(path.join(wsDir, 'workspace.yaml'), future, future);
+    expect([...findStaleDirs(computeDirMetas([logsDir]), withSidecar).stale]).toEqual([wsDir]);
+    fs.rmSync(events);
+    expect(stale()).toEqual([wsDir]);
+  });
+});
+
+describe('computeDirMetas for other directories', () => {
   it('skips Xcode and CLI directories', () => {
     const logsDir = makeTempDir();
     const xcodeDir = path.join(logsDir, '.config', 'github-copilot', 'xcode');

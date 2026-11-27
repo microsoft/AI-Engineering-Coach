@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import { Analyzer } from '../core/analyzer';
 import type { ParseResult } from '../core/parser';
+import { createRequest } from '../core/parser-shared';
 import { DashboardPanel } from './panel';
 import { panelCache } from './panel-cache';
 
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   disposed: () => {},
   modelsChanged: () => {},
   html: '',
+  dirs: ['test-logs'],
   post: vi.fn<(message: unknown) => Promise<boolean>>().mockResolvedValue(true),
   parse: vi.fn<() => Promise<ParseResult>>(),
   clearCache: vi.fn<() => void>(),
@@ -49,7 +51,7 @@ vi.mock('vscode', () => ({
 }));
 vi.mock('../core/analyzer', () => ({ Analyzer: class { warmUp = mocks.warmUp; } }));
 vi.mock('../core/parser', () => ({
-  clearCache: mocks.clearCache, findLogsDirs: () => ['test-logs'], parseAllLogsViaWorker: mocks.parse,
+  clearCache: mocks.clearCache, findLogsDirs: () => mocks.dirs, parseAllLogsViaWorker: mocks.parse,
 }));
 vi.mock('../core/parser-harnesses', () => ({ hasExternalHarnessSources: () => false }));
 vi.mock('../core/cache', () => ({ saveSidebarStats: () => {} }));
@@ -81,6 +83,7 @@ beforeEach(() => {
   mocks.parse.mockResolvedValue(result);
   mocks.warmUp.mockResolvedValue(undefined);
   mocks.probe.mockResolvedValue(true);
+  mocks.dirs = ['test-logs'];
 });
 
 afterEach(() => {
@@ -89,6 +92,17 @@ afterEach(() => {
 });
 
 describe('dashboard startup', () => {
+  it('shows the no-logs page only once the dashboard page has loaded, so the dashboard can’t replace it', async () => {
+    mocks.dirs = [];
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(DashboardPanel.current).toBeDefined());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // Replacing a page that is still loading can be undone by that page finishing its load.
+    expect(mocks.html).toBe('<html></html>');
+    mocks.receive({ type: 'ready' });
+    expect(mocks.html).toContain('No AI coding session logs found');
+  });
+
   it('keeps all requests behind the progress screen until analytics finish', async () => {
     let finish = () => {};
     mocks.warmUp.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
@@ -190,6 +204,7 @@ describe('dashboard startup', () => {
     mocks.warmUp.mockReturnValue(new Promise<void>((_resolve, reject) => { fail = reject; }));
     DashboardPanel.createOrShow(context.extensionUri, context);
     await vi.waitFor(() => expect(mocks.warmUp).toHaveBeenCalled());
+    mocks.receive({ type: 'ready' });
     mocks.receive({ type: 'request', id: 'patterns', method: 'getAntiPatterns' });
     fail(new Error('Worker unavailable'));
     await vi.waitFor(() => expect(mocks.html).toContain('Worker unavailable'));
@@ -201,6 +216,9 @@ describe('dashboard startup', () => {
   it('reports a failed cached job and removes it from the cache', async () => {
     panelCache.store(result, new Analyzer([]), Promise.reject(new Error('Cached worker failed')));
     DashboardPanel.createOrShow(context.extensionUri, context);
+    // The page loaded only after the failure: the error replaces it then.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    mocks.receive({ type: 'ready' });
     await vi.waitFor(() => expect(mocks.html).toContain('Cached worker failed'));
     expect(mocks.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' }));
     expect(panelCache.result).toBeUndefined();
@@ -277,5 +295,39 @@ describe('host capabilities', () => {
     await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(2));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(capabilityPushes()).toHaveLength(0);
+  });
+});
+
+describe('progress totals on reopen', () => {
+  const withTotals: ParseResult = {
+    ...result,
+    sessions: [{
+      sessionId: 's1', workspaceId: 'w1', workspaceName: 'api', location: '/x', harness: 'VS Code',
+      creationDate: null, lastMessageDate: null, requestCount: 2,
+      requests: [createRequest({ messageText: 'a', responseText: 'b' }), createRequest({ messageText: 'c', responseText: 'd' })],
+    }],
+  };
+
+  it('sends the found-so-far totals when the panel reopens during analytics and when the webview reloads', async () => {
+    let finish = () => {};
+    // Totals the parse reported are stored with the cache; reopening reuses them instead of
+    // counting every session again on the extension host.
+    panelCache.store(withTotals, new Analyzer([]), new Promise<void>(resolve => { finish = resolve; }), { requests: 2, toolCalls: 0, linesOfCode: 0, filesEdited: 0 });
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4 })));
+    expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4, sessions: 1, requests: 2, toolCalls: 0 }));
+    mocks.post.mockClear();
+    mocks.receive({ type: 'ready' });
+    expect(mocks.post).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'progress', phase: 4, requests: 2 }));
+    finish();
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' })));
+  });
+
+  it('reuses the stored totals on reopen rather than recounting sessions', async () => {
+    // The stored totals differ from what a recount of these (empty) sessions would give.
+    panelCache.store(result, new Analyzer([]), Promise.resolve(), { requests: 4210, toolCalls: 12004 });
+    DashboardPanel.createOrShow(context.extensionUri, context);
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'progress', phase: 4, requests: 4210, toolCalls: 12004 })));
+    await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'dataReady' })));
   });
 });

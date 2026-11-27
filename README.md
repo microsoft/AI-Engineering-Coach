@@ -29,6 +29,7 @@ AI Engineer Coach reads your local AI session logs and turns them into actionabl
 - **Track progress** -- practice scores, weekly trends, daily activity charts
 - **Detect anti-patterns** -- 45 rules across prompt quality, session hygiene, code review, tool mastery, and context management
 - **Measure output** -- AI-generated code volume by language, workspace, model, and harness
+- **See autonomy and delegation** -- when agents worked or waited on you, and how the sessions you delegated went
 - **Discover skills** -- find repeated prompts and turn them into reusable skills
 - **Score context health** — agentic readiness checks, instruction-file audits, workspace context maps
 
@@ -111,11 +112,19 @@ code --install-extension (Get-ChildItem . -Filter 'ai-engineer-coach-*.vsix' | S
 
 If the CLI does not work, install it from the VS Code UI: press `Ctrl+Shift+P`, type **Install from VSIX**, then browse to the `.vsix` file and select it.
 
+Every build has the same version, so to replace an installed build with a newer one, add `--force`: without it, `code --install-extension` reports the extension as already installed.
+
 After install:
 
 1. Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
 2. Run **AI Engineer Coach: Open Dashboard**
 3. Navigate pages from the sidebar, filter by workspace or harness
+
+### Which build is installed?
+
+Builds share the version in `package.json`, so each build is stamped with its version, commit, branch, and build time. The bottom of the dashboard sidebar shows the stamp, with `-dirty` when it was built from uncommitted changes. The same stamp is on the `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log` and in `dist/build-info.json` in the installed extension's folder.
+
+Run **AI Engineer Coach: What's New** to read the changes, grouped by date ([`CHANGELOG.md`](CHANGELOG.md)). The first time a build with newer dated changes runs, a notification offers them once; turn it off with the `aiEngineerCoach.showReleaseNotesAfterUpdate` setting.
 
 ---
 
@@ -182,7 +191,7 @@ A few features depend on the local VS Code language model and are hidden in canv
 | Page               | Description                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------- |
 | **Dashboard**      | Practice scores with week-over-week trends, daily activity chart, top workspace stats |
-| **Timeline**       | Gantt-style session timeline with per-day drill-down and overlap detection            |
+| **Timeline**       | Autonomy lanes per day, week or chosen range, waits on you, families with verdicts    |
 | **Coding Moments** | Screenshot gallery from AI coding sessions with story reels and workspace filtering   |
 
 ### Measure

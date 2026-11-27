@@ -331,6 +331,9 @@ export interface ParseContext {
   sessionSourceIndex: Map<string, SessionSource>;
   /** Running total of AI-generated lines of code (sum of all aiCode blocks). */
   aiLoc: number;
+  /** When present, filled with each workspace's project folder (also for workspaces without
+   *  sessions), so the loading screen can show it as a display path. */
+  workspaceRoots?: Map<string, string>;
 }
 
 /** Creates a SessionRequest with sensible defaults; callers only supply non-default fields. */
@@ -427,8 +430,12 @@ export function stripSingleSession(session: Session): void {
       r.messageText = r.messageText.substring(0, MEMORY_PREVIEW_CHARS);
     }
     r.responseText = '';
+    delete r.replyText;
     if (r.todoSnapshot) r.todoSnapshot = r.todoSnapshot.map(({ id, title, status }) => ({ id, title, status }));
+    // What a question or permission prompt asked, and your answer: read again with the session when it is opened.
+    for (const w of r.userWaits ?? []) delete w.text;
   }
+  for (const w of session.userWaits ?? []) delete w.text;
 }
 const DEVCONTAINER_PATH_RE = /(?:^|[\s=:"'`])\/workspaces\//;
 

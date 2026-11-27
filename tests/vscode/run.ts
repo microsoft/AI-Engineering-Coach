@@ -11,7 +11,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFixtures, scenarioContext } from './fixtures';
+import {
+  exportFamilyDataset, exportFixtureDataset, fixturePaths, isolatedEnvironment, prepareFamilyFixtures, prepareFixtures,
+  readInstalledBuild, scenarioContext,
+} from './fixtures';
 import { writeSnapshotReport } from './snapshots';
 
 const PROJECT = path.resolve(__dirname, '..', '..');
@@ -85,15 +88,49 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
   await fs.cp(source, destination, { recursive: true });
 }
 
+/** The installed VSIX ships its bundles, a build stamp from this checkout, and a dated changelog. */
+async function assertInstalledPackage(root: string, installedRoot: string, manifestVersion: string): Promise<void> {
+  for (const asset of ['extension.js', 'parse-worker.js', 'warm-up-worker.js', 'cache-write-worker.js',
+    path.join('webview', 'app.js'), path.join('webview', 'styles.css')]) {
+    assert.ok((await fs.stat(path.join(installedRoot, 'dist', asset))).size > 0, `Missing packaged asset: ${asset}`);
+  }
+  const build = await readInstalledBuild(root);
+  assert.equal(build.version, manifestVersion, 'The build stamp does not match the installed manifest');
+  assert.match(build.commit, /^[0-9a-f]{7,40}$/, `The build stamp has no git commit: ${build.commit}`);
+  const ciCommit = process.env.GITHUB_SHA;
+  if (ciCommit) assert.ok(ciCommit.startsWith(build.commit), `The build stamp commit ${build.commit} is not ${ciCommit}`);
+  const changelog = (await fs.readdir(build.root)).find(name => /^changelog\.md$/i.test(name));
+  assert.ok(changelog, 'The packaged extension has no changelog');
+  const notes = await fs.readFile(path.join(build.root, changelog), 'utf8');
+  assert.match(notes, /^## \d{4}-\d{2}-\d{2}\r?$/m, 'The packaged changelog has no dated section');
+  console.log(`Installed build: v${build.version} commit ${build.commit}${build.dirty ? '-dirty' : ''}`
+    + `${build.branch ? ` on ${build.branch}` : ''}, built ${build.builtAt}`);
+}
+
+/** vscode-extension-tester asks the test build for its version (`code -v`) with a fixed 30 s limit, which a busy
+ *  machine can exceed: the scenario then fails with `spawnSync cmd.exe ETIMEDOUT` before it starts. The build in
+ *  `storage` was copied from the cache kept for exactly `version`, so its version is known: hand it to the tester, which
+ *  then never runs that check. Without a cached build, the tester downloads one as usual. */
+async function primeCodeVersion(tester: object, storage: string, version: string): Promise<void> {
+  const cached = (await fs.readdir(storage).catch(() => [] as string[])).some(name => name.startsWith('VSCode-'));
+  const code = (tester as { code?: { cachedCodeVersion?: string } }).code;
+  if (cached && code && !code.cachedCodeVersion) code.cachedCodeVersion = version;
+}
 async function runWorker(vsix: string, version: string, scenario: string): Promise<void> {
   if (!(await discoverSuites(SUITES)).includes(scenario)) throw new Error(`Unknown scenario: ${scenario}`);
   const { root, timestamp } = scenarioContext();
   const storage = process.env.AIC_E2E_STORAGE;
   const artifacts = process.env.AIC_E2E_ARTIFACTS;
   if (!storage || !artifacts) throw new Error('Missing test storage/artifact directories');
-  await prepareFixtures(root, timestamp, scenario !== 'empty');
-  await fs.mkdir(artifacts, { recursive: true });
-  await exportFixtureDataset(root, timestamp, artifacts, scenario !== 'empty');
+  if (scenario === 'families') {
+    await prepareFamilyFixtures(root, timestamp);
+    await fs.mkdir(artifacts, { recursive: true });
+    await exportFamilyDataset(root, timestamp, artifacts);
+  } else {
+    await prepareFixtures(root, timestamp, scenario !== 'empty');
+    await fs.mkdir(artifacts, { recursive: true });
+    await exportFixtureDataset(root, timestamp, artifacts, scenario !== 'empty');
+  }
   const config = path.join(root, 'mocha.json');
   const settings = path.join(root, 'settings.json');
   await fs.writeFile(config, JSON.stringify({
@@ -108,11 +145,13 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
 
   // Import only in the child, after its home/profile environment has been isolated.
   const { ExTester, ReleaseQuality } = await import('vscode-extension-tester');
-  const extensions = path.join(root, 'extensions');
+  const extensions = fixturePaths(root).extensions;
   const release = vscodeRelease(version);
   const quality = release.quality === 'insider' ? ReleaseQuality.Insider : ReleaseQuality.Stable;
   const tester = new ExTester(storage, quality, extensions);
   try {
+    // Insiders means the newest build, so a cached one isn't taken as current.
+    if (release.quality === 'stable') await primeCodeVersion(tester, storage, release.version);
     await tester.downloadCode(release.version);
     await tester.downloadChromeDriver(release.version);
     await tester.installVsix({ vsixFile: vsix, installDependencies: false });
@@ -122,10 +161,7 @@ async function runWorker(vsix: string, version: string, scenario: string): Promi
     const installedRoot = path.join(extensions, installed[0].name);
     const installedManifest = manifestSchema.parse(JSON.parse(await fs.readFile(path.join(installedRoot, 'package.json'), 'utf8')));
     assert.deepEqual(installedManifest, manifest, 'Installed VSIX does not match the repository manifest');
-    for (const asset of ['extension.js', 'parse-worker.js', 'warm-up-worker.js', 'cache-write-worker.js',
-      path.join('webview', 'app.js'), path.join('webview', 'styles.css')]) {
-      assert.ok((await fs.stat(path.join(installedRoot, 'dist', asset))).size > 0, `Missing packaged asset: ${asset}`);
-    }
+    await assertInstalledPackage(root, installedRoot, installedManifest.version);
     const suite = path.join(__dirname, 'suite', `${scenario}.spec.js`).replaceAll('\\', '/');
     const code = await tester.runTests(suite, {
       vscodeVersion: release.version, offline: true, config, settings, locale: 'en',

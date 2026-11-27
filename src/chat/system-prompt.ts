@@ -39,7 +39,8 @@ Strategy:
 5. For tool comparison ("which tool is better?", "VS Code vs Claude"), use aiEngineerCoach_harnessComparison
 6. For context/config questions ("agentic readiness", "instructions quality", "prompt cache", "why did my cache break"), use aiEngineerCoach_contextHealth
 7. For session drill-down ("show me session X", "recent sessions"), use aiEngineerCoach_sessions
-8. Cross-reference multiple tools when questions span domains`;
+8. For autonomy and delegation questions ("how much did agents work on their own?", "did my child sessions need me?", "where did my credits go?"), use aiEngineerCoach_timeline
+9. Cross-reference multiple tools when questions span domains`;
 
 export function buildSystemPrompt(): string {
   const today = new Date().toISOString().slice(0, 10);

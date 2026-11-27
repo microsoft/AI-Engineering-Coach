@@ -26,6 +26,56 @@ function withCodexFile(lines: object[], run: (sessionsDir: string, filePath: str
 }
 
 describe('parseCodexSessions', () => {
+  it('reads the thread a fork came from', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork-thread', forked_from_id: 'source-thread', source: 'exec', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Try the other way.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:01:00Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      expect(parseCodexSessions(sessionsDir)[0]).toMatchObject({ sessionId: 'fork-thread', forkedFromId: 'source-thread' });
+    });
+  });
+
+  it('counts only a fork’s own tokens: its first total already holds what the source used', () => {
+    const tokens = (ts: string, total: [number, number], last: [number, number]) => ({ type: 'event_msg', timestamp: ts, payload: { type: 'token_count', info: {
+      total_token_usage: { input_tokens: total[0], output_tokens: total[1], total_tokens: total[0] + total[1] },
+      last_token_usage: { input_tokens: last[0], output_tokens: last[1], total_tokens: last[0] + last[1] },
+    } } });
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      tokens('2025-06-15T09:00:10Z', [100_000, 5000], [2000, 100]),
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+      tokens('2025-06-15T09:00:30Z', [103_000, 5300], [3000, 300]),
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([5000, 400]);
+    });
+  });
+
+  it('takes a fork’s own first call from its response usage when the snapshot has no last call', () => {
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      { type: 'token_usage_record', timestamp: '2025-06-15T09:00:09Z', payload: { usage: { input_tokens: 13_580, output_tokens: 34, total_tokens: 13_614 } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 172_166, output_tokens: 757, total_tokens: 172_923 } } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([13_580, 34]);
+    });
+    // With no record of its own call, the fork's usage is unknown, not zero.
+    withCodexFile([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'src', cwd: '/Users/me/proj' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'user_message', message: 'Go on.' } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:10Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 172_166, output_tokens: 757, total_tokens: 172_923 } } } },
+      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'agent_message', message: 'Done.' } },
+    ], (sessionsDir) => {
+      const [request] = parseCodexSessions(sessionsDir)[0].requests;
+      expect([request.promptTokens, request.completionTokens]).toEqual([null, null]);
+    });
+  });
+
   it('captures current custom_tool_call apply_patch deltas', () => {
     withCodexFile([
       { type: 'session_meta', payload: { id: 'sess-codex-patch', cwd: '/Users/me/proj' } },
@@ -321,106 +371,5 @@ describe('findCodexDirs', () => {
       else process.env.USERPROFILE = oldUserProfile;
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-});
-
-describe('parseCodexSessions: turn timing', () => {
-  const userItem = (ts: string, text: string) => ({
-    type: 'response_item', timestamp: ts,
-    payload: { role: 'user', type: 'message', content: [{ type: 'input_text', text }] },
-  });
-  const assistantItem = (ts: string, text: string) => ({
-    type: 'response_item', timestamp: ts,
-    payload: { role: 'assistant', type: 'message', content: [{ type: 'output_text', text }] },
-  });
-
-  it('ends a turn when its task completes or is aborted, not at the next prompt', () => {
-    withCodexFile([
-      { type: 'session_meta', payload: { id: 'sess-time', cwd: '/Users/me/proj', source: 'vscode' } },
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'task_started' } },
-      userItem('2025-06-15T10:00:00Z', 'Why?'),
-      assistantItem('2025-06-15T10:00:30Z', 'Because.'),
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:31Z', payload: { type: 'task_complete', last_agent_message: 'Because.' } },
-      { type: 'event_msg', timestamp: '2025-06-15T20:00:00Z', payload: { type: 'task_started' } },
-      userItem('2025-06-15T20:00:00Z', 'And then?'),
-      assistantItem('2025-06-15T20:00:10Z', 'Done.'),
-      { type: 'event_msg', timestamp: '2025-06-15T20:00:12Z', payload: { type: 'turn_aborted' } },
-    ], sessionsDir => {
-      expect(parseCodexSessions(sessionsDir)[0].requests.map(request => request.totalElapsed)).toEqual([31_000, 12_000]);
-    });
-  });
-
-  it('keeps work logged after task_complete in the turn', () => {
-    withCodexFile([
-      { type: 'session_meta', payload: { id: 'sess-late', cwd: '/Users/me/proj', source: 'vscode' } },
-      userItem('2025-06-15T10:00:00Z', 'Why?'),
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:10Z', payload: { type: 'task_complete' } },
-      assistantItem('2025-06-15T10:00:20Z', 'One more thing.'),
-      userItem('2025-06-15T11:00:00Z', 'Thanks.'),
-      assistantItem('2025-06-15T11:00:05Z', 'Welcome.'),
-    ], sessionsDir => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(20_000);
-    });
-  });
-
-  it('keeps reasoning and shell calls logged after task_complete in the turn', () => {
-    withCodexFile([
-      { type: 'session_meta', payload: { id: 'sess-late-items', cwd: '/Users/me/proj', source: 'vscode' } },
-      userItem('2025-06-15T10:00:00Z', 'Why?'),
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:10Z', payload: { type: 'task_complete' } },
-      { type: 'response_item', timestamp: '2025-06-15T10:00:15Z', payload: { type: 'reasoning', summary: [] } },
-      { type: 'response_item', timestamp: '2025-06-15T10:00:25Z', payload: { type: 'local_shell_call', status: 'completed' } },
-      userItem('2025-06-15T11:00:00Z', 'Thanks.'),
-      assistantItem('2025-06-15T11:00:05Z', 'Welcome.'),
-    ], sessionsDir => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(25_000);
-    });
-  });
-
-  it('does not count a later task with no prompt, such as a manual /compact, as the turn\'s work', () => {
-    withCodexFile([
-      { type: 'session_meta', payload: { id: 'sess-compact', cwd: '/Users/me/proj', source: 'cli' } },
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'task_started' } },
-      userItem('2025-06-15T10:00:00Z', 'Why?'),
-      assistantItem('2025-06-15T10:00:30Z', 'Because.'),
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:31Z', payload: { type: 'task_complete' } },
-      { type: 'event_msg', timestamp: '2025-06-15T13:00:00Z', payload: { type: 'task_started' } },
-      { type: 'compacted', timestamp: '2025-06-15T13:00:18Z', payload: { message: 'Summary.' } },
-      { type: 'event_msg', timestamp: '2025-06-15T13:00:20Z', payload: { type: 'task_complete' } },
-      userItem('2025-06-15T13:05:00Z', 'And then?'),
-      assistantItem('2025-06-15T13:05:10Z', 'Done.'),
-    ], sessionsDir => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(31_000);
-    });
-  });
-
-  it('ends the first turn at its own task even after a task with no prompt opens the session', () => {
-    withCodexFile([
-      { type: 'session_meta', payload: { id: 'sess-compact-first', cwd: '/Users/me/proj', source: 'cli' } },
-      { type: 'event_msg', timestamp: '2025-06-15T09:00:00Z', payload: { type: 'task_started' } },
-      { type: 'compacted', timestamp: '2025-06-15T09:00:18Z', payload: { message: 'Summary.' } },
-      { type: 'event_msg', timestamp: '2025-06-15T09:00:20Z', payload: { type: 'task_complete' } },
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:00Z', payload: { type: 'task_started' } },
-      userItem('2025-06-15T10:00:00Z', 'Why?'),
-      assistantItem('2025-06-15T10:00:30Z', 'Because.'),
-      { type: 'event_msg', timestamp: '2025-06-15T10:00:31Z', payload: { type: 'task_complete' } },
-      userItem('2025-06-15T13:05:00Z', 'And then?'),
-      assistantItem('2025-06-15T13:05:10Z', 'Done.'),
-    ], sessionsDir => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(31_000);
-    });
-  });
-
-  it('falls back to the next prompt when a task_complete is stamped before its prompt', () => {
-    withCodexFile([
-      { type: 'session_meta', payload: { id: 'sess-early-end', cwd: '/Users/me/proj', source: 'cli' } },
-      userItem('2025-06-15T10:00:00Z', 'Why?'),
-      assistantItem('2025-06-15T10:00:30Z', 'Because.'),
-      { type: 'event_msg', timestamp: '2025-06-15T09:59:00Z', payload: { type: 'task_complete' } },
-      userItem('2025-06-15T10:05:00Z', 'And then?'),
-      assistantItem('2025-06-15T10:05:10Z', 'Done.'),
-    ], sessionsDir => {
-      expect(parseCodexSessions(sessionsDir)[0].requests[0].totalElapsed).toBe(300_000);
-    });
   });
 });

@@ -7,9 +7,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatBuildLogFields } from '../../src/core/build-info';
 import {
-  addReloadFixture, assertFixturesUnchanged, exportFixtureDataset, fixtureDatasetSchema,
-  fixtureFiles, fixturePaths, isolatedEnvironment, prepareFixtures,
+  activateLinePattern, addReloadFixture, assertFamilyFixturesUnchanged, assertFixturesUnchanged, exportFixtureDataset, FAMILY,
+  fixtureDatasetSchema, fixtureFiles, fixturePaths, isolatedEnvironment, prepareFamilyFixtures, prepareFixtures, readInstalledBuild,
 } from './fixtures';
 import { discoverSuites, vscodeRelease, vscodeVersion } from './run';
 
@@ -70,7 +71,13 @@ describe('desktop test fixtures', () => {
       const analyzer = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces);
       expect(analyzer.getHeatmap().heatmap.flat().filter(value => value > 0)).toEqual([9, 9, 9, 9, 9, 9, 9]);
       expect(analyzer.getWorkLifeBalance()).toMatchObject({ totalRequests: 63, weekdayReqs: 45, weekendReqs: 18, activeDays: 7 });
-      expect(analyzer.getDayTimeline()).toMatchObject({ sessionCount: 3, maxConcurrent: 3 });
+      const timeline = analyzer.getTimelineData();
+      expect(timeline.sessions).toHaveLength(21);
+      const { buildLanes, peakParallel, prepareTimeline, timelineWindow } = await import('../../src/core/timeline-model');
+      const prepared = prepareTimeline(timeline);
+      const lanes = buildLanes(prepared, ...timelineWindow('day', prepared.days[prepared.days.length - 1]));
+      expect(lanes).toHaveLength(3);
+      expect(peakParallel(lanes).count).toBe(1);
       const projects = analyzer.getProjectOverview().projects;
       expect(projects.map(project => project.workspaceName).sort()).toEqual(['inventory-api', 'release-worker', 'sensor-pipeline']);
       expect(projects.map(project => project.totalRequests)).toEqual([21, 21, 21]);
@@ -78,8 +85,36 @@ describe('desktop test fixtures', () => {
     });
   });
 
-  describe('published synthetic dataset', () => {
-    it('exports the actual initial inputs separately from the planned reload addition', async () => {
+  describe('session family fixture', () => {
+    it('parses a Copilot App family with its links, names and scrubbed branches, without changing the logs', async () => {
+      await prepareFamilyFixtures(root, timestamp);
+      const { findLogsDirs, parseAllLogs } = await import('../../src/core/parser');
+      const { Analyzer } = await import('../../src/core/analyzer');
+      const { buildFamilies, prepareTimeline } = await import('../../src/core/timeline-model');
+      const parsed = parseAllLogs(findLogsDirs());
+      expect(parsed.sessions).toHaveLength(FAMILY.sessions);
+      expect(parsed.sessions.reduce((sum, session) => sum + session.requests.length, 0)).toBe(FAMILY.requests);
+      const data = new Analyzer(parsed.sessions, parsed.editLocIndex, parsed.workspaces).getTimelineData();
+      const byId = new Map(data.sessions.map(s => [s.id, s]));
+      const parentOf = (id: string) => { const s = byId.get(id)!; return [s.parent >= 0 ? data.sessions[s.parent].id : null, s.via]; };
+      expect(parentOf(FAMILY.payment)).toEqual([FAMILY.coordinator, 'create']);
+      expect(parentOf(FAMILY.lint)).toEqual([FAMILY.payment, 'create']);
+      expect(parentOf(FAMILY.perf)).toEqual([FAMILY.coordinator, 'relay']);
+      expect(parentOf(FAMILY.coordinator)).toEqual([null, null]);
+      expect(byId.get(FAMILY.coordinator)).toMatchObject({ name: 'Checkout revamp', branch: 'checkout-revamp', repo: 'shop', harness: 'Copilot App' });
+      expect(byId.get(FAMILY.lone)).toMatchObject({ name: '', harness: 'Copilot CLI' });
+      expect(byId.get(FAMILY.coordinator)?.turns.reduce((sum, t) => sum + t.cr, 0)).toBe(5);
+      const { families } = buildFamilies(prepareTimeline(data));
+      expect(families.map(f => [f.s.id, f.sessions, f.verdict, f.depth])).toEqual([[FAMILY.coordinator, 5, 'needed', 2]]);
+      // The answered question in a child and the permission you decided are waits; the policy decision is not.
+      expect(families[0]).toMatchObject({ childTyped: 1, childAnswered: 1, steppedInto: 2 });
+      expect(byId.get(FAMILY.docs)?.turns[0].w?.map(w => [w.k, (w.e - w.s) / 60_000])).toEqual([['question', 10]]);
+      expect(byId.get(FAMILY.coordinator)?.turns.flatMap(t => t.w ?? []).map(w => [w.k, (w.e - w.s) / 60_000])).toEqual([['permission', 4]]);
+      await assertFamilyFixturesUnchanged(root, timestamp);
+    });
+  });
+
+  describe('published synthetic dataset', () => {    it('exports the actual initial inputs separately from the planned reload addition', async () => {
       await prepareFixtures(root, timestamp, true);
       const artifacts = path.join(root, 'artifacts');
       await exportFixtureDataset(root, timestamp, artifacts, true);
@@ -129,7 +164,7 @@ describe('desktop test fixtures', () => {
       NODE_OPTIONS: '--inspect', CODE_VERSION: 'latest', PATH: '/tools',
       MOCHA_GREP: 'activates|no-data', MOCHA_INVERT: 'true' };
     const env = isolatedEnvironment(root, parent);
-    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'COPILOT_HOME', 'TMP', 'TEMP', 'TMPDIR']) {
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'COPILOT_HOME', 'GH_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR']) {
       expect(env[key]?.startsWith(root + path.sep)).toBe(true);
     }
     expect(env).not.toHaveProperty('VSCODE_PORTABLE');
@@ -149,6 +184,29 @@ describe('desktop test fixtures', () => {
     expect(fixturePaths(root, 'win32').logs).toContain(path.join('AppData', 'Roaming', 'Code', 'User'));
     expect(fixturePaths(root, 'darwin').logs).toContain(path.join('Library', 'Application Support', 'Code', 'User'));
     expect(fixturePaths(root, 'linux').logs).toContain(path.join('.config', 'Code', 'User'));
+  });
+});
+
+describe('installed build stamp', () => {
+  const stamp = { version: '0.2.0', commit: 'abc1234', dirty: false, branch: 'main', builtAt: '2026-11-03T09:30:12.345Z' };
+
+  it('reads dist/build-info.json from the one installed extension', async () => {
+    const installed = path.join(fixturePaths(root).extensions, 'ai-engineer-coach.ai-engineer-coach-0.2.0');
+    await fs.mkdir(path.join(installed, 'dist'), { recursive: true });
+    await fs.writeFile(path.join(installed, 'dist', 'build-info.json'), JSON.stringify(stamp));
+    expect(await readInstalledBuild(root)).toEqual({ ...stamp, root: installed });
+    await fs.mkdir(path.join(fixturePaths(root).extensions, 'another.extension-1.0.0'));
+    await expect(readInstalledBuild(root)).rejects.toThrow('Only the packaged extension should be installed');
+  });
+
+  it('matches the activate line the extension writes for that build', () => {
+    const build = { ...stamp, root };
+    const line = '2026-11-03T10:00:00.000Z pid=4242 [extension] activate | rss=90.1MB heap=20.0MB/40.0MB ext=1.0MB'
+      + ` | ${formatBuildLogFields(build)} runtimeLog=/home/user/.copilot-analytics-cache/runtime.log`;
+    expect(line).toMatch(activateLinePattern(build));
+    expect(line).not.toMatch(activateLinePattern({ ...build, version: '0.2.1' }));
+    expect(line).not.toMatch(activateLinePattern({ ...build, commit: 'abc1235' }));
+    expect(line.replace('0.2.0', '0x2x0')).not.toMatch(activateLinePattern(build));
   });
 });
 

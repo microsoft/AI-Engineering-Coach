@@ -38,6 +38,7 @@
     "onCommand:aiEngineerCoach.reload",
     "onCommand:aiEngineerCoach.exportSummary",
     "onCommand:aiEngineerCoach.reviewLocalRules",
+    "onCommand:aiEngineerCoach.showReleaseNotes",
     "onView:aiEngineerCoach.welcome"
   ],
   "main": "./dist/extension.js",
@@ -68,8 +69,24 @@
         "command": "aiEngineerCoach.reviewLocalRules",
         "title": "AI Engineer Coach: Review Local Rule Approvals",
         "icon": "$(shield)"
+      },
+      {
+        "command": "aiEngineerCoach.showReleaseNotes",
+        "title": "AI Engineer Coach: What's New",
+        "icon": "$(megaphone)"
       }
     ],
+    "configuration": {
+      "title": "AI Engineer Coach",
+      "properties": {
+        "aiEngineerCoach.showReleaseNotesAfterUpdate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "Show a notification that links to the changelog the first time AI Engineer Coach runs a build with newer dated changes."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -287,6 +304,22 @@
             "harness": { "type": "string", "description": "Filter to an AI tool name" }
           }
         }
+      },
+      {
+        "name": "aiEngineerCoach_timeline",
+        "tags": ["ai-engineer-coach"],
+        "displayName": "Coach: Timeline",
+        "modelDescription": "Get autonomy and delegation analysis: agent time, typed vs automated turns, unattended stretches, waits on the user, peak parallel sessions, and session families with credits and what the logs show about the user's input into children. Session and repository names are always masked.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "date": { "type": "string", "description": "Day to analyze (YYYY-MM-DD); defaults to the latest active day" },
+            "fromDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range start" },
+            "toDate": { "type": "string", "description": "ISO date (YYYY-MM-DD) for range end" },
+            "workspaceId": { "type": "string", "description": "Filter to a workspace ID" },
+            "harness": { "type": "string", "description": "Filter to an AI tool name" }
+          }
+        }
       }
     ]
   },
@@ -310,6 +343,7 @@
     "gen-synth-logs": "npx tsx scripts/generate-synthetic-logs.ts",
     "test:oom-synth": "npx tsx scripts/oom-repro.ts",
     "package": "node scripts/package-readme-swap.mjs",
+    "changelog": "node scripts/build-changelog.mjs",
     "spellcheck": "cspell \"src/**/*.ts\" \"docs/**/*.md\" \"*.md\"",
     "knip": "knip",
     "typecheck": "tsc --noEmit",

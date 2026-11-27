@@ -6,11 +6,15 @@
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import type { SessionSource } from './cache';
-import type { Session } from './types';
-import type { SessionSourceRequest } from './session-images';
-import { SessionSchema } from './schemas';
+import type { Session, TimelineSessionText, TimelineTextSuperseded } from './types';
+import type { SessionSourceRequest, TimelineTextRequest } from './session-images';
+import { SessionSchema, TimelineSessionTextSchema } from './schemas';
 import { warnCore } from './log';
 import type { ImageRequestMatch } from './image-data';
+
+const SUPERSEDED: TimelineTextSuperseded = { superseded: true };
+/** A lane-text read stopped for a newer one: its caller gets `SUPERSEDED`. */
+const CANCELLED = new Error('Lane-text read replaced by a newer one');
 
 interface ImageWorker {
   on(event: 'message', listener: (value: unknown) => void): void;
@@ -24,10 +28,23 @@ interface ImageWorker {
   unref(): void;
 }
 
+/** A worker reply to `request`, decoded; throws on an error reply or one of another kind. */
+function decodeReply<T>(request: SessionSourceRequest, value: unknown, decode: (value: object) => T): T {
+  if (typeof value !== 'object' || value === null || !('type' in value)) throw new Error('Invalid image worker response');
+  if (value.type === 'error') {
+    throw new Error('message' in value && typeof value.message === 'string' ? value.message : 'Image extraction failed');
+  }
+  if (value.type !== request.type) throw new Error('Invalid session worker response');
+  return decode(value);
+}
+
 export class SessionImageLoader {
   private worker: ImageWorker | null = null;
   private queue: Promise<void> = Promise.resolve();
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private textTicket = 0;
+  /** The request the worker is running, and how to stop it. */
+  private running: { text: boolean; cancel: () => void } | null = null;
 
   constructor(private readonly createWorker: () => ImageWorker = () => new Worker(path.join(__dirname, 'parse-worker.js'), {
     execArgv: [],
@@ -51,8 +68,24 @@ export class SessionImageLoader {
     });
   }
 
-  private enqueue<T>(request: SessionSourceRequest, decode: (value: object) => T): Promise<T> {
-    const result = this.queue.then(() => this.run(request, decode));
+  /** One Timeline lane's text, built and scrubbed in the worker: the host gets only what the lane shows. Only the newest
+   *  such read matters (one lane's details are shown at a time): one still queued behind it is dropped unread, and one
+   *  already running is stopped (its worker ends), both as `{ superseded: true }`, so the lane shown isn't kept waiting,
+   *  and the webview's request timeout, which counts that wait, isn't spent on a lane no longer shown. */
+  loadTimelineText(request: TimelineTextRequest): Promise<TimelineSessionText | TimelineTextSuperseded | null> {
+    const ticket = ++this.textTicket;
+    if (this.running?.text) this.running.cancel();
+    return this.enqueue<TimelineSessionText | TimelineTextSuperseded | null>(request, value => {
+      if (!('text' in value)) throw new Error('Invalid timeline text worker response');
+      return value.text === null ? null : TimelineSessionTextSchema.parse(value.text);
+    }, () => (ticket === this.textTicket ? undefined : SUPERSEDED)).catch((error: unknown) => {
+      if (error === CANCELLED) return SUPERSEDED;
+      throw error;
+    });
+  }
+
+  private enqueue<T>(request: SessionSourceRequest, decode: (value: object) => T, skip?: () => T | undefined): Promise<T> {
+    const result = this.queue.then(() => skip?.() ?? this.run(request, decode));
     // A failed request must not prevent subsequent image requests from running.
     this.queue = result.then(() => undefined, () => undefined);
     return result;
@@ -86,7 +119,17 @@ export class SessionImageLoader {
         worker.off('message', onMessage);
         worker.off('error', onError);
         worker.off('exit', onExit);
+        if (this.running === running) this.running = null;
       };
+      const running = {
+        text: request.type === 'timeline-text',
+        cancel: (): void => {
+          cleanup();
+          this.dispose();
+          reject(CANCELLED);
+        },
+      };
+      this.running = running;
       const fail = (error: Error): void => {
         cleanup();
         this.dispose();
@@ -96,21 +139,9 @@ export class SessionImageLoader {
       const onError = (error: Error): void => fail(error);
       const onExit = (code: number): void => fail(new Error(`Image worker exited before replying (code ${code})`));
       const onMessage = (value: unknown): void => {
-        if (typeof value !== 'object' || value === null || !('type' in value)) {
-          fail(new Error('Invalid image worker response'));
-          return;
-        }
-        if (value.type === 'error') {
-          fail(new Error('message' in value && typeof value.message === 'string' ? value.message : 'Image extraction failed'));
-          return;
-        }
-        if (value.type !== request.type) {
-          fail(new Error('Invalid session worker response'));
-          return;
-        }
         let result: T;
         try {
-          result = decode(value);
+          result = decodeReply(request, value, decode);
         } catch (error) {
           fail(error instanceof Error ? error : new Error(String(error)));
           return;
@@ -141,4 +172,8 @@ export function loadSessionImages(source: SessionSource, sessionId: string, requ
 
 export function loadSessionDetails(source: SessionSource, sessionId: string): Promise<Session | null> {
   return imageLoader.loadSession(source, sessionId);
+}
+
+export function loadSessionTimelineText(request: TimelineTextRequest): Promise<TimelineSessionText | TimelineTextSuperseded | null> {
+  return imageLoader.loadTimelineText(request);
 }

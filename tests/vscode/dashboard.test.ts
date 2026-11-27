@@ -9,6 +9,8 @@ import { Dashboard } from './dashboard';
 
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn<(title: string) => Promise<void>>(),
+  /** What the palette lists for a command it was given (`>` + title), and whether typing into it works. */
+  listed: vi.fn<(text: string) => Promise<string[]>>(),
   defaultContent: vi.fn<() => Promise<void>>(),
   switchToFrame: vi.fn<(timeout: number) => Promise<void>>(),
   documentId: vi.fn<() => Promise<string>>(),
@@ -17,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   executeScript: vi.fn<() => Promise<string>>(),
   saveSnapshot: vi.fn<typeof import('./snapshots')['saveSnapshot']>(),
   wait: vi.fn<(condition: () => Promise<boolean>, timeout: number, message?: string) => Promise<boolean>>(),
+  findWebElement: vi.fn<() => Promise<unknown>>(),
+  findWebElements: vi.fn<() => Promise<{ getText(): Promise<string> }[]>>(),
 }));
 
 vi.mock('vscode-extension-tester', async importOriginal => {
@@ -30,8 +34,23 @@ vi.mock('vscode-extension-tester', async importOriginal => {
       executeScript: mocks.executeScript,
       wait: mocks.wait,
     } } },
-    Workbench: class { executeCommand = mocks.executeCommand; },
-    WebView: class { switchToFrame = mocks.switchToFrame; },
+    Workbench: class {
+      openCommandPrompt = () => {
+        let text = '';
+        return Promise.resolve({
+          setText: (value: string) => { text = value; return Promise.resolve(); },
+          getQuickPicks: async () => (await mocks.listed(text)).map(label => ({ getLabel: () => Promise.resolve(label) })),
+          isDisplayed: () => Promise.resolve(true),
+          selectQuickPick: (label: string) => mocks.executeCommand(label),
+          cancel: () => Promise.resolve(),
+        });
+      };
+    },
+    WebView: class {
+      switchToFrame = mocks.switchToFrame;
+      findWebElement = mocks.findWebElement;
+      findWebElements = mocks.findWebElements;
+    },
     until: { ...actual.until, elementLocated: () => mocks.editorReady },
   };
 });
@@ -41,6 +60,7 @@ vi.mock('./snapshots', () => ({ saveSnapshot: mocks.saveSnapshot }));
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.executeCommand.mockResolvedValue();
+  mocks.listed.mockImplementation(text => Promise.resolve([text.replace(/^>/, '')]));
   mocks.defaultContent.mockResolvedValue();
   mocks.switchToFrame.mockResolvedValue();
   mocks.documentId.mockResolvedValue('initial-document');
@@ -48,6 +68,8 @@ beforeEach(() => {
   mocks.takeScreenshot.mockResolvedValue('captured-image');
   mocks.executeScript.mockResolvedValue('[]');
   mocks.saveSnapshot.mockResolvedValue();
+  mocks.findWebElement.mockResolvedValue({});
+  mocks.findWebElements.mockResolvedValue([{ getText: () => Promise.resolve('Changelog') }]);
   mocks.wait.mockImplementation(async (condition, _timeout, message) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (await condition()) return true;
@@ -59,6 +81,15 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe('desktop webview synchronization', () => {
+  it('runs a command only once the palette lists it, as it may not while the workbench is still starting', async () => {
+    mocks.listed
+      .mockRejectedValueOnce(new error.ElementNotInteractableError('the palette closed under the keystrokes'))
+      .mockResolvedValueOnce([]);
+    await new Dashboard().open();
+    expect(mocks.listed).toHaveBeenCalledTimes(3);
+    expect(mocks.executeCommand).toHaveBeenCalledExactlyOnceWith('AI Engineer Coach: Open Dashboard');
+  });
+
   it('opens the dashboard once and waits for its editor before entering the webview', async () => {
     await new Dashboard().open();
     expect(mocks.executeCommand).toHaveBeenCalledExactlyOnceWith('AI Engineer Coach: Open Dashboard');
@@ -107,6 +138,35 @@ describe('desktop webview synchronization', () => {
     await new Dashboard().open();
 
     expect(mocks.switchToFrame.mock.calls).toEqual([[60_000], [59_900]]);
+  });
+});
+
+describe('reading another webview, such as the What\'s New preview', () => {
+  it.each([
+    ['wrapped stale outer frame', new Error('WebviewMixin.switchToFrame: outer iframe became stale during frame switch. See the upstream issue.')],
+    ['stale frame', new error.StaleElementReferenceError('The preview was replaced')],
+    ['missing marker', new error.NoSuchElementError('The preview is still rendering')],
+  ])('retries a %s and returns to the workbench in between', async (_name, failure) => {
+    mocks.switchToFrame.mockRejectedValueOnce(failure);
+    expect(await new Dashboard().markdownPreviewHeadings()).toEqual(['Changelog']);
+    expect(mocks.switchToFrame).toHaveBeenCalledTimes(2);
+    expect(mocks.defaultContent.mock.invocationCallOrder.some(order =>
+      order > mocks.switchToFrame.mock.invocationCallOrder[0] && order < mocks.switchToFrame.mock.invocationCallOrder[1])).toBe(true);
+  });
+
+  it('gives each attempt only the remaining deadline', async () => {
+    mocks.switchToFrame.mockRejectedValueOnce(new error.StaleElementReferenceError());
+    vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(1000).mockReturnValue(1100);
+    await new Dashboard().markdownPreviewHeadings();
+    expect(mocks.switchToFrame.mock.calls).toEqual([[60_000], [59_900]]);
+  });
+
+  it('does not retry unexpected driver failures', async () => {
+    const failure = new Error('Driver session disconnected');
+    mocks.switchToFrame.mockRejectedValueOnce(failure);
+    await expect(new Dashboard().markdownPreviewHeadings()).rejects.toBe(failure);
+    expect(mocks.switchToFrame).toHaveBeenCalledTimes(1);
+    expect(mocks.defaultContent).toHaveBeenCalled();
   });
 });
 

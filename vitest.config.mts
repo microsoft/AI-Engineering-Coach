@@ -7,7 +7,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts', 'tests/vscode/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'tests/vscode/**/*.test.ts', 'scripts/**/*.test.mjs'],
     // Point HOME and the other per-user data roots at a temp dir so tests never touch real user data.
     setupFiles: ['src/test/hermetic-home.ts'],
     environment: 'node',

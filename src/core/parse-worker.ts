@@ -9,7 +9,10 @@
  */
 
 import { parentPort } from 'worker_threads';
+import * as os from 'os';
+import * as path from 'path';
 import { flushCacheWrites, stripSessionsForMemory } from './cache';
+import { hideAccountName, redactHomePaths } from './display-path';
 import { emitResultChunks, DEFAULT_SESSION_CHUNK_SIZE } from './parse-chunking';
 import { createAckWindow, shouldSendProgressImmediately } from './parse-worker-stream';
 import { parseAllLogsAsyncDetailed, type LoadProgress } from './parser';
@@ -17,7 +20,7 @@ import { getParseWarningCounts, getParseWarnings, setCuriosityDetector } from '.
 import { detectCuriosity } from './curiosity';
 import { installRuntimeDebugHooks, runtimeDebug } from './runtime-debug';
 import { createTelemetrySampler } from './worker-telemetry';
-import { extractSourceImages, loadSourceSession, type SessionSourceRequest } from './session-images';
+import { extractSourceImages, loadSourceSessionDetail, loadTimelineText, type SessionSourceRequest, type TimelineTextRequest } from './session-images';
 
 interface ParseWorkerRequest {
   logsDirs?: string[];
@@ -75,10 +78,26 @@ function isAckMessage(msg: unknown): msg is AckMessage {
 /** Set by the streaming step to receive chunk acks from the parent. */
 let onAck: ((seq: number) => void) | null = null;
 
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** A Timeline text request's scope, kept turns and scrub labels. */
+function isTimelineTextFields(candidate: Partial<TimelineTextRequest>): boolean {
+  const { scope, labels } = candidate;
+  return typeof scope === 'object' && scope !== null && isFiniteNumber(scope.from) && isFiniteNumber(scope.to)
+    && Array.isArray(scope.turns) && scope.turns.every(t => typeof t === 'object' && t !== null && isFiniteNumber(t.t)
+      && (t.id === undefined || typeof t.id === 'string'))
+    && (candidate.kept === undefined || isStringArray(candidate.kept))
+    && typeof labels === 'object' && labels !== null && isStringArray(labels.names)
+    && (labels.home === undefined || typeof labels.home === 'string') && (labels.handles === undefined || isStringArray(labels.handles));
+}
+
 function isSessionSourceRequest(value: object): value is SessionSourceRequest {
   const candidate = value as Partial<SessionSourceRequest>;
   const source = candidate.source;
-  return (candidate.type === 'session-detail' || (candidate.type === 'session-images' && typeof candidate.requestId === 'string'
+  return (candidate.type === 'session-detail'
+    || (candidate.type === 'timeline-text' && isTimelineTextFields(candidate))
+    || (candidate.type === 'session-images' && typeof candidate.requestId === 'string'
     && (candidate.userEventId === undefined || typeof candidate.userEventId === 'string')
     && (candidate.requestIndex === undefined || (Number.isSafeInteger(candidate.requestIndex) && candidate.requestIndex >= 0))))
     && typeof candidate.sessionId === 'string'
@@ -99,13 +118,16 @@ function onMessage(handler: (msg: ParseWorkerRequest) => void | Promise<void>): 
       onAck?.(raw.seq);
       return;
     }
-    if (typeof raw === 'object' && raw !== null && 'type' in raw && (raw.type === 'session-images' || raw.type === 'session-detail')) {
+    if (typeof raw === 'object' && raw !== null && 'type' in raw
+      && (raw.type === 'session-images' || raw.type === 'session-detail' || raw.type === 'timeline-text')) {
       try {
         if (!isSessionSourceRequest(raw)) throw new Error('Invalid session source request');
         if (raw.type === 'session-images') {
           send({ type: 'session-images', images: extractSourceImages(raw.source, raw.sessionId, raw.requestId, raw) });
+        } else if (raw.type === 'timeline-text') {
+          send({ type: 'timeline-text', text: loadTimelineText(raw) });
         } else {
-          send({ type: 'session-detail', session: loadSourceSession(raw.source, raw.sessionId) });
+          send({ type: 'session-detail', session: loadSourceSessionDetail(raw.source, raw.sessionId) });
         }
       } catch (error) {
         send({ type: 'error', message: error instanceof Error ? error.message : String(error) });
@@ -141,6 +163,7 @@ onMessage(async (msg) => {
   memTimer.unref?.();
   try {
     const logsDirs = Array.isArray(msg.logsDirs) ? msg.logsDirs : [];
+    const home = os.homedir();
     runtimeDebug('parse-worker', 'message-start', `logsDirs=${logsDirs.length}`);
 
     // Throttle verbose intra-workspace progress messages, but always send
@@ -157,6 +180,9 @@ onMessage(async (msg) => {
     };
 
     const { result, dirMetas } = await parseAllLogsAsyncDetailed(logsDirs, (progress) => {
+      // Progress is shown on screen: never send the home folder (it usually holds the user
+      // name). Parser items already carry display paths; this also covers free-text details.
+      if (progress.detail) progress.detail = hideAccountName(redactHomePaths(progress.detail, home), path.basename(home));
       progress.telemetry = sampleTelemetry();
       lastProgress = progress;
       const progressMessage: ProgressMessage = { type: 'progress', progress };

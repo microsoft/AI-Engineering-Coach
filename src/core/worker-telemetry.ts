@@ -36,10 +36,21 @@ const defaultSources: TelemetrySources = {
 };
 
 /**
- * Create a telemetry sampler. Each call to the returned function produces a fresh snapshot;
- * `cpuPct` is computed from the delta since the previous call (0 on the first call).
+ * Shortest window the CPU percentage is measured over. The worker samples on every progress
+ * event, often well under a millisecond apart, and `process.cpuUsage()` advances in scheduler
+ * ticks (about 15.6 ms on Windows), so per-call deltas read 0% while the worker is busy. Calls
+ * inside the window reuse the last measured value and keep the window open.
  */
-export function createTelemetrySampler(sources: Partial<TelemetrySources> = {}): () => ParseTelemetry {
+export const CPU_SAMPLE_WINDOW_MS = 500;
+
+/**
+ * Create a telemetry sampler. Each call to the returned function produces a fresh snapshot;
+ * `cpuPct` is measured over at least `minWindowMs` (0 until the first window closes).
+ */
+export function createTelemetrySampler(
+  sources: Partial<TelemetrySources> = {},
+  minWindowMs: number = CPU_SAMPLE_WINDOW_MS,
+): () => ParseTelemetry {
   const s: TelemetrySources = { ...defaultSources, ...sources };
   const mb = (n: number): number => Math.round(n / BYTES_PER_MB);
 
@@ -48,26 +59,27 @@ export function createTelemetrySampler(sources: Partial<TelemetrySources> = {}):
 
   let lastCpu = s.cpuUsage();
   let lastAt = s.hrtimeNs();
+  let cpuPct = 0;
 
   return function sample(): ParseTelemetry {
     const m = s.memoryUsage();
 
-    const cpuNow = s.cpuUsage();
     const at = s.hrtimeNs();
-    const usedMicros = (cpuNow.user - lastCpu.user) + (cpuNow.system - lastCpu.system);
     const elapsedMicros = Number(at - lastAt) / 1000; // ns → µs
-    lastCpu = cpuNow;
-    lastAt = at;
-    const cpuPct = elapsedMicros > 0
-      ? Math.max(0, Math.min(100, (usedMicros / elapsedMicros) * 100))
-      : 0;
+    if (elapsedMicros >= minWindowMs * 1000 && elapsedMicros > 0) {
+      const cpuNow = s.cpuUsage();
+      const usedMicros = (cpuNow.user - lastCpu.user) + (cpuNow.system - lastCpu.system);
+      lastCpu = cpuNow;
+      lastAt = at;
+      cpuPct = Math.round(Math.max(0, Math.min(100, (usedMicros / elapsedMicros) * 100)));
+    }
 
     return {
       rssMB: mb(m.rss),
       heapUsedMB: mb(m.heapUsed),
       heapLimitMB,
       fileBufMB: mb(m.external + m.arrayBuffers),
-      cpuPct: Math.round(cpuPct),
+      cpuPct,
       ...s.warningCounts(),
     };
   };

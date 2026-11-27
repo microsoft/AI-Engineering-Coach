@@ -29,6 +29,20 @@ code --install-extension ai-engineer-coach-*.vsix
 
 Or open the Extensions panel in VS Code, click the `...` menu, choose **Install from VSIX...**, and select the file.
 
+Every build has the same version, so to replace an installed build with a newer one, add `--force`; without it, `code --install-extension` reports the extension as already installed.
+
+## Which Build Is Installed?
+
+Builds share the version in `package.json`, so every build is stamped with its version, commit, branch, and build time:
+
+- The bottom of the dashboard sidebar shows the stamp. The commit ends in `-dirty` when the build included uncommitted changes. Hover over it for the branch and build time.
+- The `[extension] activate` line in `~/.copilot-analytics-cache/runtime.log` records `version=… commit=… dirty=… branch=… builtAt=…`.
+- `dist/build-info.json` in the installed extension's folder holds the same values.
+
+## What's New
+
+Run **AI Engineer Coach: What's New** from the Command Palette, or select **What's new** in the activity-bar view, to open the changelog bundled with the extension. It groups changes by the date they were merged, newest first. The first time a build with newer dated changes runs, a notification offers it once. To turn the notification off, set `aiEngineerCoach.showReleaseNotesAfterUpdate` to `false`.
+
 ## Development
 
 To run the extension in development mode instead, use `npm run build` and press `F5` in VS Code to launch the Extension Development Host.
