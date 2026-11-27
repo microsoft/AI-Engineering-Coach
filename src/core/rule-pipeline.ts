@@ -61,8 +61,10 @@ function mergeLineContinuations(rawLines: string[]): string[] {
   return lines;
 }
 
+const DETECT_BLOCK = /```detect\s*\n([\s\S]*?)```/;
+
 export function parsePipeline(rule: DetectionRule): Pipeline {
-  const block = rule.rawSource.match(/```detect\s*\n([\s\S]*?)```/);
+  const block = rule.rawSource.match(DETECT_BLOCK);
   if (!block) {
     // No detection logic → default pipeline that never triggers
     return { scan: rule.scope === 'sessions' ? 'sessions' : 'requests', aggregate: 'count' };
@@ -325,8 +327,7 @@ export function resolveInheritance(rule: DetectionRule, visited: Set<string> = n
     patterns: { ...resolvedParent.patterns, ...rule.patterns },
     // Merge fileTypes (child wins per key)
     fileTypes: { ...resolvedParent.fileTypes, ...rule.fileTypes },
-    // Keep child's detection logic if present
-    rawSource: rule.rawSource,
+    rawSource: withInheritedDetectBlock(rule.rawSource, resolvedParent.rawSource),
     conditions: rule.conditions.length > 0 ? rule.conditions : resolvedParent.conditions,
     tags: rule.tags.length > 0 ? rule.tags : resolvedParent.tags,
     version: rule.version || resolvedParent.version,
@@ -334,6 +335,12 @@ export function resolveInheritance(rule: DetectionRule, visited: Set<string> = n
     sourceFilePath: rule.sourceFilePath,
     tests: rule.tests.length > 0 ? rule.tests : resolvedParent.tests,
   };
+}
+
+function withInheritedDetectBlock(childSource: string, parentSource: string): string {
+  if (DETECT_BLOCK.test(childSource)) return childSource;
+  const parentBlock = parentSource.match(DETECT_BLOCK);
+  return parentBlock ? `${childSource}\n\n${parentBlock[0]}\n` : childSource;
 }
 
 /* ================================================================== */
